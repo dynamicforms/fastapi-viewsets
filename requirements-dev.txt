@@ -1,0 +1,7 @@
+coverage
+pytest
+pytest-asyncio
+pytest-cov
+fastapi
+httpx
+redis

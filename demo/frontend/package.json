@@ -1,0 +1,27 @@
+{
+  "name": "demo-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@dynamicforms/vue-forms": "^0.5.0",
+    "@dynamicforms/vue-grid": "file:dynamicforms-vue-grid-0.1.6.tgz",
+    "@dynamicforms/vuetify-inputs": "^0.7.1",
+    "axios": "^1.13.6",
+    "vue": "^3.4",
+    "vue-markdown-render": "^2.3.0",
+    "vuetify": "^3.7.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6",
+    "@vue/tsconfig": "^0.7.0",
+    "typescript": "^5",
+    "vite": "^7",
+    "vue-tsc": "^2"
+  }
+}

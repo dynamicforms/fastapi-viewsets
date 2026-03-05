@@ -1,0 +1,7 @@
+.idea
+node_modules
+coverage
+dist
+
+/docs/.vitepress/cache
+/package-lock.json

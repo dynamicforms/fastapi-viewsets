@@ -1,0 +1,68 @@
+{
+  "name": "@dynamicforms/viewsets",
+  "private": false,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "RESTful viewsets for Vue",
+  "author": "Jure Erznožnik",
+  "files": [
+    "dist/*"
+  ],
+  "main": "dist/dynamicforms-viewsets.umd.cjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/dynamicforms-viewsets.umd.cjs",
+      "import": "./dist/dynamicforms-viewsets.js"
+    },
+    "./styles.css": "./dist/dynamicforms-viewsets.css"
+  },
+  "workspaces": [
+    "docs",
+    "demo/frontend"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "test": "vitest run --coverage",
+    "lint": "eslint vue --fix && vue-tsc --noEmit",
+    "docs:dev": "npm run docs:dev -w docs",
+    "docs:build": "npm run docs:build -w docs",
+    "docs:preview": "npm run docs:preview -w docs",
+    "demo:dev": "npm run dev -w demo-frontend"
+  },
+  "keywords": [
+    "vue",
+    "dynamicforms",
+    "velis",
+    "viewsets"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:dynamicforms/viewsets.git"
+  },
+  "issues": "https://github.com/dynamicforms/viewsets/issues",
+  "peerDependencies": {
+    "@dynamicforms/vue-forms": "^0.5.0",
+    "axios": "^1.13.6",
+    "lodash-es": "^4.17.12",
+    "vue": "^3.4"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "^4.17.12",
+    "@types/node": "^24",
+    "@vitejs/plugin-vue": "^6",
+    "@vitest/coverage-v8": "^3",
+    "@vue/test-utils": "^2.2.4",
+    "@vue/tsconfig": "^0.7.0",
+    "eslint-config-velis": "^2.0.12",
+    "jsdom": "^26.0.0",
+    "rollup-plugin-visualizer": "^5.14.0",
+    "typescript": "^5",
+    "vite": "^7",
+    "vite-plugin-dts": "^4",
+    "vite-plugin-eslint": "^1.8.1",
+    "vitest": "^3",
+    "vue-tsc": "^2"
+  }
+}
