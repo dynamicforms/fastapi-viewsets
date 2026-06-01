@@ -21,6 +21,13 @@ export class MusicTrackViewSet extends RestProxyImpl<number, MusicTrack, 'id'>
   constructor() {
     super({ basePath: '/music', pkFieldName: 'id' });
   }
+
+  // The method name must match the BE endpoint path segment (GET /music/count → count).
+  // Renaming it (e.g. to getCount) will trigger a schema mismatch warning in the console on startup.
+  async count(): Promise<number> {
+    const res = await this.http.get<number>(`${this.basePath}/count`);
+    return res.data;
+  }
 }
 
 export const musicTrackViewSet = new MusicTrackViewSet();

@@ -10,12 +10,12 @@
   },
   "dependencies": {
     "@dynamicforms/vue-forms": "^0.5.0",
-    "@dynamicforms/vue-grid": "file:dynamicforms-vue-grid-0.1.6.tgz",
+    "@dynamicforms/vue-grid": "^0.1.6",
     "@dynamicforms/vuetify-inputs": "^0.7.1",
-    "axios": "^1.13.6",
-    "vue": "^3.4",
+    "axios": "^1.16.1",
+    "vue": "^3.5.35",
     "vue-markdown-render": "^2.3.0",
-    "vuetify": "^3.7.0"
+    "vuetify": "^3.12.7"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6",

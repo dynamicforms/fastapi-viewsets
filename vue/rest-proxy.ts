@@ -14,6 +14,48 @@ import axios, { type AxiosInstance } from 'axios';
 import type { BulkViewSetMixin, DestroyReturnData, KeyType, LookupItem, LookupMixin } from './mixins';
 
 // ---------------------------------------------------------------------------
+// Schema validation constants
+// ---------------------------------------------------------------------------
+
+const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
+
+/**
+ * Maps (path type, HTTP method) → FE method name for standard ViewSet endpoints.
+ * Path types: 'base' = root, 'pk' = /{pk}, 'bulk' = /bulk, 'lookup' = /lookup.
+ */
+const ENDPOINT_TO_FE_METHOD: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  base: { GET: 'list', POST: 'create' },
+  pk: {
+    GET: 'retrieve',
+    PUT: 'update',
+    PATCH: 'partialUpdate',
+    DELETE: 'destroy',
+  },
+  bulk: {
+    POST: 'bulkCreate',
+    PUT: 'bulkUpdate',
+    PATCH: 'bulkPartialUpdate',
+    DELETE: 'bulkDestroy',
+  },
+  lookup: { GET: 'lookup' },
+};
+
+/** All standard FE method names, in a stable order for warning output. */
+const STANDARD_FE_METHODS: readonly string[] = [
+  'list',
+  'create',
+  'retrieve',
+  'update',
+  'partialUpdate',
+  'destroy',
+  'bulkCreate',
+  'bulkUpdate',
+  'bulkPartialUpdate',
+  'bulkDestroy',
+  'lookup',
+];
+
+// ---------------------------------------------------------------------------
 // Helper types
 // ---------------------------------------------------------------------------
 
@@ -54,6 +96,81 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T>
     this.basePath = options.basePath.replace(/\/$/, '');
     this.pkFieldName = options.pkFieldName;
     this.http = options.axiosInstance ?? axios;
+    void this.validateAgainstSchema();
+  }
+
+  /**
+   * Fetches the BE schema and compares it against the FE method set.
+   * Logs a console warning for any mismatch found.
+   * Non-critical: errors during fetch or parsing are silently ignored.
+   */
+  private async validateAgainstSchema(): Promise<void> {
+    try {
+      const res = await this.http.get<{
+        paths?: Record<string, Record<string, unknown>>;
+      }>(`${this.basePath}/schema`);
+      const paths = res.data?.paths ?? {};
+
+      const beMethods = new Set<string>();
+      const unknownBeEndpoints: string[] = [];
+
+      for (const [path, pathItem] of Object.entries(paths)) {
+        const suffix = path.slice(this.basePath.length).replace(/^\//, '');
+
+        let pathType: string;
+        if (suffix === '') {
+          pathType = 'base';
+        } else if (suffix === 'bulk') {
+          pathType = 'bulk';
+        } else if (suffix === 'lookup') {
+          pathType = 'lookup';
+        } else if (suffix === 'schema') {
+          continue;
+        } else if (suffix.startsWith('{')) {
+          pathType = 'pk';
+        } else {
+          for (const httpMethod of Object.keys(pathItem)) {
+            if (HTTP_METHODS.has(httpMethod.toLowerCase())) {
+              unknownBeEndpoints.push(`${httpMethod.toUpperCase()} ${path}`);
+            }
+          }
+          continue;
+        }
+
+        const methodMap = ENDPOINT_TO_FE_METHOD[pathType] ?? {};
+        for (const httpMethod of Object.keys(pathItem)) {
+          if (!HTTP_METHODS.has(httpMethod.toLowerCase())) continue;
+          const feMethod = methodMap[httpMethod.toUpperCase()];
+          if (feMethod) beMethods.add(feMethod);
+        }
+      }
+
+      const warnings: string[] = [];
+
+      for (const method of STANDARD_FE_METHODS) {
+        if (typeof (this as unknown as Record<string, unknown>)[method] === 'function' && !beMethods.has(method)) {
+          warnings.push(`FE declares '${method}()' but BE has no matching endpoint`);
+        }
+      }
+
+      for (const method of beMethods) {
+        if (typeof (this as unknown as Record<string, unknown>)[method] !== 'function') {
+          warnings.push(`BE exposes '${method}' endpoint but FE does not implement it`);
+        }
+      }
+
+      for (const endpoint of unknownBeEndpoints) {
+        warnings.push(`BE has non-standard endpoint '${endpoint}' with no FE method`);
+      }
+
+      if (warnings.length > 0) {
+        console.warn(
+          `[ViewSet ${this.basePath}] FE/BE definition mismatch:\n` + warnings.map((w) => `  • ${w}`).join('\n'),
+        );
+      }
+    } catch {
+      // Schema validation is non-critical; ignore fetch/parse errors silently
+    }
   }
 
   async create(data: Omit<T, PK>): Promise<T> {
@@ -157,7 +274,11 @@ function route_rest<M>(
 ): RestProxy<M> {
   const options: RestProxyOptions =
     typeof basePathOrOptions === 'string'
-      ? { basePath: basePathOrOptions, pkFieldName: pkFieldName!, axiosInstance }
+      ? {
+          basePath: basePathOrOptions,
+          pkFieldName: pkFieldName!,
+          axiosInstance,
+        }
       : basePathOrOptions;
   return new RestProxyImpl(options) as unknown as RestProxy<M>;
 }

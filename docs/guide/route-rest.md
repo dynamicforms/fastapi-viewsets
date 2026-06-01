@@ -183,3 +183,33 @@ Both produce the same underlying object — `route_rest` simply wraps `new RestP
 | `bulkPartialUpdate(records)` | `PATCH /items/bulk` |
 | `bulkDestroy(pks[])` | `DELETE /items/bulk` |
 | `lookup()` | `GET /items/lookup` |
+
+## Schema validation
+
+When a `RestProxyImpl` instance is created, it automatically fetches `GET {basePath}/schema` in the background and 
+compares the BE's OpenAPI schema against the FE method set. If mismatches are found, a `console.warn` is emitted listing 
+each discrepancy.
+
+This check is **non-critical**: if the schema endpoint is unreachable (e.g. in unit tests) or returns an unexpected 
+format, the error is silently ignored and no warning is shown.
+
+### What gets checked
+
+| Situation | Warning message |
+|-----------|----------------|
+| FE declares a standard method (e.g. `create`) but BE has no matching endpoint | `FE declares 'create()' but BE has no matching endpoint` |
+| BE has a standard endpoint but FE does not implement the corresponding method | `BE exposes 'create' endpoint but FE does not implement it` |
+| BE exposes a non-standard endpoint (e.g. `GET /items/export`) with no FE method | `BE has non-standard endpoint 'GET /items/export' with no FE method` |
+
+### Example output
+
+```
+[ViewSet /items] FE/BE definition mismatch:
+  • FE declares 'create()' but BE has no matching endpoint
+  • FE declares 'update()' but BE has no matching endpoint
+  • FE declares 'partialUpdate()' but BE has no matching endpoint
+  • FE declares 'destroy()' but BE has no matching endpoint
+  • BE has non-standard endpoint 'GET /items/export' with no FE method
+```
+
+This example would appear when the BE only exposes a read-only ViewSet (list + retrieve) plus a custom export endpoint, but the FE proxy was created with `RestProxyImpl` (which includes all CRUD methods).
