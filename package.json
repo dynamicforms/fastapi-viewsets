@@ -59,8 +59,8 @@
     "jsdom": "^26.0.0",
     "rollup-plugin-visualizer": "^5.14.0",
     "typescript": "^5",
-    "vite": "^7",
-    "vite-plugin-dts": "^4",
+    "vite": "^8",
+    "vite-plugin-dts": "^5",
     "vite-plugin-eslint": "^1.8.1",
     "vitest": "^3",
     "vue-tsc": "^2"

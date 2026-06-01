@@ -1,3 +1,4 @@
+import vuetify from 'vite-plugin-vuetify';
 import { defineConfig } from 'vitepress';
 
 export default defineConfig({
@@ -58,6 +59,18 @@ export default defineConfig({
     footer: {
       message: 'Released under the MIT License.',
       copyright: 'Copyright © 2025 Jure Erznožnik',
+    },
+  },
+  ignoreDeadLinks: [/^http:\/\/localhost/],
+  vite: {
+    plugins: [vuetify()],
+    optimizeDeps: {
+      include: ['vuetify'],
+    },
+    ssr: {
+      noExternal: [
+        /vuetify/,
+      ],
     },
   },
 });
