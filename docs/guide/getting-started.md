@@ -13,7 +13,7 @@ Requirements: Python 3.11+, FastAPI, Pydantic v2.
 ### Vue / TypeScript (frontend)
 
 ```bash
-npm install @dynamicforms/viewsets
+npm install @dynamicforms/fastapi-viewsets
 ```
 
 Requirements: Vue 3.4+, axios.
@@ -105,8 +105,8 @@ This registers the following endpoints automatically:
 ### 5. Connect from Vue / TypeScript
 
 ```ts
-import type { BulkViewSetMixin, LookupMixin } from '@dynamicforms/viewsets';
-import { route_rest } from '@dynamicforms/viewsets';
+import type { BulkViewSetMixin, LookupMixin } from '@dynamicforms/fastapi-viewsets';
+import { route_rest } from '@dynamicforms/fastapi-viewsets';
 
 interface Item { id: number; name: string; description: string | null }
 

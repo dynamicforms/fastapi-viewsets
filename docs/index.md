@@ -14,7 +14,7 @@ hero:
       link: /api/python-mixins
     - theme: alt
       text: GitHub
-      link: https://github.com/dynamicforms/viewsets
+      link: https://github.com/dynamicforms/fastapi-viewsets
 
 features:
   - title: Python mixins for FastAPI

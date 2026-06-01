@@ -1,7 +1,7 @@
 # route_rest — API Reference
 
 ```ts
-import { route_rest } from '@dynamicforms/viewsets';
+import { route_rest } from '@dynamicforms/fastapi-viewsets';
 ```
 
 ## Signatures
@@ -48,7 +48,7 @@ Returns a `RestProxy<M>` — an instance of `RestProxyImpl` cast to the mixin in
 The concrete class behind every proxy. Can be subclassed for custom behaviour:
 
 ```ts
-import { RestProxyImpl } from '@dynamicforms/viewsets';
+import { RestProxyImpl } from '@dynamicforms/fastapi-viewsets';
 
 class AuthenticatedProxy<K, T, PK extends keyof T> extends RestProxyImpl<K, T, PK> {
   async list(): Promise<T[]> {

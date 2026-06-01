@@ -31,7 +31,7 @@ function route_rest<M>(
 ## Basic usage
 
 ```ts
-import { route_rest, BulkViewSetMixin } from '@dynamicforms/viewsets';
+import { route_rest, BulkViewSetMixin } from '@dynamicforms/fastapi-viewsets';
 
 interface Item {
   id: number;
@@ -93,7 +93,7 @@ const options = await itemsApi.lookup();
 ## Using with LookupMixin
 
 ```ts
-import { route_rest, BulkViewSetMixin, LookupMixin } from '@dynamicforms/viewsets';
+import { route_rest, BulkViewSetMixin, LookupMixin } from '@dynamicforms/fastapi-viewsets';
 
 const itemsApi = route_rest<BulkViewSetMixin<number, Item, 'id'> & LookupMixin>(
   ItemViewSet,
@@ -137,8 +137,8 @@ const itemsApi = route_rest<BulkViewSetMixin<number, Item, 'id'>>(
 Instead of using the `route_rest` factory, you can instantiate `RestProxyImpl` directly:
 
 ```ts
-import { RestProxyImpl } from '@dynamicforms/viewsets';
-import type { BulkViewSetMixin, LookupMixin } from '@dynamicforms/viewsets';
+import { RestProxyImpl } from '@dynamicforms/fastapi-viewsets';
+import type { BulkViewSetMixin, LookupMixin } from '@dynamicforms/fastapi-viewsets';
 
 let proxy: BulkViewSetMixin<number, Item, 'id'> & LookupMixin;
 

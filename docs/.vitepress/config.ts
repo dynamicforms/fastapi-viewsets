@@ -61,7 +61,7 @@ export default defineConfig({
       ],
     },
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/dynamicforms/viewsets' },
+      { icon: 'github', link: 'https://github.com/dynamicforms/fastapi-viewsets' },
     ],
     footer: {
       message: 'Released under the MIT License.',

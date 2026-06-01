@@ -1,6 +1,6 @@
 # Vue / TypeScript Mixins
 
-The `@dynamicforms/viewsets` package ships TypeScript mixin classes that mirror the Python backend mixins. They serve as type declarations — you use them to tell TypeScript which operations your viewset supports, and `route_rest` provides the actual HTTP implementation.
+The `@dynamicforms/fastapi-viewsets` package ships TypeScript mixin classes that mirror the Python backend mixins. They serve as type declarations — you use them to tell TypeScript which operations your viewset supports, and `route_rest` provides the actual HTTP implementation.
 
 ## Individual operation mixins
 
@@ -53,7 +53,7 @@ interface LookupItem {
 Declare a class that extends the appropriate mixin. The class body is empty — it is only used as a type token for `route_rest`:
 
 ```ts
-import { BulkViewSetMixin, LookupMixin } from '@dynamicforms/viewsets';
+import { BulkViewSetMixin, LookupMixin } from '@dynamicforms/fastapi-viewsets';
 
 interface Item {
   id: number;
@@ -67,7 +67,7 @@ class ItemViewSet extends BulkViewSetMixin<number, Item, 'id'> implements Lookup
 Then pass it to `route_rest`:
 
 ```ts
-import { route_rest } from '@dynamicforms/viewsets';
+import { route_rest } from '@dynamicforms/fastapi-viewsets';
 
 const itemsApi = route_rest<BulkViewSetMixin<number, Item, 'id'> & LookupMixin>(
   ItemViewSet,

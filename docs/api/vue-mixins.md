@@ -1,7 +1,7 @@
 # Vue Mixins — API Reference
 
 ```ts
-import { ... } from '@dynamicforms/viewsets';
+import { ... } from '@dynamicforms/fastapi-viewsets';
 ```
 
 ## Types

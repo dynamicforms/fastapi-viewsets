@@ -2,7 +2,7 @@
 
 ## Why this library?
 
-`@dynamicforms/viewsets` was built to solve a recurring problem in full-stack development:
+`@dynamicforms/fastapi-viewsets` was built to solve a recurring problem in full-stack development:
 you define the same API contract three times — once in the backend router, once in the backend
 business logic, and once in the frontend HTTP client. Any change ripples through all three.
 

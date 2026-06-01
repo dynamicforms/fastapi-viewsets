@@ -8,8 +8,8 @@
 
 ```ts
 import axios from 'axios';
-import { RestProxyImpl } from '@dynamicforms/viewsets';
-import type { BulkViewSetMixin } from '@dynamicforms/viewsets';
+import { RestProxyImpl } from '@dynamicforms/fastapi-viewsets';
+import type { BulkViewSetMixin } from '@dynamicforms/fastapi-viewsets';
 
 interface Item { id: number; name: string; description: string | null }
 
