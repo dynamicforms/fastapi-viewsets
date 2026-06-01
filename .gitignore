@@ -3,5 +3,7 @@ node_modules
 coverage
 dist
 
+/celerybeat-schedule.db
+
 /docs/.vitepress/cache
 /package-lock.json
