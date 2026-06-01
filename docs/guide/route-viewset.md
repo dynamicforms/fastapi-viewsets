@@ -8,7 +8,7 @@
 def route_viewset(
     router: APIRouter,
     base_path: str,
-    lifecycle: Literal["singleton", "per_request"] = "singleton",
+    lifecycle: LifecycleType = "singleton",
     pk_field_name: str | None = None,
 ) -> Callable[[type], type]:
 ```
@@ -19,7 +19,7 @@ def route_viewset(
 |-----------|------|---------|-------------|
 | `router` | `APIRouter` | — | The FastAPI router to register routes on |
 | `base_path` | `str` | — | URL prefix for all endpoints, e.g. `"/items"` |
-| `lifecycle` | `str` | `"singleton"` | Instance lifecycle — see below |
+| `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle — see below |
 | `pk_field_name` | `str \| None` | `None` | Name of the PK field; when set, the field is stripped from the request body on `POST` (create) |
 
 ## Usage
@@ -49,8 +49,40 @@ Both forms are equivalent.
 
 | Mode | Behaviour |
 |------|-----------|
-| `"singleton"` | One viewset instance is created when the decorator runs and reused for every request. Suitable for stateless viewsets or those that hold shared state (e.g. an in-memory collection). |
-| `"per_request"` | A new viewset instance is created for every incoming request. Useful when the viewset needs per-request context (e.g. the current user). |
+| `"singleton"` | One instance is created when the decorator runs and reused for every request. `load_state()` / `save_state()` are called on every request, so state can be shared across multiple processes (e.g. via Redis). Note: there is currently no locking — concurrent requests may cause race conditions when writing state. |
+| `"per-request"` | A new instance is created for every incoming request. `load_state()` / `save_state()` are **not** called. Useful when the viewset needs per-request context (e.g. the current user) with no shared state. |
+| `"instance-key"` | A new instance is created per request. `load_state()` is called before the endpoint and `save_state()` after it, so state is loaded fresh and persisted on every request. Same race-condition caveat as `"singleton"` applies. |
+
+## State hooks: `load_state` / `save_state`
+
+When the lifecycle is `"singleton"` or `"instance-key"`, the runner looks for two optional async methods on the viewset instance:
+
+| Method | When called | Purpose |
+|--------|-------------|---------|
+| `async def load_state(self)` | Before the endpoint handler | Restore state from an external store (e.g. read from Redis or a database) |
+| `async def save_state(self)` | After the endpoint handler (in a `finally` block) | Persist state back to the external store |
+
+Neither method is required. If a method is absent on the class it is simply skipped.
+
+```python
+@route_viewset(router, base_path="/session", lifecycle="instance-key")
+class SessionViewSet(ListMixin[str]):
+    def __init__(self):
+        self.items: list[str] = []
+
+    async def load_state(self):
+        self.items = await redis.lrange("session:items", 0, -1)
+
+    async def save_state(self):
+        await redis.delete("session:items")
+        if self.items:
+            await redis.rpush("session:items", *self.items)
+
+    async def perform_list(self) -> list[str]:
+        return self.items
+```
+
+`save_state` is called even if the endpoint raises an exception, so the store always reflects the last consistent state written by `load_state`.
 
 ## Automatic OpenAPI tags
 

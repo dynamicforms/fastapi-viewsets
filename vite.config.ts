@@ -46,8 +46,8 @@ export default defineConfig({
     lib: {
       entry: resolve(__dirname, 'vue/index.ts'),
       formats: ['umd', 'es'],
-      fileName: 'dynamicforms-viewsets',
-      name: 'dynamicforms-viewsets.[name]',
+      fileName: 'fastapi-viewsets',
+      name: 'fastapi-viewsets.[name]',
     },
     rollupOptions: {
       external: [

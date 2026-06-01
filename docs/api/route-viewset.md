@@ -10,7 +10,7 @@ from fastapi_viewsets.decorators.route_viewset import route_viewset
 def route_viewset(
     router: APIRouter,
     base_path: str,
-    lifecycle: Literal["singleton", "per_request"] = "singleton",
+    lifecycle: LifecycleType = "singleton",
     pk_field_name: str | None = None,
 ) -> Callable[[type[T]], type[T]]
 ```
@@ -21,7 +21,7 @@ def route_viewset(
 |-----------|------|---------|-------------|
 | `router` | `APIRouter` | — | FastAPI router to register routes on |
 | `base_path` | `str` | — | URL prefix for all endpoints |
-| `lifecycle` | `"singleton" \| "per_request"` | `"singleton"` | Viewset instance lifecycle |
+| `lifecycle` | `LifecycleType` | `"singleton"` | Viewset instance lifecycle |
 | `pk_field_name` | `str \| None` | `None` | PK field name; strips it from `POST` request body |
 
 ## Return value
@@ -39,7 +39,8 @@ Returns the original class unchanged (after registering its routes). Can be used
 
 ## Lifecycle modes
 
-| Value | Instance creation |
-|-------|------------------|
-| `"singleton"` | Once, at decoration time |
-| `"per_request"` | Once per incoming HTTP request |
+| Value | Instance creation | State hooks |
+|-------|------------------|-------------|
+| `"singleton"` | Once, at decoration time | `load_state()` / `save_state()` called on every request. No locking — concurrent requests may race. |
+| `"per-request"` | Once per incoming HTTP request | Not called. |
+| `"instance-key"` | Once per request | `load_state()` / `save_state()` called on every request. No locking — concurrent requests may race. |

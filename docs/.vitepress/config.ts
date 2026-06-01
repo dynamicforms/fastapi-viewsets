@@ -8,21 +8,26 @@ export default defineConfig({
     logo: '/logo.png',
     nav: [
       { text: 'Home', link: '/' },
-      { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'Guide', link: '/guide/rationale' },
       { text: 'API Reference', link: '/api/python-mixins' },
     ],
     sidebar: {
       '/guide/': [
         {
+          text: 'Rationale',
+          link: '/guide/rationale',
+        },
+        {
           text: 'Getting Started',
+          link: '/guide/getting-started',
           items: [
-            { text: 'Rationale', link: '/guide/rationale' },
             { text: 'Installation', link: '/guide/getting-started#installation' },
             { text: 'Quick Start', link: '/guide/getting-started#quick-start' },
           ],
         },
         {
           text: 'Python (FastAPI)',
+          link: '/guide/python-mixins',
           items: [
             { text: 'Mixins', link: '/guide/python-mixins' },
             { text: 'Routers & Decorators', link: '/guide/routers' },
@@ -33,9 +38,11 @@ export default defineConfig({
         },
         {
           text: 'Vue / TypeScript',
+          link: '/guide/vue-mixins',
           items: [
             { text: 'Mixins', link: '/guide/vue-mixins' },
             { text: 'route_rest factory', link: '/guide/route-rest' },
+            { text: 'Custom Endpoints', link: '/guide/vue-custom-endpoints' },
           ],
         },
       ],

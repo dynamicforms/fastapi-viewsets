@@ -5,7 +5,7 @@
 ### Python (FastAPI backend)
 
 ```bash
-pip install dynamicforms-viewsets
+pip install fastapi-viewsets
 ```
 
 Requirements: Python 3.11+, FastAPI, Pydantic v2.

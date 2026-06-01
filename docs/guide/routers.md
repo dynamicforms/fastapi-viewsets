@@ -19,7 +19,7 @@ Collects all routes defined by the mixin hierarchy, resolves generic type parame
 def route_viewset(
     router: APIRouter,
     base_path: str,
-    lifecycle: Literal["singleton", "per_request"] = "singleton",
+    lifecycle: LifecycleType = "singleton",
     pk_field_name: str | None = None,
 ) -> Callable[[type], type]:
 ```
@@ -30,7 +30,7 @@ def route_viewset(
 |-----------|------|---------|-------------|
 | `router` | `APIRouter` | — | The FastAPI router to register routes on |
 | `base_path` | `str` | — | URL prefix for all endpoints, e.g. `"/items"` |
-| `lifecycle` | `str` | `"singleton"` | Instance lifecycle — see [Lifecycle modes](#lifecycle-modes) |
+| `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle — see [Lifecycle modes](#lifecycle-modes) |
 | `pk_field_name` | `str \| None` | `None` | Name of the PK field; when set, the field is stripped from the `POST` request body |
 
 ### Usage
@@ -51,8 +51,40 @@ class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
 
 | Mode | Behaviour |
 |------|-----------|
-| `"singleton"` | One instance is created when the decorator runs and reused for every request. Suitable for stateless viewsets or those holding shared state (e.g. an in-memory collection). |
-| `"per_request"` | A new instance is created for every incoming request. Useful when the viewset needs per-request context (e.g. the current user). |
+| `"singleton"` | One instance is created when the decorator runs and reused for every request. `load_state()` / `save_state()` are called on every request, so state can be shared across multiple processes (e.g. via Redis). Note: there is currently no locking — concurrent requests may cause race conditions when writing state. |
+| `"per-request"` | A new instance is created for every incoming request. `load_state()` / `save_state()` are **not** called. Useful when the viewset needs per-request context (e.g. the current user) with no shared state. |
+| `"instance-key"` | A new instance is created per request. `load_state()` is called before the endpoint and `save_state()` after it, so state is loaded fresh and persisted on every request. Same race-condition caveat as `"singleton"` applies. |
+
+### State hooks: `load_state` / `save_state`
+
+`"singleton"` and `"instance-key"` both call two optional async methods on the viewset around each request:
+
+| Method | When called | Purpose |
+|--------|-------------|---------|
+| `async def load_state(self)` | Before the endpoint handler | Restore state from an external store |
+| `async def save_state(self)` | After the endpoint handler (in a `finally` block) | Persist state back to the external store |
+
+Neither method is required — if absent, it is simply skipped. `save_state` is called even if the endpoint raises an exception.
+
+> **Note:** There is currently no distributed locking around `load_state` / `save_state`. In deployments with multiple worker processes, concurrent requests can interleave their load/save cycles and overwrite each other's changes. Add external locking (e.g. a Redis lock) in your `load_state` / `save_state` implementation if you need consistency.
+
+```python
+@route_viewset(router, base_path="/session", lifecycle="instance-key")
+class SessionViewSet(ListMixin[str]):
+    def __init__(self):
+        self.items: list[str] = []
+
+    async def load_state(self):
+        self.items = await redis.lrange("session:items", 0, -1)
+
+    async def save_state(self):
+        await redis.delete("session:items")
+        if self.items:
+            await redis.rpush("session:items", *self.items)
+
+    async def perform_list(self) -> list[str]:
+        return self.items
+```
 
 ### Automatic OpenAPI tags
 
@@ -91,7 +123,7 @@ The same decorator call works in both processes — no conditional code needed i
 def celery_viewset(
     celery_app: Celery,
     task_prefix: str,
-    lifecycle: Literal["singleton", "per_request"] = "singleton",
+    lifecycle: LifecycleType = "singleton",
     redis_client: redis.Redis | None = None,
 ) -> Callable[[type], type]:
 ```
@@ -102,7 +134,7 @@ def celery_viewset(
 |-----------|------|---------|-------------|
 | `celery_app` | `Celery` | — | The Celery application instance |
 | `task_prefix` | `str` | — | Prefix for all registered Celery task names, e.g. `"items"` |
-| `lifecycle` | `str` | `"singleton"` | Instance lifecycle on the worker side (same semantics as `route_viewset`) |
+| `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle on the worker side (same semantics as `route_viewset`) |
 | `redis_client` | `redis.Redis \| None` | `None` | Redis client used to pass results back to FastAPI. Required in client (FastAPI) mode; optional in worker mode. |
 
 ### Usage
@@ -132,8 +164,12 @@ class ItemViewSet(ItemViewSet): ...
 ```
 
 ```python
-# celery_worker.py — just importing viewsets.py is enough
-from .viewsets import ItemViewSet  # tasks are registered on import
+# celery_worker.py — importing viewsets.py is enough; tasks are registered as a side-effect
+import myapp.viewsets  # noqa: F401
+
+from myapp.celery_app import celery_app
+
+app = celery_app
 ```
 
 ### Context auto-detection

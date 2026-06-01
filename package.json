@@ -8,14 +8,14 @@
   "files": [
     "dist/*"
   ],
-  "main": "dist/dynamicforms-viewsets.umd.cjs",
+  "main": "dist/fastapi-viewsets.umd.cjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "require": "./dist/dynamicforms-viewsets.umd.cjs",
-      "import": "./dist/dynamicforms-viewsets.js"
+      "require": "./dist/fastapi-viewsets.umd.cjs",
+      "import": "./dist/fastapi-viewsets.js"
     },
-    "./styles.css": "./dist/dynamicforms-viewsets.css"
+    "./styles.css": "./dist/fastapi-viewsets.css"
   },
   "workspaces": [
     "docs",

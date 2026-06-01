@@ -42,23 +42,21 @@ For a viewset with `task_prefix="items"`, the following Celery tasks must exist 
 
 ## Worker example
 
+There is no task code to write. Importing `viewsets.py` is enough — `@celery_viewset` registers every viewset method as a Celery task automatically.
+
 ```python
 # celery_worker.py
-from celery import Celery
+import myapp.viewsets  # noqa: F401 — registers tasks as a side-effect
 
-app = Celery("demo", broker="redis://localhost:6379/0")
+from myapp.celery_app import celery_app
 
-@app.task(name="items.list")
-def items_list():
-    return [{"id": 1, "name": "Widget", "price": 9.99}]
+app = celery_app
+```
 
-@app.task(name="items.retrieve")
-def items_retrieve(pk):
-    ...
+Start the worker with:
 
-@app.task(name="items.create")
-def items_create(data):
-    ...
+```bash
+celery -A celery_worker worker
 ```
 
 ## Result reader
