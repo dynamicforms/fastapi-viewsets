@@ -7,3 +7,12 @@ dist
 
 /docs/.vitepress/cache
 /package-lock.json
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+.pytest_cache/
+.ruff_cache/
+.coverage

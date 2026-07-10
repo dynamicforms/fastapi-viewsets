@@ -1,0 +1,65 @@
+# DynamicForms FastAPI Viewsets
+
+Django REST Framework-style viewsets for [FastAPI](https://fastapi.tiangolo.com/), with optional
+Celery-backed async execution and a matching Vue/TypeScript client counterpart.
+
+- **Python mixins for FastAPI** — compose CRUD and bulk endpoints from small, focused mixin classes.
+- **`route_viewset` decorator** — register a viewset on a FastAPI router with a single decorator call.
+  Handles type resolution, lifecycle management and OpenAPI schema automatically.
+- **`CollectionViewSet`** — zero-boilerplate in-memory viewset backed by any Python list, set or dict.
+  Great for prototyping and testing.
+- **`CeleryViewSet`** — delegate all CRUD operations to Celery tasks, for long-running or background
+  processing scenarios (requires the `celery` extra).
+- **Bulk operations** — first-class support for bulk create, update, partial update and destroy.
+- **Vue / TypeScript counterpart** — mirror mixin classes and a `route_rest` factory give you a fully
+  typed HTTP client that matches your backend viewset exactly (published separately as
+  [`@dynamicforms/fastapi-viewsets`](https://www.npmjs.com/package/@dynamicforms/fastapi-viewsets) on npm).
+
+## Installation
+
+```bash
+pip install dynamicforms-fastapi-viewsets
+
+# with Celery-backed viewset support
+pip install "dynamicforms-fastapi-viewsets[celery]"
+```
+
+Requires Python 3.10+, FastAPI and Pydantic v2.
+
+## Quick example
+
+```python
+from fastapi import APIRouter, FastAPI
+from pydantic import BaseModel
+
+from fastapi_viewsets.collection_viewset import CollectionViewSet
+from fastapi_viewsets.decorators.route_viewset import route_viewset
+from fastapi_viewsets.mixins import BulkViewSetMixin
+
+
+class Item(BaseModel):
+    id: int
+    name: str
+
+
+database: dict[int, Item] = {1: Item(id=1, name="First element")}
+
+app = FastAPI()
+router = APIRouter()
+
+
+@route_viewset(router, base_path="/items", pk_field_name="id")
+class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
+    def __init__(self):
+        super().__init__(container=database, pk_field="id")
+
+
+app.include_router(router)
+```
+
+See the [full documentation](https://docs.velis.si/dynamicforms/fastapi-viewsets/) for guides on
+the mixin system, `route_viewset`, `CollectionViewSet`, `CeleryViewSet`, and the Vue client.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
