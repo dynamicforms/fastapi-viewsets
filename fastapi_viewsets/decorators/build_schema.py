@@ -151,4 +151,11 @@ def route_sort_key(route: APIRoute):
 
     path_idx = tuple(segment_key(s) for s in path.split("/"))
 
-    return *path_idx, method_idx
+    # NOT flattened via `*path_idx, method_idx` - paths of different depths (e.g.
+    # "account/register" vs "account/register/verify/resend", a real case for custom,
+    # non-CRUD viewset actions) would then put `method_idx` (a bare int) at the same tuple
+    # position where a LONGER path still has a (int, str) segment tuple, and `sorted()` would
+    # raise `TypeError: '<' not supported between instances of 'int' and 'tuple'`. Keeping
+    # `path_idx` nested means every element at every depth is uniformly a 2-tuple - a shorter
+    # path_idx that is a prefix of a longer one compares as "less than" it with no type clash.
+    return path_idx, method_idx
