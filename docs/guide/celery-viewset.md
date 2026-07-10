@@ -2,6 +2,14 @@
 
 `CeleryViewSet` is a `BulkViewSetMixin` implementation that delegates every CRUD operation to a Celery task. It is designed for scenarios where the actual data processing happens in a background worker (e.g. long-running computations, external system integrations).
 
+::: tip Installation
+`CeleryViewSet` requires the `celery` extra:
+
+```bash
+pip install "dynamicforms-fastapi-viewsets[celery]"
+```
+:::
+
 ## How it works
 
 Each `perform_*` method sends a Celery task named `<task_prefix>.<action>`. The viewset does not wait for the result synchronously — it returns the Celery `AsyncResult` immediately. A separate result-reader mechanism (based on Redis pub/sub) is provided to stream results back to the HTTP response.

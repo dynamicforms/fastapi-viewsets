@@ -4,6 +4,14 @@
 from fastapi_viewsets.celery_viewset import CeleryViewSet
 ```
 
+::: tip Installation
+`CeleryViewSet` requires the `celery` extra:
+
+```bash
+pip install "dynamicforms-fastapi-viewsets[celery]"
+```
+:::
+
 ## Class hierarchy
 
 ```
