@@ -86,6 +86,46 @@ class SessionViewSet(ListMixin[str]):
         return self.items
 ```
 
+### Response-level side effects: `finalize_response`
+
+An action's return value is JSON-serializable data — but sometimes an endpoint needs to affect the response itself 
+(most commonly: setting a cookie), not just the response body. This matters especially when the action is *also* wired 
+through [`celery_viewset`](./celery-viewset): the method body may run in a Celery worker, which has no live `Response` 
+object at all (and its return value must survive a JSON round trip through Redis), so the response-level side effect has
+to be applied separately, once the result is back in the FastAPI process.
+
+Define an optional `finalize_response` hook on the viewset to do this:
+
+```python
+from fastapi import Response
+
+class SessionViewSet:
+    __router = APIRouter()
+
+    @__router.post("login")
+    async def login(self, data: LoginInput) -> LoginResult:
+        return LoginResult(is_authenticated=True, session_key="s3cr3t")
+
+    async def finalize_response(self, response: Response, result: LoginResult) -> dict:
+        data = result.model_dump()
+        session_key = data.pop("session_key", None)
+        if session_key is not None:
+            response.set_cookie("sessionid", session_key)
+        return data  # becomes the actual JSON body
+```
+
+`route_viewset` only adds the extra `response` parameter (and calls the hook) for viewsets that define 
+`finalize_response` — it's entirely opt-in and has no effect on viewsets that don't declare it. When present:
+
+- `response` is a **real** `Response` for the current connection (FastAPI-injected, never sent through Celery/Redis even 
+  when the action itself is `celery_viewset`-dispatched).
+- The hook's return value becomes the actual response body — it's the ONLY place you can change the shape of what's
+  served, since the original method's declared return type is no longer enforced as `response_model` for that route 
+  (otherwise FastAPI would silently re-fill any field you tried to strip with its Pydantic default).
+- Called for all three lifecycle modes, on whichever instance the action actually ran on.
+- If a `celery_viewset`-dispatched action's own exception became an `HTTPException` on the worker side, it propagates as
+  usual and `finalize_response` is never called for that request.
+
 ### Automatic OpenAPI tags
 
 The decorator derives an OpenAPI tag from the class name by stripping the `ViewSet` suffix:

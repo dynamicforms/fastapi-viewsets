@@ -3,7 +3,7 @@ import inspect
 from functools import wraps
 from typing import Annotated, get_args, get_origin, TypeVar
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from fastapi.params import FieldInfo
 from pydantic import BaseModel
 
@@ -83,6 +83,10 @@ def route_viewset(
         seen_routes = set()
         instance = cls() if lifecycle == "singleton" else None
 
+        # Opt-in: only viewsets that define `finalize_response` pay for the extra `Response`
+        # param - see docs/guide/routers.md "Response-level side effects: finalize_response".
+        has_finalize_response = hasattr(cls, "finalize_response")
+
         type_map = build_type_map(cls)
 
         # Derive tag from class name: strip "ViewSet" suffix if present
@@ -156,12 +160,23 @@ def route_viewset(
 
                 new_params.append(new_p)
 
+            if has_finalize_response:
+                # Reserved param name, only added for viewsets that opt in by defining
+                # finalize_response - FastAPI injects the REAL Response for this connection here
+                # (never forwarded to the underlying method itself, see wrapper below). Keyword-only
+                # so it can be appended regardless of what defaults precede it.
+                new_params.append(
+                    inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response)
+                )
+
             new_return_annotation = resolve_typevars(type_map, sig.return_annotation)
             new_sig = sig.replace(parameters=new_params, return_annotation=new_return_annotation)
 
             @wraps(original_endpoint)
             async def wrapper(*args, **kwargs):
                 nonlocal instance
+
+                response_obj = kwargs.pop("response", None) if has_finalize_response else None
 
                 # Check if any argument needs to be "typecasted" back to the original model
                 # This happens if we replaced the model type with a NoPK version in get_wrapper
@@ -178,12 +193,14 @@ def route_viewset(
                     else:
                         new_kwargs[param_name] = value
 
-                return await lifecycle_runner(original_endpoint, instance, cls, lifecycle, *args, **new_kwargs)
+                return await lifecycle_runner(
+                    original_endpoint, instance, cls, lifecycle, *args, response=response_obj, **new_kwargs
+                )
 
             wrapper.__signature__ = new_sig
             return wrapper, new_return_annotation
 
-        build_schema(cls, base_path, default_tags, get_wrapper)
+        build_schema(cls, base_path, default_tags, get_wrapper, disable_response_model=has_finalize_response)
 
         for route in cls.__router.routes:
             router.add_api_route(**route_to_add_api_route_kwargs(route))

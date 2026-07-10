@@ -42,11 +42,17 @@ def route_to_add_api_route_kwargs(route: APIRoute, **kwargs) -> dict:
     return result
 
 
-def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None):
+def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, disable_response_model=False):
     """
     Builds __router (APIRouter with all routes from mixins) and __app (FastAPI instance),
     and attaches them to the class. Idempotent: if already called, returns immediately.
     If get_wrapper is None, only __router is built (no FastAPI app, no endpoint wrapping).
+
+    disable_response_model: pass True when the class defines `finalize_response` (see
+    route_viewset.py) - that hook can change the shape of what's actually served (e.g. strip an
+    internal-only field), so FastAPI must not coerce/re-validate the endpoint's return value
+    against the ORIGINAL method's declared return type, which would silently undo the hook's
+    changes (missing fields reappear with their model defaults).
     """
     if hasattr(cls, "__router") and (get_wrapper is None or getattr(cls, "__router_full", False)):
         return
@@ -98,16 +104,21 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None):
 
             endpoint_wrapper, resolved_response_model = get_wrapper(route.endpoint, route.path, route.methods)
 
-            use_resolved = (
-                route.response_model is None or isinstance(route.response_model, TypeVar) or
-                (get_origin(route.response_model) and
-                 any(isinstance(arg, TypeVar) for arg in get_args(route.response_model)))
-            )
+            if disable_response_model:
+                response_model = None
+            else:
+                use_resolved = (
+                    route.response_model is None or isinstance(route.response_model, TypeVar) or
+                    (get_origin(route.response_model) and
+                     any(isinstance(arg, TypeVar) for arg in get_args(route.response_model)))
+                )
+                response_model = resolved_response_model if use_resolved else route.response_model
+
             class_router.add_api_route(**route_to_add_api_route_kwargs(
                 route,
                 path=full_path,
                 endpoint=endpoint_wrapper,
-                response_model=resolved_response_model if use_resolved else route.response_model,
+                response_model=response_model,
                 tags=route.tags or default_tags,
             ))
 
