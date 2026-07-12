@@ -30,6 +30,7 @@ class Settings:
         self.viewsets_context_json_decoder: type[json.JSONDecoder] | None = None
         self.viewsets_command_middleware: list[CommandMiddleware] = []
         self.viewsets_auth_processors: list[AuthBackend] = []
+        self.default_action_configuration: dict[Any, Any] = {}
 
 
 settings = Settings()

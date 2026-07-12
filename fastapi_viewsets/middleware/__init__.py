@@ -53,9 +53,17 @@ class Middleware(ABC):
     exact same signature a function would have - `run_command_chain` below calls
     `middlewares[index](request, viewset, context, call_next)` either way, so a `Middleware`
     instance is a drop-in `CommandMiddleware`. Reach for a class instead of a function when the
-    middleware needs to carry its own configuration/state (see `context.auth.Session` for a
+    middleware needs to carry its own configuration/state (see `middleware.auth.Session` for a
     concrete example) - a bare function would need extra indirection (closures, partials) for that.
     """
+
+    def config_from(self, context: Context) -> Any:
+        """
+        This middleware's own @action_configuration value for the current call (see
+        fastapi_viewsets/action_configuration.py), or None if nothing was configured for it.
+        Shorthand for `context.configuration_for(type(self))`.
+        """
+        return context.configuration_for(type(self))
 
     @abstractmethod
     async def __call__(

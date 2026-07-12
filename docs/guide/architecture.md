@@ -122,7 +122,9 @@ the middleware is reusable library code rather than a one-off closure):
 ```python
 class Session(Middleware):
     async def __call__(self, request, viewset, context, call_next):
-        if not getattr(viewset, "requires_auth", True):
+        config = self.config_from(context)
+        required = True if config is None else bool(config)
+        if not required:
             return await call_next()
         user = await context.user
         if user is None:
@@ -138,14 +140,45 @@ any middleware configured after it - ever runs. `ViewSetResult.status_code` carr
 the way out to the real HTTP response. (401, not 403: the credential itself no longer establishes
 who's calling - missing, garbage, or expired - which is "unauthorized," not "authorized but
 forbidden to do this specific thing.") A viewset that must stay reachable without a session (a
-login endpoint, say) opts out with `requires_auth = False`, since
-`settings.viewsets_command_middleware` is global and otherwise applies to every route. → full
-depth in [Command Middleware](./command-middleware) and [Auth](./auth).
+login endpoint, say) opts out with `@action_configuration({Session: False})` - `self.config_from(context)`
+is exactly how `Session` reads that. → full depth in [Command Middleware](./command-middleware) and
+[Auth](./auth).
 
 This is also the clearest illustration of why the two mechanisms stay separate: the context
 processor only ever *gathered* the fact ("user is `None`"); it's the command middleware that
 *decided* what to do about that fact and reshaped the response. Neither could have done the other's
 job.
+
+## Problem: "one boolean per concern doesn't scale"
+
+`Session`'s opt-out could have been solved with a single bespoke class attribute -
+`requires_auth = False`, read via `getattr(viewset, "requires_auth", True)` - and that's tempting
+for exactly one concern. But suppose a second requirement shows up: some viewsets also need a
+per-viewset rate limit, and the limit itself varies (5/minute here, 100/minute there). Following
+the same pattern means another bespoke attribute (`rate_limit = 5`), read by another middleware via
+another bespoke `getattr(...)` - and a third concern repeats the dance again. Nothing here is
+reusable; every processor/middleware that ever wants per-viewset behaviour would reinvent its own
+attribute-with-a-default convention.
+
+`@action_configuration({...})` is the general mechanism instead of one-boolean-per-concern: a
+decorator (usable on a viewset class or an individual method) carrying a dict keyed by whichever
+context processor or `Middleware` cares - the value is opaque, interpreted only by that
+identifier's own code. `Session.config_from(context)`, shown above, is shorthand for
+`context.configuration_for(type(self))` - this is what actually resolves the opt-out:
+
+```python
+from fastapi_viewsets.action_configuration import action_configuration
+
+@action_configuration({Session: False, RateLimiter: 5})
+class PublicButThrottledViewSet(...): ...
+```
+
+Configuration merges per identifier across three layers - `settings.default_action_configuration`
+(global fallback) → the viewset class's `@action_configuration` → an individual method's
+`@action_configuration` (highest priority, overriding just its own identifiers - other identifiers
+the method doesn't mention still fall through from the class). A value can even vary by action
+(`ByAction(list_items="read", update="write")`), resolved fresh each time against whichever action
+is actually running. → full depth in [Action Configuration](./action-configuration).
 
 ## Problem: "my viewset needs to remember something that isn't about who's calling"
 
@@ -227,8 +260,8 @@ A route that doesn't declare a `context` parameter skips the context-building st
 `Request` is even injected) - a genuinely zero-cost opt-out, not just "context ends up empty".
 Command middleware, by contrast, is not opt-in per route: if `settings.viewsets_command_middleware`
 is non-empty, it wraps every request-facing execution (a viewset opts *itself* out per-middleware,
-as `Session` above shows with `requires_auth`); with no middleware configured
-at all, the wrapping is a no-op. "Lifecycle uses state" means `"singleton"` or `"instance-key"` -
+as `Session` above shows via `@action_configuration`); with no middleware configured at all, the
+wrapping is a no-op. "Lifecycle uses state" means `"singleton"` or `"instance-key"` -
 see [ViewSet Lifecycle](./lifecycle) for what each mode actually does and why `"per-request"` skips
 both hooks.
 
@@ -241,6 +274,7 @@ both hooks.
 | **Context processors** | Build a per-request `context` (e.g. the authenticated user) before the endpoint runs | [Context Processors](./context-processors) |
 | **Auth backends & `auth_context_processor`** | A pluggable chain of credential schemes contributing `context.user` | [Auth](./auth) |
 | **Command middleware** | Wrap the actual execution to shape response-level side effects or short-circuit with an error status | [Command Middleware](./command-middleware) |
+| **`@action_configuration`** | Per-viewset/per-action configuration for context processors and command middleware to consult (e.g. `Session`'s opt-out) | [Action Configuration](./action-configuration) |
 | **Lifecycle & `load_state`/`save_state`** | Controls how the viewset *class* becomes a request-handling *instance*, and whether that instance's own state persists across requests - a separate axis from the pipeline above | [ViewSet Lifecycle](./lifecycle) |
 
 ## Why two separate mechanisms, not one
@@ -282,5 +316,6 @@ themselves.
 - Need per-request data like the current user in `perform_*`? See [Context Processors](./context-processors).
 - Need pluggable authentication (multiple credential schemes, session-expiry rejection)? See [Auth](./auth).
 - Need to set a cookie, change the status code, or otherwise shape the response? See [Command Middleware](./command-middleware).
+- Need per-viewset/per-action configuration for a processor or middleware (not just one boolean)? See [Action Configuration](./action-configuration).
 - Need your viewset instance to remember something between requests? See [ViewSet Lifecycle](./lifecycle).
 - Moving execution to a background worker? See the `celery_viewset` section in [Routers & Decorators](./routers).

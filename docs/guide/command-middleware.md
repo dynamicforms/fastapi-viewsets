@@ -71,6 +71,24 @@ settings.viewsets_command_middleware = [SessionCookieMiddleware()]
 called as `middleware(request, viewset, context, call_next)`. See [Auth](./auth#rejecting-unauthenticated-requests-session)
 for `Session`, a `Middleware` shipped by this library.
 
+## Per-viewset/per-action configuration
+
+A `Middleware` reads its own [`@action_configuration`](./action-configuration) value via
+`self.config_from(context)` (shorthand for `context.configuration_for(type(self))`):
+
+```python
+class RateLimiter(Middleware):
+    async def __call__(self, request, viewset, context, call_next):
+        limit = self.config_from(context) or self.default_limit
+        ...
+        return await call_next()
+```
+
+This is how one globally-registered middleware instance can behave differently per viewset or
+per action - see [Action Configuration](./action-configuration) for the full merge rules
+(global default → class → method) and for injecting a brand-new middleware just for one
+viewset/method without registering it globally at all.
+
 ## `ViewSetResult`
 
 ```python

@@ -18,8 +18,9 @@ class Session(Middleware):
     It doesn't re-derive or re-resolve anything itself - it just checks the already-resolved
     `context.user` that `context.auth` produced.
 
-    A viewset opts out (e.g. a login/signup endpoint that must be reachable without a session) by
-    setting `requires_auth = False` on itself; everything else is protected by default, since
+    A viewset (or a specific `perform_*` method) opts out - e.g. a login/signup endpoint that must
+    be reachable without a session - via `@action_configuration({Session: False})` (see
+    `fastapi_viewsets.action_configuration`); everything else is protected by default, since
     `settings.viewsets_command_middleware` is global and applies to every route.
 
     401, not 403: an expired/missing/unrecognized session means the credential itself no longer
@@ -30,11 +31,13 @@ class Session(Middleware):
     async def __call__(
         self,
         _request: "Request | None",
-        viewset: Any,
+        _viewset: Any,
         context: "Context",
         call_next: Callable[[], Awaitable[ViewSetResult]],
     ) -> ViewSetResult:
-        if not getattr(viewset, "requires_auth", True):
+        config = self.config_from(context)
+        required = True if config is None else bool(config)
+        if not required:
             return await call_next()
         user = await context.user
         if user is None:

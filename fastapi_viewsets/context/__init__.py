@@ -15,6 +15,29 @@ _TYPE_KEY = "__type__"
 _VALUE_KEY = "__value__"
 
 
+class ByAction:
+    """
+    Per-action variation for an @action_configuration value (see fastapi_viewsets/action_configuration.py) -
+    e.g. ByAction(list_items="read", update="write", default="read") lets one config entry mean
+    different things depending on which action (list_items, update, ...) is currently running. Resolved at
+    read-time (see Context.configuration_for), against whichever action name the Context currently
+    represents - not baked in once when the configuration was merged - so a Context that later
+    serves a different action (e.g. via clone_for_command with a new action_name) resolves fresh
+    rather than reusing a stale value.
+    """
+
+    def __init__(self, default: Any = None, **by_action: Any):
+        self._by_action = by_action
+        self._default = default
+
+    def resolve(self, action_name: "str | None") -> Any:
+        return self._by_action.get(action_name, self._default)
+
+
+def _resolve_config_value(value: Any, action_name: "str | None") -> Any:
+    return value.resolve(action_name) if isinstance(value, ByAction) else value
+
+
 class SerializableObject(ABC):
     """
     Base class for context values that need custom (de)serialization across the Celery/Redis
@@ -172,8 +195,15 @@ class Context:
     validation path at all), so no real request ever needs to validate into a Context.
     """
 
-    def __init__(self, data: dict[str, Any]):
+    def __init__(
+        self,
+        data: dict[str, Any],
+        action_configuration: dict[Any, Any] | None = None,
+        action_name: "str | None" = None,
+    ):
         self._data = data
+        self._action_configuration = action_configuration or {}
+        self._action_name = action_name
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
@@ -212,7 +242,17 @@ class Context:
         """The underlying plain dict - for serialize_context()/deserialize_context() to walk."""
         return self._data
 
-    async def clone_for_command(self) -> "Context":
+    def configuration_for(self, identifier: Any) -> Any:
+        """
+        The @action_configuration value registered for `identifier` (typically a context processor
+        callable or a Middleware (sub)class - see fastapi_viewsets/action_configuration.py),
+        resolved against whichever action this Context currently represents. Returns None if
+        nothing was configured for `identifier`. Command middleware normally reaches this via
+        Middleware.config_from(context) rather than calling it directly.
+        """
+        return _resolve_config_value(self._action_configuration.get(identifier), self._action_name)
+
+    async def clone_for_command(self, action_name: "str | None" = None) -> "Context":
         """
         An isolated copy of this context for one command on a long-lived connection (e.g. a WS
         message) - reuses serialize_context()/deserialize_context() rather than a generic
@@ -221,8 +261,17 @@ class Context:
         across commands on the same connection) while every command still gets its own, fully
         independent Context instance - context and the ViewSet instance are the only mutable
         structures in the pipeline, and mutations from one command must never leak into another.
+
+        The (unresolved) action_configuration dict is carried over unchanged - only `action_name`
+        may differ, since a later command on the same connection can be a different action than the
+        one that originally built this context; `configuration_for`/ByAction resolve fresh against
+        whichever action_name the clone actually carries, rather than reusing a stale resolution.
         """
-        return Context(deserialize_context(await serialize_context(self._data)))
+        return Context(
+            deserialize_context(await serialize_context(self._data)),
+            action_configuration=self._action_configuration,
+            action_name=action_name if action_name is not None else self._action_name,
+        )
 
 
 def _class_tag(cls: type) -> str:
@@ -281,12 +330,30 @@ def deserialize_context(data: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-async def build_context(request: "Request | None", viewset: Any) -> Context:
+async def build_context(
+    request: "Request | None",
+    viewset: Any,
+    action_configuration: dict[Any, Any] | None = None,
+    action_name: "str | None" = None,
+) -> Context:
     """
     Runs every processor in settings.viewsets_context_processors (in order, merging results -
     later processors win on key collisions) and returns the resulting Context.
+
+    `action_configuration`/`action_name` (see fastapi_viewsets/action_configuration.py) are the
+    per-call @action_configuration merge and the current action, respectively - both optional. A
+    processor that wants its own configuration slice declares a parameter literally named `config`
+    (detected by name, same convention as `context` in route_viewset.py); it's then called with
+    that keyword set to its own resolved entry from `action_configuration` (or None if nothing was
+    configured for it). A processor that doesn't declare `config` is called exactly as before - no
+    existing processor needs to change.
     """
+    action_configuration = action_configuration or {}
     merged: dict[str, Any] = {}
     for processor in settings.viewsets_context_processors:
-        merged.update(await processor(request, viewset))
-    return Context(merged)
+        if "config" in inspect.signature(processor).parameters:
+            config = _resolve_config_value(action_configuration.get(processor), action_name)
+            merged.update(await processor(request, viewset, config=config))
+        else:
+            merged.update(await processor(request, viewset))
+    return Context(merged, action_configuration=action_configuration, action_name=action_name)

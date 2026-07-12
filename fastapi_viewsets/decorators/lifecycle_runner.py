@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from typing import Any, Literal, TYPE_CHECKING, TypeVar
 
+from ..action_configuration import extra_middlewares_for, resolve_action_configuration
 from ..conf import settings
 from ..context import build_context
 from ..middleware import run_command_chain, ViewSetResult
@@ -39,9 +40,19 @@ async def lifecycle_runner(
     Celery task payload) simply omit needs_context and pass `context` directly in kwargs.
     """
 
+    action_configuration: dict = {}
+
     async def inject_context(req_instance: Any) -> None:
+        nonlocal action_configuration
+        # Resolved unconditionally (not just when needs_context) - execute() needs it to compute
+        # any extra per-call middleware (see extra_middlewares_for) regardless of whether this
+        # route even declares a `context` param. Harmless in the celery-worker path: execute()
+        # returns before touching it there, since command middleware never runs in the worker.
+        action_configuration = resolve_action_configuration(req_instance, original_endpoint.__name__)
         if needs_context:
-            kwargs["context"] = await build_context(request, req_instance)
+            kwargs["context"] = await build_context(
+                request, req_instance, action_configuration, original_endpoint.__name__
+            )
 
     async def call_bound(req_instance: Any) -> Any:
         bound_method = getattr(req_instance, original_endpoint.__name__, None)
@@ -59,8 +70,11 @@ async def lifecycle_runner(
         async def final_handler() -> ViewSetResult:
             return ViewSetResult(body=await call_bound(req_instance))
 
+        effective_middlewares = settings.viewsets_command_middleware + extra_middlewares_for(
+            action_configuration, settings.viewsets_command_middleware
+        )
         result = await run_command_chain(
-            settings.viewsets_command_middleware, request, req_instance, kwargs.get("context"), final_handler
+            effective_middlewares, request, req_instance, kwargs.get("context"), final_handler
         )
         for key, value in result.headers.items():
             response.headers[key] = str(value)

@@ -37,6 +37,7 @@ export default defineConfig({
             { text: 'Custom Endpoints', link: '/guide/custom-endpoints' },
             { text: 'Context Processors', link: '/guide/context-processors' },
             { text: 'Command Middleware', link: '/guide/command-middleware' },
+            { text: 'Action Configuration', link: '/guide/action-configuration' },
             { text: 'Auth', link: '/guide/auth' },
           ],
         },

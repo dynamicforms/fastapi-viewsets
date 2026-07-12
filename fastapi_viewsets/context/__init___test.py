@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from fastapi_viewsets.conf import settings
 from fastapi_viewsets.context import (
     build_context,
+    ByAction,
     Context,
     deserialize_context,
     LazyObject,
@@ -372,6 +373,56 @@ async def test_context_clone_for_command_is_isolated_and_keeps_resolved_shortcut
 
 
 # ---------------------------------------------------------------------------
+# ByAction / Context.configuration_for
+# ---------------------------------------------------------------------------
+
+def test_by_action_resolves_per_action_with_default_fallback():
+    value = ByAction(list_items="read", update="write", default="none")
+    assert value.resolve("list_items") == "read"
+    assert value.resolve("update") == "write"
+    assert value.resolve("destroy") == "none"  # falls back to default
+    assert value.resolve(None) == "none"
+
+
+def test_configuration_for_returns_none_when_nothing_configured():
+    ctx = Context({}, action_configuration={}, action_name="list_items")
+    assert ctx.configuration_for("anything") is None
+
+
+def test_configuration_for_returns_plain_value_as_is():
+    ctx = Context({}, action_configuration={"perm": "read-only"}, action_name="list_items")
+    assert ctx.configuration_for("perm") == "read-only"
+
+
+def test_configuration_for_resolves_byaction_against_current_action_name():
+    value = ByAction(list_items="read", update="write")
+    ctx = Context({}, action_configuration={"perm": value}, action_name="update")
+    assert ctx.configuration_for("perm") == "write"
+
+
+@pytest.mark.asyncio
+async def test_clone_for_command_resolves_byaction_fresh_for_a_different_action():
+    """Regression test: the raw (unresolved) action_configuration dict survives clone_for_command
+    unchanged, so a clone representing a *different* action resolves ByAction values against its
+    own action_name, rather than reusing whatever the original action resolved to."""
+    value = ByAction(list_items="read", update="write", default="none")
+    ctx = Context({}, action_configuration={"perm": value}, action_name="list_items")
+    assert ctx.configuration_for("perm") == "read"
+
+    clone = await ctx.clone_for_command(action_name="update")
+    assert clone.configuration_for("perm") == "write"
+    assert ctx.configuration_for("perm") == "read"  # original is untouched
+
+
+@pytest.mark.asyncio
+async def test_clone_for_command_defaults_to_the_same_action_name():
+    value = ByAction(list_items="read", default="none")
+    ctx = Context({}, action_configuration={"perm": value}, action_name="list_items")
+    clone = await ctx.clone_for_command()
+    assert clone.configuration_for("perm") == "read"
+
+
+# ---------------------------------------------------------------------------
 # build_context
 # ---------------------------------------------------------------------------
 
@@ -414,6 +465,51 @@ async def test_build_context_passes_request_and_viewset_to_processors():
     await build_context(sentinel_request, sentinel_viewset)
     assert received["request"] is sentinel_request
     assert received["viewset"] is sentinel_viewset
+
+
+@pytest.mark.asyncio
+async def test_build_context_delivers_config_to_processors_declaring_it_by_name():
+    async def wants_config(_request, _viewset, config) -> dict:
+        return {"perm": config}
+
+    settings.viewsets_context_processors = [wants_config]
+    ctx = await build_context(None, None, action_configuration={wants_config: "read-only"})
+    assert await ctx.perm == "read-only"
+
+
+@pytest.mark.asyncio
+async def test_build_context_resolves_byaction_config_against_action_name():
+    async def wants_config(_request, _viewset, config) -> dict:
+        return {"perm": config}
+
+    settings.viewsets_context_processors = [wants_config]
+    action_configuration = {wants_config: ByAction(update="write", default="read")}
+
+    ctx = await build_context(None, None, action_configuration, action_name="update")
+    assert await ctx.perm == "write"
+
+
+@pytest.mark.asyncio
+async def test_build_context_processor_without_config_param_is_unaffected():
+    """A processor with the classic 2-arg signature is called exactly as before, even when
+    action_configuration is non-empty - it just never receives it."""
+
+    async def two_arg_processor(_request, _viewset) -> dict:
+        return {"ok": True}
+
+    settings.viewsets_context_processors = [two_arg_processor]
+    ctx = await build_context(None, None, action_configuration={two_arg_processor: "ignored"})
+    assert await ctx.ok is True
+
+
+@pytest.mark.asyncio
+async def test_build_context_config_defaults_to_none_when_not_configured():
+    async def wants_config(_request, _viewset, config) -> dict:
+        return {"perm": config}
+
+    settings.viewsets_context_processors = [wants_config]
+    ctx = await build_context(None, None)
+    assert await ctx.perm is None
 
 
 # ---------------------------------------------------------------------------

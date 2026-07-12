@@ -138,7 +138,9 @@ settings.viewsets_command_middleware = [Session()]
 ```python
 class Session(Middleware):
     async def __call__(self, request, viewset, context, call_next):
-        if not getattr(viewset, "requires_auth", True):
+        config = self.config_from(context)
+        required = True if config is None else bool(config)
+        if not required:
             return await call_next()
         user = await context.user
         if user is None:
@@ -153,19 +155,32 @@ other. With this wired in alongside `auth_context_processor`, a request with no 
 session gets a `401` before `perform_*` ever runs; a request with a valid one passes through
 untouched.
 
-### Opting a viewset out: `requires_auth`
+### Opting a viewset out: `@action_configuration({Session: False})`
 
 `settings.viewsets_command_middleware` is global - it wraps every request-facing execution. A
-viewset that must stay reachable without a session (a login/signup endpoint, say) opts out by
-setting a class attribute:
+viewset (or a specific `perform_*` method) that must stay reachable without a session - a
+login/signup endpoint, say - opts out via
+[`@action_configuration`](./action-configuration), keyed by the `Session` class itself:
 
 ```python
+from fastapi_viewsets.action_configuration import action_configuration
+from fastapi_viewsets.middleware.auth import Session
+
 @route_viewset(router, base_path="/auth")
-class LoginViewSet(...):
-    requires_auth = False
+@action_configuration({Session: False})
+class LoginViewSet(...): ...
 ```
 
-Every other viewset is protected by default (the attribute defaults to `True` when absent).
+Every other viewset is protected by default - `Session.config_from(context)` returns `None` when
+nothing was configured, which `Session` treats as "required". Since `@action_configuration` also
+works on an individual method, a single otherwise-protected viewset can carve out one public
+action instead of the whole class:
+
+```python
+class ItemViewSet(...):
+    @action_configuration({Session: False})
+    async def perform_list(self, context): ...   # public - other actions on this viewset still require a session
+```
 
 ### Why `401`, not `403`
 
