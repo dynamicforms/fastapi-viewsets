@@ -29,13 +29,13 @@ def test_viewset_decorator():
 
     @route_viewset(router=router, base_path="/items", lifecycle="singleton")
     class MyViewSet(ListMixin[Item], CreateMixin[int, Item], RetrieveMixin[int, Item]):
-        async def perform_list(self) -> list[Item]:
+        async def perform_list(self, _context) -> list[Item]:
             return [Item(id=1, name="a"), Item(id=2, name="b")]
 
-        async def perform_create(self, data: Item) -> Item:
+        async def perform_create(self, _context, data: Item) -> Item:
             return data
 
-        async def perform_retrieve(self, pk: int) -> Item:
+        async def perform_retrieve(self, _context, pk: int) -> Item:
             return Item(id=pk, name=f"item_{pk}")
 
     paths = {route.path for route in router.routes}
@@ -60,10 +60,10 @@ async def test_viewset_execution():
 
     @route_viewset(router=router, base_path="/complex", lifecycle="singleton")
     class ComplexViewSet(ListMixin[Item], RetrieveMixin[int, Item]):
-        async def perform_list(self) -> list[Item]:
+        async def perform_list(self, _context) -> list[Item]:
             return [Item(id=1, name="first")]
 
-        async def perform_retrieve(self, pk: int) -> Item:
+        async def perform_retrieve(self, _context, pk: int) -> Item:
             return Item(id=pk, name="found")
 
     # Find routes for list and retrieve
@@ -90,7 +90,7 @@ async def test_viewset_per_request():
         def __init__(self):
             Counter.count += 1
 
-        async def perform_list(self) -> list[int]:
+        async def perform_list(self, _context) -> list[int]:
             return [Counter.count]
 
     list_route = next(r for r in router.routes if r.path == "/counter" and "GET" in r.methods)
@@ -120,7 +120,7 @@ async def test_viewset_instance_key():
         async def save_state(self):
             StateStore.data["val"] = self.state + "_saved"
 
-        async def perform_list(self) -> list[str]:
+        async def perform_list(self, _context) -> list[str]:
             current = self.state
             self.state = "modified"
             return [current]
@@ -144,7 +144,7 @@ def test_viewset_endpoint_signature():
 
     @route_viewset(router=router, base_path="/items")
     class MyViewSet(ListMixin[Item]):
-        async def perform_list(self) -> list[Item]:
+        async def perform_list(self, _context) -> list[Item]:
             return []
 
     # Find the list route
@@ -166,7 +166,7 @@ def test_viewset_endpoint_signature_with_params():
 
     @route_viewset(router=router, base_path="/items")
     class MyViewSet(RetrieveMixin[int, Item]):
-        async def perform_retrieve(self, pk: int) -> Item:
+        async def perform_retrieve(self, _context, pk: int) -> Item:
             return Item(id=pk, name="test")
 
     # Find the retrieve route
@@ -231,7 +231,7 @@ async def test_viewset_pk_not_hidden_in_update():
         name: str
 
     class SimpleViewSet(UpdateMixin[int, SimpleItem]):
-        async def perform_update(self, _pk: int, data: SimpleItem, partial: bool = True) -> SimpleItem:
+        async def perform_update(self, _context, _pk: int, data: SimpleItem, partial: bool = True) -> SimpleItem:
             return data
 
     router = APIRouter()
@@ -269,7 +269,7 @@ async def test_viewset_generic_resolution():
 
     @route_viewset(router=router, base_path="/generic")
     class GenericViewSet(ListMixin[GenericItem[MyItem]]):
-        async def perform_list(self) -> list[GenericItem[MyItem]]:
+        async def perform_list(self, _context) -> list[GenericItem[MyItem]]:
             return [GenericItem(items=[MyItem(name="test")], mapping={"a": MyItem(name="b")})]
 
     list_route = next(r for r in router.routes if r.path == "/generic" and "GET" in r.methods)
@@ -338,7 +338,7 @@ def test_viewset_route_order():
         BulkViewSetMixin[int, OrderItem],
         LookupMixin,
     ):
-        async def perform_lookup(self) -> list[LookupItem]:
+        async def perform_lookup(self, _context) -> list[LookupItem]:
             return []
 
         def __init__(self):

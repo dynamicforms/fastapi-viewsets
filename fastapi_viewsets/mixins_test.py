@@ -8,6 +8,7 @@ from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel
 
 from fastapi_viewsets.collection_viewset import CollectionViewSet
+from fastapi_viewsets.context import Context
 from fastapi_viewsets.decorators import route_viewset
 from fastapi_viewsets.mixins import (
     BulkViewSetMixin,
@@ -47,51 +48,53 @@ _DB: dict[int, Item] = {
 
 
 class ItemViewSet(BulkViewSetMixin[int, Item]):
-    async def perform_create(self, data: Item) -> Item:
+    async def perform_create(self, _context: Context, data: Item) -> Item:
         return data
 
-    async def perform_bulk_create(self, data: list[Item]) -> list[Item]:
+    async def perform_bulk_create(self, _context: Context, data: list[Item]) -> list[Item]:
         return data
 
-    async def perform_list(self) -> list[Item]:
+    async def perform_list(self, _context: Context) -> list[Item]:
         return [Item(id=1, name="test")]
 
-    async def perform_retrieve(self, pk: int) -> Item:
+    async def perform_retrieve(self, _context: Context, pk: int) -> Item:
         return Item(id=pk, name="test")
 
-    async def perform_update(self, _pk: int, data: Item, partial: bool = False) -> Item:
+    async def perform_update(self, _context: Context, _pk: int, data: Item, partial: bool = False) -> Item:
         return data
 
-    async def perform_bulk_update(self, records: dict[int, Item], partial: bool = False) -> list[Item]:
+    async def perform_bulk_update(
+        self, _context: Context, records: dict[int, Item], partial: bool = False
+    ) -> list[Item]:
         return list(records.values())
 
-    async def perform_destroy(self, pk: int) -> dict[int, Any]:
+    async def perform_destroy(self, _context: Context, pk: int) -> dict[int, Any]:
         return {pk: "deleted"}
 
-    async def perform_bulk_destroy(self, pk: list[int]) -> list[dict[int, Any]]:
+    async def perform_bulk_destroy(self, _context: Context, pk: list[int]) -> list[dict[int, Any]]:
         return [{p: "deleted"} for p in pk]
 
 class ReadOnlyItemViewSet(ReadOnlyViewSetMixin[int, Item]):
-    async def perform_list(self) -> list[Item]:
+    async def perform_list(self, _context: Context) -> list[Item]:
         return [Item(id=1, name="test")]
 
-    async def perform_retrieve(self, pk: int) -> Item:
+    async def perform_retrieve(self, _context: Context, pk: int) -> Item:
         return Item(id=pk, name="test")
 
 class StandardItemViewSet(ViewSetMixin[int, Item]):
-    async def perform_create(self, data: Item) -> Item:
+    async def perform_create(self, _context: Context, data: Item) -> Item:
         return data
 
-    async def perform_list(self) -> list[Item]:
+    async def perform_list(self, _context: Context) -> list[Item]:
         return []
 
-    async def perform_retrieve(self, pk: int) -> Item:
+    async def perform_retrieve(self, _context: Context, pk: int) -> Item:
         return Item(id=pk, name="test")
 
-    async def perform_update(self, _pk: int, data: Item, partial: bool = False) -> Item:
+    async def perform_update(self, _context: Context, _pk: int, data: Item, partial: bool = False) -> Item:
         return data
 
-    async def perform_destroy(self, pk: int) -> dict[int, Any]:
+    async def perform_destroy(self, _context: Context, pk: int) -> dict[int, Any]:
         return {pk: "deleted"}
 
 class FilterableItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item, ItemFilter]):
@@ -117,15 +120,16 @@ class FilterableItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, 
 async def test_viewset_methods():
     viewset = ItemViewSet()
     item = Item(id=1, name="test")
+    context = {}
 
-    assert await viewset.create(item) == item
-    assert await viewset.bulk_create([item]) == [item]
-    assert await viewset.list_items() == [Item(id=1, name="test")]
-    assert await viewset.retrieve(1) == Item(id=1, name="test")
-    assert await viewset.update(1, item) == item
-    assert await viewset.bulk_update({1: item}) == [item]
-    assert await viewset.destroy(1) == {1: "deleted"}
-    assert await viewset.bulk_destroy([1]) == [{1: "deleted"}]
+    assert await viewset.create(context, item) == item
+    assert await viewset.bulk_create(context, [item]) == [item]
+    assert await viewset.list_items(context) == [Item(id=1, name="test")]
+    assert await viewset.retrieve(context, 1) == Item(id=1, name="test")
+    assert await viewset.update(context, 1, item) == item
+    assert await viewset.bulk_update(context, {1: item}) == [item]
+    assert await viewset.destroy(context, 1) == {1: "deleted"}
+    assert await viewset.bulk_destroy(context, [1]) == [{1: "deleted"}]
 
 def test_final_methods():
     # Check if methods are marked as @final (in Python 3.8+ typing.final adds __final__ attribute)
@@ -162,7 +166,7 @@ def test_cannot_instantiate_incomplete_viewset():
 
 def test_can_instantiate_complete_viewset():
     class CompleteViewSet(CreateMixin[int, str]):
-        async def perform_create(self, data: str) -> str:
+        async def perform_create(self, _context: Context, data: str) -> str:
             return data
 
     # This should work without error
@@ -408,7 +412,7 @@ class LookupItemViewSet(CollectionViewSet[int, Item], LookupMixin):
     def __init__(self):
         super().__init__(container=_DB, pk_field="id")
 
-    async def perform_lookup(self) -> list[LookupItem]:
+    async def perform_lookup(self, _context: Context) -> list[LookupItem]:
         return list(_LOOKUP_DB)
 
 
@@ -508,7 +512,7 @@ async def test_lookup_setup_filter_hook_called():
         def __init__(self):
             super().__init__(container=_DB, pk_field="id")
 
-        async def perform_lookup(self) -> list[LookupItem]:
+        async def perform_lookup(self, _context: Context) -> list[LookupItem]:
             return list(_LOOKUP_DB)
 
         async def setup_lookup_filter(self, fltr: LookupFilter) -> None:
@@ -531,7 +535,7 @@ async def test_lookup_setup_filter_hook_not_called_without_q():
         def __init__(self):
             super().__init__(container=_DB, pk_field="id")
 
-        async def perform_lookup(self) -> list[LookupItem]:
+        async def perform_lookup(self, _context: Context) -> list[LookupItem]:
             return list(_LOOKUP_DB)
 
         async def setup_lookup_filter(self, fltr: LookupFilter) -> None:
@@ -557,7 +561,7 @@ class ExtendedLookupViewSet(CollectionViewSet[int, Item], LookupMixin[ExtendedLo
     def __init__(self):
         super().__init__(container=_DB, pk_field="id")
 
-    async def perform_lookup(self) -> list[LookupItem]:
+    async def perform_lookup(self, _context: Context) -> list[LookupItem]:
         return list(_LOOKUP_DB)
 
     async def filter_lookup(self, fltr: ExtendedLookupFilter, items: list[LookupItem]) -> list[LookupItem]:

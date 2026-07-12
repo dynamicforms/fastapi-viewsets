@@ -9,6 +9,7 @@ from typing import get_type_hints, TYPE_CHECKING, TypeVar
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+from ...context import Context, deserialize_context
 from ..build_schema import build_schema
 from ..lifecycle_runner import lifecycle_runner, LifecycleType
 from ..route_viewset import build_type_map, resolve_typevars
@@ -33,16 +34,29 @@ def _to_jsonable(value):
 
 
 def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> dict:
-    """Reconstruct dict values back into Pydantic BaseModel instances based on endpoint type hints."""
+    """Reconstruct dict values back into Pydantic BaseModel instances based on endpoint type hints.
+
+    `context` is handled unconditionally (by name, not by type hint) via deserialize_context - see
+    fastapi_viewsets/context.py - since its declared type is a plain Context and its actual values
+    may need SerializableObject-aware reconstruction.
+    """
+    result = {}
+    remaining = {}
+    for key, value in kwargs.items():
+        if key == "context" and isinstance(value, dict):
+            result[key] = Context(deserialize_context(value))
+        else:
+            remaining[key] = value
+
     try:
         hints = get_type_hints(original_endpoint)
     except Exception:
-        return kwargs
+        result.update(remaining)
+        return result
 
     type_map = build_type_map(cls) if cls is not None else {}
 
-    result = {}
-    for key, value in kwargs.items():
+    for key, value in remaining.items():
         hint = hints.get(key)
         if hint is not None:
             hint = resolve_typevars(type_map, hint)

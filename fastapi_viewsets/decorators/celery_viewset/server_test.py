@@ -26,10 +26,10 @@ def test_celery_viewset_server_decorator_registration():
 
     @celery_viewset_server(celery_app=celery_app, task_prefix="items")
     class ItemViewSet(ListMixin[Item], CreateMixin[int, Item]):
-        async def perform_list(self) -> list[Item]:
+        async def perform_list(self, _context) -> list[Item]:
             return [Item(id=1, name="test")]
 
-        async def perform_create(self, data: Item) -> Item:
+        async def perform_create(self, _context, data: Item) -> Item:
             return data
 
     calls = celery_app.task.call_args_list
@@ -53,12 +53,12 @@ def test_celery_viewset_server_execution():
 
     @celery_viewset_server(celery_app=celery_app, task_prefix="items")
     class ItemViewSet(ListMixin[Item]):
-        async def perform_list(self) -> list[Item]:
+        async def perform_list(self, _context) -> list[Item]:
             return [Item(id=1, name="test")]
 
     assert "items.list_items" in registered_tasks
     sync_func = registered_tasks["items.list_items"]
-    result = sync_func()
+    result = sync_func(context={})
     assert result == [Item(id=1, name="test")]
 
 
@@ -82,13 +82,13 @@ def test_celery_viewset_server_lifecycle_per_request():
         def __init__(self):
             Counter.count += 1
 
-        async def perform_list(self) -> list[int]:
+        async def perform_list(self, _context) -> list[int]:
             return [Counter.count]
 
     sync_func = registered_tasks["counter.list_items"]
-    res1 = sync_func()
+    res1 = sync_func(context={})
     assert res1 == [1]
-    res2 = sync_func()
+    res2 = sync_func(context={})
     assert res2 == [2]
 
 
@@ -110,11 +110,11 @@ def test_celery_viewset_server_pushes_result_to_redis():
 
     @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
     class ItemViewSet(ListMixin[Item]):
-        async def perform_list(self) -> list[Item]:
+        async def perform_list(self, _context) -> list[Item]:
             return [Item(id=1, name="test")]
 
     sync_func = registered_tasks["items.list_items"]
-    sync_func(_correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
+    sync_func(context={}, _correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
 
     redis_mock.rpush.assert_called_once()
     call_args = redis_mock.rpush.call_args
@@ -143,12 +143,12 @@ def test_celery_viewset_server_pushes_error_to_redis_on_exception():
 
     @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
     class ItemViewSet(ListMixin[Item]):
-        async def perform_list(self) -> list[Item]:
+        async def perform_list(self, _context) -> list[Item]:
             raise ValueError("DB connection failed")
 
     sync_func = registered_tasks["items.list_items"]
     with pytest.raises(ValueError, match="DB connection failed"):
-        sync_func(_correlation_id="err-corr-id", _result_queue_key="celery_viewset_results:items")
+        sync_func(context={}, _correlation_id="err-corr-id", _result_queue_key="celery_viewset_results:items")
 
     redis_mock.rpush.assert_called_once()
     call_args = redis_mock.rpush.call_args
@@ -178,11 +178,11 @@ def test_celery_viewset_server_pushes_http_exception_to_redis():
 
     @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
     class ItemViewSet(ListMixin[Item]):
-        async def perform_list(self) -> list[Item]:
+        async def perform_list(self, _context) -> list[Item]:
             raise HTTPException(status_code=404, detail="Item with pk 5 not found")
 
     sync_func = registered_tasks["items.list_items"]
-    result = sync_func(_correlation_id="http-corr-id", _result_queue_key="celery_viewset_results:items")
+    result = sync_func(context={}, _correlation_id="http-corr-id", _result_queue_key="celery_viewset_results:items")
     assert result is None
 
     redis_mock.rpush.assert_called_once()
@@ -208,11 +208,11 @@ def test_celery_viewset_server_no_redis_no_push():
 
     @celery_viewset_server(celery_app=celery_app, task_prefix="items")
     class ItemViewSet(ListMixin[Item]):
-        async def perform_list(self) -> list[Item]:
+        async def perform_list(self, _context) -> list[Item]:
             return [Item(id=1, name="test")]
 
     sync_func = registered_tasks["items.list_items"]
-    result = sync_func(_correlation_id="some-id", _result_queue_key="celery_viewset_results:items")
+    result = sync_func(context={}, _correlation_id="some-id", _result_queue_key="celery_viewset_results:items")
     assert result == [Item(id=1, name="test")]
 
 
@@ -222,7 +222,7 @@ def test_celery_viewset_server_metadata():
 
     @celery_viewset_server(celery_app=celery_app, task_prefix="myprefix")
     class ItemViewSet(ListMixin[Item]):
-        async def perform_list(self) -> list[Item]:
+        async def perform_list(self, _context) -> list[Item]:
             return []
 
     meta = ItemViewSet.__celery_viewset_metadata__
@@ -281,11 +281,11 @@ def test_fastapi_server_endpoint_executes_directly():
 
     @celery_viewset_server(celery_app=celery_app, task_prefix="items")
     class ItemViewSet(ListMixin[Item]):
-        async def perform_list(self) -> list[Item]:
+        async def perform_list(self, _context) -> list[Item]:
             return [Item(id=42, name="server-item")]
 
     assert "items.list_items" in registered_tasks
-    result = registered_tasks["items.list_items"]()
+    result = registered_tasks["items.list_items"](context={})
     assert result == [Item(id=42, name="server-item")]
 
 
@@ -314,7 +314,7 @@ def test_reconstruct_kwargs_with_typevar_resolved_via_cls():
     from fastapi_viewsets.mixins import CreateMixin
 
     class ItemViewSet(CreateMixin[int, Item]):
-        async def perform_create(self, data: Item) -> Item:
+        async def perform_create(self, _context, data: Item) -> Item:
             return data
 
     # CreateMixin.create has `data: T` — TypeVar, not Item
@@ -332,7 +332,7 @@ def test_reconstruct_kwargs_with_typevar_missing_field():
     from fastapi_viewsets.mixins import CreateMixin
 
     class ItemViewSet(CreateMixin[int, Item]):
-        async def perform_create(self, data: Item) -> Item:
+        async def perform_create(self, _context, data: Item) -> Item:
             return data
 
     kwargs = {"data": {"name": "no id"}}

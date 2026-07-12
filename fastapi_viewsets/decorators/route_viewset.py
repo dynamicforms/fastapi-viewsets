@@ -3,7 +3,7 @@ import inspect
 from functools import wraps
 from typing import Annotated, get_args, get_origin, TypeVar
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.params import FieldInfo
 from pydantic import BaseModel
 
@@ -12,6 +12,7 @@ try:
 except ImportError:
     _TypeVarNoDefault = object()  # fallback sentinel — never equal to any real TypeVar default
 
+from fastapi_viewsets.conf import settings
 from fastapi_viewsets.mixins import FilterParam, make_all_optional
 
 from .build_schema import build_schema, route_to_add_api_route_kwargs
@@ -83,10 +84,6 @@ def route_viewset(
         seen_routes = set()
         instance = cls() if lifecycle == "singleton" else None
 
-        # Opt-in: only viewsets that define `finalize_response` pay for the extra `Response`
-        # param - see docs/guide/routers.md "Response-level side effects: finalize_response".
-        has_finalize_response = hasattr(cls, "finalize_response")
-
         type_map = build_type_map(cls)
 
         # Derive tag from class name: strip "ViewSet" suffix if present
@@ -118,6 +115,7 @@ def route_viewset(
         def get_wrapper(original_endpoint, route_path, route_methods):
             sig = inspect.signature(original_endpoint)
             new_params = []
+            needs_context = False
 
             for name, p in sig.parameters.items():
                 if name == "self":
@@ -125,6 +123,14 @@ def route_viewset(
 
                 annotation = resolve_typevars(type_map, p.annotation)
                 new_p = p.replace(annotation=annotation)
+
+                # context is built centrally (see fastapi_viewsets/context.py) from a live Request -
+                # it must never reach FastAPI's own signature/validation, so it's dropped here and
+                # rebuilt by lifecycle_runner right before the endpoint runs. Detected by parameter
+                # name (by convention) rather than type, since its type is just a plain dict.
+                if name == "context":
+                    needs_context = True
+                    continue
 
                 # Transform Annotated[T, FilterParam()] → Annotated[TFilter, Query()]
                 if _is_filter_param(annotation):
@@ -160,13 +166,21 @@ def route_viewset(
 
                 new_params.append(new_p)
 
-            if has_finalize_response:
-                # Reserved param name, only added for viewsets that opt in by defining
-                # finalize_response - FastAPI injects the REAL Response for this connection here
-                # (never forwarded to the underlying method itself, see wrapper below). Keyword-only
-                # so it can be appended regardless of what defaults precede it.
+            # Reserved param name - FastAPI injects the REAL Response for this connection here
+            # (never forwarded to the underlying method itself, see wrapper below). Keyword-only
+            # so it can be appended regardless of what defaults precede it. Used by lifecycle_runner
+            # to run the command middleware chain and apply headers/cookies onto the real response.
+            new_params.append(
+                inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response)
+            )
+
+            if needs_context:
+                # Reserved param name, only added for endpoints that declare a `context` param.
+                # FastAPI injects the REAL Request here; lifecycle_runner uses it to build the
+                # context (see fastapi_viewsets/context.py) and injects the result as `context`
+                # right before the endpoint runs - never forwarded to the endpoint itself.
                 new_params.append(
-                    inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response)
+                    inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request)
                 )
 
             new_return_annotation = resolve_typevars(type_map, sig.return_annotation)
@@ -176,7 +190,8 @@ def route_viewset(
             async def wrapper(*args, **kwargs):
                 nonlocal instance
 
-                response_obj = kwargs.pop("response", None) if has_finalize_response else None
+                response_obj = kwargs.pop("response", None)
+                request_obj = kwargs.pop("request", None) if needs_context else None
 
                 # Check if any argument needs to be "typecasted" back to the original model
                 # This happens if we replaced the model type with a NoPK version in get_wrapper
@@ -194,13 +209,20 @@ def route_viewset(
                         new_kwargs[param_name] = value
 
                 return await lifecycle_runner(
-                    original_endpoint, instance, cls, lifecycle, *args, response=response_obj, **new_kwargs
+                    original_endpoint, instance, cls, lifecycle, *args, response=response_obj,
+                    needs_context=needs_context, request=request_obj, **new_kwargs
                 )
 
             wrapper.__signature__ = new_sig
             return wrapper, new_return_annotation
 
-        build_schema(cls, base_path, default_tags, get_wrapper, disable_response_model=has_finalize_response)
+        # Command middleware (see fastapi_viewsets/middleware.py) can reshape the response body via
+        # ViewSetResult - if any is configured, the endpoint's declared return type can no longer
+        # be trusted as the actual response_model, same reasoning as the old finalize_response hook.
+        build_schema(
+            cls, base_path, default_tags, get_wrapper,
+            disable_response_model=bool(settings.viewsets_command_middleware),
+        )
 
         for route in cls.__router.routes:
             router.add_api_route(**route_to_add_api_route_kwargs(route))

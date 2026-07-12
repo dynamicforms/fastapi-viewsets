@@ -6,7 +6,7 @@ The mixin system is the core of `fastapi-viewsets`. Each mixin adds one or more 
 
 Every mixin class owns a private `APIRouter` and registers its endpoints on it using standard FastAPI decorators. The `route_viewset` decorator later collects all routes from the class hierarchy, resolves generic type parameters, and registers them on your application router.
 
-You implement the actual business logic by overriding the corresponding `perform_*` method from `ImplMixin`.
+You implement the actual business logic by overriding the corresponding `perform_*` method from `ImplMixin`. Every `perform_*` method takes a `context: Context` as its first parameter after `self` - see [Architecture](./architecture) for the request pipeline that builds it, and [Context Processors](./context-processors) for how to use it.
 
 ## Individual operation mixins
 
@@ -19,14 +19,15 @@ You implement the actual business logic by overriding the corresponding `perform
 | `BulkCreateMixin[K, T]` | both above | Single + bulk create |
 
 ```python
+from fastapi_viewsets.context import Context
 from fastapi_viewsets.mixins import BulkCreateMixin
 
 class MyViewSet(BulkCreateMixin[int, Item]):
-    async def perform_create(self, data: Item) -> Item:
+    async def perform_create(self, context: Context, data: Item) -> Item:
         db.append(data)
         return data
 
-    async def perform_bulk_create(self, data: list[Item]) -> list[Item]:
+    async def perform_bulk_create(self, context: Context, data: list[Item]) -> list[Item]:
         db.extend(data)
         return data
 ```
@@ -53,21 +54,23 @@ is also provided, its fields appear as individual query parameters.
    sort with nulls-last (asc) / nulls-first (desc).
 
 ```python
+from fastapi_viewsets.context import Context
 from fastapi_viewsets.mixins import ListMixin, RetrieveMixin, make_all_optional, SortState
 from fastapi_viewsets.response_classes import NotFoundError
 
 ItemFilter = make_all_optional(Item)
 
 class MyViewSet(ListMixin[Item, ItemFilter], RetrieveMixin[int, Item]):
-    async def perform_list(self) -> list[Item]:
+    async def perform_list(self, context: Context) -> list[Item]:
         return list(db.values())
 
     async def filter_list(self, fltr: ItemFilter, records: list[Item]) -> list[Item]:
+        # filter_list/setup_filter don't receive context - see Context Processors "Known limitations"
         if fltr.name is not None:
             records = [r for r in records if fltr.name.lower() in r.name.lower()]
         return records
 
-    async def perform_retrieve(self, pk: int) -> Item:
+    async def perform_retrieve(self, context: Context, pk: int) -> Item:
         if pk not in db:
             raise NotFoundError(pk)
         return db[pk]
@@ -102,7 +105,7 @@ async def sort_list(self, sort: SortState, records: list[Item]) -> list[Item]:
 The `partial` parameter is `False` for `PUT` and `True` for `PATCH`.
 
 ```python
-async def perform_update(self, pk: int, data: Item, partial: bool = True) -> Item:
+async def perform_update(self, context: Context, pk: int, data: Item, partial: bool = True) -> Item:
     if partial:
         # apply only provided fields
         ...
@@ -138,7 +141,7 @@ from fastapi_viewsets.mixins import LookupMixin, LookupItem, LookupFilter
 
 # Default behaviour: q= query param, filters by title automatically
 class MyViewSet(..., LookupMixin):
-    async def perform_lookup(self) -> list[LookupItem]:
+    async def perform_lookup(self, context: Context) -> list[LookupItem]:
         return [LookupItem(group=None, pk=i.id, title=i.name, icon=None) for i in db.values()]
 
 # Custom filter model with additional fields
@@ -146,7 +149,7 @@ class MyFilter(LookupFilter):
     group: str | None = None
 
 class MyViewSet(..., LookupMixin[MyFilter]):
-    async def perform_lookup(self) -> list[LookupItem]:
+    async def perform_lookup(self, context: Context) -> list[LookupItem]:
         return [LookupItem(group=i.group, pk=i.id, title=i.name) for i in db.values()]
 
     async def filter_lookup(self, fltr: MyFilter, items: list[LookupItem]) -> list[LookupItem]:
@@ -173,15 +176,15 @@ from fastapi_viewsets.mixins import BulkViewSetMixin, make_all_optional
 ItemFilter = make_all_optional(Item)
 
 class ItemViewSet(BulkViewSetMixin[int, Item, ItemFilter]):
-    async def perform_list(self): ...
-    async def perform_retrieve(self, pk): ...
-    async def perform_create(self, data): ...
-    async def perform_bulk_create(self, data): ...
-    async def perform_update(self, pk, data, partial): ...
-    async def perform_bulk_update(self, records, partial): ...
-    async def perform_destroy(self, pk): ...
-    async def perform_bulk_destroy(self, pk): ...
-    async def filter_list(self, fltr, records): ...
+    async def perform_list(self, context): ...
+    async def perform_retrieve(self, context, pk): ...
+    async def perform_create(self, context, data): ...
+    async def perform_bulk_create(self, context, data): ...
+    async def perform_update(self, context, pk, data, partial): ...
+    async def perform_bulk_update(self, context, records, partial): ...
+    async def perform_destroy(self, context, pk): ...
+    async def perform_bulk_destroy(self, context, pk): ...
+    async def filter_list(self, fltr, records): ...  # not context-threaded, see Context Processors
 ```
 
 ## Error handling

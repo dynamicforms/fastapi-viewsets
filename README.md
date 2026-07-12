@@ -8,8 +8,9 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
   Handles type resolution, lifecycle management and OpenAPI schema automatically.
 - **`CollectionViewSet`** — zero-boilerplate in-memory viewset backed by any Python list, set or dict.
   Great for prototyping and testing.
-- **`CeleryViewSet`** — delegate all CRUD operations to Celery tasks, for long-running or background
-  processing scenarios (requires the `celery` extra).
+- **`celery_viewset` decorator** — move a viewset's execution to a Celery worker with no code changes
+  to the viewset itself, for long-running or background processing scenarios (requires the `celery`
+  extra).
 - **Bulk operations** — first-class support for bulk create, update, partial update and destroy.
 - **Vue / TypeScript counterpart** — mirror mixin classes and a `route_rest` factory give you a fully
   typed HTTP client that matches your backend viewset exactly (published separately as
@@ -58,7 +59,7 @@ app.include_router(router)
 ```
 
 See the [full documentation](https://docs.velis.si/dynamicforms/fastapi-viewsets/) for guides on
-the mixin system, `route_viewset`, `CollectionViewSet`, `CeleryViewSet`, and the Vue client.
+the mixin system, `route_viewset`, `CollectionViewSet`, `celery_viewset`, and the Vue client.
 
 ## License
 

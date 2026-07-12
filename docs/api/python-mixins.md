@@ -6,29 +6,32 @@ Abstract base. Subclasses must implement all `perform_*` methods.
 
 ```python
 class ImplMixin(Generic[K, T], ABC):
-    async def perform_create(self, data: T) -> T: ...
-    async def perform_bulk_create(self, data: list[T]) -> list[T]: ...
-    async def perform_list(self) -> list[T]: ...
-    async def perform_retrieve(self, pk: K) -> T: ...
-    async def perform_update(self, pk: K, data: T, partial: bool = True) -> T: ...
-    async def perform_bulk_update(self, records: dict[K, T], partial: bool = True) -> list[T]: ...
-    async def perform_destroy(self, pk: K) -> dict[K, Any]: ...
-    async def perform_bulk_destroy(self, pk: list[K]) -> list[dict[K, Any]]: ...
+    async def perform_create(self, context: Context, data: T) -> T: ...
+    async def perform_bulk_create(self, context: Context, data: list[T]) -> list[T]: ...
+    async def perform_list(self, context: Context) -> list[T]: ...
+    async def perform_retrieve(self, context: Context, pk: K) -> T: ...
+    async def perform_update(self, context: Context, pk: K, data: T, partial: bool = True) -> T: ...
+    async def perform_bulk_update(self, context: Context, records: dict[K, T], partial: bool = True) -> list[T]: ...
+    async def perform_destroy(self, context: Context, pk: K) -> dict[K, Any]: ...
+    async def perform_bulk_destroy(self, context: Context, pk: list[K]) -> list[dict[K, Any]]: ...
 ```
+
+`context` (a [`Context`](../guide/context-processors) instance) is built by `route_viewset` from
+`settings.viewsets_context_processors` - see [Architecture](../guide/architecture).
 
 ## Operation mixins
 
 ### CreateMixin `[K, T]`
-- `POST /` → calls `perform_create(data: T) -> T`
+- `POST /` → calls `perform_create(context, data: T) -> T`
 
 ### BulkOnlyCreateMixin `[K, T]`
-- `POST /bulk` → calls `perform_bulk_create(data: list[T]) -> list[T]`
+- `POST /bulk` → calls `perform_bulk_create(context, data: list[T]) -> list[T]`
 
 ### BulkCreateMixin `[K, T]`
 Combines `CreateMixin` + `BulkOnlyCreateMixin`.
 
 ### ListMixin `[T, TFilter=None]`
-- `GET /` → calls `perform_list() -> list[T]`
+- `GET /` → calls `perform_list(context) -> list[T]`
 - Always exposes a `sort` query parameter (`column:asc,column:desc` comma-separated format).
 - When `TFilter` is provided, filter fields are also exposed as individual query parameters.
 
@@ -41,24 +44,24 @@ Sort hooks:
 - `sort_list(sort: SortState, records: list[T]) -> list[T]` — post-sort hook (default: stable multi-key in-memory sort; nulls last for asc, nulls first for desc)
 
 ### RetrieveMixin `[K, T]`
-- `GET /{pk}` → calls `perform_retrieve(pk: K) -> T`
+- `GET /{pk}` → calls `perform_retrieve(context, pk: K) -> T`
 
 ### UpdateMixin `[K, T]`
-- `PUT /{pk}` → calls `perform_update(pk, data, partial=False) -> T`
-- `PATCH /{pk}` → calls `perform_update(pk, data, partial=True) -> T`
+- `PUT /{pk}` → calls `perform_update(context, pk, data, partial=False) -> T`
+- `PATCH /{pk}` → calls `perform_update(context, pk, data, partial=True) -> T`
 
 ### BulkOnlyUpdateMixin `[K, T]`
-- `PUT /bulk` → calls `perform_bulk_update(records, partial=False) -> list[T]`
-- `PATCH /bulk` → calls `perform_bulk_update(records, partial=True) -> list[T]`
+- `PUT /bulk` → calls `perform_bulk_update(context, records, partial=False) -> list[T]`
+- `PATCH /bulk` → calls `perform_bulk_update(context, records, partial=True) -> list[T]`
 
 ### BulkUpdateMixin `[K, T]`
 Combines `UpdateMixin` + `BulkOnlyUpdateMixin`.
 
 ### DestroyMixin `[K, T]`
-- `DELETE /{pk}` → calls `perform_destroy(pk: K) -> dict[K, Any]`
+- `DELETE /{pk}` → calls `perform_destroy(context, pk: K) -> dict[K, Any]`
 
 ### BulkOnlyDestroyMixin `[K, T]`
-- `DELETE /bulk` → calls `perform_bulk_destroy(pk: list[K]) -> list[dict[K, Any]]`
+- `DELETE /bulk` → calls `perform_bulk_destroy(context, pk: list[K]) -> list[dict[K, Any]]`
 
 ### BulkDestroyMixin `[K, T]`
 Combines `DestroyMixin` + `BulkOnlyDestroyMixin`.
@@ -81,7 +84,7 @@ SortState = list[SortStateColumn]
 `SortState`. Format: `"name:asc,score:desc"`. Entries with an unknown direction are skipped.
 
 ### LookupMixin `[TLookupFilter=LookupFilter]`
-- `GET /lookup` → calls `perform_lookup() -> list[LookupItem]`
+- `GET /lookup` → calls `perform_lookup(context) -> list[LookupItem]`
 - `TLookupFilter` defaults to `LookupFilter` (single `q: str | None` field), so basic title search
   works without any configuration.
 - When the filter is active:

@@ -23,8 +23,8 @@ features:
     details: Register a viewset on a FastAPI router with a single decorator call. Handles type resolution, lifecycle management and OpenAPI schema automatically.
   - title: CollectionViewSet
     details: Zero-boilerplate in-memory viewset backed by any Python list, set or dict. Great for prototyping and testing.
-  - title: CeleryViewSet
-    details: Delegate all CRUD operations to Celery tasks. Ideal for long-running or background processing scenarios.
+  - title: Transparent Celery delegation
+    details: Move a viewset's execution to a Celery worker with a single decorator — no code changes to the viewset itself.
   - title: Vue / TypeScript counterpart
     details: Mirror mixin classes and a route_rest factory give you a fully typed HTTP client that matches your backend viewset exactly.
   - title: Bulk operations

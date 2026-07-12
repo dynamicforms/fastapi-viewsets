@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, create_model
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
+from fastapi_viewsets.context import Context
 from fastapi_viewsets.response_classes import NOT_FOUND_RESPONSE
 
 T = TypeVar("T")
@@ -16,56 +17,56 @@ TFilter = TypeVar("TFilter", default=None)
 
 class ImplMixin(Generic[K, T], ABC):
     @abstractmethod
-    async def perform_create(self, data: T) -> T:
+    async def perform_create(self, context: Context, data: T) -> T:
         """
         Subclasses should implement this method to perform the actual creation.
         """
         raise NotImplementedError("Method 'perform_create' must be implemented.")
 
     @abstractmethod
-    async def perform_bulk_create(self, data: list[T]) -> list[T]:
+    async def perform_bulk_create(self, context: Context, data: list[T]) -> list[T]:
         """
         Subclasses should implement this method to perform the actual bulk creation.
         """
         raise NotImplementedError("Method 'perform_bulk_create' must be implemented.")
 
     @abstractmethod
-    async def perform_list(self) -> list[T]:
+    async def perform_list(self, context: Context) -> list[T]:
         """
         Subclasses should implement this method to perform the actual listing.
         """
         raise NotImplementedError("Method 'perform_list' must be implemented.")
 
     @abstractmethod
-    async def perform_retrieve(self, pk: K) -> T:
+    async def perform_retrieve(self, context: Context, pk: K) -> T:
         """
         Subclasses should implement this method to perform the actual retrieval.
         """
         raise NotImplementedError("Method 'perform_retrieve' must be implemented.")
 
     @abstractmethod
-    async def perform_update(self, pk: K, data: T, partial: bool = True) -> T:
+    async def perform_update(self, context: Context, pk: K, data: T, partial: bool = True) -> T:
         """
         Subclasses should implement this method to perform the actual update.
         """
         raise NotImplementedError("Method 'perform_update' must be implemented.")
 
     @abstractmethod
-    async def perform_bulk_update(self, records: dict[K, T], partial: bool = True) -> list[T]:
+    async def perform_bulk_update(self, context: Context, records: dict[K, T], partial: bool = True) -> list[T]:
         """
         Subclasses should implement this method to perform the actual bulk update.
         """
         raise NotImplementedError("Method 'perform_bulk_update' must be implemented.")
 
     @abstractmethod
-    async def perform_destroy(self, pk: K) -> dict[K, Any]:
+    async def perform_destroy(self, context: Context, pk: K) -> dict[K, Any]:
         """
         Subclasses should implement this method to perform the actual destruction.
         """
         raise NotImplementedError("Method 'perform_destroy' must be implemented.")
 
     @abstractmethod
-    async def perform_bulk_destroy(self, pk: list[K]) -> list[dict[K, Any]]:
+    async def perform_bulk_destroy(self, context: Context, pk: list[K]) -> list[dict[K, Any]]:
         """
         Subclasses should implement this method to perform the actual bulk destruction.
         """
@@ -83,8 +84,8 @@ class CreateMixin(Generic[K, T], ABC):
 
     @final
     @__router.post("")
-    async def create(self: "ImplMixin[K, T] | CreateMixin[K ,T]", data: T) -> T:
-        return await self.perform_create(data)
+    async def create(self: "ImplMixin[K, T] | CreateMixin[K ,T]", context: Context, data: T) -> T:
+        return await self.perform_create(context, data)
 
 
 class BulkOnlyCreateMixin(Generic[K, T], ABC):
@@ -95,8 +96,10 @@ class BulkOnlyCreateMixin(Generic[K, T], ABC):
 
     @final
     @__router.post("bulk")
-    async def bulk_create(self: "ImplMixin[K, T] | BulkOnlyCreateMixin[K ,T]", data: list[T]) -> list[T]:
-        return await self.perform_bulk_create(data)
+    async def bulk_create(
+        self: "ImplMixin[K, T] | BulkOnlyCreateMixin[K ,T]", context: Context, data: list[T]
+    ) -> list[T]:
+        return await self.perform_bulk_create(context, data)
 
 
 class BulkCreateMixin(CreateMixin[K, T], BulkOnlyCreateMixin[K, T]):
@@ -193,6 +196,7 @@ class ListMixin(Generic[T, TFilter], ABC):
     @__router.get("")
     async def list_items(
         self: "ImplMixin[Any, T] | ListMixin[T]",
+        context: Context,
         fltr: Annotated[TFilter, Query()] = None,
         sort: str | None = None,
     ) -> list[T]:
@@ -207,7 +211,7 @@ class ListMixin(Generic[T, TFilter], ABC):
             await self.setup_filter(fltr)
         if sort_state:
             await self.setup_sort(sort_state)
-        res = await self.perform_list()
+        res = await self.perform_list(context)
         if has_filter:
             res = await self.filter_list(fltr, res)
         if sort_state:
@@ -274,8 +278,8 @@ class RetrieveMixin(Generic[K, T], ABC):
 
     @final
     @__router.get("/{pk}", responses=NOT_FOUND_RESPONSE)
-    async def retrieve(self: "ImplMixin[K, T] | RetrieveMixin[K, T]", pk: K) -> T:
-        return await self.perform_retrieve(pk)
+    async def retrieve(self: "ImplMixin[K, T] | RetrieveMixin[K, T]", context: Context, pk: K) -> T:
+        return await self.perform_retrieve(context, pk)
 
 
 ###################################################################################################
@@ -289,13 +293,15 @@ class UpdateMixin(Generic[K, T], ABC):
 
     @final
     @__router.put("/{pk}", responses=NOT_FOUND_RESPONSE)
-    async def update(self: "ImplMixin[K, T] | UpdateMixin[K, T]", pk: K, data: T) -> T:
-        return await self.perform_update(pk, data, partial=False)
+    async def update(self: "ImplMixin[K, T] | UpdateMixin[K, T]", context: Context, pk: K, data: T) -> T:
+        return await self.perform_update(context, pk, data, partial=False)
 
     @final
     @__router.patch("/{pk}", name="partial_update", responses=NOT_FOUND_RESPONSE)
-    async def partial_update(self: "ImplMixin[K, T] | UpdateMixin[K, T]", pk: K, data: T) -> T:
-        return await self.perform_update(pk, data, partial=True)
+    async def partial_update(
+        self: "ImplMixin[K, T] | UpdateMixin[K, T]", context: Context, pk: K, data: T
+    ) -> T:
+        return await self.perform_update(context, pk, data, partial=True)
 
 
 class BulkOnlyUpdateMixin(Generic[K, T], ABC):
@@ -306,13 +312,17 @@ class BulkOnlyUpdateMixin(Generic[K, T], ABC):
 
     @final
     @__router.put("bulk")
-    async def bulk_update(self: "ImplMixin[K, T] | BulkOnlyUpdateMixin[K, T]", records: dict[K, T]) -> list[T]:
-        return await self.perform_bulk_update(records, partial=False)
+    async def bulk_update(
+        self: "ImplMixin[K, T] | BulkOnlyUpdateMixin[K, T]", context: Context, records: dict[K, T]
+    ) -> list[T]:
+        return await self.perform_bulk_update(context, records, partial=False)
 
     @final
     @__router.patch("bulk", name="bulk_partial_update")
-    async def bulk_partial_update(self: "ImplMixin[K, T] | BulkOnlyUpdateMixin[K, T]", records: dict[K, T]) -> list[T]:
-        return await self.perform_bulk_update(records, partial=True)
+    async def bulk_partial_update(
+        self: "ImplMixin[K, T] | BulkOnlyUpdateMixin[K, T]", context: Context, records: dict[K, T]
+    ) -> list[T]:
+        return await self.perform_bulk_update(context, records, partial=True)
 
 
 class BulkUpdateMixin(UpdateMixin[K, T], BulkOnlyUpdateMixin[K, T]):
@@ -332,8 +342,8 @@ class DestroyMixin(Generic[K, T], ABC):
 
     @final
     @__router.delete("/{pk}", responses=NOT_FOUND_RESPONSE)
-    async def destroy(self: "ImplMixin[K, T] | DestroyMixin[K, T]", pk: K) -> dict[K, Any]:
-        return await self.perform_destroy(pk)
+    async def destroy(self: "ImplMixin[K, T] | DestroyMixin[K, T]", context: Context, pk: K) -> dict[K, Any]:
+        return await self.perform_destroy(context, pk)
 
 
 class BulkOnlyDestroyMixin(Generic[K, T], ABC):
@@ -344,8 +354,10 @@ class BulkOnlyDestroyMixin(Generic[K, T], ABC):
 
     @final
     @__router.delete("bulk")
-    async def bulk_destroy(self: "ImplMixin[K, T] | BulkOnlyDestroyMixin[K, T]", pk: list[K]) -> list[dict[K, Any]]:
-        return await self.perform_bulk_destroy(pk)
+    async def bulk_destroy(
+        self: "ImplMixin[K, T] | BulkOnlyDestroyMixin[K, T]", context: Context, pk: list[K]
+    ) -> list[dict[K, Any]]:
+        return await self.perform_bulk_destroy(context, pk)
 
 
 class BulkDestroyMixin(DestroyMixin[K, T], BulkOnlyDestroyMixin[K, T]):
@@ -394,7 +406,7 @@ class LookupMixin(Generic[TLookupFilter], ABC):
     __router = APIRouter()
 
     @abstractmethod
-    async def perform_lookup(self) -> list[LookupItem]:
+    async def perform_lookup(self, context: Context) -> list[LookupItem]:
         """
         Subclasses should implement this method to return lookup items.
         This method is intentionally NOT in ImplMixin because it's expected to be a simple
@@ -423,6 +435,7 @@ class LookupMixin(Generic[TLookupFilter], ABC):
     @__router.get("lookup")
     async def lookup(
         self: "ImplMixin[Any, LookupItem] | LookupMixin",
+        context: Context,
         fltr: Annotated[TLookupFilter, Query()] = None,
     ) -> list[LookupItem]:
         has_filter = (
@@ -432,7 +445,7 @@ class LookupMixin(Generic[TLookupFilter], ABC):
         )
         if has_filter:
             await self.setup_lookup_filter(fltr)
-        res = await self.perform_lookup()
+        res = await self.perform_lookup(context)
         if has_filter:
             res = await self.filter_lookup(fltr, res)
         return res

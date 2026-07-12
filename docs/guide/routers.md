@@ -30,7 +30,7 @@ def route_viewset(
 |-----------|------|---------|-------------|
 | `router` | `APIRouter` | — | The FastAPI router to register routes on |
 | `base_path` | `str` | — | URL prefix for all endpoints, e.g. `"/items"` |
-| `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle — see [Lifecycle modes](#lifecycle-modes) |
+| `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle — see [ViewSet Lifecycle](./lifecycle) |
 | `pk_field_name` | `str \| None` | `None` | Name of the PK field; when set, the field is stripped from the `POST` request body |
 
 ### Usage
@@ -47,84 +47,27 @@ class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
         super().__init__(container=database, pk_field="id")
 ```
 
-### Lifecycle modes
+### Lifecycle modes and state hooks
 
-| Mode | Behaviour |
-|------|-----------|
-| `"singleton"` | One instance is created when the decorator runs and reused for every request. `load_state()` / `save_state()` are called on every request, so state can be shared across multiple processes (e.g. via Redis). Note: there is currently no locking — concurrent requests may cause race conditions when writing state. |
-| `"per-request"` | A new instance is created for every incoming request. `load_state()` / `save_state()` are **not** called. Useful when the viewset needs per-request context (e.g. the current user) with no shared state. |
-| `"instance-key"` | A new instance is created per request. `load_state()` is called before the endpoint and `save_state()` after it, so state is loaded fresh and persisted on every request. Same race-condition caveat as `"singleton"` applies. |
+`lifecycle` controls how the viewset **class** becomes the **instance** that handles a request
+(`"singleton"`, `"per-request"`, or `"instance-key"`), and whether that instance's own
+`load_state()`/`save_state()` hooks get called around each request. This is its own dedicated
+topic — see [ViewSet Lifecycle](./lifecycle) for the full picture, including the race-condition
+caveat and a worked example.
 
-### State hooks: `load_state` / `save_state`
+### Response-level side effects: Command Middleware
 
-`"singleton"` and `"instance-key"` both call two optional async methods on the viewset around each request:
-
-| Method | When called | Purpose |
-|--------|-------------|---------|
-| `async def load_state(self)` | Before the endpoint handler | Restore state from an external store |
-| `async def save_state(self)` | After the endpoint handler (in a `finally` block) | Persist state back to the external store |
-
-Neither method is required — if absent, it is simply skipped. `save_state` is called even if the endpoint raises an exception.
-
-> **Note:** There is currently no distributed locking around `load_state` / `save_state`. In deployments with multiple worker processes, concurrent requests can interleave their load/save cycles and overwrite each other's changes. Add external locking (e.g. a Redis lock) in your `load_state` / `save_state` implementation if you need consistency.
-
-```python
-@route_viewset(router, base_path="/session", lifecycle="instance-key")
-class SessionViewSet(ListMixin[str]):
-    def __init__(self):
-        self.items: list[str] = []
-
-    async def load_state(self):
-        self.items = await redis.lrange("session:items", 0, -1)
-
-    async def save_state(self):
-        await redis.delete("session:items")
-        if self.items:
-            await redis.rpush("session:items", *self.items)
-
-    async def perform_list(self) -> list[str]:
-        return self.items
-```
-
-### Response-level side effects: `finalize_response`
-
-An action's return value is JSON-serializable data — but sometimes an endpoint needs to affect the response itself 
-(most commonly: setting a cookie), not just the response body. This matters especially when the action is *also* wired 
-through [`celery_viewset`](./celery-viewset): the method body may run in a Celery worker, which has no live `Response` 
+An action's return value is JSON-serializable data — but sometimes an endpoint needs to affect the response itself
+(most commonly: setting a cookie), not just the response body. This matters especially when the action is *also* wired
+through [`celery_viewset`](#celery-viewset): the method body may run in a Celery worker, which has no live `Response`
 object at all (and its return value must survive a JSON round trip through Redis), so the response-level side effect has
 to be applied separately, once the result is back in the FastAPI process.
 
-Define an optional `finalize_response` hook on the viewset to do this:
-
-```python
-from fastapi import Response
-
-class SessionViewSet:
-    __router = APIRouter()
-
-    @__router.post("login")
-    async def login(self, data: LoginInput) -> LoginResult:
-        return LoginResult(is_authenticated=True, session_key="s3cr3t")
-
-    async def finalize_response(self, response: Response, result: LoginResult) -> dict:
-        data = result.model_dump()
-        session_key = data.pop("session_key", None)
-        if session_key is not None:
-            response.set_cookie("sessionid", session_key)
-        return data  # becomes the actual JSON body
-```
-
-`route_viewset` only adds the extra `response` parameter (and calls the hook) for viewsets that define 
-`finalize_response` — it's entirely opt-in and has no effect on viewsets that don't declare it. When present:
-
-- `response` is a **real** `Response` for the current connection (FastAPI-injected, never sent through Celery/Redis even 
-  when the action itself is `celery_viewset`-dispatched).
-- The hook's return value becomes the actual response body — it's the ONLY place you can change the shape of what's
-  served, since the original method's declared return type is no longer enforced as `response_model` for that route 
-  (otherwise FastAPI would silently re-fill any field you tried to strip with its Pydantic default).
-- Called for all three lifecycle modes, on whichever instance the action actually ran on.
-- If a `celery_viewset`-dispatched action's own exception became an `HTTPException` on the worker side, it propagates as
-  usual and `finalize_response` is never called for that request.
+**Command middleware** is the mechanism for this: a middleware in `settings.viewsets_command_middleware` can
+inspect/replace the `ViewSetResult` that `call_next()` returns and set `.headers`/`.cookies` on it - `route_viewset`
+applies those onto the real `Response` once the result is back in the FastAPI process, regardless of whether the
+action ran in-process or was `celery_viewset`-dispatched to a worker. See the
+[Command Middleware guide](./command-middleware) for the full picture.
 
 ### Automatic OpenAPI tags
 
@@ -174,7 +117,7 @@ def celery_viewset(
 |-----------|------|---------|-------------|
 | `celery_app` | `Celery` | — | The Celery application instance |
 | `task_prefix` | `str` | — | Prefix for all registered Celery task names, e.g. `"items"` |
-| `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle on the worker side (same semantics as `route_viewset`) |
+| `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle on the worker side (same semantics as `route_viewset` — see [ViewSet Lifecycle](./lifecycle)) |
 | `redis_client` | `redis.Redis \| None` | `None` | Redis client used to pass results back to FastAPI. Required in client (FastAPI) mode; optional in worker mode. |
 
 ### Usage
@@ -286,4 +229,17 @@ main.py              ← @route_viewset   (FastAPI only, wraps the viewset)
 celery_worker.py     ← imports viewsets (tasks registered on import)
 ```
 
-See the [CeleryViewSet guide](./celery-viewset) for a full working example.
+See `demo/backend/viewsets.py` + `demo/backend/main.py` in the repository for a full working example.
+
+---
+
+## Context processors & command middleware
+
+Every standard mixin action (`create`, `list_items`, `retrieve`, ...) also accepts a `context`
+parameter (a `Context` instance), built from a global list of processor callables (Django-style
+`context_processors`) and forwarded into `perform_*`. This is the recommended way to make
+per-request data (e.g. the authenticated user) available to `perform_*` without re-deriving it,
+and it survives the `celery_viewset` client/worker boundary. See [Architecture](./architecture) for
+how this fits together with the rest of the request pipeline, and
+[Context Processors](./context-processors) / [Command Middleware](./command-middleware) for the
+two mechanisms themselves.

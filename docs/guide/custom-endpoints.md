@@ -16,8 +16,8 @@ class ListMixin(Generic[T], ABC):
 
     @final
     @__router.get("")
-    async def list_items(self: ...) -> list[T]:
-        return await self.perform_list()
+    async def list_items(self: ..., context: Context) -> list[T]:
+        return await self.perform_list(context)
 ```
 
 `route_viewset` collects all `__router` instances from the MRO and registers their routes on the application router.
@@ -29,6 +29,7 @@ Declare your own `__router` on the ViewSet class and decorate a method with it. 
 ```python
 from fastapi import APIRouter
 from fastapi_viewsets.collection_viewset import CollectionViewSet
+from fastapi_viewsets.context import Context
 from fastapi_viewsets.decorators.route_viewset import route_viewset
 from fastapi_viewsets.mixins import BulkViewSetMixin, LookupItem, LookupMixin
 
@@ -41,14 +42,14 @@ class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item], Loo
     def __init__(self):
         super().__init__(container=database, pk_field="id")
 
-    async def perform_lookup(self) -> list[LookupItem]:
+    async def perform_lookup(self, context: Context) -> list[LookupItem]:
         return [LookupItem(group=None, pk=item.id, title=item.name, icon=None)
-                for item in await self.perform_list()]
+                for item in await self.perform_list(context)]
 
     @__router.get("search", tags=["Item"])
-    async def search(self, q: str) -> list[Item]:
+    async def search(self, context: Context, q: str) -> list[Item]:
         """Return items whose name contains the query string."""
-        all_items = await self.perform_list()
+        all_items = await self.perform_list(context)
         return [item for item in all_items if q.lower() in item.name.lower()]
 ```
 
@@ -71,11 +72,11 @@ class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
         super().__init__(container=database, pk_field="id")
 
     @__router.post("clone", tags=["Item"])
-    async def clone(self, body: CloneRequest) -> Item:
+    async def clone(self, context: Context, body: CloneRequest) -> Item:
         """Clone an existing item under a new name."""
-        source = await self.perform_retrieve(body.source_id)
+        source = await self.perform_retrieve(context, body.source_id)
         return await self.perform_create(
-            Item(id=0, name=body.new_name, description=source.description)
+            context, Item(id=0, name=body.new_name, description=source.description)
         )
 ```
 
