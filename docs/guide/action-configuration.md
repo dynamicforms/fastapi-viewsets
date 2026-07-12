@@ -5,11 +5,12 @@ middleware per-viewset (or per-action) configuration - instead of a one-off bool
 per concern (which doesn't scale once more than one processor/middleware needs this).
 
 ::: tip Where this fits
-[`Session`](./auth#rejecting-unauthenticated-requests-session) (see [Auth](./auth)) is the first
-real user of this mechanism - see [Architecture](./architecture#problem-one-boolean-per-concern-doesn-t-scale)
-for why a one-off boolean class attribute per concern wouldn't have scaled, and how
-`@action_configuration` generalizes that into something any context processor or command
-middleware can use, for any concern.
+[`Session`](./authentication#rejecting-unauthenticated-requests-session) (see
+[Authentication](./authentication)) is the first real user of this mechanism - see
+[Architecture](./architecture#problem-one-boolean-per-concern-doesn-t-scale) for why a one-off
+boolean class attribute per concern wouldn't have scaled, and how `@action_configuration`
+generalizes that into something any context processor or command middleware can use, for any
+concern.
 :::
 
 ---
@@ -107,10 +108,14 @@ from fastapi_viewsets.middleware import Middleware, ViewSetResult
 
 class RateLimiter(Middleware):
     async def __call__(self, request, viewset, context, call_next):
-        limit = self.config_from(context) or self.default_limit
+        config = self.config_from(context)
+        limit = self.default_limit if config is None else config
         ...
         return await call_next()
 ```
+
+`RateLimiter` is a real, ready-to-use middleware shipped with this library - see
+[Rate Limiter](./rate-limiter) for the full implementation.
 
 ## Configuring an existing middleware
 
@@ -118,7 +123,7 @@ Key the dict with the `Middleware` **class** to configure whichever instance is 
 globally:
 
 ```python
-settings.viewsets_command_middleware = [RateLimiter(limit=100)]
+settings.viewsets_command_middleware = [RateLimiter(default_limit=100)]
 
 @action_configuration({RateLimiter: 10})   # this viewset gets a stricter limit
 class ExpensiveViewSet(...): ...

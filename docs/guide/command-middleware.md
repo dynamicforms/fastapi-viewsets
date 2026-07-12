@@ -68,8 +68,9 @@ settings.viewsets_command_middleware = [SessionCookieMiddleware()]
 
 `run_command_chain` doesn't need to know or care whether an entry in
 `settings.viewsets_command_middleware` is a bare function or a `Middleware` instance - both are just
-called as `middleware(request, viewset, context, call_next)`. See [Auth](./auth#rejecting-unauthenticated-requests-session)
-for `Session`, a `Middleware` shipped by this library.
+called as `middleware(request, viewset, context, call_next)`. See
+[Authentication](./authentication#rejecting-unauthenticated-requests-session) for `Session`, a
+`Middleware` shipped by this library.
 
 ## Per-viewset/per-action configuration
 
@@ -79,7 +80,8 @@ A `Middleware` reads its own [`@action_configuration`](./action-configuration) v
 ```python
 class RateLimiter(Middleware):
     async def __call__(self, request, viewset, context, call_next):
-        limit = self.config_from(context) or self.default_limit
+        config = self.config_from(context)
+        limit = self.default_limit if config is None else config
         ...
         return await call_next()
 ```
@@ -87,7 +89,9 @@ class RateLimiter(Middleware):
 This is how one globally-registered middleware instance can behave differently per viewset or
 per action - see [Action Configuration](./action-configuration) for the full merge rules
 (global default → class → method) and for injecting a brand-new middleware just for one
-viewset/method without registering it globally at all.
+viewset/method without registering it globally at all. [`RateLimiter`](./rate-limiter) is exactly
+this middleware, for real - one of a few
+[built-in middleware/processor implementations](./authentication) this library ships.
 
 ## `ViewSetResult`
 
@@ -108,7 +112,7 @@ and `cookies` via `response.set_cookie(...)` once the chain finishes - regardles
 action ran in-process or was `celery_viewset`-dispatched to a worker.
 
 `status_code`, when set, lets a middleware short-circuit the chain with a non-200 result (e.g. `401`
-for an expired session, see [Auth](./auth)) without ever calling `call_next()` - no special
+for an expired session, see [Authentication](./authentication)) without ever calling `call_next()` - no special
 mechanism is needed for this, since a middleware simply returning without calling `call_next()`
 already means nothing further down the chain runs. `route_viewset` applies it onto the real
 `Response`'s status code; left `None` (the default), the response's status code is unaffected.

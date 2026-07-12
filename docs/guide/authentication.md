@@ -1,14 +1,19 @@
-# Auth
+# Authentication
 
 Pluggable authentication: a chain of credential-recognizing backends contributing `context.user`,
 plus a command middleware that rejects requests whose session is missing or expired before
 `perform_*` ever runs. Built entirely on the general [Context Processors](./context-processors) and
 [Command Middleware](./command-middleware) mechanisms - nothing here is special-cased by the
-library outside of `fastapi_viewsets.context.auth`.
+library outside of `fastapi_viewsets.context.auth`/`fastapi_viewsets.middleware.auth`. This is one
+of a few [built-in middleware/processor implementations](./rate-limiter) this library ships -
+[Authorization](./authorization) is a separate, independent one that happens to pair well with it.
 
 ::: tip Where this fits
 See [Architecture](./architecture#problem-real-auth-has-more-than-one-way-to-prove-who-you-are) for
-why this exists and how it grew out of a single ad-hoc context processor.
+why this exists and how it grew out of a single ad-hoc context processor, and
+[Architecture](./architecture#problem-a-context-processor-can-t-say-no) for why rejecting an
+expired session needed command middleware (`Session`, below) rather than the context processor
+itself.
 :::
 
 ---
@@ -184,11 +189,11 @@ class ItemViewSet(...):
 
 ### Why `401`, not `403`
 
-- **`401 Unauthorized`** - the credential itself no longer establishes who's calling: missing,
-  garbage, or expired. That's exactly the case here.
-- **`403 Forbidden`** - the caller *is* known, but isn't allowed to do this specific thing (a
-  permissions/authorization check on an already-verified identity). Doesn't apply to a rejected
-  session, since there's no verified identity yet to check permissions against.
+**`401 Unauthorized`** - the credential itself no longer establishes who's calling: missing,
+garbage, or expired. That's exactly the case here. This is *not* the same question
+[Authorization](./authorization) asks (`403 Forbidden` - the caller *is* known, but isn't allowed
+to do this specific thing) - a rejected session has no verified identity yet to even check
+permissions against.
 
 ## Putting it together
 

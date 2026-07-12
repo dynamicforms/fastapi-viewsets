@@ -38,7 +38,15 @@ export default defineConfig({
             { text: 'Context Processors', link: '/guide/context-processors' },
             { text: 'Command Middleware', link: '/guide/command-middleware' },
             { text: 'Action Configuration', link: '/guide/action-configuration' },
-            { text: 'Auth', link: '/guide/auth' },
+          ],
+        },
+        {
+          text: 'Built-in Middleware & Processors',
+          link: '/guide/authentication',
+          items: [
+            { text: 'Authentication', link: '/guide/authentication' },
+            { text: 'Authorization', link: '/guide/authorization' },
+            { text: 'Rate Limiter', link: '/guide/rate-limiter' },
           ],
         },
         {

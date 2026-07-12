@@ -242,6 +242,16 @@ class Context:
         """The underlying plain dict - for serialize_context()/deserialize_context() to walk."""
         return self._data
 
+    def set(self, key: str, value: Any) -> None:
+        """
+        Adds/replaces a context value after construction - e.g. a command middleware (which runs
+        after context is already built) enriching context with something a later perform_* can
+        read (see fastapi_viewsets.middleware.auth.Authorization's `context.authorization`).
+        `value` is stored as-is; field access (`context.foo`/`context["foo"]`) wraps it awaitable
+        exactly like any context-processor-contributed value, per the usual rules.
+        """
+        self._data[key] = value
+
     def configuration_for(self, identifier: Any) -> Any:
         """
         The @action_configuration value registered for `identifier` (typically a context processor

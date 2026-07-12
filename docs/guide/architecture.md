@@ -3,10 +3,11 @@
 This page builds up the full request pipeline one real problem at a time, using a single running
 example (an `Item` viewset that needs authentication). Every guide page it links to
 ([Context Processors](./context-processors), [Command Middleware](./command-middleware),
-[Auth](./auth), [ViewSet Lifecycle](./lifecycle), [Routers & Decorators](./routers)) is reference
-material - exhaustive, structured, meant to be looked up once you already know what you're looking
-for. This page is the opposite: read it top to bottom once, and you'll know *why* each of those
-pieces exists before you ever need to look one up.
+[Action Configuration](./action-configuration), [Authentication](./authentication),
+[Authorization](./authorization), [ViewSet Lifecycle](./lifecycle),
+[Routers & Decorators](./routers)) is reference material - exhaustive, structured, meant to be
+looked up once you already know what you're looking for. This page is the opposite: read it top to
+bottom once, and you'll know *why* each of those pieces exists before you ever need to look one up.
 
 ---
 
@@ -98,7 +99,7 @@ value that can't just be `deepcopy`'d across the Celery/Redis boundary if the ac
 object, so the worker can resolve it again on its own side. `LazyObject` (a `SerializableObject`
 subclass with lazy, memoized resolution) is what makes `context.user` uniformly awaitable *and*
 correctly (de)serializable regardless of which backend produced it. → full depth in
-[Auth](./auth) and the `LazyObject`/`SerializableObject` section of
+[Authentication](./authentication) and the `LazyObject`/`SerializableObject` section of
 [Context Processors](./context-processors).
 
 ## Problem: "a context processor can't say no"
@@ -142,7 +143,7 @@ who's calling - missing, garbage, or expired - which is "unauthorized," not "aut
 forbidden to do this specific thing.") A viewset that must stay reachable without a session (a
 login endpoint, say) opts out with `@action_configuration({Session: False})` - `self.config_from(context)`
 is exactly how `Session` reads that. → full depth in [Command Middleware](./command-middleware) and
-[Auth](./auth).
+[Authentication](./authentication).
 
 This is also the clearest illustration of why the two mechanisms stay separate: the context
 processor only ever *gathered* the fact ("user is `None`"); it's the command middleware that
@@ -178,7 +179,9 @@ Configuration merges per identifier across three layers - `settings.default_acti
 `@action_configuration` (highest priority, overriding just its own identifiers - other identifiers
 the method doesn't mention still fall through from the class). A value can even vary by action
 (`ByAction(list_items="read", update="write")`), resolved fresh each time against whichever action
-is actually running. → full depth in [Action Configuration](./action-configuration).
+is actually running. → full depth in [Action Configuration](./action-configuration), and see
+[Rate Limiter](./rate-limiter) and [Authorization](./authorization) for `RateLimiter` and
+`Authorization`, two real middleware shipped with this library that build on it.
 
 ## Problem: "my viewset needs to remember something that isn't about who's calling"
 
@@ -272,7 +275,7 @@ both hooks.
 | **`celery_viewset`** | Optionally moves `perform_*` execution to a Celery worker - transparent to everything else in this list | [Routers & Decorators](./routers) |
 | **`CollectionViewSet`** | A ready-made `perform_*` implementation backed by an in-memory collection | [CollectionViewSet](./collection-viewset) |
 | **Context processors** | Build a per-request `context` (e.g. the authenticated user) before the endpoint runs | [Context Processors](./context-processors) |
-| **Auth backends & `auth_context_processor`** | A pluggable chain of credential schemes contributing `context.user` | [Auth](./auth) |
+| **Auth backends & `auth_context_processor`** | A pluggable chain of credential schemes contributing `context.user` | [Authentication](./authentication) |
 | **Command middleware** | Wrap the actual execution to shape response-level side effects or short-circuit with an error status | [Command Middleware](./command-middleware) |
 | **`@action_configuration`** | Per-viewset/per-action configuration for context processors and command middleware to consult (e.g. `Session`'s opt-out) | [Action Configuration](./action-configuration) |
 | **Lifecycle & `load_state`/`save_state`** | Controls how the viewset *class* becomes a request-handling *instance*, and whether that instance's own state persists across requests - a separate axis from the pipeline above | [ViewSet Lifecycle](./lifecycle) |
@@ -314,8 +317,9 @@ themselves.
 
 - New to the library? Start with [Python Mixins](./python-mixins) and [Routers & Decorators](./routers).
 - Need per-request data like the current user in `perform_*`? See [Context Processors](./context-processors).
-- Need pluggable authentication (multiple credential schemes, session-expiry rejection)? See [Auth](./auth).
+- Need pluggable authentication (multiple credential schemes, session-expiry rejection)? See [Authentication](./authentication).
 - Need to set a cookie, change the status code, or otherwise shape the response? See [Command Middleware](./command-middleware).
 - Need per-viewset/per-action configuration for a processor or middleware (not just one boolean)? See [Action Configuration](./action-configuration).
 - Need your viewset instance to remember something between requests? See [ViewSet Lifecycle](./lifecycle).
 - Moving execution to a background worker? See the `celery_viewset` section in [Routers & Decorators](./routers).
+- Want to see all built-in middleware/processor implementations this library ships (not just the mechanisms behind them)? See [Authentication](./authentication), [Authorization](./authorization), and [Rate Limiter](./rate-limiter).
