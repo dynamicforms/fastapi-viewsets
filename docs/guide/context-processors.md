@@ -134,11 +134,15 @@ works the same as for any other field, even though nothing here is actually lazy
 JSON-safe payload:
 
 ```python
-{"__type__": "yourapp.money.Money", "__value__": {"cents": 500, "currency": "EUR"}}
+{"__fpv_type__": "yourapp.money.Money", "__fpv_value__": {"cents": 500, "currency": "EUR"}}
 ```
 
-The `__type__` tag is the class's dotted import path (`module.QualName`) - deserialization imports
-that exact module and looks up the class with a plain `getattr`, no separate registry required.
+The `__fpv_type__` tag is the class's dotted import path (`module.QualName`) - deserialization
+imports that exact module and looks up the class with a plain `getattr`, no separate registry
+required. The keys are prefixed (rather than the plainer `__type__`/`__value__`) to avoid
+colliding with `kombu.utils.json`'s own `__type__`/`__value__` convention for its JSON codec -
+without the prefix, a Celery worker's `object_hook` would intercept this payload before it ever
+reached `deserialize_context()`.
 
 ::: warning
 `SerializableObject` subclasses must be importable at module level. A class defined inside a

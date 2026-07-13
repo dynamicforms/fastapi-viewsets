@@ -242,8 +242,8 @@ async def test_serialize_context_awaits_bare_awaitables_not_wrapped_in_serializa
 async def test_serialize_context_tags_serializable_objects():
     ctx = {"n": _Tagged(7)}
     serialized = await serialize_context(ctx)
-    assert serialized["n"]["__type__"] == f"{_Tagged.__module__}.{_Tagged.__qualname__}"
-    assert serialized["n"]["__value__"] == 7
+    assert serialized["n"]["__fpv_type__"] == f"{_Tagged.__module__}.{_Tagged.__qualname__}"
+    assert serialized["n"]["__fpv_value__"] == 7
 
 
 @pytest.mark.asyncio
@@ -260,7 +260,7 @@ async def test_lazy_object_survives_serialize_deserialize_unresolved_and_resolve
     the reconstructed object is unresolved and only computes its value when awaited."""
     ctx = {"user": _SessionUser("sess-1")}
     serialized = await serialize_context(ctx)
-    assert serialized["user"]["__value__"] == {"recipe": {"session_id": "sess-1"}}
+    assert serialized["user"]["__fpv_value__"] == {"recipe": {"session_id": "sess-1"}}
 
     restored = deserialize_context(serialized)
     user_obj = restored["user"]
@@ -280,8 +280,8 @@ async def test_lazy_object_already_resolved_survives_with_shortcut_no_reresoluti
     await obj  # resolve it once
 
     serialized = await serialize_context({"user": obj})
-    assert serialized["user"]["__value__"]["recipe"] == {"session_id": "sess-1"}
-    assert serialized["user"]["__value__"]["resolved_value"] == "jure"
+    assert serialized["user"]["__fpv_value__"]["recipe"] == {"session_id": "sess-1"}
+    assert serialized["user"]["__fpv_value__"]["resolved_value"] == "jure"
 
     restored = deserialize_context(serialized)["user"]
     assert restored is not obj  # fully independent instance
@@ -291,14 +291,14 @@ async def test_lazy_object_already_resolved_survives_with_shortcut_no_reresoluti
 
 def test_deserialize_context_unknown_type_tag_raises():
     with pytest.raises(TypeError):
-        deserialize_context({"n": {"__type__": "os.path.NotASerializableObject", "__value__": 1}})
+        deserialize_context({"n": {"__fpv_type__": "os.path.NotASerializableObject", "__fpv_value__": 1}})
 
 
 def test_deserialize_context_is_loop_independent():
     """Reconstruction must never require a running event loop - it happens synchronously in
     celery_viewset_server's _reconstruct_kwargs, before the worker's event loop starts."""
-    data = {"user": {"__type__": f"{_SessionUser.__module__}.{_SessionUser.__qualname__}",
-                     "__value__": {"recipe": {"session_id": "sess-1"}}}}
+    data = {"user": {"__fpv_type__": f"{_SessionUser.__module__}.{_SessionUser.__qualname__}",
+                     "__fpv_value__": {"recipe": {"session_id": "sess-1"}}}}
     restored = deserialize_context(data)  # no asyncio.run() anywhere around this call
     assert isinstance(restored["user"], _SessionUser)
     assert restored["user"].is_resolved is False
@@ -646,7 +646,7 @@ def test_celery_context_round_trip_with_lazy_object():
         result_reader.register_future = original_register
 
     # The context sent to Celery carries the LazyObject's serialized recipe, not a resolved value
-    assert captured_kwargs["context"]["user"]["__value__"]["recipe"] == {"session_id": "sess-1"}
+    assert captured_kwargs["context"]["user"]["__fpv_value__"]["recipe"] == {"session_id": "sess-1"}
 
     # Worker-side reconstruction restores an unresolved _SessionUser that can still be resolved
     async def worker_endpoint(_self, context: Context):

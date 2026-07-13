@@ -11,8 +11,8 @@ from ..conf import settings
 if TYPE_CHECKING:
     from fastapi import Request
 
-_TYPE_KEY = "__type__"
-_VALUE_KEY = "__value__"
+_TYPE_KEY = "__fpv_type__"
+_VALUE_KEY = "__fpv_value__"
 
 
 class ByAction:
