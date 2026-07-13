@@ -17,6 +17,7 @@ from fastapi import Request  # noqa: E402
 from fastapi_viewsets.context.auth.django import (  # noqa: E402
     _DjangoSessionUserLazy,
     DjangoSessionAuthBackend,
+    DjangoSessionCookieAuthBackend,
 )
 
 
@@ -59,6 +60,13 @@ def _make_request(session_key: str) -> Request:
     return Request({
         "type": "http", "method": "GET", "path": "/",
         "headers": [(b"x-session-token", session_key.encode())],
+    })
+
+
+def _make_cookie_request(session_key: str, cookie_name: str = "sessionid") -> Request:
+    return Request({
+        "type": "http", "method": "GET", "path": "/",
+        "headers": [(b"cookie", f"{cookie_name}={session_key}".encode())] if session_key else [],
     })
 
 
@@ -160,3 +168,73 @@ def test_custom_header_name():
     })
     assert isinstance(backend.try_handle(request), _DjangoSessionUserLazy)
     assert backend.try_handle(_make_request("some-key")) is None
+
+
+# ---------------------------------------------------------------------------
+# DjangoSessionCookieAuthBackend
+# ---------------------------------------------------------------------------
+
+def test_cookie_backend_returns_none_when_cookie_missing():
+    backend = DjangoSessionCookieAuthBackend()
+    assert backend.try_handle(_make_cookie_request("")) is None
+
+
+def test_cookie_backend_returns_lazy_when_cookie_present():
+    backend = DjangoSessionCookieAuthBackend()
+    lazy = backend.try_handle(_make_cookie_request("some-key"))
+    assert isinstance(lazy, _DjangoSessionUserLazy)
+
+
+def test_cookie_backend_ignores_the_header():
+    backend = DjangoSessionCookieAuthBackend()
+    assert backend.try_handle(_make_request("some-key")) is None
+
+
+def test_cookie_backend_defaults_to_djangos_session_cookie_name():
+    """cookie_name=None (the default) means 'whatever django.conf.settings.SESSION_COOKIE_NAME is'
+    - Django's own default is "sessionid", already configured for these tests."""
+    from django.conf import settings as django_settings
+
+    assert django_settings.SESSION_COOKIE_NAME == "sessionid"
+    backend = DjangoSessionCookieAuthBackend()
+    assert isinstance(backend.try_handle(_make_cookie_request("some-key", "sessionid")), _DjangoSessionUserLazy)
+    assert backend.try_handle(_make_cookie_request("some-key", "other_cookie")) is None
+
+
+def test_cookie_backend_custom_cookie_name():
+    backend = DjangoSessionCookieAuthBackend(cookie_name="my_session")
+    assert backend.try_handle(_make_cookie_request("some-key", "sessionid")) is None
+    lazy = backend.try_handle(_make_cookie_request("some-key", "my_session"))
+    assert isinstance(lazy, _DjangoSessionUserLazy)
+
+
+@pytest.mark.asyncio
+async def test_cookie_backend_resolves_to_real_user_for_valid_session(django_user, session_key):
+    """Same underlying resolution/auth-hash validation as the header backend - proven against a
+    real Django session, not just a mock."""
+    backend = DjangoSessionCookieAuthBackend()
+    lazy = backend.try_handle(_make_cookie_request(session_key))
+    user = await lazy
+    assert user is not None
+    assert user.username == "jure"
+    assert user.pk == django_user.pk
+
+
+@pytest.mark.asyncio
+async def test_header_and_cookie_backends_compose_via_the_auth_processor_chain(session_key):
+    """The documented pattern: register both, first match wins - a request carrying either
+    credential shape is recognized."""
+    from fastapi_viewsets.conf import settings
+    from fastapi_viewsets.context.auth import auth_context_processor
+
+    settings.viewsets_auth_processors = [DjangoSessionCookieAuthBackend(), DjangoSessionAuthBackend()]
+    try:
+        cookie_result = await auth_context_processor(_make_cookie_request(session_key), None)
+        user = await cookie_result["user"]
+        assert user.username == "jure"
+
+        header_result = await auth_context_processor(_make_request(session_key), None)
+        user = await header_result["user"]
+        assert user.username == "jure"
+    finally:
+        settings.viewsets_auth_processors = []

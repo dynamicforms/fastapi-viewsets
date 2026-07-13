@@ -40,7 +40,10 @@ class StaticUserAuthBackend(AuthBackend):
         # or: StaticUserAuthBackend.from_json_file("users.json")
         settings.viewsets_auth_processors = [backend]
 
-    Requests carry the token in the `X-Session-Token` header (configurable via `header_name`).
+    Requests carry the token in the `X-Session-Token` **header** (configurable via `header_name`).
+    For a cookie instead, see `StaticUserCookieAuthBackend` below - register both to accept either:
+
+        settings.viewsets_auth_processors = [StaticUserCookieAuthBackend(users), StaticUserAuthBackend(users)]
     """
 
     def __init__(self, users_by_token: dict[str, dict[str, Any]], header_name: str = "x-session-token"):
@@ -55,6 +58,30 @@ class StaticUserAuthBackend(AuthBackend):
 
     def try_handle(self, request: "Request") -> LazyObject | None:
         token = request.headers.get(self.header_name)
+        if token is None or token not in self.users_by_token:
+            return None  # not a token we recognize - let the next backend try it
+        return _StaticUserLazy(self.users_by_token[token])
+
+
+class StaticUserCookieAuthBackend(AuthBackend):
+    """
+    Same fixed token -> user data mapping as `StaticUserAuthBackend`, but reads the token from a
+    **cookie** instead of a header - for exercising/prototyping a real browser-cookie flow without
+    a real session store.
+    """
+
+    def __init__(self, users_by_token: dict[str, dict[str, Any]], cookie_name: str = "sessionid"):
+        self.users_by_token = users_by_token
+        self.cookie_name = cookie_name
+
+    @classmethod
+    def from_json_file(cls, path: str | Path, cookie_name: str = "sessionid") -> "StaticUserCookieAuthBackend":
+        """`path` should contain a JSON object mapping token -> user data, e.g.
+        `{"tok-jure": {"id": 1, "username": "jure"}}`."""
+        return cls(json.loads(Path(path).read_text()), cookie_name)
+
+    def try_handle(self, request: "Request") -> LazyObject | None:
+        token = request.cookies.get(self.cookie_name)
         if token is None or token not in self.users_by_token:
             return None  # not a token we recognize - let the next backend try it
         return _StaticUserLazy(self.users_by_token[token])

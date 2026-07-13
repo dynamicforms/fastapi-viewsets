@@ -61,46 +61,60 @@ the request because of it.
 
 ## Backends
 
-### `StaticUserAuthBackend` - ad-hoc, fixed users
+### `StaticUserAuthBackend`/`StaticUserCookieAuthBackend` - ad-hoc, fixed users
 
 For prototyping/tests: a fixed mapping of session token → user data (e.g. loaded from a small JSON
-file), no real session store involved.
+file), no real session store involved. Two backends, differing only in *where* the token comes
+from - register one, the other, or both (in whichever order fits your traffic):
 
 ```python
-from fastapi_viewsets.context.auth.static import StaticUserAuthBackend
+from fastapi_viewsets.context.auth.static import StaticUserAuthBackend, StaticUserCookieAuthBackend
 
-backend = StaticUserAuthBackend({"tok-jure": {"id": 1, "username": "jure"}})
+users = {"tok-jure": {"id": 1, "username": "jure"}}
 # or load from disk - the file should contain a JSON object mapping token -> user data:
-backend = StaticUserAuthBackend.from_json_file("users.json")
+# users = StaticUserAuthBackend.from_json_file("users.json").users_by_token
 
-settings.viewsets_auth_processors = [backend]
+settings.viewsets_auth_processors = [
+    StaticUserCookieAuthBackend(users),   # reads a cookie (default name: "sessionid")
+    StaticUserAuthBackend(users),         # reads the X-Session-Token header
+]
 ```
 
-Requests carry the token in the `X-Session-Token` header by default (configurable via
-`header_name=`). Resolution is synchronous and needs no I/O - `context.user` is available the
-moment anything awaits it.
+`header_name=`/`cookie_name=` override the default names on either. Resolution is synchronous and
+needs no I/O - `context.user` is available the moment anything awaits it.
 
-### `DjangoSessionAuthBackend` - real Django sessions
+### `DjangoSessionAuthBackend`/`DjangoSessionCookieAuthBackend` - real Django sessions
 
 Resolves the caller from a real Django session, the same way Django's own
 `AuthenticationMiddleware` does (`django.contrib.auth.get_user`, which validates the session's auth
-hash - a changed password invalidates the session exactly as it would for a real Django request) -
-except the session key arrives via an `X-Session-Token` header instead of Django's own session
-cookie, so it works for non-browser/cross-origin clients too.
+hash - a changed password invalidates the session exactly as it would for a real Django request).
+Two backends, same underlying resolution, differing only in *where* the session key comes from:
+
+- **`DjangoSessionAuthBackend`** - an `X-Session-Token` **header**, for non-browser/cross-origin
+  clients (a mobile app, a service-to-service call, allauth's headless "app" client mode).
+- **`DjangoSessionCookieAuthBackend`** - Django's own session **cookie** (default name: whatever
+  `django.conf.settings.SESSION_COOKIE_NAME` is, normally `"sessionid"`), for real browser clients
+  (allauth's headless "browser" client mode, or plain Django/allauth). This is the one that
+  actually works with a standard `HttpOnly` cookie - unlike a header, a cookie is attached to the
+  request automatically by the browser, and (being `HttpOnly`) can't be read by JavaScript to be
+  copied into a header even if you wanted to.
+
+Register whichever you need, or both to accept either:
 
 ```python
-from fastapi_viewsets.context.auth.django import DjangoSessionAuthBackend
+from fastapi_viewsets.context.auth.django import DjangoSessionAuthBackend, DjangoSessionCookieAuthBackend
 
-settings.viewsets_auth_processors = [DjangoSessionAuthBackend()]
+settings.viewsets_auth_processors = [DjangoSessionCookieAuthBackend(), DjangoSessionAuthBackend()]
 ```
 
 Uses whichever backend `django.conf.settings.SESSION_ENGINE` names (DB, cache, Redis, ...), same as
 Django itself. Requires the `django` extra (`pip install "dynamicforms-fastapi-viewsets[django]"`)
-and a Django app already configured/`django.setup()`'d by the host application - this backend
-doesn't configure Django itself, it only uses whatever's already set up. Resolution runs the actual
-Django ORM/session lookup through `asgiref.sync.sync_to_async`, so the event loop isn't blocked.
+and a Django app already configured/`django.setup()`'d by the host application - these backends
+don't configure Django themselves, they only use whatever's already set up. Resolution runs the
+actual Django ORM/session lookup through `asgiref.sync.sync_to_async`, so the event loop isn't
+blocked.
 
-Because the resolved value is a live Django ORM `User` instance - not JSON-safe - this backend's
+Because the resolved value is a live Django ORM `User` instance - not JSON-safe - both backends'
 `LazyObject` always serializes as just its recipe (the `session_key`); a Celery worker re-resolves
 it independently (one extra query, but correct) rather than receiving something un-picklable. See
 [Context Processors](./context-processors#lazyobject) for what "recipe" means here.
@@ -252,9 +266,10 @@ class ItemViewSet(CollectionViewSet[int, Item]):
 
 ## Known limitations
 
-- `StaticUserAuthBackend`/`DjangoSessionAuthBackend` recognize credentials via an `X-Session-Token`
-  header; `JWTAuthBackend` via `Authorization: Bearer`. There's no built-in cookie-based backend
-  yet - write your own `AuthBackend` for that (see
+- `StaticUserAuthBackend`/`DjangoSessionAuthBackend` (header) and `StaticUserCookieAuthBackend`/
+  `DjangoSessionCookieAuthBackend` (cookie) cover the `X-Session-Token`/session-cookie cases;
+  `JWTAuthBackend` covers `Authorization: Bearer`. Anything else (a differently-named cookie
+  scheme, a custom signing scheme) still needs your own `AuthBackend` (see
   [Writing your own backend](#writing-your-own-backend)).
 - `auth_context_processor`/`Session` are ordinary context processor/command middleware entries - if
   your app already configures other processors or middleware, add these alongside them (order among
