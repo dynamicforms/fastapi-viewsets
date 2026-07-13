@@ -367,3 +367,29 @@ async def build_context(
         else:
             merged.update(await processor(request, viewset))
     return Context(merged, action_configuration=action_configuration, action_name=action_name)
+
+
+async def get_shared_context(
+    request: "Request | None", viewset: Any, action_configuration: dict[Any, Any], action_name: str
+) -> Context:
+    """
+    Builds Context at most once per request - cached on request.state - so it can be shared between
+    an early Middleware.depends() call (see route_viewset.py) and the later real perform_*
+    execution (see decorators/lifecycle_runner.py) without re-running context processors twice (e.g.
+    avoiding a second DjangoSessionAuthBackend DB hit). Whichever of the two runs first for a given
+    request decides what "viewset" context processors actually see (the class, if depends() ran
+    first for a per-request/instance-key lifecycle; the real instance otherwise) - the second
+    caller's own `viewset` argument is simply ignored once a Context is already cached.
+
+    `request` may be None (e.g. a test calling a wrapped endpoint directly, bypassing FastAPI's own
+    request injection) - there's no request.state to cache on in that case, so a fresh Context is
+    just built every time, same as calling build_context() directly.
+    """
+    if request is None:
+        return await build_context(request, viewset, action_configuration, action_name)
+    cached = getattr(request.state, "_context", None)
+    if cached is not None:
+        return cached
+    context = await build_context(request, viewset, action_configuration, action_name)
+    request.state._context = context
+    return context

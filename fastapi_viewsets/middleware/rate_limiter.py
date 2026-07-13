@@ -1,7 +1,10 @@
+import inspect
 import time
 
 from collections.abc import Awaitable, Callable
 from typing import Any, TYPE_CHECKING
+
+from fastapi import HTTPException
 
 from . import Middleware, ViewSetResult
 
@@ -11,7 +14,7 @@ if TYPE_CHECKING:
 
     from ..context import Context
 
-KeyFunc = Callable[["Request | None", Any, "Context"], str]
+KeyFunc = Callable[["Request | None", type, "Context"], "str | Awaitable[str]"]
 
 
 class RateLimiter(Middleware):
@@ -26,11 +29,16 @@ class RateLimiter(Middleware):
         @action_configuration({RateLimiter: 10})   # stricter limit just for this viewset
         class ExpensiveViewSet(...): ...
 
+    The whole check lives in `depends()` - bridged onto FastAPI's own `Depends()` by route_viewset,
+    so an exceeded limit is rejected before FastAPI even parses the request body. `__call__` (the
+    onion command-middleware chain) is therefore a trivial passthrough.
+
     The identity key defaults to `"<ViewSetClassName>:<client IP>"` - override via `key_func` (also
     receives the built `Context`, so e.g. `await context.user` can rate-limit per authenticated
-    user instead of per IP):
+    user instead of per IP; `key_func` may itself be sync or async, same as the callable
+    `Authorization` config):
 
-        RateLimiter(default_limit=100, key_func=lambda request, viewset, context: str(id(context)))
+        RateLimiter(default_limit=100, key_func=lambda request, cls, context: context.user)
 
     Storage defaults to an in-memory dict - correct for a single-process deployment (and tests),
     but each worker process would track its own counts independently. Pass a `redis_client`
@@ -52,23 +60,27 @@ class RateLimiter(Middleware):
         self._counts: dict[str, tuple[int, float]] = {}
 
     @staticmethod
-    def _default_key(request: "Request | None", viewset: Any, _context: "Context") -> str:
+    def _default_key(request: "Request | None", cls: type, _context: "Context") -> str:
         client_host = request.client.host if request is not None and request.client is not None else "unknown"
-        return f"{type(viewset).__name__}:{client_host}"
+        return f"{cls.__name__}:{client_host}"
+
+    async def depends(self, request: "Request | None", cls: type, context: "Context") -> None:
+        config = self.config_from(context)
+        limit = self.default_limit if config is None else config
+        key = self.key_func(request, cls, context)
+        if inspect.isawaitable(key):
+            key = await key
+        allowed = await self._increment(key, limit)
+        if not allowed:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     async def __call__(
         self,
-        request: "Request | None",
-        viewset: Any,
-        context: "Context",
+        _request: "Request | None",
+        _viewset: Any,
+        _context: "Context",
         call_next: Callable[[], Awaitable[ViewSetResult]],
     ) -> ViewSetResult:
-        config = self.config_from(context)
-        limit = self.default_limit if config is None else config
-        key = self.key_func(request, viewset, context)
-        allowed = await self._increment(key, limit)
-        if not allowed:
-            return ViewSetResult(body={"detail": "Rate limit exceeded"}, status_code=429)
         return await call_next()
 
     async def _increment(self, key: str, limit: int) -> bool:

@@ -1,6 +1,8 @@
 from collections.abc import Awaitable, Callable
 from typing import Any, TYPE_CHECKING
 
+from fastapi import HTTPException
+
 from .. import Middleware, ViewSetResult
 
 if TYPE_CHECKING:
@@ -11,12 +13,16 @@ if TYPE_CHECKING:
 
 class Session(Middleware):
     """
-    Command middleware pairing with `auth_context_processor` (see `fastapi_viewsets.context.auth`):
-    that processor only ever *gathers* the fact ("user is None" or a real user) by resolving
-    whichever `AuthBackend` claimed the request - this middleware is what actually *decides* what
-    to do about it, since only command middleware can short-circuit the chain/shape the response.
-    It doesn't re-derive or re-resolve anything itself - it just checks the already-resolved
-    `context.user` that `context.auth` produced.
+    Pairs with `auth_context_processor` (see `fastapi_viewsets.context.auth`): that processor only
+    ever *gathers* the fact ("user is None" or a real user) by resolving whichever `AuthBackend`
+    claimed the request - this is what actually *decides* what to do about it. It doesn't re-derive
+    or re-resolve anything itself - it just checks the already-resolved `context.user` that
+    `context.auth` produced.
+
+    The whole check lives in `depends()` - bridged onto FastAPI's own `Depends()` by route_viewset,
+    so an expired/missing session is rejected before FastAPI even parses the request body.
+    `__call__` (the onion command-middleware chain) is therefore a trivial passthrough: if
+    `depends()` would have rejected, `__call__`/the onion chain is never even reached at all.
 
     A viewset (or a specific `perform_*` method) opts out - e.g. a login/signup endpoint that must
     be reachable without a session - via `@action_configuration({Session: False})` (see
@@ -28,18 +34,20 @@ class Session(Middleware):
     which would apply to a *known* caller lacking permission for this specific action.
     """
 
+    async def depends(self, _request: "Request | None", _cls: type, context: "Context") -> None:
+        config = self.config_from(context)
+        required = True if config is None else bool(config)
+        if not required:
+            return
+        user = await context.user
+        if user is None:
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
+
     async def __call__(
         self,
         _request: "Request | None",
         _viewset: Any,
-        context: "Context",
+        _context: "Context",
         call_next: Callable[[], Awaitable[ViewSetResult]],
     ) -> ViewSetResult:
-        config = self.config_from(context)
-        required = True if config is None else bool(config)
-        if not required:
-            return await call_next()
-        user = await context.user
-        if user is None:
-            return ViewSetResult(body={"detail": "Session expired or invalid"}, status_code=401)
         return await call_next()

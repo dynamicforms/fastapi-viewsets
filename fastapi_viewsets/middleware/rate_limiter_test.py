@@ -1,6 +1,6 @@
 import pytest
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
@@ -28,74 +28,81 @@ class _FakeViewset:
 
 
 @pytest.mark.asyncio
-async def test_allows_requests_within_the_limit():
-    limiter = RateLimiter(default_limit=2)
-    context = Context({})
-    viewset = _FakeViewset()
-
-    first = await limiter(None, viewset, context, _final_ok)
-    second = await limiter(None, viewset, context, _final_ok)
-
-    assert first.body == "ok"
-    assert second.body == "ok"
+async def test_call_is_a_trivial_passthrough():
+    """All of RateLimiter's real logic lives in depends() now - __call__ just calls call_next()."""
+    result = await RateLimiter(default_limit=1)(None, object(), Context({}), _final_ok)
+    assert result.body == "ok"
 
 
 @pytest.mark.asyncio
-async def test_rejects_with_429_once_the_limit_is_exceeded():
+async def test_depends_allows_requests_within_the_limit():
+    limiter = RateLimiter(default_limit=2)
+    context = Context({})
+
+    assert await limiter.depends(None, _FakeViewset, context) is None
+    assert await limiter.depends(None, _FakeViewset, context) is None
+
+
+@pytest.mark.asyncio
+async def test_depends_rejects_with_429_once_the_limit_is_exceeded():
     limiter = RateLimiter(default_limit=1)
     context = Context({})
-    viewset = _FakeViewset()
 
-    await limiter(None, viewset, context, _final_ok)
-    result = await limiter(None, viewset, context, _final_ok)
+    await limiter.depends(None, _FakeViewset, context)
+    with pytest.raises(HTTPException) as exc_info:
+        await limiter.depends(None, _FakeViewset, context)
 
-    assert result.status_code == 429
-    assert result.body == {"detail": "Rate limit exceeded"}
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail == "Rate limit exceeded"
 
 
 @pytest.mark.asyncio
 async def test_action_configuration_overrides_default_limit():
     limiter = RateLimiter(default_limit=100)
     context = Context({}, action_configuration={RateLimiter: 1})
-    viewset = _FakeViewset()
 
-    await limiter(None, viewset, context, _final_ok)
-    result = await limiter(None, viewset, context, _final_ok)
+    await limiter.depends(None, _FakeViewset, context)
+    with pytest.raises(HTTPException) as exc_info:
+        await limiter.depends(None, _FakeViewset, context)
 
-    assert result.status_code == 429
+    assert exc_info.value.status_code == 429
 
 
 @pytest.mark.asyncio
 async def test_different_keys_are_tracked_independently():
-    limiter = RateLimiter(default_limit=1, key_func=lambda request, _viewset, _context: request)
+    limiter = RateLimiter(default_limit=1, key_func=lambda request, _cls, _context: request)
 
-    first = await limiter("key-a", _FakeViewset(), Context({}), _final_ok)
-    second = await limiter("key-b", _FakeViewset(), Context({}), _final_ok)
+    assert await limiter.depends("key-a", _FakeViewset, Context({})) is None
+    assert await limiter.depends("key-b", _FakeViewset, Context({})) is None  # different key - independent count
 
-    assert first.body == "ok"
-    assert second.body == "ok"  # different key - independent count, not blocked by key-a
+
+@pytest.mark.asyncio
+async def test_async_key_func_is_awaited():
+    async def key_func(request, _cls, _context):
+        return request
+
+    limiter = RateLimiter(default_limit=1, key_func=key_func)
+    assert await limiter.depends("key-a", _FakeViewset, Context({})) is None
+    assert await limiter.depends("key-b", _FakeViewset, Context({})) is None
 
 
 @pytest.mark.asyncio
 async def test_window_resets_after_window_seconds(monkeypatch):
     limiter = RateLimiter(default_limit=1, window_seconds=10)
     context = Context({})
-    viewset = _FakeViewset()
 
     fake_now = [1000.0]
     monkeypatch.setattr("time.monotonic", lambda: fake_now[0])
 
-    await limiter(None, viewset, context, _final_ok)
-    blocked = await limiter(None, viewset, context, _final_ok)
-    assert blocked.status_code == 429
+    await limiter.depends(None, _FakeViewset, context)
+    with pytest.raises(HTTPException):
+        await limiter.depends(None, _FakeViewset, context)
 
     fake_now[0] += 11  # past the window
-    allowed_again = await limiter(None, viewset, context, _final_ok)
-    assert allowed_again.body == "ok"
+    assert await limiter.depends(None, _FakeViewset, context) is None
 
 
-@pytest.mark.asyncio
-async def test_default_key_uses_viewset_type_and_client_ip():
+def test_default_key_uses_viewset_type_and_client_ip():
     limiter = RateLimiter(default_limit=1)
 
     class _Client:
@@ -104,14 +111,13 @@ async def test_default_key_uses_viewset_type_and_client_ip():
     class _RequestStub:
         client = _Client
 
-    key = limiter.key_func(_RequestStub(), _FakeViewset(), Context({}))
+    key = limiter.key_func(_RequestStub(), _FakeViewset, Context({}))
     assert key == "_FakeViewset:1.2.3.4"
 
 
-@pytest.mark.asyncio
-async def test_default_key_falls_back_to_unknown_without_a_request():
+def test_default_key_falls_back_to_unknown_without_a_request():
     limiter = RateLimiter(default_limit=1)
-    key = limiter.key_func(None, _FakeViewset(), Context({}))
+    key = limiter.key_func(None, _FakeViewset, Context({}))
     assert key == "_FakeViewset:unknown"
 
 
@@ -137,15 +143,13 @@ async def test_redis_backend_increments_and_sets_expiry_on_first_hit():
     redis = _FakeRedis()
     limiter = RateLimiter(default_limit=2, window_seconds=30, redis_client=redis)
     context = Context({})
-    viewset = _FakeViewset()
 
-    first = await limiter(None, viewset, context, _final_ok)
-    second = await limiter(None, viewset, context, _final_ok)
-    third = await limiter(None, viewset, context, _final_ok)
+    await limiter.depends(None, _FakeViewset, context)
+    await limiter.depends(None, _FakeViewset, context)
+    with pytest.raises(HTTPException) as exc_info:
+        await limiter.depends(None, _FakeViewset, context)
 
-    assert first.body == "ok"
-    assert second.body == "ok"
-    assert third.status_code == 429
+    assert exc_info.value.status_code == 429
     assert redis.expired == [("_FakeViewset:unknown", 30)]  # only set once, on the first increment
 
 

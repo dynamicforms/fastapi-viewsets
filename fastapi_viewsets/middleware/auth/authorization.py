@@ -3,6 +3,8 @@ import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any, TYPE_CHECKING
 
+from fastapi import HTTPException
+
 from .. import Middleware, ViewSetResult
 
 if TYPE_CHECKING:
@@ -18,20 +20,22 @@ class Authorization(Middleware):
     `fastapi_viewsets.action_configuration`), keyed by this class. The configured value has two
     roles at once, depending on its shape:
 
-    - If it's callable, it's evaluated as `check(request, viewset, context)` (sync or async) - a
-      falsy result rejects the request with 403 before `perform_*` ever runs. Use this for checks
-      that don't need a specific record (e.g. a role check).
+    - If it's callable, it's evaluated as `check(request, cls, context)` (sync or async) in
+      `depends()` - bridged onto FastAPI's own `Depends()` by route_viewset - a falsy result
+      rejects the request with 403 before `perform_*` (or even FastAPI's own body parsing) ever
+      runs. Use this for checks that don't need a specific record (e.g. a role check).
     - Either way (callable or not, or even unconfigured), the resolved value is made available as
-      `context.authorization` - `perform_*` can inspect it once it has whatever record-specific
-      info a check needs (e.g. the object a `pk` resolved to) and reject itself
-      (`raise HTTPException(403, ...)`) if it decides to. This is the "no hook in the middleware
-      layer needed" case - just raise, same as anywhere else in the pipeline (see
-      docs/guide/action-configuration.md's "Rejecting a request: just raise").
+      `context.authorization` (set in `__call__`, unconditionally, in the onion chain - there's no
+      reject decision here, so there's no benefit to doing this any earlier) - `perform_*` can
+      inspect it once it has whatever record-specific info a check needs (e.g. the object a `pk`
+      resolved to) and reject itself (`raise HTTPException(403, ...)`) if it decides to. This is
+      the "no hook in the middleware layer needed" case - just raise, same as anywhere else in the
+      pipeline (see docs/guide/action-configuration.md's "Rejecting a request: just raise").
 
     Unconfigured (no `@action_configuration` entry for `Authorization` at all): nothing is
     enforced, `context.authorization` resolves to `None`.
 
-        @action_configuration({Authorization: lambda request, viewset, context: is_admin(context)})
+        @action_configuration({Authorization: lambda request, cls, context: is_admin(context)})
         class AdminOnlyViewSet(...): ...
 
         @action_configuration({Authorization: "owner-only"})
@@ -43,21 +47,21 @@ class Authorization(Middleware):
                 return item
     """
 
-    async def __call__(
-        self,
-        request: "Request | None",
-        viewset: Any,
-        context: "Context",
-        call_next: Callable[[], Awaitable[ViewSetResult]],
-    ) -> ViewSetResult:
+    async def depends(self, request: "Request | None", cls: type, context: "Context") -> None:
         config = self.config_from(context)
-        context.set("authorization", config)
         if callable(config):
-            allowed = config(request, viewset, context)
+            allowed = config(request, cls, context)
             if inspect.isawaitable(allowed):
                 allowed = await allowed
             if not allowed:
-                return ViewSetResult(
-                    body={"detail": "Not authorized to perform this action"}, status_code=403
-                )
+                raise HTTPException(status_code=403, detail="Not authorized to perform this action")
+
+    async def __call__(
+        self,
+        _request: "Request | None",
+        _viewset: Any,
+        context: "Context",
+        call_next: Callable[[], Awaitable[ViewSetResult]],
+    ) -> ViewSetResult:
+        context.set("authorization", self.config_from(context))
         return await call_next()

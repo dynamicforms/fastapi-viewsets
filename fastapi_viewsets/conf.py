@@ -5,6 +5,7 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fastapi import Request
+    from fastapi.security.base import SecurityBase
 
     from .context.auth import AuthBackend
     from .middleware import CommandMiddleware
@@ -31,6 +32,14 @@ class Settings:
         self.viewsets_command_middleware: list[CommandMiddleware] = []
         self.viewsets_auth_processors: list[AuthBackend] = []
         self.default_action_configuration: dict[Any, Any] = {}
+        self.viewsets_security_scheme: SecurityBase | None = None
+        """
+        Purely for OpenAPI/Swagger discoverability (a lock icon + testable Authorize flow) - attached
+        as an extra sub-dependency alongside the per-route Middleware.depends() bridge (see
+        route_viewset.py), not otherwise consumed by this library. Must be set before any viewset
+        class is decorated with route_viewset (same existing constraint as
+        disable_response_model=bool(settings.viewsets_command_middleware) already has).
+        """
 
 
 settings = Settings()

@@ -105,6 +105,34 @@ Because the resolved value is a live Django ORM `User` instance - not JSON-safe 
 it independently (one extra query, but correct) rather than receiving something un-picklable. See
 [Context Processors](./context-processors#lazyobject) for what "recipe" means here.
 
+### `JWTAuthBackend` - stateless `Bearer` tokens
+
+Verifies a JWT's signature and expiry - no session store, no database lookup, purely local
+computation. Requires the `jwt` extra (`pip install "dynamicforms-fastapi-viewsets[jwt]"`).
+
+```python
+from fastapi_viewsets.context.auth.jwt import JWTAuthBackend
+
+settings.viewsets_auth_processors = [JWTAuthBackend(secret="...", algorithm="HS256")]
+```
+
+**Not a session replacement.** A bare, stateless JWT can't be revoked - there's no server-side
+record to delete, unlike `DjangoSessionAuthBackend`. If "logout"/password-change/force-logout
+matters, don't hand out long-lived JWTs directly; instead mint a *short-lived* one (`encode_jwt`,
+also in `fastapi_viewsets.context.auth.jwt`) only once an actual, revocable session (e.g. a Django
+session, via `DjangoSessionAuthBackend`) is confirmed active:
+
+```python
+from fastapi_viewsets.context.auth.jwt import encode_jwt
+
+# inside your own login/token-exchange endpoint, after confirming an active Django session:
+access_token = encode_jwt({"sub": str(user.id)}, secret="...", expires_in=datetime.timedelta(minutes=15))
+```
+
+`Session`/logout still revoke the underlying Django session as usual; already-issued JWTs simply
+expire on their own, soon, being short-lived - real revocation lives entirely in the session layer,
+the JWT is just a fast, stateless-to-verify derivative of it.
+
 ### Writing your own backend
 
 Any class implementing `try_handle(request) -> LazyObject | None` works - it doesn't have to
@@ -142,23 +170,26 @@ settings.viewsets_command_middleware = [Session()]
 
 ```python
 class Session(Middleware):
-    async def __call__(self, request, viewset, context, call_next):
+    async def depends(self, request, cls, context) -> None:
         config = self.config_from(context)
         required = True if config is None else bool(config)
         if not required:
-            return await call_next()
+            return
         user = await context.user
         if user is None:
-            return ViewSetResult(body={"detail": "Session expired or invalid"}, status_code=401)
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
+
+    async def __call__(self, request, viewset, context, call_next):
         return await call_next()
 ```
 
-`Session` is a class rather than a plain function specifically so it can live as reusable library
-code under `fastapi_viewsets.middleware.auth` (see [Command Middleware](./command-middleware) for
-`Middleware`, the small ABC it implements) - functionally it's just a `CommandMiddleware` like any
-other. With this wired in alongside `auth_context_processor`, a request with no recognized/valid
-session gets a `401` before `perform_*` ever runs; a request with a valid one passes through
-untouched.
+The whole check lives in `depends()` - bridged onto FastAPI's own native `Depends()` by
+`route_viewset` (see [Command Middleware](./command-middleware#early-rejection-middleware-depends)),
+so a missing/expired session is rejected before FastAPI even parses the request body; `__call__`
+(the onion command-middleware chain) is a trivial passthrough, since `depends()` already made the
+only decision that matters. With this wired in alongside `auth_context_processor`, a request with
+no recognized/valid session gets a `401` before `perform_*` ever runs; a request with a valid one
+passes through untouched.
 
 ### Opting a viewset out: `@action_configuration({Session: False})`
 
@@ -221,8 +252,9 @@ class ItemViewSet(CollectionViewSet[int, Item]):
 
 ## Known limitations
 
-- Both backends recognize credentials via an `X-Session-Token` header - there's no built-in cookie-
-  or `Authorization: Bearer`-based backend yet. Write your own `AuthBackend` for those (see
+- `StaticUserAuthBackend`/`DjangoSessionAuthBackend` recognize credentials via an `X-Session-Token`
+  header; `JWTAuthBackend` via `Authorization: Bearer`. There's no built-in cookie-based backend
+  yet - write your own `AuthBackend` for that (see
   [Writing your own backend](#writing-your-own-backend)).
 - `auth_context_processor`/`Session` are ordinary context processor/command middleware entries - if
   your app already configures other processors or middleware, add these alongside them (order among

@@ -34,21 +34,36 @@ value of `None` (unconfigured) falls back to `default_limit`:
 class ExpensiveViewSet(...): ...
 ```
 
-Exceeding the limit returns `429` (`{"detail": "Rate limit exceeded"}`) without ever calling
-`perform_*`.
+Exceeding the limit returns `429` (`{"detail": "Rate limit exceeded"}`) - raised from `depends()`
+(bridged onto FastAPI's own native `Depends()` by `route_viewset`, see
+[Command Middleware](./command-middleware#early-rejection-middleware-depends)), so a request over
+the limit is rejected before FastAPI even parses the body, without ever calling `perform_*`.
 
 ## Identity key
 
-The default key is `"<ViewSetClassName>:<client IP>"` - override via
-`key_func(request, viewset, context)`:
+The default key is `"<ViewSetClassName>:<client IP>"` - override via `key_func(request, cls,
+context)` (`cls` is the viewset *class*, not an instance - see
+[Command Middleware](./command-middleware#early-rejection-middleware-depends) for why). `key_func`
+may itself be sync or async (checked the same way as `Authorization`'s callable config):
 
 ```python
-RateLimiter(default_limit=100, key_func=lambda request, viewset, context: str(id(context)))
+def per_ip_key(request, cls, context):
+    return f"{cls.__name__}:{request.client.host}"
+
+RateLimiter(default_limit=100, key_func=per_ip_key)
 ```
 
 The built `Context` is available too, so a key function can rate-limit per authenticated user
-(`await context.user`) instead of per IP - handy if [Authentication](./authentication) is also
-wired in, though `RateLimiter` doesn't require it (any `context` field, or none at all, works).
+instead of per IP - handy if [Authentication](./authentication) is also wired in, though
+`RateLimiter` doesn't require it (any `context` field, or none at all, works):
+
+```python
+async def per_user_key(request, cls, context):
+    user = await context.user
+    return f"{cls.__name__}:{user['id'] if user else 'anonymous'}"
+
+RateLimiter(default_limit=100, key_func=per_user_key)
+```
 
 ## Storage
 

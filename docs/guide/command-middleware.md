@@ -70,20 +70,84 @@ settings.viewsets_command_middleware = [SessionCookieMiddleware()]
 `settings.viewsets_command_middleware` is a bare function or a `Middleware` instance - both are just
 called as `middleware(request, viewset, context, call_next)`. See
 [Authentication](./authentication#rejecting-unauthenticated-requests-session) for `Session`, a
-`Middleware` shipped by this library.
+`Middleware` shipped by this library - though, as of the next section, most of its actual logic
+doesn't live in `__call__` at all anymore.
+
+## Early rejection: `Middleware.depends()`
+
+A pure "check and maybe reject" middleware - no "after" phase, never inspects/reshapes what
+`call_next()` returns - doesn't actually need the onion chain's timing at all: it only ever needs
+to run *before* `perform_*`. `Middleware` has an optional second method, `depends()`, for exactly
+this case - bridged by `route_viewset` onto FastAPI's own native `Depends()` mechanism, so it runs
+before FastAPI even parses the request body:
+
+```python
+from fastapi import HTTPException
+from fastapi_viewsets.middleware import Middleware
+
+class RequireAdmin(Middleware):
+    async def depends(self, request, cls, context) -> None:
+        user = await context.user
+        if user is None or not user.get("is_admin"):
+            raise HTTPException(status_code=403, detail="Admins only")
+
+    async def __call__(self, request, viewset, context, call_next):
+        return await call_next()   # depends() already decided everything - nothing left to do here
+```
+
+This gets: rejection *before* FastAPI parses the body (a `403`/`401`/`429` can now precede a `422`
+for a malformed body on the same request - the conventional, correct ordering for real APIs),
+native OpenAPI/Swagger discoverability (see `settings.viewsets_security_scheme` below),
+`app.dependency_overrides` testability (impossible with the pure onion-chain mechanism, since it's
+never part of FastAPI's own dependency graph), and - since `depends()` is entirely optional -
+existing plain-function middleware and `Middleware` subclasses that don't define it are completely
+unaffected, running only in the onion chain exactly as before.
+
+`context` is real and usable inside `depends()` (built as early as possible - see
+[Context Processors](./context-processors) - and shared/cached for the rest of the request, so
+context processors never run twice), but `viewset` is not: `cls` (the viewset *class*, not an
+instance) is passed instead, since for `per-request`/`instance-key` lifecycles no instance exists
+yet this early (uniform across all three lifecycle modes, rather than sometimes a real instance and
+sometimes not).
+
+**Put only reject-capable logic in `depends()`.** Work that always happens regardless of any
+decision (e.g. enriching `context` with no reject path) has no early-timing benefit and should stay
+in `__call__`, exactly as it would without `depends()` at all - see
+[Authorization](./authorization), which splits across both methods for precisely this reason: the
+callable-config check (might reject) lives in `depends()`, while unconditionally exposing
+`context.authorization` for `perform_*` to read stays in `__call__`.
+
+### OpenAPI/Swagger discoverability: `viewsets_security_scheme`
+
+`depends()` alone gets you correct timing, but no lock icon in Swagger UI - that requires a real
+[`fastapi.security`](https://fastapi.tiangolo.com/tutorial/security/) scheme somewhere in the
+dependency tree. Set one globally and `route_viewset` attaches it as an extra sub-dependency
+alongside the `depends()` bridge on every route, purely for OpenAPI's benefit (this library never
+reads its resolved value itself):
+
+```python
+from fastapi.security import APIKeyHeader
+from fastapi_viewsets.conf import settings
+
+settings.viewsets_security_scheme = APIKeyHeader(name="X-Session-Token", auto_error=False)
+```
+
+Must be set **before** any viewset class is decorated with `route_viewset` (the same existing
+constraint `disable_response_model=bool(settings.viewsets_command_middleware)` already has in this
+codebase) - typically at app startup, before importing viewset modules.
 
 ## Per-viewset/per-action configuration
 
 A `Middleware` reads its own [`@action_configuration`](./action-configuration) value via
-`self.config_from(context)` (shorthand for `context.configuration_for(type(self))`):
+`self.config_from(context)` (shorthand for `context.configuration_for(type(self))`) - works the
+same whether read from `depends()` or `__call__`:
 
 ```python
 class RateLimiter(Middleware):
-    async def __call__(self, request, viewset, context, call_next):
+    async def depends(self, request, cls, context):
         config = self.config_from(context)
         limit = self.default_limit if config is None else config
         ...
-        return await call_next()
 ```
 
 This is how one globally-registered middleware instance can behave differently per viewset or
@@ -111,11 +175,13 @@ mechanism is meant to work over other transports too (see [Architecture](./archi
 and `cookies` via `response.set_cookie(...)` once the chain finishes - regardless of whether the
 action ran in-process or was `celery_viewset`-dispatched to a worker.
 
-`status_code`, when set, lets a middleware short-circuit the chain with a non-200 result (e.g. `401`
-for an expired session, see [Authentication](./authentication)) without ever calling `call_next()` - no special
-mechanism is needed for this, since a middleware simply returning without calling `call_next()`
-already means nothing further down the chain runs. `route_viewset` applies it onto the real
-`Response`'s status code; left `None` (the default), the response's status code is unaffected.
+`status_code`, when set, lets a middleware short-circuit the *onion chain* with a non-200 result
+without ever calling `call_next()` - no special mechanism is needed for this, since a middleware
+simply returning without calling `call_next()` already means nothing further down the chain runs.
+`route_viewset` applies it onto the real `Response`'s status code; left `None` (the default), the
+response's status code is unaffected. For a middleware whose *entire* job is reject-or-allow with
+no "after" phase (e.g. `Session`'s `401`), prefer raising `HTTPException` from `depends()` instead
+(see above) - it runs earlier and gets OpenAPI/testability benefits `status_code` alone doesn't.
 
 With no middleware configured (the default), behaviour is unchanged: the endpoint's return value
 becomes the response body as-is, no headers/cookies are touched.
@@ -124,8 +190,11 @@ becomes the response body as-is, no headers/cookies are touched.
 
 Like the context-processor's `Request`, command middleware only ever runs in the outer,
 HTTP-facing `route_viewset` call - never inside `celery_viewset_server`'s inner, worker-only call
-(there's no live `Response` there to shape). A `celery_viewset`-dispatched action's core logic runs
-in the worker; the middleware chain runs once the result is back in the FastAPI process.
+(there's no live `Response` there to shape, and no `Depends()` concept either). A
+`celery_viewset`-dispatched action's core logic runs in the worker; both `depends()` and the onion
+chain run once (before dispatch and once the result is back, respectively) in the FastAPI process -
+`depends()` in particular means an action never even reaches the worker if it was going to be
+rejected anyway.
 
 ## Known limitations
 
@@ -134,5 +203,8 @@ in the worker; the middleware chain runs once the result is back in the FastAPI 
   adapter would run the command middleware chain once per message on a long-lived connection, using
   `Context.clone_for_command()` to give each command an isolated copy - but only the HTTP adapter is
   actually implemented today.
+- `depends()` (see above) runs before `load_state()` for `per-request`/`instance-key` lifecycles
+  (previously always after, back when everything ran in the onion chain) - accepted since no
+  shipped context processor reads viewset instance state.
 - `load_state`/`save_state` (see [ViewSet Lifecycle](./lifecycle)) remain a separate mechanism -
   command middleware doesn't replace them.

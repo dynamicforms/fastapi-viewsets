@@ -28,9 +28,14 @@ general per-viewset configuration mechanism rather than one-off class attributes
 Configured via [`@action_configuration`](./action-configuration), keyed by the `Authorization`
 class. The value plays one of two roles depending on its shape:
 
-- **Callable** - evaluated as `check(request, viewset, context)` (sync or async); a falsy result
-  rejects the request with `403` before `perform_*` ever runs. Use this for checks that don't need
-  a specific record (a role check, say).
+- **Callable** - evaluated as `check(request, cls, context)` (sync or async) in `depends()` -
+  bridged onto FastAPI's own native `Depends()` by `route_viewset` (see
+  [Command Middleware](./command-middleware#early-rejection-middleware-depends)) - a falsy result
+  rejects the request with `403` before `perform_*` (or even FastAPI's own body parsing) ever runs.
+  `cls` is the viewset *class*, not an instance (no instance exists yet this early - see
+  [Command Middleware](./command-middleware#early-rejection-middleware-depends)); `context` is real
+  and usable, so e.g. `is_admin(context)` still works exactly as shown below. Use this for checks
+  that don't need a specific record (a role check, say).
 - **Anything else** (or unconfigured, `None`) - not enforced by the middleware at all; instead it's
   made available as `context.authorization`, for `perform_*` to inspect once it has whatever
   record-specific info a check actually needs, and reject itself
@@ -43,10 +48,31 @@ from fastapi_viewsets.middleware.auth.authorization import Authorization
 settings.viewsets_command_middleware = [Authorization()]
 ```
 
+The two roles map onto `Middleware`'s two methods directly - `depends()` holds only the
+reject-capable (callable) case; the always-happens, never-rejects context enrichment stays in
+`__call__` (there's no early-timing benefit to it, so it runs at its usual point in the onion
+chain, unchanged):
+
+```python
+class Authorization(Middleware):
+    async def depends(self, request, cls, context) -> None:
+        config = self.config_from(context)
+        if callable(config):
+            allowed = config(request, cls, context)
+            if inspect.isawaitable(allowed):
+                allowed = await allowed
+            if not allowed:
+                raise HTTPException(status_code=403, detail="Not authorized to perform this action")
+
+    async def __call__(self, request, viewset, context, call_next):
+        context.set("authorization", self.config_from(context))
+        return await call_next()
+```
+
 ### Middleware-level: no specific record needed
 
 ```python
-@action_configuration({Authorization: lambda request, viewset, context: is_admin(context)})
+@action_configuration({Authorization: lambda request, cls, context: is_admin(context)})
 class AdminOnlyViewSet(...): ...
 ```
 

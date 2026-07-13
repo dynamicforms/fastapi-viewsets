@@ -118,37 +118,45 @@ and deciding what to do about them are different-shaped problems.
 **Command middleware** is the other shape - an onion chain wrapping the actual execution, each
 layer calling `call_next()` for the next one. A middleware is just anything callable with the right
 signature - a plain function, or a class implementing `Middleware.__call__` (useful when, as here,
-the middleware is reusable library code rather than a one-off closure):
+the middleware is reusable library code rather than a one-off closure).
+
+For a pure "check and maybe reject" middleware like `Session` - no "after" phase, it never inspects
+what `perform_list` returns - the onion timing isn't even needed: `Middleware` has an optional
+second method, `depends()`, that `route_viewset` bridges onto FastAPI's own native `Depends()`
+mechanism, so it runs *before* FastAPI even parses the request body:
 
 ```python
 class Session(Middleware):
-    async def __call__(self, request, viewset, context, call_next):
+    async def depends(self, request, cls, context):
         config = self.config_from(context)
         required = True if config is None else bool(config)
         if not required:
-            return await call_next()
+            return
         user = await context.user
         if user is None:
-            return ViewSetResult(body={"detail": "Session expired or invalid"}, status_code=401)
-        return await call_next()
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
+
+    async def __call__(self, request, viewset, context, call_next):
+        return await call_next()   # depends() already decided everything - nothing left to do here
 
 settings.viewsets_command_middleware = [Session()]
 ```
 
-Because it's onion-shaped, "reject" needs no special mechanism at all: a middleware that returns
-without calling `call_next()` simply means nothing further down the chain - not `perform_list`, not
-any middleware configured after it - ever runs. `ViewSetResult.status_code` carries the `401` all
-the way out to the real HTTP response. (401, not 403: the credential itself no longer establishes
-who's calling - missing, garbage, or expired - which is "unauthorized," not "authorized but
-forbidden to do this specific thing.") A viewset that must stay reachable without a session (a
-login endpoint, say) opts out with `@action_configuration({Session: False})` - `self.config_from(context)`
-is exactly how `Session` reads that. → full depth in [Command Middleware](./command-middleware) and
+"Reject" needs no special mechanism at all here: raising `HTTPException` inside `depends()`
+propagates straight out through FastAPI's own dependency resolution, so nothing further down the
+line - not `perform_list`, not the onion chain, not even FastAPI's own request-body parsing - ever
+runs. (401, not 403: the credential itself no longer establishes who's calling - missing, garbage,
+or expired - which is "unauthorized," not "authorized but forbidden to do this specific thing.") A
+viewset that must stay reachable without a session (a login endpoint, say) opts out with
+`@action_configuration({Session: False})` - `self.config_from(context)` is exactly how `Session`
+reads that. → full depth in [Command Middleware](./command-middleware) and
 [Authentication](./authentication).
 
 This is also the clearest illustration of why the two mechanisms stay separate: the context
 processor only ever *gathered* the fact ("user is `None`"); it's the command middleware that
-*decided* what to do about that fact and reshaped the response. Neither could have done the other's
-job.
+*decided* what to do about that fact - whether that decision runs early, via `depends()`, or later,
+in the onion chain, is an implementation detail of *how* command middleware decides, not a third
+mechanism. Neither a context processor nor `perform_list` itself could have made that call.
 
 ## Problem: "one boolean per concern doesn't scale"
 
@@ -228,17 +236,27 @@ Pulling every piece from the sections above into one picture, for a single HTTP 
 HTTP request
      │
      ▼
+FastAPI's own Depends() resolution (before FastAPI parses the request body)
+     │      Middleware.depends(), for every configured command middleware that defines it
+     │      (e.g. Session/Authorization/RateLimiter can short-circuit here with a 401/403/429 -
+     │       this is also where Context gets built, cached for reuse below - see Context
+     │       Processors / Authentication)
+     ▼
+FastAPI parses/validates the request body (422 on failure) - only reached if depends() allowed it
+     │
+     ▼
 route_viewset-registered endpoint (lifecycle: singleton / per-request / instance-key)
      │
      ├─ if lifecycle uses state:  await viewset.load_state()
      │
      ├─ if the endpoint declares `context`:
-     │      build Context by running settings.viewsets_context_processors
-     │      (needs the live Request - see Context Processors / Auth)
+     │      reuse the already-built Context from the Depends() phase above (or build one now,
+     │      running settings.viewsets_context_processors, if depends() never touched it)
      │
      ▼
 Command middleware chain (settings.viewsets_command_middleware) — before phase, in list order
-     │      (e.g. Session can short-circuit here with a 401)
+     │      (only meaningful for middleware with "after" work left to do - a middleware whose
+     │       entire job lives in depends() is a trivial passthrough here)
      ▼
 perform_* execution
      │      (optionally delegated: celery_viewset ships `context` to a worker,
@@ -259,14 +277,17 @@ HTTP transport adapter: ViewSetResult.body → JSON response body
 HTTP response
 ```
 
-A route that doesn't declare a `context` parameter skips the context-building step entirely (no
-`Request` is even injected) - a genuinely zero-cost opt-out, not just "context ends up empty".
-Command middleware, by contrast, is not opt-in per route: if `settings.viewsets_command_middleware`
-is non-empty, it wraps every request-facing execution (a viewset opts *itself* out per-middleware,
-as `Session` above shows via `@action_configuration`); with no middleware configured at all, the
-wrapping is a no-op. "Lifecycle uses state" means `"singleton"` or `"instance-key"` -
-see [ViewSet Lifecycle](./lifecycle) for what each mode actually does and why `"per-request"` skips
-both hooks.
+A route that doesn't declare a `context` parameter skips the context-building step entirely inside
+`route_viewset` (no `Request` is even injected there) - a genuinely zero-cost opt-out, not just
+"context ends up empty" - though `depends()` may still build one earlier if any configured
+middleware needs it. Command middleware, by contrast, is not opt-in per route: if
+`settings.viewsets_command_middleware` is non-empty, it wraps every request-facing execution (a
+viewset opts *itself* out per-middleware, as `Session` above shows via `@action_configuration`);
+with no middleware configured at all, the wrapping is a no-op. "Lifecycle uses state" means
+`"singleton"` or `"instance-key"` - see [ViewSet Lifecycle](./lifecycle) for what each mode
+actually does and why `"per-request"` skips both hooks, and note `depends()` runs *before*
+`load_state()` for `per-request`/`instance-key` lifecycles (no shipped context processor reads
+viewset instance state, so this doesn't matter in practice).
 
 | Piece | What it does | Guide |
 |---|---|---|

@@ -50,7 +50,7 @@ def test_resolve_uses_global_default_when_nothing_else_configured():
     class Plain:
         pass
 
-    assert resolve_action_configuration(Plain(), "list_items") == {_MARKER: "default-value"}
+    assert resolve_action_configuration(Plain, "list_items") == {_MARKER: "default-value"}
 
 
 def test_resolve_class_level_overrides_global_default():
@@ -60,7 +60,7 @@ def test_resolve_class_level_overrides_global_default():
     class Foo:
         pass
 
-    assert resolve_action_configuration(Foo(), "list_items") == {_MARKER: "class-value"}
+    assert resolve_action_configuration(Foo, "list_items") == {_MARKER: "class-value"}
 
 
 def test_resolve_method_level_overrides_class_level_per_key_only():
@@ -73,7 +73,7 @@ def test_resolve_method_level_overrides_class_level_per_key_only():
         def perform_list(self):
             pass
 
-    result = resolve_action_configuration(Foo(), "list_items")
+    result = resolve_action_configuration(Foo, "list_items")
     assert result == {_MARKER: "method-value", other: "class-other"}
 
 
@@ -86,7 +86,7 @@ def test_resolve_checks_action_method_name_for_hand_written_endpoints():
         def mine(self):
             pass
 
-    assert resolve_action_configuration(Foo(), "mine") == {_MARKER: "method-value"}
+    assert resolve_action_configuration(Foo, "mine") == {_MARKER: "method-value"}
 
 
 def test_resolve_perform_method_wins_over_action_method_if_both_decorated():
@@ -99,7 +99,7 @@ def test_resolve_perform_method_wins_over_action_method_if_both_decorated():
         def perform_update(self):
             pass
 
-    assert resolve_action_configuration(Foo(), "update") == {_MARKER: "perform-method-value"}
+    assert resolve_action_configuration(Foo, "update") == {_MARKER: "perform-method-value"}
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ def test_resolved_dict_keeps_byaction_values_unresolved():
     class Foo:
         pass
 
-    result = resolve_action_configuration(Foo(), "update")
+    result = resolve_action_configuration(Foo, "update")
     assert isinstance(result[_MARKER], ByAction)
 
 

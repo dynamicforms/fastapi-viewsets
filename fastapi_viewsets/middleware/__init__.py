@@ -65,6 +65,34 @@ class Middleware(ABC):
         """
         return context.configuration_for(type(self))
 
+    async def depends(self, _request: "Request", _cls: type, _context: Context) -> None:
+        """
+        Optional early-gate hook, bridged onto FastAPI's own native Depends() by route_viewset -
+        runs before FastAPI even parses the request body. Raise HTTPException to reject; return
+        normally to allow. Default is a no-op: a middleware that doesn't override this only runs in
+        the onion chain below, exactly as if this method didn't exist.
+
+        `cls` is always the viewset *class*, never an instance - for `per-request`/`instance-key`
+        lifecycles no instance exists yet this early (uniform across all 3 lifecycle modes, rather
+        than sometimes a real instance and sometimes not, depending on which one). `context` is
+        real and usable here (see `fastapi_viewsets.context.get_shared_context`) - built as early as
+        this method can possibly run, which for `per-request`/`instance-key` lifecycles is *before*
+        `load_state()` (a real, accepted change in ordering - no shipped context processor reads
+        viewset instance state, so this doesn't affect anything today).
+
+        Put here *only* logic that might actually reject - there's no benefit to running
+        unconditional work (e.g. enriching context with no reject path - see
+        `middleware.auth.authorization.Authorization`, which splits across both methods for exactly
+        this reason) before body parsing, so that kind of work stays in `__call__` as it does today.
+        For middleware whose entire job is reject-or-allow with nothing unconditional (`Session`,
+        `RateLimiter`), `__call__` correctly becomes a trivial `return await call_next()`: `depends()`
+        already made the only decision that matters, and if it rejected, `__call__`/the onion chain
+        is never even reached at all (the exception already propagated out via FastAPI's own
+        `Depends()` resolution, before our wrapper/lifecycle_runner ever starts) - so nothing runs
+        twice.
+        """
+        return None
+
     @abstractmethod
     async def __call__(
         self,

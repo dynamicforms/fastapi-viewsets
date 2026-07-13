@@ -27,8 +27,9 @@ async def _final_ok():
 @pytest.mark.asyncio
 async def test_unconfigured_passes_through_and_context_authorization_is_none():
     context = Context({})
-    result = await Authorization()(None, object(), context, _final_ok)
+    assert await Authorization().depends(None, object, context) is None
 
+    result = await Authorization()(None, object(), context, _final_ok)
     assert result.body == "ok"
     assert await context.authorization is None
 
@@ -36,61 +37,58 @@ async def test_unconfigured_passes_through_and_context_authorization_is_none():
 @pytest.mark.asyncio
 async def test_non_callable_config_is_exposed_but_not_enforced():
     context = Context({}, action_configuration={Authorization: "owner-only"})
-    result = await Authorization()(None, object(), context, _final_ok)
+    assert await Authorization().depends(None, object, context) is None
 
+    result = await Authorization()(None, object(), context, _final_ok)
     assert result.body == "ok"
     assert await context.authorization == "owner-only"
 
 
 @pytest.mark.asyncio
 async def test_callable_config_returning_true_passes_through():
-    context = Context({}, action_configuration={Authorization: lambda _r, _v, _c: True})
-    result = await Authorization()(None, object(), context, _final_ok)
-
-    assert result.body == "ok"
+    context = Context({}, action_configuration={Authorization: lambda _r, _c, _ctx: True})
+    assert await Authorization().depends(None, object, context) is None
 
 
 @pytest.mark.asyncio
 async def test_callable_config_returning_false_rejects_with_403():
-    async def final_handler():
-        raise AssertionError("call_next must not run when the check fails")
+    context = Context({}, action_configuration={Authorization: lambda _r, _c, _ctx: False})
 
-    context = Context({}, action_configuration={Authorization: lambda _r, _v, _c: False})
-    result = await Authorization()(None, object(), context, final_handler)
+    with pytest.raises(HTTPException) as exc_info:
+        await Authorization().depends(None, object, context)
 
-    assert result.status_code == 403
-    assert result.body == {"detail": "Not authorized to perform this action"}
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Not authorized to perform this action"
 
 
 @pytest.mark.asyncio
 async def test_async_callable_config_is_awaited():
-    async def check(_request, _viewset, _context):
+    async def check(_request, _cls, _context):
         return False
 
-    async def final_handler():
-        raise AssertionError("call_next must not run when the check fails")
-
     context = Context({}, action_configuration={Authorization: check})
-    result = await Authorization()(None, object(), context, final_handler)
 
-    assert result.status_code == 403
+    with pytest.raises(HTTPException) as exc_info:
+        await Authorization().depends(None, object, context)
+
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio
-async def test_callable_config_receives_request_viewset_context():
+async def test_callable_config_receives_request_cls_context():
     received = {}
 
-    def check(request, viewset, context):
+    def check(request, cls, context):
         received["request"] = request
-        received["viewset"] = viewset
+        received["cls"] = cls
         received["context"] = context
         return True
 
-    sentinel_request, sentinel_viewset = object(), object()
+    sentinel_request, sentinel_cls = object(), object()
     context = Context({}, action_configuration={Authorization: check})
-    await Authorization()(sentinel_request, sentinel_viewset, context, _final_ok)
+    await Authorization().depends(sentinel_request, sentinel_cls, context)
 
-    assert received == {"request": sentinel_request, "viewset": sentinel_viewset, "context": context}
+    assert received == {"request": sentinel_request, "cls": sentinel_cls, "context": context}
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +110,7 @@ def test_callable_config_rejects_a_real_route_with_403():
     router = APIRouter()
 
     @route_viewset(router, base_path="/admin-items")
-    @action_configuration({Authorization: lambda _request, _viewset, _context: False})
+    @action_configuration({Authorization: lambda _request, _cls, _context: False})
     class AdminItemViewSet(ListMixin[Item]):
         async def perform_list(self, _context: Context) -> list[Item]:
             return list(_DATABASE.values())

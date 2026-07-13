@@ -3,7 +3,7 @@ from typing import Any, Literal, TYPE_CHECKING, TypeVar
 
 from ..action_configuration import extra_middlewares_for, resolve_action_configuration
 from ..conf import settings
-from ..context import build_context
+from ..context import get_shared_context
 from ..middleware import run_command_chain, ViewSetResult
 
 if TYPE_CHECKING:
@@ -48,9 +48,9 @@ async def lifecycle_runner(
         # any extra per-call middleware (see extra_middlewares_for) regardless of whether this
         # route even declares a `context` param. Harmless in the celery-worker path: execute()
         # returns before touching it there, since command middleware never runs in the worker.
-        action_configuration = resolve_action_configuration(req_instance, original_endpoint.__name__)
+        action_configuration = resolve_action_configuration(cls, original_endpoint.__name__)
         if needs_context:
-            kwargs["context"] = await build_context(
+            kwargs["context"] = await get_shared_context(
                 request, req_instance, action_configuration, original_endpoint.__name__
             )
 

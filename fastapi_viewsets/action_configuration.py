@@ -55,7 +55,7 @@ def _candidate_method_names(action_name: str) -> list[str]:
     return names
 
 
-def resolve_action_configuration(req_instance: Any, action_name: str) -> dict[Any, Any]:
+def resolve_action_configuration(cls: type, action_name: str) -> dict[Any, Any]:
     """
     Merges settings.default_action_configuration (lowest priority) -> class-level
     @action_configuration -> method-level @action_configuration (highest priority), per identifier
@@ -67,15 +67,21 @@ def resolve_action_configuration(req_instance: Any, action_name: str) -> dict[An
     time against the current action, so a Context reused across actions - e.g. via
     clone_for_command - never resolves stale).
 
+    Takes the viewset *class* (not an instance) - method-level lookup via `getattr(cls, candidate)`
+    returns the same underlying function (and thus the same `__action_configuration__` attribute)
+    as `getattr(instance, candidate)` would, so no instance is ever needed; this also lets it be
+    called before a viewset instance exists yet (e.g. from an early Middleware.depends() call - see
+    route_viewset.py - for per-request/instance-key lifecycles).
+
     Method-level lookup checks both the actual action method name (for hand-written __router
     endpoints, which have no separate perform_* counterpart) and its mapped perform_* method (where
     CRUD logic actually lives - see _PERFORM_METHOD_BY_ACTION), in that order, so a perform_*-level
     override wins if both happen to be decorated.
     """
     merged: dict[Any, Any] = dict(settings.default_action_configuration)
-    merged.update(getattr(type(req_instance), "__action_configuration__", {}))
+    merged.update(getattr(cls, "__action_configuration__", {}))
     for candidate in _candidate_method_names(action_name):
-        method_config = getattr(getattr(req_instance, candidate, None), "__action_configuration__", None)
+        method_config = getattr(getattr(cls, candidate, None), "__action_configuration__", None)
         if method_config:
             merged.update(method_config)
     return merged

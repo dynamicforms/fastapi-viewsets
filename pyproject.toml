@@ -35,6 +35,7 @@ dependencies = [
 [project.optional-dependencies]
 celery = ["celery>=5.3", "redis>=5.0"]
 django = ["django>=4.2", "asgiref>=3.6"]
+jwt = ["PyJWT>=2.8"]
 dev = [
     "coverage",
     "pytest",
@@ -45,6 +46,7 @@ dev = [
     "celery",
     "django",
     "asgiref",
+    "PyJWT",
 ]
 
 [project.urls]

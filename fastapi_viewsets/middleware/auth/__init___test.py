@@ -1,6 +1,6 @@
 import pytest
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
@@ -25,23 +25,12 @@ def test_session_is_a_middleware():
 
 
 @pytest.mark.asyncio
-async def test_short_circuits_with_401_when_user_is_none():
-    async def final_handler():
-        raise AssertionError("call_next must not run when the session is missing/expired")
-
-    context = Context({"user": None})
-    result = await Session()(None, object(), context, final_handler)
-
-    assert result.status_code == 401
-    assert result.body == {"detail": "Session expired or invalid"}
-
-
-@pytest.mark.asyncio
-async def test_passes_through_when_user_resolves():
+async def test_call_is_a_trivial_passthrough():
+    """All of Session's real logic lives in depends() now - __call__ just calls call_next()."""
     async def final_handler():
         return ViewSetResult(body="ok")
 
-    context = Context({"user": {"id": 1}})
+    context = Context({"user": None})
     result = await Session()(None, object(), context, final_handler)
 
     assert result.body == "ok"
@@ -49,26 +38,36 @@ async def test_passes_through_when_user_resolves():
 
 
 @pytest.mark.asyncio
+async def test_depends_raises_401_when_user_is_none():
+    context = Context({"user": None})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await Session().depends(None, object, context)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Session expired or invalid"
+
+
+@pytest.mark.asyncio
+async def test_depends_passes_through_when_user_resolves():
+    context = Context({"user": {"id": 1}})
+    assert await Session().depends(None, object, context) is None
+
+
+@pytest.mark.asyncio
 async def test_action_configuration_false_opts_out():
-    async def final_handler():
-        return ViewSetResult(body="public")
-
     context = Context({"user": None}, action_configuration={Session: False})
-    result = await Session()(None, object(), context, final_handler)
-
-    assert result.body == "public"
-    assert result.status_code is None
+    assert await Session().depends(None, object, context) is None
 
 
 @pytest.mark.asyncio
 async def test_default_is_required_when_not_configured():
-    async def final_handler():
-        raise AssertionError("call_next must not run - nothing opted this call out")
-
     context = Context({"user": None})
-    result = await Session()(None, object(), context, final_handler)
 
-    assert result.status_code == 401
+    with pytest.raises(HTTPException) as exc_info:
+        await Session().depends(None, object, context)
+
+    assert exc_info.value.status_code == 401
 
 
 # ---------------------------------------------------------------------------
