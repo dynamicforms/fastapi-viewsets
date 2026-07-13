@@ -44,3 +44,5 @@ Returns the original class unchanged (after registering its routes). Can be used
 | `"singleton"` | Once, at decoration time | `load_state()` / `save_state()` called on every request. No locking — concurrent requests may race. |
 | `"per-request"` | Once per incoming HTTP request | Not called. |
 | `"instance-key"` | Once per request | `load_state()` / `save_state()` called on every request. No locking — concurrent requests may race. |
+
+See [ViewSet Lifecycle](../guide/lifecycle) for the full guide, including a worked example.

@@ -48,11 +48,12 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
     and attaches them to the class. Idempotent: if already called, returns immediately.
     If get_wrapper is None, only __router is built (no FastAPI app, no endpoint wrapping).
 
-    disable_response_model: pass True when the class defines `finalize_response` (see
-    route_viewset.py) - that hook can change the shape of what's actually served (e.g. strip an
-    internal-only field), so FastAPI must not coerce/re-validate the endpoint's return value
-    against the ORIGINAL method's declared return type, which would silently undo the hook's
-    changes (missing fields reappear with their model defaults).
+    disable_response_model: pass True when command middleware is configured (see
+    fastapi_viewsets/middleware.py and route_viewset.py) - middleware can change the shape of what's
+    actually served (e.g. strip an internal-only field via ViewSetResult.body), so FastAPI must not
+    coerce/re-validate the endpoint's return value against the ORIGINAL method's declared return
+    type, which would silently undo those changes (missing fields reappear with their model
+    defaults).
     """
     if hasattr(cls, "__router") and (get_wrapper is None or getattr(cls, "__router_full", False)):
         return

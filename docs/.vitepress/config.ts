@@ -27,13 +27,26 @@ export default defineConfig({
         },
         {
           text: 'Python (FastAPI)',
-          link: '/guide/python-mixins',
+          link: '/guide/architecture',
           items: [
+            { text: 'Architecture', link: '/guide/architecture' },
             { text: 'Mixins', link: '/guide/python-mixins' },
             { text: 'Routers & Decorators', link: '/guide/routers' },
+            { text: 'ViewSet Lifecycle', link: '/guide/lifecycle' },
             { text: 'CollectionViewSet', link: '/guide/collection-viewset' },
-            { text: 'CeleryViewSet', link: '/guide/celery-viewset' },
             { text: 'Custom Endpoints', link: '/guide/custom-endpoints' },
+            { text: 'Context Processors', link: '/guide/context-processors' },
+            { text: 'Command Middleware', link: '/guide/command-middleware' },
+            { text: 'Action Configuration', link: '/guide/action-configuration' },
+          ],
+        },
+        {
+          text: 'Built-in Middleware & Processors',
+          link: '/guide/authentication',
+          items: [
+            { text: 'Authentication', link: '/guide/authentication' },
+            { text: 'Authorization', link: '/guide/authorization' },
+            { text: 'Rate Limiter', link: '/guide/rate-limiter' },
           ],
         },
         {
@@ -53,7 +66,6 @@ export default defineConfig({
             { text: 'Python mixins', link: '/api/python-mixins' },
             { text: 'route_viewset', link: '/api/route-viewset' },
             { text: 'CollectionViewSet', link: '/api/collection-viewset' },
-            { text: 'CeleryViewSet', link: '/api/celery-viewset' },
             { text: 'Vue mixins', link: '/api/vue-mixins' },
             { text: 'route_rest', link: '/api/route-rest' },
           ],

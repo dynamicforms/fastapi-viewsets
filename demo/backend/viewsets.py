@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from demo.backend.celery_app import celery_app, redis_sync
 from demo.backend.data_generator import generate_music_library
 from fastapi_viewsets.collection_viewset import CollectionViewSet
+from fastapi_viewsets.context import Context
 from fastapi_viewsets.decorators.celery_viewset import celery_viewset
 from fastapi_viewsets.mixins import BulkViewSetMixin, LookupItem, LookupMixin, make_all_optional
 
@@ -39,11 +40,11 @@ class MusicTrackViewSet(
     __router = APIRouter()
 
     @__router.get("count", tags=["MusicTrack"], summary="Return the total number of tracks")
-    async def count(self) -> int:
-        return len(await self.perform_list())
+    async def count(self, context: Context) -> int:
+        return len(await self.perform_list(context))
 
-    async def perform_lookup(self) -> list[LookupItem]:
-        return [LookupItem(group=None, pk=t.id, title=t.title, icon=None) for t in await self.perform_list()]
+    async def perform_lookup(self, context: Context) -> list[LookupItem]:
+        return [LookupItem(group=None, pk=t.id, title=t.title, icon=None) for t in await self.perform_list(context)]
 
     async def filter_list(self, fltr: Any, items: list[MusicTrack]) -> list[MusicTrack]:
         def filter_item(itm: MusicTrack) -> bool:

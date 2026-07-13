@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
 from fastapi_viewsets.collection_viewset import CollectionViewSet
+from fastapi_viewsets.context import Context
 from fastapi_viewsets.decorators import route_viewset
 from fastapi_viewsets.mixins import BulkViewSetMixin, LookupItem, LookupMixin
 
@@ -49,13 +50,13 @@ def make_search_app():
         def __init__(self):
             super().__init__(container=database, pk_field="id")
 
-        async def perform_lookup(self) -> list[LookupItem]:
+        async def perform_lookup(self, context: Context) -> list[LookupItem]:
             return [LookupItem(group=None, pk=item.id, title=item.name, icon=None)
-                    for item in await self.perform_list()]
+                    for item in await self.perform_list(context)]
 
         @__router.get("search")
-        async def search(self, q: str) -> list[Item]:
-            all_items = await self.perform_list()
+        async def search(self, context: Context, q: str) -> list[Item]:
+            all_items = await self.perform_list(context)
             return [item for item in all_items if q.lower() in item.name.lower()]
 
     app.include_router(router)
@@ -122,10 +123,10 @@ def make_clone_app():
             super().__init__(container=database, pk_field="id")
 
         @__router.post("clone")
-        async def clone(self, body: CloneRequest) -> Item:
-            source = await self.perform_retrieve(body.source_id)
+        async def clone(self, context: Context, body: CloneRequest) -> Item:
+            source = await self.perform_retrieve(context, body.source_id)
             return await self.perform_create(
-                Item(id=0, name=body.new_name, description=source.description)
+                context, Item(id=0, name=body.new_name, description=source.description)
             )
 
     app.include_router(router)
@@ -174,15 +175,15 @@ def make_combined_app():
             super().__init__(container=database, pk_field="id")
 
         @__router.get("search")
-        async def search(self, q: str) -> list[Item]:
-            all_items = await self.perform_list()
+        async def search(self, context: Context, q: str) -> list[Item]:
+            all_items = await self.perform_list(context)
             return [item for item in all_items if q.lower() in item.name.lower()]
 
         @__router.post("clone")
-        async def clone(self, body: CloneRequest) -> Item:
-            source = await self.perform_retrieve(body.source_id)
+        async def clone(self, context: Context, body: CloneRequest) -> Item:
+            source = await self.perform_retrieve(context, body.source_id)
             return await self.perform_create(
-                Item(id=0, name=body.new_name, description=source.description)
+                context, Item(id=0, name=body.new_name, description=source.description)
             )
 
     app.include_router(router)

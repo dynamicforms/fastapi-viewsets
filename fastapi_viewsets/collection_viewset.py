@@ -4,6 +4,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
+from .context import Context
 from .mixins import ImplMixin
 from .response_classes import NotFoundError
 
@@ -39,35 +40,37 @@ class AsyncCollectionViewSet(
     async def container_delete(self, pk: K) -> None:
         raise NotImplementedError
 
-    async def perform_list(self) -> list[T]:
+    async def perform_list(self, _context: Context) -> list[T]:
         return await self.container_list()
 
-    async def perform_retrieve(self, pk: K) -> T:
+    async def perform_retrieve(self, _context: Context, pk: K) -> T:
         return await self.container_retrieve(pk)
 
-    async def perform_create(self, data: T) -> T:
+    async def perform_create(self, _context: Context, data: T) -> T:
         return await self.container_add(data)
 
-    async def perform_bulk_create(self, data: list[T]) -> list[T]:
+    async def perform_bulk_create(self, _context: Context, data: list[T]) -> list[T]:
         results = []
         for item in data:
             results.append(await self.container_add(item))
         return results
 
-    async def perform_update(self, pk: K, data: T, partial: bool = True) -> T:
+    async def perform_update(self, _context: Context, pk: K, data: T, partial: bool = True) -> T:
         return await self.container_update(pk, data, partial)
 
-    async def perform_bulk_update(self, records: dict[K, T], partial: bool = True) -> list[T]:
+    async def perform_bulk_update(
+        self, _context: Context, records: dict[K, T], partial: bool = True
+    ) -> list[T]:
         results = []
         for pk, data in records.items():
             results.append(await self.container_update(pk, data, partial))
         return results
 
-    async def perform_destroy(self, pk: K) -> dict[K, Any]:
+    async def perform_destroy(self, _context: Context, pk: K) -> dict[K, Any]:
         await self.container_delete(pk)
         return {pk: None}
 
-    async def perform_bulk_destroy(self, pk: list[K]) -> list[dict[K, Any]]:
+    async def perform_bulk_destroy(self, _context: Context, pk: list[K]) -> list[dict[K, Any]]:
         results = []
         for p in pk:
             await self.container_delete(p)

@@ -54,12 +54,13 @@ Only add methods for genuinely custom behaviour (e.g. `perform_lookup`):
 
 ```python
 from fastapi_viewsets.collection_viewset import CollectionViewSet
+from fastapi_viewsets.context import Context
 from fastapi_viewsets.mixins import BulkViewSetMixin, LookupItem, LookupMixin
 
 class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item], LookupMixin):
-    async def perform_lookup(self) -> list[LookupItem]:
+    async def perform_lookup(self, context: Context) -> list[LookupItem]:
         return [LookupItem(group=None, pk=item.id, title=item.name, icon=None)
-                for item in await self.perform_list()]
+                for item in await self.perform_list(context)]
 
     def __init__(self):
         super().__init__(container=database, pk_field="id")
@@ -76,9 +77,9 @@ router = APIRouter()
 
 @route_viewset(router, base_path="/items", pk_field_name="id")
 class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item], LookupMixin):
-    async def perform_lookup(self) -> list[LookupItem]:
+    async def perform_lookup(self, context: Context) -> list[LookupItem]:
         return [LookupItem(group=None, pk=item.id, title=item.name, icon=None)
-                for item in await self.perform_list()]
+                for item in await self.perform_list(context)]
 
     def __init__(self):
         super().__init__(container=database, pk_field="id")

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, TypeVar
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
+from ...context import serialize_context
 from ..build_schema import build_schema
 from . import result_reader
 from .result_reader import get_result_queue_key
@@ -70,10 +71,14 @@ def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, redi
         result_reader.register_future(correlation_id, future)
 
         try:
-            serializable_kwargs = {
-                k: v.model_dump() if isinstance(v, BaseModel) else v
-                for k, v in kwargs.items()
-            }
+            serializable_kwargs = {}
+            for k, v in kwargs.items():
+                if k == "context":
+                    serializable_kwargs[k] = await serialize_context(v.raw())
+                elif isinstance(v, BaseModel):
+                    serializable_kwargs[k] = v.model_dump()
+                else:
+                    serializable_kwargs[k] = v
             logger.info("Celery task scheduling: %s (correlation_id=%s)", task_name, correlation_id)
             celery_app.send_task(
                     task_name,
