@@ -115,5 +115,9 @@ More backends (e.g. Django ORM `ModelViewSet`) are planned. For Celery, there's 
 implementation class to inherit from — see [Transparent Celery delegation](#transparent-celery-delegation)
 above: any viewset gains Celery-backed execution via the `celery_viewset` decorator alone.
 
+Until a Django ORM-backed implementation class ships, see [Django Integration](./django-integration)
+for the recommended convention (plain sync functions + `sync_to_async`) and everything else a
+Django-backed project needs (process init, `autodiscover_tasks`, decorator combination).
+
 For the full picture of what happens between a request arriving and a response going out —
 context processors, command middleware, and how `celery_viewset` fits in — see [Architecture](./architecture).

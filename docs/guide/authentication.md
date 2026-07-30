@@ -119,6 +119,10 @@ Because the resolved value is a live Django ORM `User` instance - not JSON-safe 
 it independently (one extra query, but correct) rather than receiving something un-picklable. See
 [Context Processors](./context-processors#lazyobject) for what "recipe" means here.
 
+For the rest of what a Django-backed project needs beyond auth - initializing Django itself in
+both the FastAPI and Celery worker processes, `autodiscover_tasks`, and the recommended ORM-access
+convention for `perform_*` - see [Django Integration](./django-integration).
+
 ### `JWTAuthBackend` - stateless `Bearer` tokens
 
 Verifies a JWT's signature and expiry - no session store, no database lookup, purely local

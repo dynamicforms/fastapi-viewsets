@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 # Global registry: correlation_id -> asyncio.Future
 _pending_futures: dict[str, asyncio.Future] = {}
 
-# Global reader task reference
-_reader_task: asyncio.Task | None = None
+# Global reader task registry, keyed by queue_key - one reader per Celery viewset task_prefix
+_reader_tasks: dict[str, asyncio.Task] = {}
 
 
 def register_future(correlation_id: str, future: asyncio.Future) -> None:
@@ -78,22 +78,39 @@ def push_result(redis_client: "redis.Redis", queue_key: str, correlation_id: str
     redis_client.rpush(queue_key, json.dumps(data))
 
 
+def get_running_queue_keys() -> frozenset[str]:
+    """Return the queue_keys that currently have a running (not done) reader task."""
+    return frozenset(key for key, task in _reader_tasks.items() if not task.done())
+
+
 async def start_result_reader(redis_client: "redis.Redis", queue_key: str, poll_interval: float = 0.05) -> asyncio.Task:
-    """Start the background result reader task. Should be called on FastAPI startup."""
-    global _reader_task
-    if _reader_task is not None and not _reader_task.done():
-        return _reader_task
-    _reader_task = asyncio.create_task(result_reader_loop(redis_client, queue_key, poll_interval))
-    return _reader_task
+    """
+    Start the background result reader task for the given queue_key.
+
+    Should be called once per queue_key (i.e. once per celery_viewset task_prefix) on FastAPI
+    startup. Calling it again with the same queue_key while its reader is still running returns
+    the existing task; a different queue_key gets its own independent reader task.
+    """
+    existing = _reader_tasks.get(queue_key)
+    if existing is not None and not existing.done():
+        return existing
+    task = asyncio.create_task(result_reader_loop(redis_client, queue_key, poll_interval))
+    _reader_tasks[queue_key] = task
+    return task
 
 
-async def stop_result_reader() -> None:
-    """Stop the background result reader task. Should be called on FastAPI shutdown."""
-    global _reader_task
-    if _reader_task is not None and not _reader_task.done():
-        _reader_task.cancel()
-        try:
-            await _reader_task
-        except asyncio.CancelledError:
-            pass
-    _reader_task = None
+async def stop_result_reader(queue_key: str | None = None) -> None:
+    """
+    Stop background result reader task(s). Should be called on FastAPI shutdown.
+
+    If queue_key is given, stop only that reader; otherwise stop all running readers.
+    """
+    keys = [queue_key] if queue_key is not None else list(_reader_tasks.keys())
+    for key in keys:
+        task = _reader_tasks.pop(key, None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

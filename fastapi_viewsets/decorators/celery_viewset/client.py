@@ -21,6 +21,15 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
+# queue_keys registered by celery_viewset_client so far - populated at decoration (import) time,
+# used by check_result_readers() to spot a queue_key with no running result reader.
+_registered_queue_keys: set[str] = set()
+
+
+def get_registered_queue_keys() -> frozenset[str]:
+    """Return the queue_keys registered by celery_viewset_client decorators applied so far."""
+    return frozenset(_registered_queue_keys)
+
 
 def celery_viewset_client(
     celery_app: "Celery",
@@ -53,6 +62,7 @@ def celery_viewset_client(
             "queue_key": queue_key,
             "mode": "client",
         }
+        _registered_queue_keys.add(queue_key)
 
         return cls
 

@@ -1,4 +1,6 @@
-from unittest.mock import MagicMock, patch
+import logging
+
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -8,7 +10,13 @@ from fastapi_viewsets.decorators import (
     celery_viewset,
     set_is_celery_worker,
 )
-from fastapi_viewsets.decorators.celery_viewset import _detect_is_celery_worker
+from fastapi_viewsets.decorators.celery_viewset import (
+    _detect_is_celery_worker,
+    check_result_readers,
+    get_result_queue_key,
+    start_result_reader,
+    stop_result_reader,
+)
 from fastapi_viewsets.mixins import ListMixin
 
 
@@ -86,3 +94,54 @@ def test_detect_is_celery_worker_via_sys_argv():
         assert _detect_is_celery_worker() is True
     with patch("sys.argv", ["uvicorn", "main:app"]):
         assert _detect_is_celery_worker() is False
+
+
+# ---------------------------------------------------------------------------
+# check_result_readers
+# ---------------------------------------------------------------------------
+
+def test_check_result_readers_warns_when_reader_missing(caplog):
+    """check_result_readers reports (and logs) a queue_key registered but with no running reader."""
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+
+    set_is_celery_worker(False)
+    try:
+        @celery_viewset(celery_app=celery_app, task_prefix="check-readers-missing", redis_client=redis_mock)
+        class ItemViewSet(ListMixin[Item]):
+            async def perform_list(self) -> list[Item]:
+                return []
+
+        queue_key = get_result_queue_key("check-readers-missing")
+        with caplog.at_level(logging.WARNING):
+            missing = check_result_readers()
+
+        assert queue_key in missing
+        assert any(queue_key in record.getMessage() for record in caplog.records)
+    finally:
+        set_is_celery_worker(None)
+
+
+@pytest.mark.asyncio
+async def test_check_result_readers_clean_once_reader_started():
+    """check_result_readers no longer flags a queue_key once its reader is running."""
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+    async_redis_mock = AsyncMock()
+    async_redis_mock.lpop.return_value = None
+
+    set_is_celery_worker(False)
+    queue_key = get_result_queue_key("check-readers-running")
+    try:
+        @celery_viewset(celery_app=celery_app, task_prefix="check-readers-running", redis_client=redis_mock)
+        class ItemViewSet(ListMixin[Item]):
+            async def perform_list(self) -> list[Item]:
+                return []
+
+        await start_result_reader(async_redis_mock, queue_key, poll_interval=0.01)
+        missing = check_result_readers()
+
+        assert queue_key not in missing
+    finally:
+        await stop_result_reader(queue_key)
+        set_is_celery_worker(None)

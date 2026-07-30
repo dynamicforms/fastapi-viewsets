@@ -219,3 +219,38 @@ async def test_start_result_reader_returns_existing_task():
     assert task1 is task2
 
     await stop_result_reader()
+
+
+@pytest.mark.asyncio
+async def test_start_result_reader_supports_multiple_queue_keys():
+    """A different queue_key (e.g. a different celery_viewset task_prefix) gets its own reader task."""
+    redis_mock = AsyncMock()
+    redis_mock.lpop.return_value = None
+
+    task_items = await start_result_reader(redis_mock, "celery_viewset_results:items", poll_interval=0.01)
+    task_orders = await start_result_reader(redis_mock, "celery_viewset_results:orders", poll_interval=0.01)
+
+    assert task_items is not task_orders
+    assert not task_items.done()
+    assert not task_orders.done()
+
+    await stop_result_reader()
+    assert task_items.done()
+    assert task_orders.done()
+
+
+@pytest.mark.asyncio
+async def test_stop_result_reader_with_queue_key_stops_only_that_reader():
+    """stop_result_reader(queue_key) cancels only the reader for that queue_key."""
+    redis_mock = AsyncMock()
+    redis_mock.lpop.return_value = None
+
+    task_items = await start_result_reader(redis_mock, "celery_viewset_results:items", poll_interval=0.01)
+    task_orders = await start_result_reader(redis_mock, "celery_viewset_results:orders", poll_interval=0.01)
+
+    await stop_result_reader("celery_viewset_results:items")
+    assert task_items.done()
+    assert not task_orders.done()
+
+    await stop_result_reader()
+    assert task_orders.done()

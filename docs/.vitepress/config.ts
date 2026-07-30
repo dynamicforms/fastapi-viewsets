@@ -38,6 +38,7 @@ export default defineConfig({
             { text: 'Context Processors', link: '/guide/context-processors' },
             { text: 'Command Middleware', link: '/guide/command-middleware' },
             { text: 'Action Configuration', link: '/guide/action-configuration' },
+            { text: 'Django Integration', link: '/guide/django-integration' },
           ],
         },
         {

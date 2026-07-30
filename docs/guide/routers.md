@@ -192,17 +192,35 @@ Each viewset method is registered as a Celery task named `{task_prefix}.{method_
 
 Results are passed from the worker back to FastAPI via a Redis list (not via the Celery result backend). Each call is correlated with a UUID so that concurrent requests are handled correctly.
 
-The result reader background task must be started in the FastAPI lifespan:
+A result reader background task must be started in the FastAPI lifespan for each `queue_key` (i.e. each distinct `task_prefix` used by a `celery_viewset`-decorated class) — `start_result_reader` keeps one reader task per `queue_key`, so calling it once per prefix is required and sufficient. Every `celery_viewset_client` decorator registers its own `queue_key` at import time (before `lifespan` ever runs), so instead of maintaining your own list of prefixes, iterate `get_registered_queue_keys()` — it can't drift out of sync with your actual viewsets:
 
 ```python
-from fastapi_viewsets.decorators.celery_viewset import start_result_reader, stop_result_reader
+from fastapi_viewsets.decorators.celery_viewset import (
+    check_result_readers, get_registered_queue_keys, start_result_reader, stop_result_reader,
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await start_result_reader(redis_client)
+    for queue_key in get_registered_queue_keys():
+        await start_result_reader(redis_client, queue_key)
+    check_result_readers()  # logs a warning for any queue_key that still has no running reader
     yield
-    await stop_result_reader()
+    await stop_result_reader()  # stops all readers; pass a queue_key to stop just one
 ```
+
+::: warning One reader per queue_key, not automatic
+`start_result_reader(redis_client, queue_key)` starts (and reuses) exactly one reader task per
+`queue_key` — calling it for a *new* `queue_key` always starts an additional reader; it never
+replaces or interferes with readers for other keys. But nothing starts a reader for a prefix you
+never call it for: if your app has more than one `celery_viewset`-decorated class with different
+`task_prefix` values (a very common shape) and you forget to start a reader for one of them,
+results for it are never picked up — the Celery task runs fine, but the client-side `await` on the
+result hangs forever (no exception). `check_result_readers()` is a safety net for exactly this: it
+compares every registered `queue_key` against the ones with an actual running reader and logs
+`"No result reader is running for queue_key=..."` for each mismatch — call it once, right after
+starting your readers in `lifespan`, so a missing reader shows up as a log line at startup instead
+of a silent hang on the first request.
+:::
 
 ### Low-level decorators
 
@@ -221,7 +239,14 @@ from fastapi_viewsets.decorators.celery_viewset import celery_viewset_client, ce
 
 ## Combining both decorators
 
-A typical setup uses `celery_viewset` for task delegation and `route_viewset` for HTTP routing. Both are applied to the same class — `celery_viewset` in `viewsets.py` (shared), `route_viewset` in `main.py` (FastAPI only):
+There are two valid ways to apply `celery_viewset` and `route_viewset` together. Pick based on
+whether the FastAPI process needs its own subclass (e.g. to override something FastAPI-only) or
+not.
+
+### Pattern 1: subclassing (FastAPI-only overrides)
+
+`celery_viewset` decorates a base class in `viewsets.py` (shared by both processes), and
+`route_viewset` decorates a subclass in `main.py` (FastAPI only):
 
 ```
 viewsets.py          ← @celery_viewset  (shared by FastAPI and worker)
@@ -230,6 +255,34 @@ celery_worker.py     ← imports viewsets (tasks registered on import)
 ```
 
 See `demo/backend/viewsets.py` + `demo/backend/main.py` in the repository for a full working example.
+
+### Pattern 2: stacking on the same class
+
+Both decorators can instead be stacked directly on one class, in a single file imported by both
+processes:
+
+```python
+@route_viewset(router, base_path="/items", pk_field_name="id")
+@celery_viewset(celery_app, task_prefix="items", redis_client=redis_client)
+class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
+    def __init__(self):
+        super().__init__(container=database, pk_field="id")
+```
+
+**Order matters: `celery_viewset` must be the inner decorator (closer to the class), `route_viewset`
+the outer one**, exactly as written above. Both decorators call an internal, memoizing
+`build_schema(cls)` to collect the class's routes; whichever decorator runs *first* is the one that
+actually populates it. If `celery_viewset` runs first (correct order), `route_viewset` still
+detects its own, FastAPI-specific build hasn't run yet and rebuilds the route table correctly. If
+the order is reversed, `celery_viewset`'s own `build_schema(cls)` call is skipped (it sees a route
+table already built), so it iterates `route_viewset`'s FastAPI-wrapped routes instead of the raw
+viewset methods — including the auto-added `/items/schema` endpoint — which silently registers a
+bogus `schema` Celery task and patches a `schema` method onto the class that was never meant to
+exist.
+
+Prefer Pattern 1 when the FastAPI-only class needs its own overrides (e.g. extra endpoints, a
+different `lifecycle`); prefer Pattern 2 for simple viewsets where a single file is enough — but
+respect the decorator order.
 
 ---
 
