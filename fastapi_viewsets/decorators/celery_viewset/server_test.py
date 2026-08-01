@@ -1,3 +1,4 @@
+from datetime import date, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,6 +14,12 @@ from fastapi_viewsets.mixins import CreateMixin, ListMixin
 class Item(BaseModel):
     id: int
     name: str
+
+
+class ItemWithDate(BaseModel):
+    id: int
+    created: date
+    updated: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +130,35 @@ def test_celery_viewset_server_pushes_result_to_redis():
     assert queue_key == "celery_viewset_results:items"
     assert payload["correlation_id"] == "test-corr-id"
     assert payload["result"] is not None
+
+
+def test_celery_viewset_server_pushes_result_with_date_field_to_redis():
+    """Result models with date/datetime fields must round-trip through the Redis JSON push without crashing."""
+    import json
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+    registered_tasks = {}
+
+    def mock_task(name):
+        def deck(func):
+            registered_tasks[name] = func
+            return func
+        return deck
+
+    celery_app.task.side_effect = mock_task
+
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+    class ItemViewSet(ListMixin[ItemWithDate]):
+        async def perform_list(self, _context) -> list[ItemWithDate]:
+            return [ItemWithDate(id=1, created=date(2026, 8, 1), updated=datetime(2026, 8, 1, 12, 30))]
+
+    sync_func = registered_tasks["items.list_items"]
+    sync_func(context={}, _correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
+
+    redis_mock.rpush.assert_called_once()
+    payload = json.loads(redis_mock.rpush.call_args[0][1])
+    assert payload["result"] == [{"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}]
 
 
 def test_celery_viewset_server_pushes_error_to_redis_on_exception():
@@ -250,6 +286,20 @@ def test_to_jsonable_with_list_of_models():
     items = [Item(id=1, name="a"), Item(id=2, name="b")]
     result = _to_jsonable(items)
     assert result == [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+
+
+def test_to_jsonable_with_date_field():
+    """_to_jsonable serializes date/datetime fields to JSON-safe strings (mode="json")."""
+    import json
+
+    from fastapi_viewsets.decorators.celery_viewset.server import _to_jsonable
+
+    item = ItemWithDate(id=1, created=date(2026, 8, 1), updated=datetime(2026, 8, 1, 12, 30))
+    result = _to_jsonable(item)
+
+    assert result == {"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}
+    # Must not raise - this is the actual celery round-trip failure mode.
+    json.dumps(result)
 
 
 def test_to_jsonable_with_plain_value():

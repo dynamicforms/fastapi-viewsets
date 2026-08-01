@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, TypeVar
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
-from ...context import serialize_context
+from ...context import Context, serialize_context
 from ..build_schema import build_schema
 from . import result_reader
 from .result_reader import get_result_queue_key
@@ -69,6 +69,15 @@ def celery_viewset_client(
     return decorator
 
 
+async def _serialize_value(value):
+    """Convert a Context or BaseModel value into a JSON-safe structure for Celery/Kombu transport."""
+    if isinstance(value, Context):
+        return await serialize_context(value.raw())
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    return value
+
+
 def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, redis_client, queue_key: str):
     """Replace the method on cls with an async version that sends a Celery task and awaits the result."""
     method_name = original_endpoint.__name__
@@ -81,18 +90,17 @@ def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, redi
         result_reader.register_future(correlation_id, future)
 
         try:
+            serializable_args = [await _serialize_value(v) for v in args]
             serializable_kwargs = {}
             for k, v in kwargs.items():
                 if k == "context":
                     serializable_kwargs[k] = await serialize_context(v.raw())
-                elif isinstance(v, BaseModel):
-                    serializable_kwargs[k] = v.model_dump()
                 else:
-                    serializable_kwargs[k] = v
+                    serializable_kwargs[k] = await _serialize_value(v)
             logger.info("Celery task scheduling: %s (correlation_id=%s)", task_name, correlation_id)
             celery_app.send_task(
                     task_name,
-                    args=args,
+                    args=serializable_args,
                     kwargs={**serializable_kwargs, "_correlation_id": correlation_id, "_result_queue_key": queue_key},
             )
             return await future

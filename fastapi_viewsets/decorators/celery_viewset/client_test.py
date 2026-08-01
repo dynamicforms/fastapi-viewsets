@@ -1,5 +1,6 @@
 import asyncio
 
+from datetime import date, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -16,6 +17,12 @@ from fastapi_viewsets.mixins import ListMixin
 class Item(BaseModel):
     id: int
     name: str
+
+
+class ItemWithDate(BaseModel):
+    id: int
+    created: date
+    updated: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +70,75 @@ def test_celery_viewset_client_sends_task():
         celery_app.send_task.assert_called_once()
         call_kwargs = celery_app.send_task.call_args
         assert call_kwargs[0][0] == "items.list_items"
+    finally:
+        result_reader.register_future = original_register
+
+
+def test_celery_viewset_client_sends_date_fields_as_json_safe_strings():
+    """BaseModel kwargs with date/datetime fields must serialize to JSON-safe strings for Celery/Kombu."""
+    import json
+
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+    from fastapi_viewsets.mixins import CreateMixin
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+
+    original_register = result_reader.register_future
+
+    def mock_register(_correlation_id, future):
+        asyncio.get_event_loop().call_soon(lambda: future.set_result(None))
+
+    result_reader.register_future = mock_register
+    try:
+        @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+        class ItemViewSet(CreateMixin[int, ItemWithDate]):
+            async def perform_create(self, data: ItemWithDate) -> ItemWithDate:
+                return data
+
+        instance = ItemViewSet()
+        payload = ItemWithDate(id=1, created=date(2026, 8, 1), updated=datetime(2026, 8, 1, 12, 30))
+        asyncio.get_event_loop().run_until_complete(instance.create(data=payload))
+
+        sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
+        assert sent_kwargs["data"] == {"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}
+        # Must not raise - this is what Kombu's JSON encoder does under the hood.
+        json.dumps(sent_kwargs)
+    finally:
+        result_reader.register_future = original_register
+
+
+def test_celery_viewset_client_serializes_positional_basemodel_args():
+    """BaseModel values passed positionally (not as kwargs) must also be serialized to JSON-safe structures."""
+    import json
+
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+    from fastapi_viewsets.mixins import CreateMixin
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+
+    original_register = result_reader.register_future
+
+    def mock_register(_correlation_id, future):
+        asyncio.get_event_loop().call_soon(lambda: future.set_result(None))
+
+    result_reader.register_future = mock_register
+    try:
+        @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+        class ItemViewSet(CreateMixin[int, ItemWithDate]):
+            async def perform_create(self, data: ItemWithDate) -> ItemWithDate:
+                return data
+
+        instance = ItemViewSet()
+        payload = ItemWithDate(id=1, created=date(2026, 8, 1), updated=datetime(2026, 8, 1, 12, 30))
+        # Call with a positional arg rather than a keyword arg.
+        asyncio.get_event_loop().run_until_complete(instance.create(payload))
+
+        sent_args = celery_app.send_task.call_args.kwargs["args"]
+        assert sent_args == [{"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}]
+        # Must not raise - this is what Kombu's JSON encoder does under the hood.
+        json.dumps(sent_args)
     finally:
         result_reader.register_future = original_register
 

@@ -27,7 +27,7 @@ T = TypeVar("T")
 def _to_jsonable(value):
     """Recursively convert Pydantic models and lists to JSON-serializable structures."""
     if isinstance(value, BaseModel):
-        return value.model_dump()
+        return value.model_dump(mode="json")
     if isinstance(value, list):
         return [_to_jsonable(v) for v in value]
     return value
