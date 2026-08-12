@@ -7,53 +7,15 @@
  *   );
  *   const items = await restItems.list();
  *   const item  = await restItems.retrieve(1);
+ *
+ * Everything except the sending lives in ViewSetProxyBase, which MuxwsProxyImpl shares — see
+ * proxy-base.ts.
  */
 
 import axios, { type AxiosInstance } from 'axios';
 
-import type { BulkViewSetMixin, DestroyReturnData, KeyType, LookupItem, LookupMixin } from './mixins';
-
-// ---------------------------------------------------------------------------
-// Schema validation constants
-// ---------------------------------------------------------------------------
-
-const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
-
-/**
- * Maps (path type, HTTP method) → FE method name for standard ViewSet endpoints.
- * Path types: 'base' = root, 'pk' = /{pk}, 'bulk' = /bulk, 'lookup' = /lookup.
- */
-const ENDPOINT_TO_FE_METHOD: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  base: { GET: 'list', POST: 'create' },
-  pk: {
-    GET: 'retrieve',
-    PUT: 'update',
-    PATCH: 'partialUpdate',
-    DELETE: 'destroy',
-  },
-  bulk: {
-    POST: 'bulkCreate',
-    PUT: 'bulkUpdate',
-    PATCH: 'bulkPartialUpdate',
-    DELETE: 'bulkDestroy',
-  },
-  lookup: { GET: 'lookup' },
-};
-
-/** All standard FE method names, in a stable order for warning output. */
-const STANDARD_FE_METHODS: readonly string[] = [
-  'list',
-  'create',
-  'retrieve',
-  'update',
-  'partialUpdate',
-  'destroy',
-  'bulkCreate',
-  'bulkUpdate',
-  'bulkPartialUpdate',
-  'bulkDestroy',
-  'lookup',
-];
+import type { KeyType } from './mixins';
+import { type HttpMethod, type ProxyBaseOptions, type RequestOptions, ViewSetProxyBase } from './proxy-base';
 
 // ---------------------------------------------------------------------------
 // Helper types
@@ -70,11 +32,7 @@ type ViewSetClass = abstract new (...args: any[]) => any;
  */
 export type RestProxy<M> = M;
 
-export interface RestProxyOptions {
-  /** Base path to the resource, e.g. '/items'. */
-  basePath: string;
-  /** Name of the PK field on the model, e.g. 'id'. */
-  pkFieldName: string;
+export interface RestProxyOptions extends ProxyBaseOptions {
   /** Optional: existing axios instance. Defaults to the global axios. */
   axiosInstance?: AxiosInstance;
 }
@@ -83,149 +41,61 @@ export interface RestProxyOptions {
 // Proxy implementation
 // ---------------------------------------------------------------------------
 
-export class RestProxyImpl<K extends KeyType, T, PK extends keyof T>
-  implements BulkViewSetMixin<K, T, PK>, LookupMixin
-{
+export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends ViewSetProxyBase<K, T, PK> {
   protected readonly http: AxiosInstance;
 
-  protected readonly basePath: string;
-
-  protected readonly pkFieldName: string;
-
   constructor(options: RestProxyOptions) {
-    this.basePath = options.basePath.replace(/\/$/, '');
-    this.pkFieldName = options.pkFieldName;
+    super(options);
     this.http = options.axiosInstance ?? axios;
-    void this.validateAgainstSchema();
+    this.initSchemaValidation();
   }
 
   /**
-   * Fetches the BE schema and compares it against the FE method set.
-   * Logs a console warning for any mismatch found.
-   * Non-critical: errors during fetch or parsing are silently ignored.
+   * Dispatches to axios' per-verb methods rather than to `http.request()`, deliberately. Those
+   * are the calls this proxy has always made, and they are what application interceptors and test
+   * doubles are written against — routing everything through `request()` would be invisible on
+   * the wire but would break every one of them.
+   *
+   * axios throws its own AxiosError on a non-2xx, which already carries `response.status` — the
+   * shape ViewSetRequestError mirrors for the muxws side. Nothing to translate here.
    */
-  private async validateAgainstSchema(): Promise<void> {
-    try {
-      const res = await this.http.get<{
-        paths?: Record<string, Record<string, unknown>>;
-      }>(`${this.basePath}/schema`);
-      const paths = res.data?.paths ?? {};
+  protected async request<R>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<R> {
+    const url = `${this.basePath}${path}`;
+    const hasQuery = options.query !== undefined && Object.keys(options.query).length > 0;
+    const config = hasQuery ? { params: options.query } : undefined;
 
-      const beMethods = new Set<string>();
-      const unknownBeEndpoints: string[] = [];
-
-      for (const [path, pathItem] of Object.entries(paths)) {
-        const suffix = path.slice(this.basePath.length).replace(/^\//, '');
-
-        let pathType: string;
-        if (suffix === '') {
-          pathType = 'base';
-        } else if (suffix === 'bulk') {
-          pathType = 'bulk';
-        } else if (suffix === 'lookup') {
-          pathType = 'lookup';
-        } else if (suffix === 'schema') {
-          continue;
-        } else if (suffix.startsWith('{')) {
-          pathType = 'pk';
-        } else {
-          for (const httpMethod of Object.keys(pathItem)) {
-            if (HTTP_METHODS.has(httpMethod.toLowerCase())) {
-              unknownBeEndpoints.push(`${httpMethod.toUpperCase()} ${path}`);
-            }
-          }
-          continue;
-        }
-
-        const methodMap = ENDPOINT_TO_FE_METHOD[pathType] ?? {};
-        for (const httpMethod of Object.keys(pathItem)) {
-          if (!HTTP_METHODS.has(httpMethod.toLowerCase())) continue;
-          const feMethod = methodMap[httpMethod.toUpperCase()];
-          if (feMethod) beMethods.add(feMethod);
-        }
+    switch (method) {
+      case 'GET': {
+        const res = config ? await this.http.get<R>(url, config) : await this.http.get<R>(url);
+        return res.data;
       }
-
-      const warnings: string[] = [];
-
-      for (const method of STANDARD_FE_METHODS) {
-        if (typeof (this as unknown as Record<string, unknown>)[method] === 'function' && !beMethods.has(method)) {
-          warnings.push(`FE declares '${method}()' but BE has no matching endpoint`);
-        }
+      // The config argument is omitted rather than passed as undefined: axios treats the two
+      // identically, but a spy does not, and the call shape is part of what this proxy promises.
+      case 'POST': {
+        const res = config
+          ? await this.http.post<R>(url, options.body, config)
+          : await this.http.post<R>(url, options.body);
+        return res.data;
       }
-
-      for (const method of beMethods) {
-        if (typeof (this as unknown as Record<string, unknown>)[method] !== 'function') {
-          warnings.push(`BE exposes '${method}' endpoint but FE does not implement it`);
-        }
+      case 'PUT': {
+        const res = config
+          ? await this.http.put<R>(url, options.body, config)
+          : await this.http.put<R>(url, options.body);
+        return res.data;
       }
-
-      for (const endpoint of unknownBeEndpoints) {
-        warnings.push(`BE has non-standard endpoint '${endpoint}' with no FE method`);
+      case 'PATCH': {
+        const res = config
+          ? await this.http.patch<R>(url, options.body, config)
+          : await this.http.patch<R>(url, options.body);
+        return res.data;
       }
-
-      if (warnings.length > 0) {
-        console.warn(
-          `[ViewSet ${this.basePath}] FE/BE definition mismatch:\n` + warnings.map((w) => `  • ${w}`).join('\n'),
-        );
+      case 'DELETE': {
+        // A DELETE body has to go through the config object; axios has no positional slot for it.
+        const deleteConfig = options.body === undefined ? config : { ...(config ?? {}), data: options.body };
+        const res = deleteConfig ? await this.http.delete<R>(url, deleteConfig) : await this.http.delete<R>(url);
+        return res.data;
       }
-    } catch {
-      // Schema validation is non-critical; ignore fetch/parse errors silently
     }
-  }
-
-  async create(data: Omit<T, PK>): Promise<T> {
-    const res = await this.http.post<T>(this.basePath, data);
-    return res.data;
-  }
-
-  async bulkCreate(data: Omit<T, PK>[]): Promise<T[]> {
-    const res = await this.http.post<T[]>(`${this.basePath}/bulk`, data);
-    return res.data;
-  }
-
-  async list(): Promise<T[]> {
-    const res = await this.http.get<T[]>(this.basePath);
-    return res.data;
-  }
-
-  async retrieve(pk: K): Promise<T> {
-    const res = await this.http.get<T>(`${this.basePath}/${pk}`);
-    return res.data;
-  }
-
-  async update(pk: K, data: T): Promise<T> {
-    const res = await this.http.put<T>(`${this.basePath}/${pk}`, data);
-    return res.data;
-  }
-
-  async partialUpdate(pk: K, data: Partial<T>): Promise<T> {
-    const res = await this.http.patch<T>(`${this.basePath}/${pk}`, data);
-    return res.data;
-  }
-
-  async bulkUpdate(records: Record<K, T>): Promise<T[]> {
-    const res = await this.http.put<T[]>(`${this.basePath}/bulk`, records);
-    return res.data;
-  }
-
-  async bulkPartialUpdate(records: Record<K, Partial<T>>): Promise<T[]> {
-    const res = await this.http.patch<T[]>(`${this.basePath}/bulk`, records);
-    return res.data;
-  }
-
-  async destroy(pk: K): Promise<DestroyReturnData> {
-    const res = await this.http.delete<DestroyReturnData>(`${this.basePath}/${pk}`);
-    return res.data;
-  }
-
-  async bulkDestroy(pks: K[]): Promise<DestroyReturnData[]> {
-    const res = await this.http.delete<DestroyReturnData[]>(`${this.basePath}/bulk`, { data: pks });
-    return res.data;
-  }
-
-  async lookup(): Promise<LookupItem[]> {
-    const res = await this.http.get<LookupItem[]>(`${this.basePath}/lookup`);
-    return res.data;
   }
 }
 
