@@ -89,6 +89,11 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
         def schema():
             return app.openapi()
 
+        # Marks this route as the framework's own /schema endpoint. The muxws transport has to
+        # skip it and substitute its own (which reports the muxws endpoint set, not this one) -
+        # see fastapi_viewsets/mux_ws/registry.py.
+        schema.__viewset_schema_endpoint__ = True
+
         schema_route_kwargs = dict(
             path=f"{base_path.rstrip('/')}/schema",
             endpoint=schema,

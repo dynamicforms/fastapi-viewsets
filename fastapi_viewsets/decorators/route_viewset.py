@@ -17,6 +17,7 @@ from fastapi_viewsets.conf import settings
 from fastapi_viewsets.context import get_shared_context
 from fastapi_viewsets.middleware import Middleware
 from fastapi_viewsets.mixins import FilterParam, make_all_optional
+from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
 
 from .build_schema import build_schema, route_to_add_api_route_kwargs
 from .lifecycle_runner import lifecycle_runner, LifecycleType
@@ -113,7 +114,14 @@ def route_viewset(
         base_path: str,
         lifecycle: LifecycleType = "singleton",
         pk_field_name: str = None,
+        register_muxws: bool = None,
 ):
+    """
+    `register_muxws` decides whether this viewset is also reachable over the muxws transport (see
+    fastapi_viewsets/mux_ws/). True registers it, False does not, and None - the default - defers
+    to `settings.viewsets_register_muxws`. Individual endpoints can override it again with
+    `@transports(...)`.
+    """
     def decorator(cls: type[T]):
         seen_routes = set()
         instance = cls() if lifecycle == "singleton" else None
@@ -258,12 +266,26 @@ def route_viewset(
             disable_response_model=bool(settings.viewsets_command_middleware),
         )
 
+        muxws_routes = []
         for route in cls.__router.routes:
             action_name = route.endpoint.__name__  # survives @wraps(original_endpoint) in get_wrapper
             dependencies = list(route.dependencies or []) + [
                 Depends(_make_middleware_depends(cls, action_name))
             ]
-            router.add_api_route(**route_to_add_api_route_kwargs(route, dependencies=dependencies))
+            route_kwargs = route_to_add_api_route_kwargs(route, dependencies=dependencies)
+
+            if resolve_register_rest(route.endpoint):
+                router.add_api_route(**route_kwargs)
+
+            # The /schema route is deliberately not carried over: it closes over the REST app and
+            # would report the REST endpoint set no matter which transport asked. The muxws
+            # registry substitutes its own.
+            is_schema_route = getattr(route.endpoint, "__viewset_schema_endpoint__", False)
+            if not is_schema_route and resolve_register_muxws(route.endpoint, register_muxws):
+                muxws_routes.append(route_kwargs)
+
+        if muxws_routes:
+            register_viewset(cls, base_path, muxws_routes, default_tags)
 
         cls.__viewset_metadata__ = {
             "base_path": base_path,
