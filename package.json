@@ -4,7 +4,7 @@
   "version": "0.3.6",
   "type": "module",
   "description": "RESTful viewsets for Vue",
-  "author": "Jure Erznožnik",
+  "author": "Jure Erzno\u017enik",
   "files": [
     "dist/*"
   ],
@@ -46,7 +46,8 @@
     "@dynamicforms/vue-forms": "^0.5.0",
     "axios": "^1.13.6",
     "lodash-es": "^4.17.12",
-    "vue": "^3.4"
+    "vue": "^3.4",
+    "muxws": "^0.2.0"
   },
   "devDependencies": {
     "@types/lodash-es": "^4.17.12",
@@ -64,5 +65,10 @@
     "vite-plugin-eslint": "^1.8.1",
     "vitest": "^3",
     "vue-tsc": "^2"
+  },
+  "peerDependenciesMeta": {
+    "muxws": {
+      "optional": true
+    }
   }
 }
