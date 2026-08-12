@@ -1,3 +1,5 @@
+import warnings
+
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Annotated, Any, final, Generic, get_args, get_origin, Union
@@ -8,6 +10,14 @@ from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
 from fastapi_viewsets.context import Context
+from fastapi_viewsets.list_query import (
+    build_list_query,
+    ListQuery,
+    ListRecords,
+    materialize,
+    PaginatedList,
+    take_page,
+)
 from fastapi_viewsets.response_classes import NOT_FOUND_RESPONSE
 
 T = TypeVar("T")
@@ -200,29 +210,127 @@ class ListMixin(Generic[T, TFilter], ABC):
         fltr: Annotated[TFilter, Query()] = None,
         sort: str | None = None,
     ) -> list[T]:
-        has_filter = (
-            fltr is not None
-            and hasattr(fltr, "model_dump")
-            and any(v is not None for v in fltr.model_dump().values())
-        )
-        sort_state: SortState = parse_sort_param(sort)
+        return await self.get_list(context, build_list_query(fltr, sort))
 
-        if has_filter:
-            await self.setup_filter(fltr)
-        if sort_state:
-            await self.setup_sort(sort_state)
-        res = await self.perform_list(context)
-        if has_filter:
-            res = await self.filter_list(fltr, res)
-        if sort_state:
-            res = await self.sort_list(sort_state, res)
-        return res
+    async def get_list(
+        self: "ImplMixin[Any, T] | ListMixin[T]", context: Context, query: ListQuery
+    ) -> "list[T] | PaginatedList[T]":
+        """
+        The list pipeline, in one place and overridable as a whole.
+
+        Each stage is a separate method so a subclass can replace just the one it cares about and
+        call `super()` for the rest - a viewset that can sort in its database overrides
+        `apply_sort`, marks the stage applied, and everything else keeps working unchanged.
+        """
+        await self._run_legacy_setup_hooks(query)
+        records = await self.perform_list(context)
+        records = await self.apply_filter(context, query, records)
+        records = await self.apply_sort(context, query, records)
+        return await self.apply_pagination(context, query, records)
+
+    async def _run_legacy_setup_hooks(self, query: ListQuery) -> None:
+        """
+        Calls `setup_filter`/`setup_sort` for viewsets that still define them.
+
+        These are the old push-down side channel: they ran before `perform_list` and mutated
+        instance state, because `perform_list` had no way to be told what was being asked of it.
+        It does now - override `apply_filter`/`apply_sort` instead, where the records and the query
+        are both in hand.
+        """
+        for hook, active, argument in (
+            ("setup_filter", query.has_filter, query.fltr),
+            ("setup_sort", query.has_sort, query.sort),
+        ):
+            if not active:
+                continue
+            method = getattr(type(self), hook, None)
+            if method is None or getattr(method, "__is_default_hook__", False):
+                continue
+            warnings.warn(
+                f"{type(self).__name__}.{hook}() is deprecated; override "
+                f"apply_{'filter' if hook == 'setup_filter' else 'sort'}() instead, which "
+                f"receives the ListQuery together with the records",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            await getattr(self, hook)(argument)
+
+    async def apply_filter(
+        self: "ImplMixin[Any, T] | ListMixin[T]",
+        context: Context,  # noqa: ARG002 - part of the hook signature, for overrides to use
+        query: ListQuery,
+        records: ListRecords,
+    ) -> ListRecords:
+        """
+        Narrows `records` to those the filter accepts. Override to filter in the backend; mark the
+        stage applied so this default does not redo the work:
+
+            async def apply_filter(self, context, query, records):
+                if query.has_filter:
+                    records = self.db.where(...)
+                    query.mark_applied("filter")
+                return await super().apply_filter(context, query, records)
+
+        The default delegates to the older `filter_list` hook, which stays supported.
+        """
+        if not query.has_filter or not query.needs("filter"):
+            return records
+        materialized = await materialize(records)
+        filtered = await self.filter_list(query.fltr, materialized)
+        # filter_list has no default implementation and so returns None when a viewset declares a
+        # filter type but never implements filtering. Returning that verbatim would answer the
+        # request with null; keeping the unfiltered records is wrong too, but visibly so.
+        return materialized if filtered is None else filtered
+
+    async def apply_sort(
+        self: "ImplMixin[Any, T] | ListMixin[T]",
+        context: Context,  # noqa: ARG002 - part of the hook signature, for overrides to use
+        query: ListQuery,
+        records: ListRecords,
+    ) -> ListRecords:
+        """
+        Orders `records`. Override to sort in the backend and mark the stage applied; the default
+        delegates to the older `sort_list` hook.
+        """
+        if not query.has_sort or not query.needs("sort"):
+            return records
+        return await self.sort_list(query.sort, await materialize(records))
+
+    async def apply_pagination(
+        self: "ImplMixin[Any, T] | ListMixin[T]",
+        context: Context,  # noqa: ARG002 - part of the hook signature, for overrides to use
+        query: ListQuery,
+        records: ListRecords,
+    ) -> "list[T] | PaginatedList[T]":
+        """
+        Cuts one page out of `records`, or returns the lot when the client asked for no page.
+
+        Only reads as far as the page needs, so paging a lazy source stays lazy. `count` is
+        reported only when it is already known - a list knows its length, a generator does not,
+        and draining it to find out would undo the point of paging it.
+        """
+        if not query.is_paginated:
+            return await materialize(records)
+
+        count = len(records) if isinstance(records, (list, tuple)) else None
+        page, has_more = await take_page(records, query.offset, query.limit)
+        return PaginatedList[Any](
+            results=page,
+            offset=query.offset,
+            limit=query.limit,
+            count=count,
+            has_more=has_more,
+            has_previous=query.offset > 0,
+        )
 
     async def setup_filter(self, fltr: TFilter) -> None:
         """
-        Optional pre-filter hook called before perform_list when a filter is active.
-        Subclasses can override to set up server-side filtering (e.g., build a DB query).
+        Deprecated. Pre-filter hook called before perform_list when a filter is active.
+        Override apply_filter() instead - it receives the query and the records together, so there
+        is no second method to keep in step with it.
         """
+
+    setup_filter.__is_default_hook__ = True
 
     async def filter_list(self, fltr: TFilter, records: list[T]) -> list[T]:
         """
@@ -232,9 +340,11 @@ class ListMixin(Generic[T, TFilter], ABC):
 
     async def setup_sort(self, sort: SortState) -> None:
         """
-        Optional pre-sort hook called before perform_list when a sort order is active.
-        Subclasses can override to apply server-side ordering (e.g., add ORDER BY to a DB query).
+        Deprecated. Pre-sort hook called before perform_list when a sort order is active.
+        Override apply_sort() instead.
         """
+
+    setup_sort.__is_default_hook__ = True
 
     async def sort_list(self, sort: SortState, records: list[T]) -> list[T]:
         """
@@ -265,6 +375,51 @@ class ListMixin(Generic[T, TFilter], ABC):
             return 0
 
         return sorted(records, key=functools.cmp_to_key(compare))
+
+
+class PaginatedListMixin(ListMixin[T, TFilter], ABC):
+    """
+    List a queryset one page at a time.
+
+    Use in place of ListMixin - the GET route it declares replaces the plain one, because
+    build_schema keys routes on (methods, path) and lets the more derived class win:
+
+        class TrackViewSet(CollectionViewSet[int, Track], PaginatedListMixin[Track]): ...
+
+    The whole pipeline is shared with ListMixin; only the endpoint's parameters and its response
+    shape differ. That is deliberately a viewset-wide decision rather than a per-request one: an
+    endpoint that answers sometimes with a list and sometimes with an envelope forces every client
+    to branch on the shape it got back, and leaves the OpenAPI schema describing a union that
+    nothing can be generated from.
+    """
+    __router = APIRouter()
+
+    default_page_size: int = 100
+    """Used when the client asks for a page but does not say how big. Override per viewset."""
+
+    max_page_size: int = 1000
+    """
+    Ceiling on `limit`, so a client cannot turn paging back into "fetch everything" by asking for
+    a page the size of the collection.
+    """
+
+    @final
+    @__router.get("")
+    async def list_items(
+        self: "ImplMixin[Any, T] | PaginatedListMixin[T]",
+        context: Context,
+        fltr: Annotated[TFilter, Query()] = None,
+        sort: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> PaginatedList[T]:
+        query = build_list_query(
+            fltr,
+            sort,
+            offset=offset,
+            limit=min(limit if limit is not None else self.default_page_size, self.max_page_size),
+        )
+        return await self.get_list(context, query)
 
 
 ###################################################################################################
