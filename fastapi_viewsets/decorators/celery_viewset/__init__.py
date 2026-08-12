@@ -3,7 +3,13 @@ import sys
 
 from ..lifecycle_runner import LifecycleType
 from .client import celery_viewset_client, get_registered_queue_keys
-from .result_reader import get_result_queue_key, get_running_queue_keys, push_result, start_result_reader, stop_result_reader
+from .result_reader import (
+    get_result_queue_key,
+    get_running_queue_keys,
+    push_result,
+    start_result_reader,
+    stop_result_reader,
+)
 from .server import celery_viewset_server
 
 logger = logging.getLogger(__name__)
