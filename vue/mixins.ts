@@ -35,7 +35,42 @@ export class BulkCreateMixin<T, PK extends keyof T> extends CreateMixin<T, PK> i
 }
 
 export class ListMixin<T> {
-  declare list: () => Promise<T[]>;
+  declare list: (params?: ListParams) => Promise<T[]>;
+}
+
+/** Query parameters a list call accepts. `sort` is 'column:asc,other:desc'; the rest are filters. */
+export interface ListParams {
+  sort?: string;
+  [key: string]: string | number | boolean | null | undefined | Array<string | number>;
+}
+
+/**
+ * One page, mirroring the BE PaginatedList.
+ *
+ * `count` is null when the backend could not know it without draining a lazy source. `hasMore` and
+ * `hasPrevious` are stated rather than inferred — a client that guesses from a null gets the guess
+ * wrong exactly at the boundary where it matters.
+ */
+export interface PaginatedList<T> {
+  results: T[];
+  offset: number;
+  limit: number | null;
+  count: number | null;
+  hasMore: boolean;
+  hasPrevious: boolean;
+}
+
+export interface PageParams extends ListParams {
+  offset?: number;
+  limit?: number;
+}
+
+/**
+ * FE counterpart of the BE PaginatedListMixin. A ViewSet declares either this or ListMixin: the BE
+ * endpoint answers with one shape or the other, decided per viewset, never per request.
+ */
+export class PaginatedListMixin<T> {
+  declare listPage: (params?: PageParams) => Promise<PaginatedList<T>>;
 }
 
 export class RetrieveMixin<K extends KeyType, T> {
