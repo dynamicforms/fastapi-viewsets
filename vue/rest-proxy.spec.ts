@@ -446,6 +446,20 @@ describe('schema validation — validateAgainstSchema()', () => {
     return proxy;
   }
 
+  it('runs from the constructor, not only when called by hand', async () => {
+    // Regression: the check lives on the shared base class, but it reads `this.http`, which the
+    // subclass constructor assigns after super() returns. Kicking it off from the base
+    // constructor made every call throw on an undefined axios instance — and since the check
+    // swallows its own errors, it went silently dead instead of failing.
+    mockSchema(FULL_SCHEMA);
+    new RestProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+    });
+    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema'));
+  });
+
   it('no warnings when BE matches FE (BulkViewSetMixin + LookupMixin)', async () => {
     await createAndValidate(FULL_SCHEMA);
     expect(warnSpy).not.toHaveBeenCalled();
