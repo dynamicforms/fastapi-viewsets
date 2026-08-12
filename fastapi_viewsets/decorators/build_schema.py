@@ -6,6 +6,29 @@ from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
 
 
+def _pydantic_generic_args(annotation) -> tuple[type, tuple] | None:
+    """
+    (origin, args) for a parameterised pydantic generic that still has TypeVars in it, else None.
+
+    Pydantic builds `PaginatedList[T]` as a real class rather than a typing alias, so
+    get_origin/get_args report nothing about it and every TypeVar inside is invisible to the usual
+    machinery. The origin and args are on the class instead, and re-subscripting the origin is how
+    a resolved model gets built.
+
+    An unparameterised generic reports empty args, and a fully concrete one has no TypeVars left
+    to substitute; neither needs rebuilding.
+    """
+    metadata = getattr(annotation, "__pydantic_generic_metadata__", None)
+    if not metadata:
+        return None
+    origin, args = metadata.get("origin"), metadata.get("args")
+    if not origin or not args:
+        return None
+    if not any(isinstance(arg, TypeVar) for arg in args):
+        return None
+    return origin, args
+
+
 def route_to_add_api_route_kwargs(route: APIRoute, **kwargs) -> dict:
     """
     Maps an APIRoute instance to a dict of kwargs suitable for add_api_route().
@@ -116,7 +139,11 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
                 use_resolved = (
                     route.response_model is None or isinstance(route.response_model, TypeVar) or
                     (get_origin(route.response_model) and
-                     any(isinstance(arg, TypeVar) for arg in get_args(route.response_model)))
+                     any(isinstance(arg, TypeVar) for arg in get_args(route.response_model))) or
+                    # A parameterised pydantic generic (PaginatedList[T]) is a class, not a typing
+                    # alias, so get_origin/get_args see nothing in it. Without this the unresolved
+                    # model is kept and the schema describes PaginatedList__T_ with results of Any.
+                    bool(_pydantic_generic_args(route.response_model))
                 )
                 response_model = resolved_response_model if use_resolved else route.response_model
 

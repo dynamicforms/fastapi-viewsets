@@ -19,7 +19,7 @@ from fastapi_viewsets.middleware import Middleware
 from fastapi_viewsets.mixins import FilterParam, make_all_optional
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
 
-from .build_schema import build_schema, route_to_add_api_route_kwargs
+from .build_schema import _pydantic_generic_args, build_schema, route_to_add_api_route_kwargs
 from .lifecycle_runner import lifecycle_runner, LifecycleType
 from .primary_key_model_helper import create_model_without_pk, typecast_to_original_model
 
@@ -65,6 +65,19 @@ def resolve_typevars(type_map, annotation):
         tv_default = getattr(resolved, "__default__", _TypeVarNoDefault)
         if tv_default is not _TypeVarNoDefault and not isinstance(tv_default, TypeVar):
             return tv_default
+    elif _pydantic_generic_args(annotation):
+        # A parameterised pydantic model (PaginatedList[T]) is a real class, not a typing alias, so
+        # get_origin/get_args see nothing and the branch below would hand back the annotation with
+        # its TypeVars still in it - which FastAPI then turns into a response model full of Any.
+        # Pydantic keeps the origin and args on the class itself; re-subscripting the origin is how
+        # a resolved model gets built.
+        origin, args = _pydantic_generic_args(annotation)
+        new_args = tuple(resolve_typevars(type_map, arg) for arg in args)
+        if new_args != args:
+            try:
+                return origin[new_args]
+            except Exception:
+                return annotation
     elif get_origin(annotation) is not None:
         origin = get_origin(annotation)
         args = get_args(annotation)
