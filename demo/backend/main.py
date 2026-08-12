@@ -1,18 +1,27 @@
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, WebSocket
+from muxws import accept, Stream
 
-from demo.backend.celery_app import redis_async
-from demo.backend.viewsets import MusicTrackViewSet
-from fastapi_viewsets.decorators.celery_viewset import start_result_reader, stop_result_reader
+from demo.backend.viewsets import MusicTrackViewSet, USE_CELERY
 from fastapi_viewsets.decorators.route_viewset import route_viewset
+from fastapi_viewsets.mux_ws import process_command
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from fastapi_viewsets.decorators.celery_viewset import get_result_queue_key
-    queue_key = get_result_queue_key("music")
-    await start_result_reader(redis_async, queue_key)
+    if not USE_CELERY:
+        yield
+        return
+
+    from demo.backend.celery_app import redis_async
+    from fastapi_viewsets.decorators.celery_viewset import (
+        get_result_queue_key,
+        start_result_reader,
+        stop_result_reader,
+    )
+
+    await start_result_reader(redis_async, get_result_queue_key("music"))
     yield
     await stop_result_reader()
 
@@ -24,8 +33,31 @@ route_viewset(router, base_path="/music", pk_field_name="id")(MusicTrackViewSet)
 
 app.include_router(router)
 
+
+@app.websocket("/ws")
+async def muxws_endpoint(websocket: WebSocket) -> None:
+    """
+    The same viewsets, over one WebSocket.
+
+    Note that websocket.accept() is never called here: muxws performs the upgrade itself, because
+    only it knows which muxws.v1.<codec> subprotocol to select.
+    """
+    peer = await accept(websocket)
+
+    async def on_stream(payload, stream: Stream) -> None:
+        if await process_command(payload, stream, connection=websocket):
+            return
+        # Not a viewset command. A real application would dispatch its own protocol here; this
+        # demo has none, so saying so is more useful than silence.
+        await stream.reply({"error": "unknown command", "hint": "viewset commands carry :method and :path"})
+
+    peer.on_stream(on_stream)
+    await peer.serve()
+
+
 def main():
     import uvicorn
     print("Starting demo application at http://127.0.0.1:8000")
     print("Documentation is available at http://127.0.0.1:8000/docs")
+    print(f"muxws endpoint at ws://127.0.0.1:8000/ws (Celery {'on' if USE_CELERY else 'off'})")
     uvicorn.run(app, host="127.0.0.1", port=8000)
