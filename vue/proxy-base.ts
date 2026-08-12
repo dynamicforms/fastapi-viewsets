@@ -16,7 +16,16 @@
  *   }
  */
 
-import type { BulkViewSetMixin, DestroyReturnData, KeyType, LookupItem, LookupMixin } from './mixins';
+import type {
+  BulkViewSetMixin,
+  DestroyReturnData,
+  KeyType,
+  ListParams,
+  LookupItem,
+  LookupMixin,
+  PageParams,
+  PaginatedList,
+} from './mixins';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -215,8 +224,36 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     return this.request<T[]>('POST', '/bulk', { body: data });
   }
 
-  async list(): Promise<T[]> {
-    return this.request<T[]>('GET', '');
+  async list(params?: ListParams): Promise<T[]> {
+    return this.request<T[]>('GET', '', { query: params });
+  }
+
+  /**
+   * Fetches one page. Only meaningful against a viewset built on the BE PaginatedListMixin — a
+   * plain ListMixin ignores offset/limit and answers with the whole collection, which would not
+   * match this return type.
+   *
+   * The BE speaks snake_case (`has_more`); the rest of this client speaks whatever the model
+   * declares, so only the envelope's own fields are renamed here. The records inside are passed
+   * through untouched.
+   */
+  async listPage(params?: PageParams): Promise<PaginatedList<T>> {
+    const page = await this.request<{
+      results: T[];
+      offset: number;
+      limit: number | null;
+      count: number | null;
+      has_more: boolean;
+      has_previous: boolean;
+    }>('GET', '', { query: params });
+    return {
+      results: page.results,
+      offset: page.offset,
+      limit: page.limit,
+      count: page.count,
+      hasMore: page.has_more,
+      hasPrevious: page.has_previous,
+    };
   }
 
   async retrieve(pk: K): Promise<T> {

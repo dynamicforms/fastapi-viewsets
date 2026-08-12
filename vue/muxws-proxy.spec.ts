@@ -124,6 +124,28 @@ describe('MuxwsProxyImpl — envelope', () => {
     expect(mock.last.headers).not.toHaveProperty(':query');
   });
 
+  it('list() passes filter and sort parameters through as :query', async () => {
+    mock.reply(MOCK_ITEMS);
+    await proxy.list({ sort: 'id:desc', name: 'Test' });
+    expect(mock.last.headers[':query']).toEqual({ sort: 'id:desc', name: 'Test' });
+  });
+
+  it('listPage() renames the envelope fields the BE sends in snake_case', async () => {
+    mock.reply({ results: MOCK_ITEMS, offset: 10, limit: 2, count: 42, has_more: true, has_previous: true });
+    const page = await proxy.listPage({ offset: 10, limit: 2 });
+    expect(page.results).toEqual(MOCK_ITEMS);
+    expect(page.hasMore).toBe(true);
+    expect(page.hasPrevious).toBe(true);
+    expect(page.count).toBe(42);
+    expect(mock.last.headers[':query']).toEqual({ offset: 10, limit: 2 });
+  });
+
+  it('listPage() keeps an unknown count as null rather than inventing a zero', async () => {
+    mock.reply({ results: MOCK_ITEMS, offset: 0, limit: 2, count: null, has_more: false, has_previous: false });
+    const page = await proxy.listPage();
+    expect(page.count).toBeNull();
+  });
+
   it('sends configured headers on every call', async () => {
     const withHeaders = new MuxwsProxyImpl<number, Item, 'id'>({
       basePath: '/items',
