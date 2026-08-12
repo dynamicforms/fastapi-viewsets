@@ -32,6 +32,14 @@ class Settings:
         self.viewsets_command_middleware: list[CommandMiddleware] = []
         self.viewsets_auth_processors: list[AuthBackend] = []
         self.default_action_configuration: dict[Any, Any] = {}
+        self.viewsets_register_muxws: bool = True
+        """
+        Whether a viewset is reachable over the muxws transport (see fastapi_viewsets/mux_ws/) when
+        it does not say either way itself. `route_viewset(register_muxws=...)` overrides this per
+        viewset, and `muxws_endpoint(register_muxws=...)` overrides it again per endpoint - each
+        level only decides for the levels below it that left the question open (None). Read at
+        decoration time, so it must be set before any viewset class is decorated.
+        """
         self.viewsets_security_scheme: SecurityBase | None = None
         """
         Purely for OpenAPI/Swagger discoverability (a lock icon + testable Authorize flow) - attached
