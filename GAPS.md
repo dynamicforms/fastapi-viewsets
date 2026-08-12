@@ -67,6 +67,53 @@ it turns out to be wanted.
 
 ## Pagination and the fetch pipeline
 
+### A separate mixin rather than two shapes on one endpoint
+
+Paging was first built as an opt-in per request: no `limit` meant a plain list, a `limit` meant an
+envelope, one endpoint returning `list[T] | PaginatedList[T]`. That is what the author's Django
+implementation does, and it is backwards compatible in the strongest sense — no existing client
+changes.
+
+It was abandoned for two reasons. The soft one: every client has to branch on the shape it got
+back, and the OpenAPI schema describes a union that no generator can do anything useful with. The
+hard one: `list[T] | PaginatedList[T]` broke TypeVar resolution outright. `types.UnionType` is not
+subscriptable, so the resolver silently returned the annotation unresolved, and pydantic collapses
+`PaginatedList[T]` to the bare class inside a union's `get_args`. The schema came out describing
+results as a list of anything, silently.
+
+`PaginatedListMixin` makes it a viewset-wide decision instead: one endpoint, one shape, one schema.
+The cost is that switching an existing viewset to paging is a breaking change for its clients,
+rather than something they can adopt at their own pace.
+
+### TypeVar resolution now knows about pydantic generics
+
+`build_schema` and `resolve_typevars` were extended to handle parameterised pydantic models, which
+are real classes rather than typing aliases and so were invisible to `get_origin`/`get_args`.
+Without it `PaginatedList[T]` reached FastAPI unresolved. This is a general fix - any pydantic
+generic in a return annotation was affected - but it was found because of pagination, and nothing
+else in the codebase exercises it yet.
+
+### `count` is best-effort
+
+A list knows its length; a generator does not, and draining it to find out defeats the purpose. So
+`count` is null for lazy sources. A backend that can count cheaply (a `SELECT COUNT(*)`) has no way
+to say so yet - `apply_pagination` would have to be overridden wholesale. A `count_records()` hook
+would be the obvious addition if anyone wants it.
+
+### Custom Vue endpoints changed idiom
+
+They used to be written against `this.http` (axios); they should now be written against
+`this.request()`, which each transport implements, so the same method body works on either.
+`this.http` still exists on `RestProxyImpl` and still works. The docs were updated; anyone with
+existing code has not been broken, only left on the REST-only idiom.
+
+### The demo no longer uses Celery by default
+
+It used to, unconditionally. That made the transport benchmark meaningless - queueing through Redis
+and waiting for a worker dwarfs the difference between HTTP and a WebSocket frame. `DEMO_CELERY=1`
+restores it, and `celery_worker.py` sets it itself. The Celery path is consequently no longer
+exercised by simply running the demo, which is a real loss of coverage for it.
+
 ### Cursor pagination needs a query object that does not exist yet
 
 Cursor paging works by pushing a comparison predicate down into whatever produces the rows. With
