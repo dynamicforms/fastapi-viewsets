@@ -2,9 +2,67 @@
   <v-app>
     <v-main>
       <v-container fluid class="pa-4">
-        <h1 class="text-h5 mb-4">Music Library</h1>
+        <div class="d-flex align-center flex-wrap ga-4 mb-4">
+          <h1 class="text-h5 mb-0">Music Library</h1>
+          <v-btn-toggle v-model="transport" mandatory density="comfortable" color="primary">
+            <v-btn value="rest">REST</v-btn>
+            <v-btn value="muxws">muxws</v-btn>
+          </v-btn-toggle>
+          <v-spacer />
+          <v-btn :loading="benchmarking" variant="tonal" @click="runComparison">Compare transports</v-btn>
+        </div>
+
+        <v-alert v-if="results.length" type="info" variant="tonal" density="compact" class="mb-4">
+          <table class="benchmark">
+            <thead>
+              <tr>
+                <th>Transport</th>
+                <th colspan="4">Sequential retrieve (ms)</th>
+                <th>{{ results[0].burstCount }} at once</th>
+              </tr>
+              <tr>
+                <th />
+                <th>min</th>
+                <th>p50</th>
+                <th>p95</th>
+                <th>max</th>
+                <th>total (ms)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="result in results" :key="result.transport">
+                <td class="font-weight-medium">{{ result.transport }}</td>
+                <td>{{ result.sequential.min.toFixed(2) }}</td>
+                <td>{{ result.sequential.p50.toFixed(2) }}</td>
+                <td>{{ result.sequential.p95.toFixed(2) }}</td>
+                <td>{{ result.sequential.max.toFixed(2) }}</td>
+                <td>{{ result.burstTotalMs.toFixed(1) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="text-caption mt-2">
+            Sequential cost is close on both — once a connection is warm, HTTP header parsing
+            against muxws frame decoding is a small difference. The burst column is the real one:
+            a browser opens about six concurrent HTTP/1.1 connections per host, so the seventh
+            request waits. muxws multiplexes all of them onto one socket.
+          </div>
+        </v-alert>
+
         <div v-if="error" class="text-error mb-4">{{ error }}</div>
-        <div v-else-if="loading" class="text-center pa-8">Loading...</div>
+
+        <div class="d-flex align-center ga-3 mb-3">
+          <v-btn size="small" :disabled="!page?.hasPrevious || loading" @click="goTo(offset - pageSize)">
+            Previous
+          </v-btn>
+          <v-btn size="small" :disabled="!page?.hasMore || loading" @click="goTo(offset + pageSize)">Next</v-btn>
+          <span class="text-caption">
+            {{ offset + 1 }}–{{ offset + (page?.results.length ?? 0) }}
+            <template v-if="page?.count !== null && page?.count !== undefined">of {{ page.count }}</template>
+            · loaded in {{ lastLoadMs.toFixed(1) }} ms over {{ transport }}
+          </span>
+        </div>
+
+        <div v-if="loading && !records.length" class="text-center pa-8">Loading...</div>
         <df-grid
           v-else
           v-model:active-columns="activeColumnDef"
@@ -12,7 +70,7 @@
           :records="records"
           key-field="id"
           :show-filter-row="true"
-          style="height: 80vh"
+          style="height: 70vh"
           @click="(data: any) => console.log('click:', data)"
           @sort="(data: any) => console.log('sort:', data)"
         />
@@ -22,15 +80,24 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { ref, watch } from 'vue';
 import { createColumn, filterColumns, type ResponsiveColumnDefinitions } from '@dynamicforms/vue-grid';
-import { musicTrackViewSet } from './viewsets';
-import type { MusicTrack } from './viewsets';
+import type { PaginatedList } from '../../../vue/mixins';
+import { runBenchmark, type BenchmarkResult } from './benchmark';
+import { viewSetFor, type MusicTrack, type Transport } from './viewsets';
 
+const transport = ref<Transport>('rest');
 const records = ref<MusicTrack[]>([]);
+const page = ref<PaginatedList<MusicTrack> | null>(null);
+const offset = ref(0);
+const pageSize = 50;
 const loading = ref(true);
+const lastLoadMs = ref(0);
 const error = ref<string | null>(null);
 const activeColumnDef = ref('three-row');
+
+const benchmarking = ref(false);
+const results = ref<BenchmarkResult[]>([]);
 
 const columns = [
   createColumn('id', 'Id', 'int', { cssClass: 'text-right' }),
@@ -52,18 +119,60 @@ const columnsResponsive: ResponsiveColumnDefinitions = [
   { cssClass: 'single-column', columns: columns },
 ];
 
-onMounted(async () => {
+async function goTo(newOffset: number) {
+  loading.value = true;
+  error.value = null;
+  const started = performance.now();
   try {
-    records.value = await musicTrackViewSet.list();
+    const result = await viewSetFor(transport.value).listPage({
+      offset: Math.max(0, newOffset),
+      limit: pageSize,
+    });
+    lastLoadMs.value = performance.now() - started;
+    page.value = result;
+    records.value = result.results;
+    offset.value = result.offset;
   } catch (e: any) {
-    error.value = `Failed to load data: ${e.message}`;
+    // Both transports throw the same shape, so this branch needs no transport-specific handling.
+    error.value = `Failed to load data: ${e.response?.status ?? ''} ${e.message}`;
   } finally {
     loading.value = false;
   }
-});
+}
+
+async function runComparison() {
+  benchmarking.value = true;
+  results.value = [];
+  try {
+    for (const which of ['rest', 'muxws'] as Transport[]) {
+      results.value = [...results.value, await runBenchmark(which)];
+    }
+  } catch (e: any) {
+    error.value = `Benchmark failed: ${e.message}`;
+  } finally {
+    benchmarking.value = false;
+  }
+}
+
+// Switching transport reloads the same page, so the two are directly comparable on screen.
+watch(transport, () => goTo(offset.value), { immediate: false });
+void goTo(0);
 </script>
 
 <style scoped>
+.benchmark {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.benchmark th,
+.benchmark td {
+  padding: 0.15em 0.9em 0.15em 0;
+  text-align: right;
+}
+.benchmark th:first-child,
+.benchmark td:first-child {
+  text-align: left;
+}
 .full-screen {
   position: fixed;
   inset: 0;

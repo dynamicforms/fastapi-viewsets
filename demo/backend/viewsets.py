@@ -1,14 +1,33 @@
+import os
+
 from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from demo.backend.celery_app import celery_app, redis_sync
 from demo.backend.data_generator import generate_music_library
 from fastapi_viewsets.collection_viewset import CollectionViewSet
 from fastapi_viewsets.context import Context
-from fastapi_viewsets.decorators.celery_viewset import celery_viewset
-from fastapi_viewsets.mixins import BulkViewSetMixin, LookupItem, LookupMixin, make_all_optional
+from fastapi_viewsets.mixins import (
+    BulkViewSetMixin,
+    LookupItem,
+    LookupMixin,
+    make_all_optional,
+    PaginatedListMixin,
+)
+
+USE_CELERY = os.environ.get("DEMO_CELERY", "").lower() in ("1", "true", "yes")
+"""
+Celery is off by default in this demo.
+
+It used to be unconditional, which made the transport benchmark meaningless: every call queued a
+task through Redis and waited for a worker, and that round trip dwarfs the difference between
+sending a request over HTTP and sending it over a WebSocket - which is the thing the benchmark
+exists to show. Set DEMO_CELERY=1 (and run the worker) to exercise the Celery path instead.
+"""
+
+LIBRARY_SIZE = int(os.environ.get("DEMO_LIBRARY_SIZE", "5000"))
+"""Large enough that paging is the only sane way to read it - which is the point of the demo."""
 
 
 class MusicTrack(BaseModel):
@@ -27,17 +46,20 @@ class MusicTrack(BaseModel):
 
 MusicTrackFilter = make_all_optional(MusicTrack)
 
-database: dict[int, MusicTrack] = {record["id"]: MusicTrack(**record) for record in generate_music_library(100)}
+database: dict[int, MusicTrack] = {
+    record["id"]: MusicTrack(**record) for record in generate_music_library(LIBRARY_SIZE)
+}
 
 
-@celery_viewset(celery_app=celery_app, task_prefix="music", redis_client=redis_sync)
 class MusicTrackViewSet(
     CollectionViewSet[int, MusicTrack],
     BulkViewSetMixin[int, MusicTrack, MusicTrackFilter],
-    # FilterableMixin[MusicTrack],
+    PaginatedListMixin[MusicTrack, MusicTrackFilter],
     LookupMixin,
 ):
     __router = APIRouter()
+
+    default_page_size = 50
 
     @__router.get("count", tags=["MusicTrack"], summary="Return the total number of tracks")
     async def count(self, context: Context) -> int:
@@ -66,3 +88,12 @@ class MusicTrackViewSet(
 
     def __init__(self):
         super().__init__(container=database, pk_field="id")
+
+
+if USE_CELERY:
+    from demo.backend.celery_app import celery_app, redis_sync
+    from fastapi_viewsets.decorators.celery_viewset import celery_viewset
+
+    MusicTrackViewSet = celery_viewset(  # noqa: F811 - same viewset, wrapped for the Celery path
+        celery_app=celery_app, task_prefix="music", redis_client=redis_sync
+    )(MusicTrackViewSet)

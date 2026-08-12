@@ -15,7 +15,8 @@
     "axios": "^1.16.1",
     "vue": "^3.5.35",
     "vue-markdown-render": "^2.3.0",
-    "vuetify": "^3.12.7"
+    "vuetify": "^3.12.7",
+    "muxws": "^0.2.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6",
