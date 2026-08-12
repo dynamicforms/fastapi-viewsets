@@ -6,6 +6,10 @@
 
 ## Extending RestProxyImpl
 
+Write custom methods against `this.request()` rather than against axios directly. It takes a method
+and a path relative to `basePath`, returns the decoded body, and — because it is the one thing each
+transport implements — the same method body works unchanged on a `MuxwsProxyImpl` subclass.
+
 ```ts
 import axios from 'axios';
 import { RestProxyImpl } from '@dynamicforms/fastapi-viewsets';
@@ -18,14 +22,12 @@ interface CloneRequest { source_id: number; new_name: string }
 class ItemApi extends RestProxyImpl<number, Item, 'id'> {
   /** Search items by name fragment. */
   async search(q: string): Promise<Item[]> {
-    const res = await this.http.get<Item[]>(`${this.basePath}/search`, { params: { q } });
-    return res.data;
+    return this.request<Item[]>('GET', '/search', { query: { q } });
   }
 
   /** Clone an item under a new name. */
   async clone(body: CloneRequest): Promise<Item> {
-    const res = await this.http.post<Item>(`${this.basePath}/clone`, body);
-    return res.data;
+    return this.request<Item>('POST', '/clone', { body });
   }
 }
 
@@ -43,12 +45,16 @@ const cloned   = await itemsApi.clone({ source_id: 1, new_name: 'Widget copy' })
 
 ## Accessing protected members
 
-`RestProxyImpl` exposes two `protected` members you can use inside subclass methods:
+`RestProxyImpl` exposes these `protected` members you can use inside subclass methods:
 
 | Member | Type | Description |
 |--------|------|-------------|
-| `this.http` | `AxiosInstance` | The axios instance (custom or global) |
+| `this.request(method, path, opts?)` | `Promise<R>` | Sends one call and returns the decoded body. Transport-independent — prefer this. |
 | `this.basePath` | `string` | The base path, e.g. `'/items'` |
+| `this.http` | `AxiosInstance` | The axios instance (custom or global). REST-only; using it ties the method to HTTP. |
+
+`request()`'s options are `{ query?, body? }`. A non-2xx throws with `error.response.status`
+readable on the thrown value, on both transports.
 
 ## Using a custom axios instance
 
