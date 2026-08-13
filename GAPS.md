@@ -65,6 +65,30 @@ already does, so the knob would have exactly one use: a viewset that wants muxws
 except a handful of endpoints. That did not seem worth a third resolution level. Easy to add if
 it turns out to be wanted.
 
+## Celery already carries the whole list pipeline
+
+A design was proposed where the list parameters (filter, sort, pagination) are shipped to the
+Celery worker, the worker reports back which of them it implemented, and the FastAPI side applies
+whatever is left. Half of that turned out to be already true and the other half should not be
+built.
+
+`celery_viewset_client` patches the **route endpoints** - `list_items`, not `perform_list` - so the
+entire pipeline already runs in the worker. Filter, sort and pagination parameters cross today and
+work (verified against a live worker, and pinned by
+`decorators/celery_viewset/list_params_test.py`), and the `PaginatedList` envelope comes back
+intact.
+
+Which means there is nothing to report back. `query.mark_applied()` is an intra-process contract,
+and the worker *is* that process: a backend that translated part of the query into its own query
+says so, and the in-memory stages skip that work, with both the query and the records in the same
+memory. Reporting back to the FastAPI side would require shipping unfiltered, unsorted, unpaginated
+records across the queue so they could be reduced somewhere else - the exact opposite of what
+push-down is for.
+
+The part of the proposal that survives intact is the filter plugin API: a Django-ORM-backed worker
+still needs filters expressed as data rather than as hand-written closures before it can translate
+them into queryset calls.
+
 ## Pagination and the fetch pipeline
 
 ### A separate mixin rather than two shapes on one endpoint

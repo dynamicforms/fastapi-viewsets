@@ -6,11 +6,13 @@ Offset paging is in (`PaginatedListMixin`). Cursor paging is not, and it is the 
 fixes the two problems offset paging has: it re-reads every skipped row, and it drifts when records
 are inserted or deleted between pages.
 
-The blocker is not the algorithm, it is where the algorithm runs. A cursor works by pushing a
-comparison predicate down into whatever produces the rows. `apply_*` stages and `query.applied` now
-give it somewhere to live for an in-process backend, but for a Celery-backed viewset the query has
-to be composed *in the worker*, which means the cursor state has to travel there. That part is
-undesigned.
+The blocker is not the algorithm, it is expressing the predicate as data. A cursor works by pushing
+a comparison down into whatever produces the rows, and `apply_*` plus `query.applied` already give
+it somewhere to live.
+
+The Celery half of this is a non-problem: the whole pipeline already runs in the worker (see
+GAPS.md), so the cursor is composed there, next to the data. What it needs is the filter plugin API
+below - a cursor is just one more declarative predicate, which is why it comes after it.
 
 In-memory viewsets do not need any of this — slicing a list is what they do — so an implementation
 that only ever runs in-process could ship first and would still be useful.
@@ -24,8 +26,11 @@ Design carried over from the author's Django implementation (concepts only, to b
   makes every key tuple unique, so ties are eliminated structurally and DRF's tie-offset machinery
   (with its hard ~1000 cap that collapses on low-cardinality sort columns) is not needed at all.
 - Comparison is **lexicographic over the tuple**: key₁ strictly past the anchor; OR key₁ equal and
-  key₂ strictly past; OR … Prefer a row-value comparison where the backend supports it — a single
-  predicate a composite index can serve — and fall back to the segment union only where it cannot.
+  key₂ strictly past; OR … Use a **row-value comparison** where the backend has one —
+  `WHERE (year, month, day) > (2026, 8, 3)` — which is a single predicate a composite index serves
+  directly, instead of a union the planner usually degrades into a scan. Postgres has it; so does
+  SQLite, since 3.15. Django's ORM does **not** expose it, so it needs a small custom expression.
+  The segment union stays as the fallback for backends without it.
 - Per-key direction is `XOR(field is descending, reading backwards)`, so mixed-direction ordering
   works.
 - **NULL is defined as the smallest value**, always, in both directions, with explicit `IS NULL` /
@@ -45,6 +50,19 @@ Deliberate departures from the original:
 - **Drop `offset` from the protocol.** With a unique position it is dead weight, and where it is
   honoured it degrades into the offset paging cursors exist to avoid.
 - **Use the real PK name** from model metadata, not a literal `id`.
+
+## Django ORM backend
+
+A second real backend, so the filter plugin API below is designed against something that *must*
+push down rather than only against an in-memory dict. Django rather than SQLAlchemy: this repo
+already supports Django (`context/auth/django.py`, the `django` extra, asgiref), so it exercises an
+integration that exists instead of adding a second ORM to the dependency surface.
+
+A QuerySet is lazy, so it drops straight into `perform_list`, and slicing it pushes LIMIT/OFFSET
+into SQL. The one real gap is that Django has no native row-value comparison - see the cursor
+section - so it needs a small custom expression. That gap is useful rather than annoying: it forces
+the "backend cannot do this natively, fall back" path to be exercised for real rather than
+theoretically.
 
 ## Grid integration
 
