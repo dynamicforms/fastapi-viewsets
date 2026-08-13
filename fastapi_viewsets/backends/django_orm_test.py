@@ -18,10 +18,11 @@ import pytest
 from django.db import connection, models
 from pydantic import BaseModel
 
+from ..cursor import CursorPredicate
 from ..filters import Filter, make_filter_model, register_operator
-from ..list_query import ListQuery
-from ..mixins import make_all_optional, PaginatedListMixin, SortStateColumn
-from .django_orm import DjangoORMViewSet
+from ..list_query import build_list_query, ListQuery
+from ..mixins import CursorListMixin, make_all_optional, PaginatedListMixin, SortStateColumn
+from .django_orm import _cursor_condition, DjangoORMViewSet
 
 
 class TrackModel(models.Model):
@@ -319,3 +320,97 @@ async def test_the_in_memory_fallback_sees_response_models_not_raw_rows(tagged_r
     assert "filter" not in query.applied  # overlaps has no compiler, so this is the fallback
     assert [record.title for record in page.results] == ["one"]
     assert page.results[0].tags == ["jazz", "bop"]
+
+
+# ---------------------------------------------------------------------------
+# Cursor pagination
+# ---------------------------------------------------------------------------
+
+class CursorTrackViewSet(DjangoORMViewSet[int, Track], CursorListMixin[Track, TrackFilter]):
+    model = TrackModel
+    schema = Track
+    default_page_size = 4
+    pk_field_name = "id"
+
+
+async def _walk(viewset, sort):
+    """
+    Follows `next` to the end, returning every page's titles.
+
+    Async rather than wrapping asyncio.run(): that closes the loop it created and leaves the thread
+    with none, which breaks every later test that expects one.
+    """
+    pages, cursor = [], None
+    while True:
+        query = build_list_query(None, sort, limit=4)
+        query.cursor = cursor
+        page = await viewset.get_list(None, query)
+        pages.append([record.title for record in page.results])
+        cursor = page.next
+        if not cursor:
+            return pages
+
+
+def test_a_uniform_ascending_cursor_uses_a_row_value_comparison():
+    """
+    The fast path: one predicate a composite index can seek with, rather than a union the planner
+    turns into a scan.
+    """
+    keys = (("year", False), ("id", False))
+    predicate = CursorPredicate(
+        field="", value={}, keys=keys, position={"year": 2003, "id": 5}, backwards=False, inclusive=False
+    )
+    sql = str(TrackModel.objects.filter(_cursor_condition(CursorTrackViewSet(), predicate)).query)
+    assert '("backends_trackmodel"."year", "backends_trackmodel"."id") > (2003, 5)' in sql
+
+
+def test_mixed_directions_fall_back_to_the_segment_union():
+    """A row constructor cannot say `a ASC, b DESC`, so this one has to be spelled out."""
+    keys = (("year", True), ("id", False))
+    predicate = CursorPredicate(
+        field="", value={}, keys=keys, position={"year": 2003, "id": 5}, backwards=False, inclusive=False
+    )
+    sql = str(TrackModel.objects.filter(_cursor_condition(CursorTrackViewSet(), predicate)).query)
+    assert ") > (" not in sql
+    assert "OR" in sql
+
+
+def test_an_inclusive_cursor_falls_back_and_keeps_its_own_anchor():
+    keys = (("year", False), ("id", False))
+    predicate = CursorPredicate(
+        field="", value={}, keys=keys, position={"year": 2003, "id": 5}, backwards=False, inclusive=True
+    )
+    condition = _cursor_condition(CursorTrackViewSet(), predicate)
+    sql = str(TrackModel.objects.filter(condition).query)
+    assert ") > (" not in sql  # the anchor row has to be OR-ed back in, so no row-value fast path
+
+
+@pytest.mark.asyncio
+async def test_the_cursor_predicate_reaches_sql(viewset):  # noqa: ARG001
+    query = build_list_query(None, "id:asc", limit=4)
+    page = await CursorTrackViewSet().get_list(None, query)
+    assert [record.title for record in page.results] == ["Track 001", "Track 002", "Track 003", "Track 004"]
+
+    second = build_list_query(None, "id:asc", limit=4)
+    second.cursor = page.next
+    page_two = await CursorTrackViewSet().get_list(None, second)
+    assert "filter" in second.applied  # translated, not filtered in memory
+    assert [record.title for record in page_two.results] == [
+        "Track 005", "Track 006", "Track 007", "Track 008",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_walking_a_table_by_cursor_visits_every_row_once():
+    pages = await _walk(CursorTrackViewSet(), "id:asc")
+    titles = [title for page in pages for title in page]
+    assert titles == [f"Track {n:03d}" for n in range(1, 31)]
+
+
+@pytest.mark.asyncio
+async def test_walking_a_multi_key_ordering_with_ties_visits_every_row_once():
+    """`year` takes five values across thirty rows, so every page boundary lands inside a tie."""
+    pages = await _walk(CursorTrackViewSet(), "year:asc")
+    titles = [title for page in pages for title in page]
+    assert sorted(titles) == [f"Track {n:03d}" for n in range(1, 31)]
+    assert len(titles) == len(set(titles))

@@ -16,7 +16,7 @@ from fastapi_viewsets.action_configuration import extra_middlewares_for, resolve
 from fastapi_viewsets.conf import settings
 from fastapi_viewsets.context import get_shared_context
 from fastapi_viewsets.middleware import Middleware
-from fastapi_viewsets.mixins import FilterParam, make_all_optional
+from fastapi_viewsets.mixins import FilterParam
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
 
 from .build_schema import _pydantic_generic_args, build_schema, route_to_add_api_route_kwargs

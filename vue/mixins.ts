@@ -66,6 +66,38 @@ export interface PageParams extends ListParams {
 }
 
 /**
+ * One cursor page.
+ *
+ * `next`/`previous` are exclusive, so following them never repeats a row. `first`/`last` are the
+ * same two edges read inclusively: they return their own row again — one duplicate to drop — and
+ * in exchange they survive rows being inserted at that edge, which is what polling a live list
+ * needs. They are present whenever the page is non-empty, even when `next` is null.
+ *
+ * There is no total count: producing one costs a second full pass per request and is stale by the
+ * time it is read.
+ */
+export interface CursorPage<T> {
+  results: T[];
+  limit: number;
+  hasMore: boolean;
+  hasPrevious: boolean;
+  next: string | null;
+  previous: string | null;
+  first: string | null;
+  last: string | null;
+}
+
+export interface CursorParams extends ListParams {
+  cursor?: string;
+  limit?: number;
+}
+
+/** FE counterpart of the BE CursorListMixin. A ViewSet declares this or PaginatedListMixin. */
+export class CursorListMixin<T> {
+  declare listCursor: (params?: CursorParams) => Promise<CursorPage<T>>;
+}
+
+/**
  * FE counterpart of the BE PaginatedListMixin. A ViewSet declares either this or ListMixin: the BE
  * endpoint answers with one shape or the other, decided per viewset, never per request.
  */

@@ -17,14 +17,19 @@ its native async API (`aget`, `acount`, `__aiter__`, added in Django 4.1) or `sy
 nothing blocks the event loop.
 """
 
+import operator
+
+from functools import reduce
 from typing import Any, ClassVar, Generic, TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
+from django.db.models import BooleanField, F, Func, Q, Value
 from fastapi import HTTPException
 from pydantic import BaseModel
 from typing_extensions import TypeVar
 
 from ..context import Context
+from ..cursor import CursorPredicate, wants_greater
 from ..filters import (
     can_compile_all,
     compile_all,
@@ -43,7 +48,7 @@ from ..filters import (
     StartsWith,
 )
 from ..list_query import ListQuery, ListRecords
-from ..mixins import ImplMixin, SortDirection
+from ..mixins import filter_set_for, ImplMixin, SortDirection
 
 if TYPE_CHECKING:
     from django.db.models import Model, QuerySet
@@ -109,14 +114,16 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         if queryset is None or not query.has_filter or not query.needs("filter"):
             return await super().apply_filter(context, query, records)
 
-        filter_set = filters_from(query.fltr)
-        if filter_set is None:
+        filter_set = filter_set_for(query)
+        if not filter_set and filters_from(query.fltr) is None:
             # A hand-written filter model, on the older filter_list path. Nothing declarative to
             # translate, so the in-memory pass takes it.
             return await super().apply_filter(context, query, records)
 
         concrete = self._concrete_fields()
-        translatable = all(fltr.field in concrete for fltr in filter_set)
+        translatable = all(
+            all(name in concrete for name in fltr.fields()) for fltr in filter_set
+        )
         if not translatable or not can_compile_all(type(self), filter_set):
             return await super().apply_filter(context, query, records)
 
@@ -285,3 +292,109 @@ def _compile_lookup(_viewset, fltr, queryset):
 
 for _filter_type in _LOOKUPS:
     compiles(DjangoORMViewSet, _filter_type)(_compile_lookup)
+
+
+# ---------------------------------------------------------------------------
+# Cursor predicate
+# ---------------------------------------------------------------------------
+
+class RowValues(Func):
+    """`(a, b, c)` - a SQL row constructor."""
+
+    template = "(%(expressions)s)"
+    arg_joiner = ", "
+
+
+class _RowCompare(Func):
+    template = "%(expressions)s"
+    output_field = BooleanField()
+
+
+class RowGreater(_RowCompare):
+    arg_joiner = " > "
+
+
+class RowLess(_RowCompare):
+    arg_joiner = " < "
+
+
+def _cursor_condition(viewset: "DjangoORMViewSet", fltr: CursorPredicate) -> Q:
+    """
+    "Everything past this row", as SQL.
+
+    Two forms, because one is faster and the other is always correct:
+
+    * A **row-value comparison** - `WHERE (year, id) > (2003, 42)` - is a single predicate that a
+      composite index on exactly those columns can seek with, so page 500 costs what page 1 costs.
+      It is only usable when every key sorts the same way (a row constructor cannot express
+      `a ASC, b DESC`) and no key is nullable, because SQL evaluates any comparison involving NULL
+      as unknown while this library defines NULL as the smallest value there is. The two rules
+      disagree, and SQL's wins inside the database - so where they could differ, this form is not
+      used.
+    * A **union of segments** - key₁ past the anchor, OR key₁ equal and key₂ past, OR … - which
+      spells the NULL handling out and copes with mixed directions. The planner usually degrades
+      it to a scan, which is the price of being right.
+
+    Verified against Django + SQLite; `Func(..., function='ROW')`, the recipe usually cited for
+    this, is Postgres-only, and a row constructor fails outright if annotated rather than used
+    directly as a condition.
+    """
+    keys = fltr.keys
+    nullable = {
+        field.name for field in viewset.model._meta.get_fields() if getattr(field, "null", False)
+    }
+    uniform = len({descending for _, descending in keys}) == 1
+    if uniform and not fltr.inclusive and not any(name in nullable for name, _ in keys):
+        return _row_value_condition(keys, fltr.position, fltr.backwards)
+    return _segment_condition(keys, fltr.position, fltr.backwards, fltr.inclusive)
+
+
+def _row_value_condition(keys, position, backwards: bool) -> Q:
+    left = RowValues(*(F(name) for name, _ in keys))
+    right = RowValues(*(Value(position[name]) for name, _ in keys))
+    comparison = RowGreater if wants_greater(keys[0][1], backwards) else RowLess
+    return Q(comparison(left, right))
+
+
+def _equals(name: str, value: Any) -> Q:
+    """`IS NULL` rather than `= NULL`, which is never true."""
+    return Q(**{f"{name}__isnull": True}) if value is None else Q(**{name: value})
+
+
+def _segment_condition(keys, position, backwards: bool, inclusive: bool) -> Q:
+    segments: list[Q] = []
+
+    for index, (name, descending) in enumerate(keys):
+        segment = Q()
+        for earlier, _ in keys[:index]:
+            segment &= _equals(earlier, position[earlier])
+
+        value = position[name]
+        greater = wants_greater(descending, backwards)
+        if value is None:
+            if not greater:
+                # Nothing sorts below NULL, so this segment can match nothing at all.
+                continue
+            segment &= Q(**{f"{name}__isnull": False})
+        elif greater:
+            segment &= Q(**{f"{name}__gt": value})
+        else:
+            # NULLs are below every value, so they belong in a "less than" segment - which SQL
+            # would otherwise drop, since NULL < anything is unknown rather than true.
+            segment &= Q(**{f"{name}__lt": value}) | Q(**{f"{name}__isnull": True})
+        segments.append(segment)
+
+    if inclusive:
+        anchor = Q()
+        for name, _ in keys:
+            anchor &= _equals(name, position[name])
+        segments.append(anchor)
+
+    if not segments:
+        return Q(pk__in=[])  # matches nothing, and says so without a special case downstream
+    return reduce(operator.or_, segments)
+
+
+@compiles(DjangoORMViewSet, CursorPredicate)
+def _compile_cursor(viewset, fltr, queryset):
+    return queryset.filter(_cursor_condition(viewset, fltr))
