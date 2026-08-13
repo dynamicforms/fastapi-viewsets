@@ -60,9 +60,15 @@ Declared rather than hand-written: this replaces the boolean expression that use
 them falls back to in-memory filtering - correctly, just not as quickly.
 """
 
-_records = generate_music_library(LIBRARY_SIZE)
-database: dict[int, MusicTrack] = {record["id"]: MusicTrack(**record) for record in _records}
-ensure_database(_records)
+records = generate_music_library(LIBRARY_SIZE)
+database: dict[int, MusicTrack] = {record["id"]: MusicTrack(**record) for record in records}
+"""
+The in-memory library. Pure Python, so building it at import time costs nothing but CPU.
+
+The SQLite copy is *not* seeded here: `ensure_database` talks to the database, and uvicorn imports
+the app inside its own event loop when it is given `"module:app"` as a string - where Django
+refuses a synchronous query outright. It is seeded from the lifespan instead, in a worker thread.
+"""
 
 
 class MusicTrackViewSet(

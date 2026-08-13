@@ -1,14 +1,18 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
+// Overridable so the e2e run can start its own backend on a port of its own rather than colliding
+// with whatever the developer already has running.
+const api = `http://127.0.0.1:${process.env.DEMO_API_PORT ?? 8000}`;
+
 export default defineConfig({
   plugins: [vue()],
   server: {
-    port: 5173,
+    port: Number(process.env.DEMO_FE_PORT ?? 5173),
     proxy: {
-      '/music': 'http://127.0.0.1:8000',
-      '/music-db': 'http://127.0.0.1:8000',
-      '/ws': { target: 'ws://127.0.0.1:8000', ws: true },
+      '/music': api,
+      '/music-db': api,
+      '/ws': { target: api.replace('http', 'ws'), ws: true },
     },
   },
 });

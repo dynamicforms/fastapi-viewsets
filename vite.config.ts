@@ -62,6 +62,9 @@ export default defineConfig({
     }
   },
   test: {
+    // The library's own specs only. demo/e2e is Playwright, which vitest would otherwise collect
+    // and fail to run - two runners fighting over the same *.spec.ts glob.
+    include: ['vue/**/*.spec.ts'],
     coverage: {
       provider: 'v8',
       include: [
