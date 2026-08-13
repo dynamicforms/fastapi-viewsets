@@ -73,8 +73,13 @@ def ensure_database(records: list[dict]) -> None:
         with connection.schema_editor() as editor:
             editor.create_model(MusicTrackRow)
 
-    if MusicTrackRow.objects.exists():
+    # Refill when the row count no longer matches what was asked for. The table is written once
+    # and reused across runs, so a demo started with a different DEMO_LIBRARY_SIZE would otherwise
+    # serve a stale library from one backend and a fresh one from the other, and the two would
+    # quietly disagree about how many rows match a filter.
+    if MusicTrackRow.objects.count() == len(records):
         return
+    MusicTrackRow.objects.all().delete()
 
     MusicTrackRow.objects.bulk_create(
         (

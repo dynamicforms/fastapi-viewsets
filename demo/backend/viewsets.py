@@ -10,13 +10,8 @@ from demo.backend.django_setup import ensure_database, MusicTrackRow
 from fastapi_viewsets.backends.django_orm import DjangoORMViewSet
 from fastapi_viewsets.collection_viewset import CollectionViewSet
 from fastapi_viewsets.context import Context
-from fastapi_viewsets.mixins import (
-    BulkViewSetMixin,
-    LookupItem,
-    LookupMixin,
-    make_all_optional,
-    PaginatedListMixin,
-)
+from fastapi_viewsets.filters import make_filter_model
+from fastapi_viewsets.mixins import BulkViewSetMixin, LookupItem, LookupMixin, PaginatedListMixin
 
 USE_CELERY = os.environ.get("DEMO_CELERY", "").lower() in ("1", "true", "yes")
 """
@@ -46,7 +41,24 @@ class MusicTrack(BaseModel):
     language: str
 
 
-MusicTrackFilter = make_all_optional(MusicTrack)
+MusicTrackFilter = make_filter_model(MusicTrack, {
+    "id": ["exact"],
+    "title": ["icontains"],
+    "artist": ["icontains", "exact"],
+    "year": ["exact", "gte", "lte", "in"],
+    "rating": ["exact", "gte"],
+    "favorite": ["exact"],
+    "play_count": ["gte", "lte"],
+    "language": ["iexact"],
+    "genres": ["overlaps"],
+    "moods": ["overlaps"],
+})
+"""
+Declared rather than hand-written: this replaces the boolean expression that used to live in
+`filter_list` below, and the SQLite viewset gets the same filters translated into SQL for free.
+`genres`/`moods` use `overlaps`, which no backend can translate portably, so a request touching
+them falls back to in-memory filtering - correctly, just not as quickly.
+"""
 
 _records = generate_music_library(LIBRARY_SIZE)
 database: dict[int, MusicTrack] = {record["id"]: MusicTrack(**record) for record in _records}
@@ -69,24 +81,6 @@ class MusicTrackViewSet(
 
     async def perform_lookup(self, context: Context) -> list[LookupItem]:
         return [LookupItem(group=None, pk=t.id, title=t.title, icon=None) for t in await self.perform_list(context)]
-
-    async def filter_list(self, fltr: Any, items: list[MusicTrack]) -> list[MusicTrack]:
-        def filter_item(itm: MusicTrack) -> bool:
-            return (
-                (fltr.id is None or itm.id == fltr.id)
-                and (fltr.title is None or fltr.title.lower() in itm.title.lower())
-                and (fltr.artist is None or fltr.artist.lower() in itm.artist.lower())
-                and (fltr.year is None or itm.year == fltr.year)
-                and (fltr.duration is None or itm.duration == fltr.duration)
-                and (fltr.genres is None or set(fltr.genres).intersection(itm.genres))
-                and (fltr.rating is None or (itm.rating == fltr.rating))
-                and (fltr.favorite is None or (itm.favorite == fltr.favorite))
-                and (fltr.play_count is None or (itm.play_count == fltr.play_count))
-                and (fltr.moods is None or set(fltr.moods).intersection(itm.moods))
-                and (fltr.language is None or itm.language.lower() == fltr.language.lower())
-            )
-
-        return list(filter(filter_item, items))
 
     def __init__(self):
         super().__init__(container=database, pk_field="id")

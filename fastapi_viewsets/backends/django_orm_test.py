@@ -7,6 +7,9 @@ backend absorbed is not redone in memory, that a stage it declined still produce
 and that paging a queryset reads a page rather than a table.
 """
 
+from dataclasses import dataclass
+from typing import ClassVar
+
 import pytest
 
 
@@ -15,6 +18,7 @@ import pytest
 from django.db import connection, models
 from pydantic import BaseModel
 
+from ..filters import Filter, make_filter_model, register_operator
 from ..list_query import ListQuery
 from ..mixins import make_all_optional, PaginatedListMixin, SortStateColumn
 from .django_orm import DjangoORMViewSet
@@ -36,7 +40,22 @@ class Track(BaseModel):
     year: int
 
 
-TrackFilter = make_all_optional(Track)
+TrackFilter = make_filter_model(Track, {
+    "title": ["exact", "icontains"],
+    "artist": ["exact"],
+    "year": ["exact", "gte", "lte", "in"],
+})
+
+class _Tagged(BaseModel):
+    id: int
+    title: str
+    tags: list[str]
+
+
+TaggedFilter = make_filter_model(_Tagged, {"tags": ["overlaps"], "title": ["exact"]})
+
+LegacyTrackFilter = make_all_optional(Track)
+"""A hand-made filter model, with no declaration for the backend to translate."""
 
 
 class TrackViewSet(DjangoORMViewSet[int, Track], PaginatedListMixin[Track, TrackFilter]):
@@ -136,24 +155,66 @@ async def test_a_descending_sort_falls_back_and_still_sorts(viewset):
     )
 
 
+@dataclass(frozen=True)
+class EndsWith(Filter):
+    """
+    A filter defined outside the library, with no compiler registered for any backend - which is
+    all it takes to add an operator: one `matches()`, and it works everywhere immediately.
+    """
+
+    lookup: ClassVar[str] = "endswith_demo"
+
+    def matches(self, record) -> bool:
+        actual = self.read(record)
+        return actual is not None and str(actual).endswith(str(self.value))
+
+
+register_operator(EndsWith)
+
+
 @pytest.mark.asyncio
-async def test_a_filter_that_cannot_be_pushed_is_not_marked_applied():
+async def test_an_operator_with_no_compiler_leaves_the_whole_stage_alone(viewset):  # noqa: ARG001
     """
-    Marking the stage after pushing only half of it would silently return too many rows, so a field
-    the backend could not translate has to leave the whole stage to the in-memory pass.
+    All or nothing: pushing the filters it understands and forgetting the rest would return too
+    many rows while looking like it worked. One untranslatable operator sends the whole set to the
+    in-memory pass - which still gives the right answer, because every filter can always do that.
     """
-    class UntranslatableViewSet(TrackViewSet):
-        async def filter_list(self, fltr, records):
-            return [track for track in records if fltr.title is None or fltr.title in track.title]
-
-        def build_filter_criteria(self, fltr):
-            criteria, _ = super().build_filter_criteria(fltr)
-            return criteria, False
-
-    query = ListQuery(fltr=TrackFilter(title="Track 007"), limit=50)
-    page = await UntranslatableViewSet().get_list(None, query)
+    extended = make_filter_model(Track, {"title": ["icontains", "endswith_demo"]})
+    query = ListQuery(fltr=extended(title__icontains="track", title__endswith_demo="007"), limit=50)
+    page = await viewset.get_list(None, query)
     assert "filter" not in query.applied
     assert [track.title for track in page.results] == ["Track 007"]
+
+
+@pytest.mark.asyncio
+async def test_a_declared_operator_is_pushed_down_once_every_filter_has_a_compiler(viewset):
+    """The same declaration minus the uncompilable operator does reach SQL."""
+    query = ListQuery(fltr=TrackFilter(title__icontains="track 007"), limit=50)
+    page = await viewset.get_list(None, query)
+    assert "filter" in query.applied
+    assert [track.title for track in page.results] == ["Track 007"]
+
+
+@pytest.mark.asyncio
+async def test_a_hand_made_filter_model_still_uses_filter_list():
+    """No declaration means nothing declarative to translate, and the older path takes it."""
+    class LegacyViewSet(TrackViewSet):
+        async def filter_list(self, fltr, records):
+            return [track for track in records if fltr.title is None or fltr.title == track.title]
+
+    query = ListQuery(fltr=LegacyTrackFilter(title="Track 007"), limit=50)
+    page = await LegacyViewSet().get_list(None, query)
+    assert "filter" not in query.applied
+    assert [track.title for track in page.results] == ["Track 007"]
+
+
+@pytest.mark.asyncio
+async def test_a_range_of_operators_compiles_into_one_query(viewset):
+    query = ListQuery(fltr=TrackFilter(year__gte=2002, year__lte=2003, title__icontains="0"), limit=50)
+    page = await viewset.get_list(None, query)
+    assert "filter" in query.applied
+    assert page.results
+    assert all(2002 <= track.year <= 2003 for track in page.results)
 
 
 @pytest.mark.asyncio
@@ -211,3 +272,50 @@ async def test_the_primary_key_in_the_body_cannot_overwrite_another_row(viewset)
     assert created.id != 1
     assert (await viewset.perform_retrieve(None, 1)).title == "Track 001"
     await viewset.perform_destroy(None, created.id)
+
+
+class TagModel(models.Model):
+    title = models.CharField(max_length=200)
+    tags = models.TextField()
+
+    class Meta:
+        app_label = "backends"
+
+
+class TaggedViewSet(DjangoORMViewSet[int, _Tagged], PaginatedListMixin[_Tagged, TaggedFilter]):
+    model = TagModel
+    schema = _Tagged
+
+    def to_record(self, raw):
+        if isinstance(raw, _Tagged):
+            return raw
+        return _Tagged(id=raw.id, title=raw.title, tags=raw.tags.split(",") if raw.tags else [])
+
+
+@pytest.fixture
+def tagged_rows():
+    """Sync, because Django refuses schema and ORM calls from inside a running event loop."""
+    with connection.schema_editor() as editor:
+        editor.create_model(TagModel)
+    TagModel.objects.bulk_create([
+        TagModel(title="one", tags="jazz,bop"),
+        TagModel(title="two", tags="rock"),
+    ])
+    yield
+    with connection.schema_editor() as editor:
+        editor.delete_model(TagModel)
+
+
+@pytest.mark.asyncio
+async def test_the_in_memory_fallback_sees_response_models_not_raw_rows(tagged_rows):  # noqa: ARG001
+    """
+    Regression: a filter declaration names the *response* model's fields, but the source yields
+    whatever the backend stores. This viewset keeps a list as a comma-joined string, and before
+    land() converted first, `overlaps` compared a set of characters against a set of words and
+    matched nothing at all while looking like it had worked.
+    """
+    query = ListQuery(fltr=TaggedFilter(tags__overlaps="jazz"), limit=10)
+    page = await TaggedViewSet().get_list(None, query)
+    assert "filter" not in query.applied  # overlaps has no compiler, so this is the fallback
+    assert [record.title for record in page.results] == ["one"]
+    assert page.results[0].tags == ["jazz", "bop"]

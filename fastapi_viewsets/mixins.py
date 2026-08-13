@@ -10,6 +10,7 @@ from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
 from fastapi_viewsets.context import Context
+from fastapi_viewsets.filters import filters_from
 from fastapi_viewsets.list_query import (
     build_list_query,
     ListQuery,
@@ -275,7 +276,14 @@ class ListMixin(Generic[T, TFilter], ABC):
         """
         if not query.has_filter or not query.needs("filter"):
             return records
-        materialized = await materialize(records)
+
+        # A filter model built by make_filter_model knows which operators it stands for, so the
+        # filtering is already written; a hand-made one does not, and falls through to filter_list.
+        filter_set = filters_from(query.fltr)
+        if filter_set is not None:
+            return filter_set.apply(await self.land(query, records))
+
+        materialized = await self.land(query, records)
         filtered = await self.filter_list(query.fltr, materialized)
         # filter_list has no default implementation and so returns None when a viewset declares a
         # filter type but never implements filtering. Returning that verbatim would answer the
@@ -294,7 +302,30 @@ class ListMixin(Generic[T, TFilter], ABC):
         """
         if not query.has_sort or not query.needs("sort"):
             return records
-        return await self.sort_list(query.sort, await materialize(records))
+        return await self.sort_list(query.sort, await self.land(query, records))
+
+    async def land(
+        self: "ImplMixin[Any, T] | ListMixin[T]", query: ListQuery, records: ListRecords
+    ) -> list:
+        """
+        Ends the lazy part: materialises the source and converts it to the response model.
+
+        Every in-memory stage goes through this, because a filter declaration is written against
+        the *response* model - `make_filter_model(Track, ...)` names Track's fields - while the
+        source yields whatever the backend stores. Where the two shapes differ the filter would
+        otherwise be reading the wrong thing: the demo's SQLite backend keeps `genres` as a
+        comma-joined string, and `genres__overlaps` against that matched nothing at all while
+        looking like it worked.
+
+        Idempotent, so a later stage does not convert twice, and `apply_pagination` knows from
+        `query.applied` whether the page still needs it. `to_record` implementations must tolerate
+        being handed an already-converted record for the same reason.
+        """
+        materialized = await materialize(records)
+        if query.needs("conversion"):
+            query.mark_applied("conversion")
+            return self._to_records(materialized)
+        return materialized
 
     async def apply_pagination(
         self: "ImplMixin[Any, T] | ListMixin[T]",
@@ -312,12 +343,14 @@ class ListMixin(Generic[T, TFilter], ABC):
         of records with nothing left to push into.
         """
         if not query.is_paginated:
-            return self._to_records(await materialize(records))
+            return await self.land(query, records)
 
         count = await self.count_records(context, query, records)
         page, has_more = await self.take_page(query, records)
+        # Already converted if an in-memory stage had to land the source earlier; see land().
+        results = page if not query.needs("conversion") else self._to_records(page)
         return PaginatedList[Any](
-            results=self._to_records(page),
+            results=results,
             offset=query.offset,
             limit=query.limit,
             count=count,
