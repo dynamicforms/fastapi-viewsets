@@ -17,7 +17,7 @@
  * happens once.
  */
 
-import type { Transport } from './viewsets';
+import type { Backend, Transport } from './viewsets';
 import { viewSetFor } from './viewsets';
 
 export interface Stats {
@@ -56,12 +56,12 @@ function idFor(index: number, librarySize: number): number {
 
 export async function runBenchmark(
   transport: Transport,
-  options: { rounds?: number; burst?: number; librarySize?: number } = {},
+  options: { rounds?: number; burst?: number; librarySize?: number; backend?: Backend } = {},
 ): Promise<BenchmarkResult> {
   const rounds = options.rounds ?? 50;
   const burst = options.burst ?? 50;
   const librarySize = options.librarySize ?? 5000;
-  const viewSet = viewSetFor(transport);
+  const viewSet = viewSetFor(transport, options.backend ?? 'memory');
 
   // Warm-up: the first call opens the connection, and that cost is not per-request.
   await Promise.all([viewSet.retrieve(1), viewSet.retrieve(2), viewSet.retrieve(3)]);

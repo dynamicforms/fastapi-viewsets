@@ -8,6 +8,10 @@
             <v-btn value="rest">REST</v-btn>
             <v-btn value="muxws">muxws</v-btn>
           </v-btn-toggle>
+          <v-btn-toggle v-model="backend" mandatory density="comfortable" color="secondary">
+            <v-btn value="memory">in-memory</v-btn>
+            <v-btn value="db">SQLite</v-btn>
+          </v-btn-toggle>
           <v-spacer />
           <v-btn :loading="benchmarking" variant="tonal" @click="runComparison">Compare transports</v-btn>
         </div>
@@ -58,7 +62,7 @@
           <span class="text-caption">
             {{ offset + 1 }}–{{ offset + (page?.results.length ?? 0) }}
             <template v-if="page?.count !== null && page?.count !== undefined">of {{ page.count }}</template>
-            · loaded in {{ lastLoadMs.toFixed(1) }} ms over {{ transport }}
+            · loaded in {{ lastLoadMs.toFixed(1) }} ms over {{ transport }} from {{ backend }}
           </span>
         </div>
 
@@ -84,9 +88,10 @@ import { ref, watch } from 'vue';
 import { createColumn, filterColumns, type ResponsiveColumnDefinitions } from '@dynamicforms/vue-grid';
 import type { PaginatedList } from '../../../vue/mixins';
 import { runBenchmark, type BenchmarkResult } from './benchmark';
-import { viewSetFor, type MusicTrack, type Transport } from './viewsets';
+import { viewSetFor, type Backend, type MusicTrack, type Transport } from './viewsets';
 
 const transport = ref<Transport>('rest');
+const backend = ref<Backend>('memory');
 const records = ref<MusicTrack[]>([]);
 const page = ref<PaginatedList<MusicTrack> | null>(null);
 const offset = ref(0);
@@ -124,7 +129,7 @@ async function goTo(newOffset: number) {
   error.value = null;
   const started = performance.now();
   try {
-    const result = await viewSetFor(transport.value).listPage({
+    const result = await viewSetFor(transport.value, backend.value).listPage({
       offset: Math.max(0, newOffset),
       limit: pageSize,
     });
@@ -145,7 +150,7 @@ async function runComparison() {
   results.value = [];
   try {
     for (const which of ['rest', 'muxws'] as Transport[]) {
-      results.value = [...results.value, await runBenchmark(which)];
+      results.value = [...results.value, await runBenchmark(which, { backend: backend.value })];
     }
   } catch (e: any) {
     error.value = `Benchmark failed: ${e.message}`;
@@ -155,7 +160,7 @@ async function runComparison() {
 }
 
 // Switching transport reloads the same page, so the two are directly comparable on screen.
-watch(transport, () => goTo(offset.value), { immediate: false });
+watch([transport, backend], () => goTo(offset.value), { immediate: false });
 void goTo(0);
 </script>
 

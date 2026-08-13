@@ -51,18 +51,32 @@ Deliberate departures from the original:
   honoured it degrades into the offset paging cursors exist to avoid.
 - **Use the real PK name** from model metadata, not a literal `id`.
 
-## Django ORM backend
+## Filter plugin API
 
-A second real backend, so the filter plugin API below is designed against something that *must*
-push down rather than only against an in-memory dict. Django rather than SQLAlchemy: this repo
-already supports Django (`context/auth/django.py`, the `django` extra, asgiref), so it exercises an
-integration that exists instead of adding a second ORM to the dependency surface.
+The remaining piece, and the one the Django backend was built to constrain. Today
+`DjangoORMViewSet.build_filter_criteria` pushes down exact matches and nothing else, because
+anything richer would mean inventing a private lookup syntax that this API would then have to
+unpick.
 
-A QuerySet is lazy, so it drops straight into `perform_list`, and slicing it pushes LIMIT/OFFSET
-into SQL. The one real gap is that Django has no native row-value comparison - see the cursor
-section - so it needs a small custom expression. That gap is useful rather than annoying: it forces
-the "backend cannot do this natively, fall back" path to be exercised for real rather than
-theoretically.
+Shape, from the discussion:
+
+- A filter is **data, not a closure**: a registered `name` plus parameters, with `to_spec()` /
+  `from_spec()`. That is what lets it be introspected for the schema, and what would let it travel
+  if it ever needed to.
+- **Every filter has a working in-memory `apply()`.** That makes "the backend could not translate
+  this one" a non-event rather than an error - the same contract `apply_*` already has.
+- A backend opts in by **compiling** rather than applying: `compile_filter(fltr) -> bool`.
+- Push-down becomes **per filter**, not per stage. `query.applied` already takes arbitrary strings,
+  so `"filter:year__gte"` needs no wire change - but `apply_filter` currently marks the whole stage
+  or nothing, and that is what has to become finer.
+- **Trigger side:** the real decision is how many parameters land in OpenAPI. Generating every
+  field × every operator is combinatorial, so declare them per viewset:
+  `filters = {"year": ["exact", "gte"], "title": ["icontains"]}`. `make_all_optional` becomes the
+  special case of "every field, exact only".
+
+Hand-written `filter_list` must keep working. The plugin API earns its place on the boring 90%; for
+the awkward 10% a hand-written predicate beats any expression language, and forgetting that is how
+these things turn into half an ORM.
 
 ## Grid integration
 
