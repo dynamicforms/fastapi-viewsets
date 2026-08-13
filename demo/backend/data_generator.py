@@ -78,31 +78,40 @@ languages = [
 ]
 
 
-def random_duration() -> str:
-    if random.random() < 0.7:
-        minutes = random.randint(2, 7)
-        seconds = random.randint(0, 59)
+def random_duration(rng=random) -> str:
+    if rng.random() < 0.7:
+        minutes = rng.randint(2, 7)
+        seconds = rng.randint(0, 59)
     else:
-        minutes = random.randint(30, 89)
-        seconds = random.randint(0, 59)
+        minutes = rng.randint(30, 89)
+        seconds = rng.randint(0, 59)
     return f"{minutes}:{seconds:02d}"
 
 
-def generate_music_library(count: int = 100) -> list[dict]:
+def generate_music_library(count: int = 100, seed: int | None = 20240101) -> list[dict]:
+    """
+    Seeded by default, so every process generates the identical library.
+
+    That matters because the demo serves the same records from two backends - a dict and SQLite -
+    and claims they are the same records. With an unseeded generator the SQLite copy, written once
+    on first run, silently drifts away from whatever the next process invents, and the two
+    backends start disagreeing about how many rows match a filter.
+    """
+    rng = random.Random(seed) if seed is not None else random
     library = []
     for i in range(count):
         record = {
             "id": i + 1,
-            "title": random.choice(titles),
-            "artist": random.choice(artists),
-            "year": random.randint(1954, 2024),
-            "duration": random_duration(),
-            "genres": random.sample(genres, k=random.randint(1, 3)),
-            "rating": random.randint(1, 5),
-            "favorite": random.random() < 0.3,
-            "play_count": random.randint(0, 9999),
-            "moods": random.sample(moods, k=random.randint(1, 4)),
-            "language": random.choice(languages),
+            "title": rng.choice(titles),
+            "artist": rng.choice(artists),
+            "year": rng.randint(1954, 2024),
+            "duration": random_duration(rng),
+            "genres": rng.sample(genres, k=rng.randint(1, 3)),
+            "rating": rng.randint(1, 5),
+            "favorite": rng.random() < 0.3,
+            "play_count": rng.randint(0, 9999),
+            "moods": rng.sample(moods, k=rng.randint(1, 4)),
+            "language": rng.choice(languages),
         }
         library.append(record)
     return library

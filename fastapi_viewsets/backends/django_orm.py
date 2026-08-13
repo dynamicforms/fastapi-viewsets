@@ -25,6 +25,23 @@ from pydantic import BaseModel
 from typing_extensions import TypeVar
 
 from ..context import Context
+from ..filters import (
+    can_compile_all,
+    compile_all,
+    compiles,
+    Contains,
+    Exact,
+    filters_from,
+    Gt,
+    Gte,
+    IContains,
+    IExact,
+    In,
+    IsNull,
+    Lt,
+    Lte,
+    StartsWith,
+)
 from ..list_query import ListQuery, ListRecords
 from ..mixins import ImplMixin, SortDirection
 
@@ -92,36 +109,23 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         if queryset is None or not query.has_filter or not query.needs("filter"):
             return await super().apply_filter(context, query, records)
 
-        criteria, all_pushed = self.build_filter_criteria(query.fltr)
-        if criteria:
-            queryset = queryset.filter(**criteria)
-        if all_pushed:
-            query.mark_applied("filter")
+        filter_set = filters_from(query.fltr)
+        if filter_set is None:
+            # A hand-written filter model, on the older filter_list path. Nothing declarative to
+            # translate, so the in-memory pass takes it.
+            return await super().apply_filter(context, query, records)
+
+        concrete = self._concrete_fields()
+        translatable = all(fltr.field in concrete for fltr in filter_set)
+        if not translatable or not can_compile_all(type(self), filter_set):
+            return await super().apply_filter(context, query, records)
+
+        queryset = compile_all(type(self), self, filter_set, queryset)
+        query.mark_applied("filter")
         return await super().apply_filter(context, query, queryset)
 
-    def build_filter_criteria(self, fltr: Any) -> tuple[dict[str, Any], bool]:
-        """
-        (queryset kwargs, whether every set field made it in).
-
-        Deliberately dumb: exact match on concrete fields, nothing else. Operators, lookups and
-        anything composable belong in the filter plugin API rather than here - see TODO.md - and
-        pre-empting it with a private lookup syntax would be the wrong thing to have to unpick
-        later.
-        """
-        if not hasattr(fltr, "model_dump"):
-            return {}, False
-
-        concrete = {field.name for field in self.model._meta.get_fields() if getattr(field, "concrete", False)}
-        criteria: dict[str, Any] = {}
-        all_pushed = True
-        for name, value in fltr.model_dump().items():
-            if value is None:
-                continue
-            if name in concrete and not isinstance(value, (list, dict, set, tuple)):
-                criteria[name] = value
-            else:
-                all_pushed = False
-        return criteria, all_pushed
+    def _concrete_fields(self) -> set[str]:
+        return {field.name for field in self.model._meta.get_fields() if getattr(field, "concrete", False)}
 
     async def apply_sort(self, context: Context, query: ListQuery, records: ListRecords) -> ListRecords:
         """
@@ -244,3 +248,40 @@ def _as_queryset(records: ListRecords) -> "QuerySet | None":
     except ImportError:  # pragma: no cover - the django extra is not installed
         return None
     return records if isinstance(records, QuerySet) else None
+
+
+# ---------------------------------------------------------------------------
+# Filter compilers
+# ---------------------------------------------------------------------------
+# Registered here rather than on the filters themselves. A filter knows only how to answer in
+# memory; how it becomes a queryset is this backend's business, and keeping it here means a new
+# operator needs no change to this file's imports being complete, while a new backend needs no
+# change to any filter. See fastapi_viewsets/filters/registry.py.
+
+_LOOKUPS = {
+    Exact: "exact",
+    IExact: "iexact",
+    Contains: "contains",
+    IContains: "icontains",
+    StartsWith: "startswith",
+    Gt: "gt",
+    Gte: "gte",
+    Lt: "lt",
+    Lte: "lte",
+    In: "in",
+    IsNull: "isnull",
+}
+"""
+Every one of these happens to be spelled the same way in Django's own lookup language, so the
+compilers are one shared function rather than eleven near-identical ones. `Overlaps` is absent on
+purpose: it has no portable Django equivalent (ArrayField's `overlap` is Postgres-only), so a
+viewset using it falls back to the in-memory pass - which is the contract working, not a gap.
+"""
+
+
+def _compile_lookup(_viewset, fltr, queryset):
+    return queryset.filter(**{f"{fltr.field}__{_LOOKUPS[type(fltr)]}": fltr.value})
+
+
+for _filter_type in _LOOKUPS:
+    compiles(DjangoORMViewSet, _filter_type)(_compile_lookup)

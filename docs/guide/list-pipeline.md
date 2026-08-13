@@ -135,6 +135,85 @@ page.results;      // Track[]
 page.hasMore;      // the envelope's snake_case fields are renamed; records are untouched
 ```
 
+## Declarative filters
+
+Instead of writing `filter_list` by hand, declare which fields accept which operators:
+
+```python
+from fastapi_viewsets.filters import make_filter_model
+
+TrackFilter = make_filter_model(Track, {
+    "year": ["exact", "gte", "lte", "in"],
+    "title": ["icontains"],
+    "genres": ["overlaps"],
+})
+
+class TrackViewSet(CollectionViewSet[int, Track], PaginatedListMixin[Track, TrackFilter]):
+    ...
+```
+
+That produces the query parameters `year`, `year__gte`, `year__lte`, `year__in`,
+`title__icontains`, `genres__overlaps` — and nothing else. `exact` keeps the bare field name,
+because `?year=2003` is what anyone would write. Generating every field crossed with every operator
+would put dozens of meaningless parameters in the schema, so the declaration is explicit.
+
+A typo is refused at import time rather than producing a parameter that silently never matches.
+
+Built in: `exact`, `iexact`, `contains`, `icontains`, `startswith`, `gt`, `gte`, `lt`, `lte`, `in`,
+`isnull`, `overlaps`.
+
+`in` and `overlaps` take a **comma-separated string** (`?year__in=1999,2000`), not repeated
+parameters. FastAPI cannot expose a list-typed field of a `Depends()`-expanded model as a query
+parameter — it drops the field from the schema and never populates it, with or without an explicit
+`Query()` — and that expansion is how `route_viewset` turns a filter model into individual query
+parameters. Values are still coerced to the field's own type; one that will not convert is refused
+rather than dropped.
+
+### Adding an operator
+
+One class with one method, and it works on every backend immediately:
+
+```python
+from fastapi_viewsets.filters import Filter, register_operator
+
+@register_operator
+@dataclass(frozen=True)
+class Decade(Filter):
+    lookup: ClassVar[str] = "decade"
+
+    def matches(self, record) -> bool:
+        value = self.read(record)
+        return value is not None and value // 10 * 10 == self.value
+```
+
+`matches()` is mandatory and is the universal implementation. Everything else is optional.
+
+### Teaching a backend to translate one
+
+Backend translations are registered, not inherited — they live with the backend, not with the
+filter:
+
+```python
+from fastapi_viewsets.filters import compiles
+from fastapi_viewsets.backends.django_orm import DjangoORMViewSet
+
+@compiles(DjangoORMViewSet, Decade)
+def _(viewset, fltr, queryset):
+    return queryset.filter(year__gte=fltr.value, year__lt=fltr.value + 10)
+```
+
+That asymmetry is the whole design. If a filter carried an implementation per backend, adding a
+backend would mean editing every filter; if a backend carried one per filter, adding an operator
+would mean editing every backend. Registered pairs close neither door.
+
+Push-down is **all or nothing**: if any filter in a request has no compiler, the backend leaves the
+entire stage to the in-memory pass. Translating the ones it understands and forgetting the rest
+would return too many rows while looking like it worked.
+
+Hand-written `filter_list` keeps working untouched — a model built by hand carries no declaration,
+so this machinery stays out of its way. It remains the right answer for anything an operator would
+express badly.
+
 ## Backends
 
 `CollectionViewSet` backs a viewset with anything already in memory. `DjangoORMViewSet` backs one
@@ -177,6 +256,11 @@ Override the stages your store can answer and chain the rest:
 | `take_page` | the store has LIMIT/OFFSET or a cursor |
 | `count_records` | the store can count cheaply |
 | `to_record` | your source yields rows rather than the response model |
+
+`to_record` must tolerate being handed an already-converted record: an in-memory stage converts
+when it materialises the source, because a filter declaration names the *response* model's fields
+while the source yields whatever the backend stores. Where the two shapes differ — a list kept as a
+comma-joined column, say — filtering the raw rows would read the wrong thing entirely.
 
 `to_record` runs on the page only, never on the whole source. That is why conversion happens at the
 end: the earlier stages must carry your query object, because that is the only thing a filter or an
