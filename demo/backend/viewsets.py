@@ -11,7 +11,7 @@ from fastapi_viewsets.backends.django_orm import DjangoORMViewSet
 from fastapi_viewsets.collection_viewset import CollectionViewSet
 from fastapi_viewsets.context import Context
 from fastapi_viewsets.filters import make_filter_model
-from fastapi_viewsets.mixins import BulkViewSetMixin, LookupItem, LookupMixin, PaginatedListMixin
+from fastapi_viewsets.mixins import BulkViewSetMixin, CursorListMixin, LookupItem, LookupMixin
 
 USE_CELERY = os.environ.get("DEMO_CELERY", "").lower() in ("1", "true", "yes")
 """
@@ -48,7 +48,7 @@ MusicTrackFilter = make_filter_model(MusicTrack, {
     "year": ["exact", "gte", "lte", "in"],
     "rating": ["exact", "gte"],
     "favorite": ["exact"],
-    "play_count": ["gte", "lte"],
+    "play_count": ["exact", "gte", "lte"],
     "language": ["iexact"],
     "genres": ["overlaps"],
     "moods": ["overlaps"],
@@ -68,11 +68,19 @@ ensure_database(_records)
 class MusicTrackViewSet(
     CollectionViewSet[int, MusicTrack],
     BulkViewSetMixin[int, MusicTrack, MusicTrackFilter],
-    PaginatedListMixin[MusicTrack, MusicTrackFilter],
+    CursorListMixin[MusicTrack, MusicTrackFilter],
     LookupMixin,
 ):
+    """
+    Cursor-paged rather than offset-paged, because the grid loads by scrolling rather than by page
+    number - and because a table being scrolled through while rows arrive is exactly the case
+    offset paging gets wrong.
+    """
+
     __router = APIRouter()
 
+    schema = MusicTrack
+    pk_field_name = "id"
     default_page_size = 50
 
     @__router.get("count", tags=["MusicTrack"], summary="Return the total number of tracks")
@@ -88,18 +96,19 @@ class MusicTrackViewSet(
 
 class MusicTrackDbViewSet(
     DjangoORMViewSet[int, MusicTrack],
-    PaginatedListMixin[MusicTrack, MusicTrackFilter],
+    CursorListMixin[MusicTrack, MusicTrackFilter],
 ):
     """
     The same API as MusicTrackViewSet, over SQLite instead of a dict.
 
-    Worth comparing the two under `?limit=50&offset=4000`: the in-memory one walks four thousand
-    records to reach the page, this one seeks to it with LIMIT/OFFSET and reports a real `count`
-    from a COUNT(*) rather than a null.
+    Worth watching while scrolling: the in-memory one walks the collection to find each page
+    boundary, this one seeks to it - and with `year` in the ordering, the composite index on
+    (year, id) is exactly what the cursor's row-value comparison needs.
     """
 
     model = MusicTrackRow
     schema = MusicTrack
+    pk_field_name = "id"
     default_page_size = 50
 
     def to_record(self, raw: Any) -> MusicTrack:

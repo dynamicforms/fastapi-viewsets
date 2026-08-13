@@ -6,12 +6,6 @@
 falls back to in-memory filtering. Worth adding a Postgres-specific compiler once there is a
 Postgres backend to hang it off.
 
-## Grid integration
-
-`@dynamicforms/vue-grid`'s incremental loading contract has not been checked against `listPage()`.
-The demo drives paging with explicit prev/next buttons rather than guessing at it. If the grid
-expects to drive loading itself, `listPage` may need a different shape or an adapter.
-
 ## Deprecation removal
 
 `setup_filter` / `setup_sort` warn but still work. Decide a version to drop them in.
@@ -32,6 +26,8 @@ expects to drive loading itself, `listPage` may need a different shape or an ada
 - **Django `DESC NULLS` is still declined.** `apply_sort` refuses to push down any descending
   ordering, so a cursor page sorted descending sorts in memory. `F(col).desc(nulls_last=True)`
   would fix it per database backend.
-- **The demo does not use it.** `/music` and `/music-db` still page by offset, which is the right
-  default for a grid that shows page numbers; a third endpoint would show the cursor off better
-  than converting one of those.
+- **Offset paging has no demo.** Both demo endpoints are cursor-paged now, so `PaginatedListMixin`
+  is exercised only by tests.
+- **`vue-grid` ships typings its exports map hides.** `package.json` has no `types` condition, so
+  TypeScript cannot find `dist/index.d.ts` through the `.` export. The demo works around it with a
+  `paths` entry; the real fix belongs upstream.
