@@ -15,6 +15,8 @@ pip install "dynamicforms-fastapi-viewsets[muxws]"
 npm install muxws
 ```
 
+Requires muxws 0.3.1 or later, for response headers on data frames.
+
 ## Server
 
 muxws performs the WebSocket upgrade itself, because only it knows which `muxws.v1.<codec>`
@@ -134,22 +136,22 @@ becomes a repeated key (`?genre=jazz&genre=blues`), which is how FastAPI binds a
 
 ### Responses
 
-The response status travels in the stream's **trailers**:
+The response status is announced **before** the body, in the answering side's leading headers —
+exactly as HTTP/2 puts `:status` in HEADERS ahead of DATA:
 
 ```json
-{"type": "data", "stream": 3, "end": true, "payload": [...], "trailers": {":status": 200}}
+{"type": "data", "stream": 3, "end": true, "headers": {":status": 200}, "payload": [...]}
 ```
 
-This is the one place the HTTP/2 analogy breaks. A muxws `data` frame has no `headers` field —
-`headers` appears on `open` frames only, and the sole post-body channel is `trailers`, which may
-only ride a frame with `end: true`. For a unary reply that costs nothing, since the trailers arrive
-in the same frame as the body. muxws is expected to grow response headers on data frames; when it
-does, this will move there.
+muxws carries `headers` on the first `data` frame a peer sends as well as on `open` (0.3.1+, SPEC
+WSM-FRM-016). The client reads them from `stream.replyHeaders` once `stream.replyHeadersArrived`
+resolves — `reply_headers` / `reply_headers_arrived` in Python — so an error status is known
+without reading the response at all, which is what makes this work for a streaming reply and not
+only a unary one.
 
 ### Errors
 
-A 404 or a 422 comes back as a normal reply with that status in the trailers, **not** as a stream
-reset. A status is an answer, not a transport failure, and resetting would tell the caller the
+A 404 or a 422 comes back as a normal reply carrying that status, **not** as a stream reset. A status is an answer, not a transport failure, and resetting would tell the caller the
 connection misbehaved when the server in fact answered perfectly well. Resets are reserved for
 genuine transport and protocol failures.
 

@@ -20,18 +20,18 @@ headers that is *not* `:`-prefixed is passed through as an ordinary HTTP header.
         },
     )
 
-The response direction is where the analogy currently breaks. A muxws `data` frame has no
-`headers` field - per the envelope table in SPEC §2.2, `headers` appears on `open` frames only,
-and the sole post-body metadata channel is `trailers`, which may only ride a frame with
-`end: true`. So the response status travels in trailers:
+The response direction is symmetric as of muxws 0.3.1, which carries `headers` on the first `data`
+frame a peer sends as well as on `open` (SPEC §2.2, WSM-FRM-016). So the status is announced ahead
+of the body, exactly as HTTP/2 puts `:status` in HEADERS before DATA:
 
-    await stream.reply(body, trailers={":status": 200})
+    await stream.reply(body, headers={":status": 200})
 
-For a unary reply (`reply` is send-plus-end) that costs nothing: the trailers arrive in the same
-frame as the body. It only bites for a streaming response, where the caller would have to consume
-the whole body before learning whether it was an error - which is precisely why HTTP/2 puts
-`:status` in HEADERS ahead of DATA. muxws is expected to grow response headers on data frames;
-when it does, `RESPONSE_META_VIA_TRAILERS` below is the single place that has to change.
+and the caller reads it from `stream.reply_headers` (`replyHeaders` in TypeScript), which is final
+once `reply_headers_arrived` is set.
+
+Before 0.3.1 this had to ride in `trailers`, which only attach to a frame with `end: true`. That
+was free for a unary reply but wrong for a streaming one, where the caller would have had to
+consume the whole body before learning whether it was an error at all.
 """
 
 from typing import Any
@@ -43,13 +43,6 @@ METHOD_KEY = ":method"
 PATH_KEY = ":path"
 QUERY_KEY = ":query"
 STATUS_KEY = ":status"
-
-RESPONSE_META_VIA_TRAILERS = True
-"""
-Whether response status/headers ride in the stream's trailers (True) or in per-data-frame headers
-(False, once muxws supports them). Flip this - and the two branches that read it in server.py and
-in the TypeScript client - to migrate.
-"""
 
 
 class EnvelopeError(ValueError):
@@ -123,7 +116,7 @@ def merge_headers(base: dict[str, str] | None, override: dict[str, str]) -> dict
 
 
 def build_response_meta(status: int, headers: dict[str, str]) -> dict[str, Any]:
-    """The trailers (for now - see module docstring) that accompany a response body."""
+    """The leading headers that announce a response, status first."""
     meta: dict[str, Any] = {STATUS_KEY: status}
     meta.update(headers)
     return meta

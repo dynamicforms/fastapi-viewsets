@@ -20,16 +20,15 @@ re-implementing parameter binding - which is the duplication the transport exist
 If profiling ever shows this matters, the honest fix is not to bypass FastAPI but to let it
 accept a pre-decoded body. Worth measuring before doing anything.
 
-### Response status travels in trailers
+### Response status travels in leading headers
 
-Per SPEC §2.2 a muxws `data` frame has no `headers` field; `headers` is an `open`-frame thing and
-the only post-body channel is `trailers`, which may only ride a frame with `end: true`. For a
-unary reply that is free - the trailers arrive in the same frame as the body - but a streaming
-response would force the caller to consume the whole body before learning the status.
+Resolved. It rode in `trailers` until muxws 0.3.1, which carries `headers` on the first `data`
+frame a peer sends as well as on `open` (WSM-FRM-016). Trailers only attach to a frame with
+`end: true`, so the status arrived *after* the body - free for a unary reply, wrong for a
+streaming one, where a caller would have had to read a whole response to discover it was an error.
 
-muxws is expected to grow response headers on data frames. `protocol.RESPONSE_META_VIA_TRAILERS`
-marks the single place that changes when it does, and the TypeScript client has the matching
-branch.
+The client now awaits `replyHeadersArrived` before reading the body, so the status is known first.
+Minimum muxws is 0.3.1 on both packages.
 
 ### An unhandled exception answers 500 rather than resetting the stream
 
@@ -120,9 +119,9 @@ else in the codebase exercises it yet.
 ### `count` is best-effort
 
 A list knows its length; a generator does not, and draining it to find out defeats the purpose. So
-`count` is null for lazy sources. A backend that can count cheaply (a `SELECT COUNT(*)`) has no way
-to say so yet - `apply_pagination` would have to be overridden wholesale. A `count_records()` hook
-would be the obvious addition if anyone wants it.
+`count` is null for lazy sources. A backend that can count cheaply overrides `count_records()` -
+the Django one answers with a `SELECT COUNT(*)` - so the null is a statement about the source, not
+about the pipeline.
 
 ### Custom Vue endpoints changed idiom
 
