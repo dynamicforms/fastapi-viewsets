@@ -1,0 +1,13 @@
+{
+  "name": "demo-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "End-to-end cover for the demo. Nothing here is part of the library.",
+  "scripts": {
+    "test:e2e": "playwright test --config playwright.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  },
+  "type": "module"
+}

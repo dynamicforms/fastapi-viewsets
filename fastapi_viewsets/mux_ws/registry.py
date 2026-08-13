@@ -8,6 +8,8 @@ differ from the REST one - an endpoint can be registered for one transport and n
 each `/schema` then describes exactly the transport it was asked over.
 """
 
+import warnings
+
 from typing import Any
 
 from fastapi import FastAPI
@@ -64,14 +66,18 @@ def resolve_register_muxws(endpoint: Any, viewset_level: bool | None) -> bool:
     return True
 
 
-def resolve_register_rest(endpoint: Any) -> bool:
+def resolve_register_rest(endpoint: Any, viewset_level: bool | None = None) -> bool:
     """
-    REST registration is opt-out and only at endpoint level: an endpoint says `rest=False` to
-    become muxws-only. There is no viewset-wide or global switch, because turning REST off for a
-    whole application is what simply not calling `route_viewset` already does.
+    Endpoint decision beats viewset decision beats "yes" - the same ladder muxws uses.
+
+    Symmetric on purpose. `route_viewset` is what registers a viewset on *both* transports, so not
+    calling it turns off muxws as well; there was no way to say "this viewset is muxws-only" short
+    of annotating every endpoint on it.
     """
-    value = getattr(endpoint, "__register_rest__", None)
-    return True if value is None else bool(value)
+    for value in (getattr(endpoint, "__register_rest__", None), viewset_level):
+        if value is not None:
+            return bool(value)
+    return True
 
 
 def register_viewset(
@@ -85,14 +91,26 @@ def register_viewset(
     previous entry rather than adding a second copy, so re-importing a module (or a test that
     decorates the same viewset twice) cannot produce shadowed duplicate routes.
 
-    Two *different* viewsets sharing one base path are not reported. Routing picks the first
-    match, so the later one's endpoints are unreachable - which sounds worth warning about until
-    you notice that registering a throwaway viewset per test case looks exactly like it, and the
-    warning fires dozens of times in this project's own suite. A warning nobody can act on is a
-    warning nobody reads. The REST side stays silent about the same thing. See GAPS.md.
+    Two different viewsets sharing one base path are warned about: routing picks the first match,
+    so the later one's endpoints are simply unreachable, and neither FastAPI nor this library would
+    otherwise say so. A warning rather than an error, because that is proportionate to how easily
+    it is fixed and to how little else in this area is strict - and because refusing would be a new
+    way for an application that starts today to stop starting.
+
+    It is noisy in a suite that builds a throwaway viewset per test; the suite filters it (see
+    pyproject.toml) rather than the design absorbing the noise.
     """
     global _dispatch_app
-    _registrations[_key(cls)] = _Registration(cls, base_path, route_kwargs, tags)
+    key = _key(cls)
+    for other_key, registration in _registrations.items():
+        if other_key != key and registration.base_path == base_path:
+            warnings.warn(
+                f"{cls.__name__} registers base_path {base_path!r}, which "
+                f"{registration.cls.__name__} already uses - the later one's endpoints are "
+                f"unreachable",
+                stacklevel=2,
+            )
+    _registrations[key] = _Registration(cls, base_path, route_kwargs, tags)
     _dispatch_app = None
 
 

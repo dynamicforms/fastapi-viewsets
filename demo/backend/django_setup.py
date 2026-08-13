@@ -73,17 +73,23 @@ def ensure_database(records: list[dict]) -> None:
         with connection.schema_editor() as editor:
             editor.create_model(MusicTrackRow)
 
-    # Refill when the row count no longer matches what was asked for. The table is written once
-    # and reused across runs, so a demo started with a different DEMO_LIBRARY_SIZE would otherwise
-    # serve a stale library from one backend and a fresh one from the other, and the two would
-    # quietly disagree about how many rows match a filter.
-    if MusicTrackRow.objects.count() == len(records):
+    # Refill when the table no longer matches what was asked for. It is written once and reused
+    # across runs, so a demo started with a different DEMO_LIBRARY_SIZE would otherwise serve a
+    # stale library from one backend and a fresh one from the other. The highest id is checked as
+    # well as the count: SQLite's AUTOINCREMENT never reuses a value, so a refilled table has the
+    # right number of rows under the wrong ids.
+    highest = MusicTrackRow.objects.order_by("-id").values_list("id", flat=True).first()
+    if MusicTrackRow.objects.count() == len(records) and highest == len(records):
         return
     MusicTrackRow.objects.all().delete()
 
     MusicTrackRow.objects.bulk_create(
         (
             MusicTrackRow(
+                # The generator's own id, not one the database invents: the demo's whole claim is
+                # that the two backends serve the same records, and a record with a different id is
+                # a different record as far as any client is concerned.
+                id=record["id"],
                 title=record["title"],
                 artist=record["artist"],
                 year=record["year"],

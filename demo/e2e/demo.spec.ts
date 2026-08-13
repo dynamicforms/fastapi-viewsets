@@ -39,7 +39,11 @@ async function waitForFirstPage(page: Page) {
 async function renderedIds(page: Page, count = 20): Promise<number[]> {
   const cells = await page.locator('.df-grid.card:not(.header) .df-grid.cell.id').allInnerTexts();
   return cells
-    .map((text) => Number(text.trim()))
+    .map((text) => text.trim())
+    // Empty first: Number('') is 0, so the filter row's blank id cell was arriving as record 0 and
+    // sitting at the head of every comparison.
+    .filter((text) => text !== '')
+    .map(Number)
     .filter((value) => !Number.isNaN(value))
     .slice(0, count);
 }
@@ -123,7 +127,9 @@ test('sorting happens on the server and restarts the paging', async ({ page }) =
   const ascending = await renderedIds(page);
   const loaded = await loadedCount(page);
 
-  await page.locator('.df-grid.header .df-grid.cell.id').click();
+  // `year`, not `id`: the default order already is by id ascending, so sorting by it changes
+  // nothing and the assertion below could never have been satisfied.
+  await page.locator('.df-grid.header .df-grid.cell.year').click();
   await expect.poll(async () => renderedIds(page), { timeout: 30_000 }).not.toEqual(ascending);
   await expect(page.getByTestId('error')).toHaveCount(0);
 

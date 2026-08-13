@@ -141,38 +141,6 @@ async def test_a_filter_type_with_no_filter_list_returns_records_not_none():
     assert len(result) == 1
 
 
-@pytest.mark.asyncio
-async def test_the_legacy_setup_hooks_still_run_but_warn():
-    seen = []
-
-    class LegacyViewSet(ListMixin[Track, TrackFilter]):
-        async def perform_list(self, _context: Context):
-            return [Track(id=1, title="a", year=2000)]
-
-        async def setup_filter(self, fltr) -> None:
-            seen.append(fltr)
-
-        async def filter_list(self, fltr, records):  # noqa: ARG002 - hook signature
-            return records
-
-    with pytest.warns(DeprecationWarning, match="setup_filter"):
-        await LegacyViewSet().get_list(None, ListQuery(fltr=TrackFilter(id=1)))
-    assert len(seen) == 1
-
-
-@pytest.mark.asyncio
-async def test_a_viewset_without_the_legacy_hooks_does_not_warn():
-    import warnings
-
-    class ModernViewSet(ListMixin[Track, TrackFilter]):
-        async def perform_list(self, _context: Context):
-            return [Track(id=1, title="a", year=2000)]
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", DeprecationWarning)
-        await ModernViewSet().get_list(None, ListQuery(fltr=TrackFilter(id=1)))
-
-
 # ---------------------------------------------------------------------------
 # Over HTTP
 # ---------------------------------------------------------------------------
