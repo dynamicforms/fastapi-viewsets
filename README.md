@@ -16,8 +16,10 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
   per call, dispatched through the same FastAPI app so validation, middleware and response models
   behave identically. Multiplexing sidesteps the browser's ~6 connections per host: in the demo, a
   burst of 100 requests takes 156 ms over REST and 37 ms over muxws.
-- **Pagination** — `PaginatedListMixin` adds offset/limit paging; a lazy `perform_list` is read only
-  as far as the page needs.
+- **Pagination** — `PaginatedListMixin` for offset/limit, `CursorListMixin` for cursor paging that
+  neither re-reads skipped rows nor drifts when the collection changes underneath the client.
+- **Declarative filters** — declare which fields accept which operators and get query parameters,
+  an OpenAPI schema and filtering for free; backends translate what they can into their own query.
 - **Vue / TypeScript counterpart** — mirror mixin classes and a `route_rest` factory give you a fully
   typed HTTP client that matches your backend viewset exactly (published separately as
   [`@dynamicforms/fastapi-viewsets`](https://www.npmjs.com/package/@dynamicforms/fastapi-viewsets) on npm).
@@ -78,8 +80,10 @@ python -m demo.backend.main          # http://127.0.0.1:8000, muxws at ws://127.
 npm run demo:dev                     # http://127.0.0.1:5173
 ```
 
-The demo pages through a 5000-track library and lets you switch the whole grid between the REST and
-muxws transports, with a side-by-side latency comparison. Celery is off by default so the benchmark
+The demo scrolls through a 5000-track library - cursor-paged, loading the next page as you reach
+the end - and lets you switch the whole grid between the REST and muxws transports and between the
+in-memory and SQLite backends, with a side-by-side latency comparison. Sorting and filtering are
+server-side; changing either restarts from the first page. Celery is off by default so the benchmark
 measures the transport rather than the queue; set `DEMO_CELERY=1` and run the worker to exercise
 that path instead.
 

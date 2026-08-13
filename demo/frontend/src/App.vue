@@ -1,7 +1,7 @@
 <template>
   <v-app>
     <v-main>
-      <v-container fluid class="pa-4">
+      <v-container fluid class="pa-4 d-flex flex-column fill-height">
         <div class="d-flex align-center flex-wrap ga-4 mb-4">
           <h1 class="text-h5 mb-0">Music Library</h1>
           <v-btn-toggle v-model="transport" mandatory density="comfortable" color="primary">
@@ -13,6 +13,10 @@
             <v-btn value="db">SQLite</v-btn>
           </v-btn-toggle>
           <v-spacer />
+          <span class="text-caption">
+            {{ records.length }} loaded<template v-if="!hasMore"> · end of list</template>
+            <template v-if="lastLoadMs"> · last page {{ lastLoadMs.toFixed(0) }} ms</template>
+          </span>
           <v-btn :loading="benchmarking" variant="tonal" @click="runComparison">Compare transports</v-btn>
         </div>
 
@@ -25,12 +29,7 @@
                 <th>{{ results[0].burstCount }} at once</th>
               </tr>
               <tr>
-                <th />
-                <th>min</th>
-                <th>p50</th>
-                <th>p95</th>
-                <th>max</th>
-                <th>total (ms)</th>
+                <th /><th>min</th><th>p50</th><th>p95</th><th>max</th><th>total (ms)</th>
               </tr>
             </thead>
             <tbody>
@@ -54,29 +53,19 @@
 
         <div v-if="error" class="text-error mb-4">{{ error }}</div>
 
-        <div class="d-flex align-center ga-3 mb-3">
-          <v-btn size="small" :disabled="!page?.hasPrevious || loading" @click="goTo(offset - pageSize)">
-            Previous
-          </v-btn>
-          <v-btn size="small" :disabled="!page?.hasMore || loading" @click="goTo(offset + pageSize)">Next</v-btn>
-          <span class="text-caption">
-            {{ offset + 1 }}–{{ offset + (page?.results.length ?? 0) }}
-            <template v-if="page?.count !== null && page?.count !== undefined">of {{ page.count }}</template>
-            · loaded in {{ lastLoadMs.toFixed(1) }} ms over {{ transport }} from {{ backend }}
-          </span>
-        </div>
-
-        <div v-if="loading && !records.length" class="text-center pa-8">Loading...</div>
         <df-grid
-          v-else
+          v-model:sort-state="sortState"
           v-model:active-columns="activeColumnDef"
           :columns="columnsResponsive"
           :records="records"
+          :loading="loading"
           key-field="id"
           :show-filter-row="true"
-          style="height: 70vh"
-          @click="(data: any) => console.log('click:', data)"
-          @sort="(data: any) => console.log('sort:', data)"
+          class="flex-grow-1"
+          style="min-height: 0"
+          @sort="onSort"
+          @filter="onFilter"
+          @load="loadMore"
         />
       </v-container>
     </v-main>
@@ -85,37 +74,74 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { createColumn, filterColumns, type ResponsiveColumnDefinitions } from '@dynamicforms/vue-grid';
-import type { PaginatedList } from '../../../vue/mixins';
+import {
+  createColumn,
+  filterColumns,
+  filterExternal,
+  sortExternal,
+  type GridFilterEvent,
+  type GridSortEvent,
+  type ResponsiveColumnDefinitions,
+  type SortState,
+} from '@dynamicforms/vue-grid';
 import { runBenchmark, type BenchmarkResult } from './benchmark';
 import { viewSetFor, type Backend, type MusicTrack, type Transport } from './viewsets';
 
+const PAGE_SIZE = 50;
+
 const transport = ref<Transport>('rest');
 const backend = ref<Backend>('memory');
+
 const records = ref<MusicTrack[]>([]);
-const page = ref<PaginatedList<MusicTrack> | null>(null);
-const offset = ref(0);
-const pageSize = 50;
-const loading = ref(true);
+const cursor = ref<string | null>(null);
+const hasMore = ref(true);
+const loading = ref(false);
 const lastLoadMs = ref(0);
 const error = ref<string | null>(null);
 const activeColumnDef = ref('three-row');
 
+const sortState = ref<SortState>([]);
+const filterValues = ref<Record<string, unknown>>({});
+
 const benchmarking = ref(false);
 const results = ref<BenchmarkResult[]>([]);
 
+/**
+ * Which declared filter parameter each column maps to.
+ *
+ * The grid hands back a plain column → value map; the backend declares which operator each field
+ * accepts, so `title` means `title__icontains` while `year` means an exact match. Anything not
+ * listed here has no filter parameter on the backend and is dropped rather than guessed at.
+ */
+const FILTER_PARAM: Record<string, string> = {
+  id: 'id',
+  title: 'title__icontains',
+  artist: 'artist__icontains',
+  year: 'year',
+  rating: 'rating',
+  favorite: 'favorite',
+  play_count: 'play_count',
+  language: 'language__iexact',
+  genres: 'genres__overlaps',
+  moods: 'moods__overlaps',
+};
+
+// `as const` keeps `sortExternal`/`filterExternal` as their unique symbol types; in a plain object
+// literal they widen to `symbol` and no longer match the sentinel the column definition expects.
+const external = { sortable: { key: sortExternal }, filterable: { key: filterExternal } } as const;
+
 const columns = [
-  createColumn('id', 'Id', 'int', { cssClass: 'text-right' }),
-  createColumn('title', 'Title', 'plain'),
-  createColumn('artist', 'Artist', 'plain'),
-  createColumn('year', 'Year', 'int', { cssClass: 'text-right' }),
+  createColumn('id', 'Id', 'int', { cssClass: 'text-right', ...external }),
+  createColumn('title', 'Title', 'plain', external),
+  createColumn('artist', 'Artist', 'plain', external),
+  createColumn('year', 'Year', 'int', { cssClass: 'text-right', ...external }),
   createColumn('duration', 'Duration', 'plain', { cssClass: 'text-right' }),
-  createColumn('genres', 'Genres', 'plain'),
-  createColumn('rating', 'Rating', 'int', { cssClass: 'text-right' }),
-  createColumn('favorite', 'Favorite', 'checkbox'),
-  createColumn('play_count', 'Play count', 'int', { cssClass: 'text-right' }),
-  createColumn('moods', 'Moods', 'plain'),
-  createColumn('language', 'Language', 'plain'),
+  createColumn('genres', 'Genres', 'plain', external),
+  createColumn('rating', 'Rating', 'int', { cssClass: 'text-right', ...external }),
+  createColumn('favorite', 'Favorite', 'checkbox', external),
+  createColumn('play_count', 'Play count', 'int', { cssClass: 'text-right', ...external }),
+  createColumn('moods', 'Moods', 'plain', external),
+  createColumn('language', 'Language', 'plain', external),
 ];
 
 const columnsResponsive: ResponsiveColumnDefinitions = [
@@ -124,25 +150,82 @@ const columnsResponsive: ResponsiveColumnDefinitions = [
   { cssClass: 'single-column', columns: columns },
 ];
 
-async function goTo(newOffset: number) {
+/** Sort and filters as the backend's query parameters. Same on every page of a walk. */
+function queryParams(): Record<string, any> {
+  const params: Record<string, any> = {};
+  const sort = sortState.value.map((c: SortState[number]) => `${c.columnName}:${c.direction}`).join(',');
+  if (sort) params.sort = sort;
+  for (const [column, value] of Object.entries(filterValues.value)) {
+    const parameter = FILTER_PARAM[column];
+    if (parameter && value !== null && value !== undefined && value !== '') params[parameter] = value;
+  }
+  return params;
+}
+
+/**
+ * Fetches the first page and throws away whatever was loaded before.
+ *
+ * Any change to the sort or the filters has to restart here: a cursor is a position in one
+ * particular ordering, and the backend refuses one issued for a different query rather than
+ * silently returning a page from somewhere else.
+ */
+async function reload() {
   loading.value = true;
   error.value = null;
+  records.value = [];
+  cursor.value = null;
+  hasMore.value = true;
   const started = performance.now();
   try {
-    const result = await viewSetFor(transport.value, backend.value).listPage({
-      offset: Math.max(0, newOffset),
-      limit: pageSize,
+    const page = await viewSetFor(transport.value, backend.value).listCursor({
+      ...queryParams(),
+      limit: PAGE_SIZE,
     });
     lastLoadMs.value = performance.now() - started;
-    page.value = result;
-    records.value = result.results;
-    offset.value = result.offset;
+    records.value = page.results;
+    cursor.value = page.next;
+    hasMore.value = page.hasMore;
   } catch (e: any) {
-    // Both transports throw the same shape, so this branch needs no transport-specific handling.
+    // Both transports throw the same shape, so this needs no transport-specific handling.
     error.value = `Failed to load data: ${e.response?.status ?? ''} ${e.message}`;
   } finally {
     loading.value = false;
   }
+}
+
+/**
+ * Appends the next page. The grid fires `@load` when the viewport nears the end and `loading` is
+ * false, so setting `loading` for the duration of the fetch is what stops it firing again.
+ */
+async function loadMore() {
+  if (loading.value || !cursor.value) return;
+  loading.value = true;
+  const started = performance.now();
+  try {
+    const page = await viewSetFor(transport.value, backend.value).listCursor({
+      ...queryParams(),
+      cursor: cursor.value,
+      limit: PAGE_SIZE,
+    });
+    lastLoadMs.value = performance.now() - started;
+    records.value = [...records.value, ...page.results];
+    cursor.value = page.next;
+    hasMore.value = page.hasMore;
+  } catch (e: any) {
+    error.value = `Failed to load more: ${e.response?.status ?? ''} ${e.message}`;
+  } finally {
+    loading.value = false;
+  }
+}
+
+function onSort({ suggestedSort }: GridSortEvent) {
+  sortState.value = suggestedSort;
+  void reload();
+}
+
+function onFilter(event: GridFilterEvent) {
+  filterValues.value = event.filterValues;
+  void reload();
 }
 
 async function runComparison() {
@@ -159,9 +242,9 @@ async function runComparison() {
   }
 }
 
-// Switching transport reloads the same page, so the two are directly comparable on screen.
-watch([transport, backend], () => goTo(offset.value), { immediate: false });
-void goTo(0);
+// Switching transport or backend reloads the same query, so the two are comparable on screen.
+watch([transport, backend], () => void reload());
+void reload();
 </script>
 
 <style scoped>
@@ -177,19 +260,6 @@ void goTo(0);
 .benchmark th:first-child,
 .benchmark td:first-child {
   text-align: left;
-}
-.full-screen {
-  position: fixed;
-  inset: 0;
-  z-index: 999;
-  color: white;
-  background: black;
-}
-.grid-class {
-  height: 60em;
-}
-.full-screen .grid-class {
-  flex: 1;
 }
 :deep(.df-grid.header) {
   font-weight: bold;
@@ -209,10 +279,6 @@ void goTo(0);
   border: 1px solid #808080ff;
   border-radius: 6px;
   font-size: 0.85rem;
-  /*
-   * won't work for item measurements, so see the next selector adding negligible padding to parent. That seems to
-   * finally take into account this margin
-   */
   margin-bottom: .5em;
 }
 :deep(.df-grid.dynamic-scroller-item) {
@@ -227,7 +293,6 @@ void goTo(0);
   grid-area: auto !important;
 }
 :deep(.df-grid.card.single-line) {
-  /* column before last 1fr so that it stretches to remaining available space */
   grid-template-columns: repeat(9, minmax(min-content, max-content)) 1fr minmax(min-content, max-content);
 }
 :deep(.df-grid.card.single-line > *) {
