@@ -3,13 +3,13 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI, WebSocket
 from muxws import accept, Stream
 
-from demo.backend.viewsets import MusicTrackViewSet, USE_CELERY
+from demo.backend.viewsets import MusicTrackDbViewSet, MusicTrackViewSet, USE_CELERY
 from fastapi_viewsets.decorators.route_viewset import route_viewset
 from fastapi_viewsets.mux_ws import process_command
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAPI
     if not USE_CELERY:
         yield
         return
@@ -30,6 +30,9 @@ app = FastAPI(title="Demo ViewSet App", lifespan=lifespan)
 router = APIRouter()
 
 route_viewset(router, base_path="/music", pk_field_name="id")(MusicTrackViewSet)
+# The same API over SQLite via the Django ORM, so the two backends can be compared
+# side by side on the same data - see MusicTrackDbViewSet.
+route_viewset(router, base_path="/music-db", pk_field_name="id")(MusicTrackDbViewSet)
 
 app.include_router(router)
 

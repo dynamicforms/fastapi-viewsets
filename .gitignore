@@ -4,6 +4,7 @@ coverage
 dist
 
 /celerybeat-schedule.db
+/demo/backend/demo.sqlite3
 
 /docs/.vitepress/cache
 /package-lock.json

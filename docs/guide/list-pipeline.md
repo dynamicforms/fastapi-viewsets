@@ -135,6 +135,53 @@ page.results;      // Track[]
 page.hasMore;      // the envelope's snake_case fields are renamed; records are untouched
 ```
 
+## Backends
+
+`CollectionViewSet` backs a viewset with anything already in memory. `DjangoORMViewSet` backs one
+with a database through the Django ORM, and is what the push-down machinery above was designed
+against:
+
+```python
+from fastapi_viewsets.backends.django_orm import DjangoORMViewSet
+
+class TrackViewSet(DjangoORMViewSet[int, Track], PaginatedListMixin[Track, TrackFilter]):
+    model = TrackModel      # Django model
+    schema = Track          # pydantic model rows are converted into
+```
+
+It returns the queryset unevaluated from `perform_list`, translates exact filters into `.filter()`,
+ascending sorts into `.order_by()`, and the page into `LIMIT`/`OFFSET`, marking each stage applied
+so the in-memory defaults do not repeat the work. `count` comes from a real `COUNT(*)` instead of
+being reported as unknown. Requires the `django` extra; nothing blocks the event loop, since every
+ORM call uses Django's async API or `sync_to_async`.
+
+Two things it deliberately declines:
+
+- **Descending sorts.** This library defines NULL as the smallest value in *both* directions; SQL's
+  `DESC` puts NULLs first. Django can express the fix, but only per database backend, so the honest
+  answer is to leave it to the in-memory sort, which already implements the intended semantics.
+- **Anything but exact matches.** Operators belong in the filter plugin API rather than in a
+  private lookup syntax that would have to be unpicked later.
+
+Both fall back rather than failing, which is the contract: an unapplied stage is a stage the
+default handles, never an error.
+
+### Writing your own
+
+Override the stages your store can answer and chain the rest:
+
+| hook | override when |
+|---|---|
+| `perform_list` | always — return your lazy source |
+| `apply_filter` / `apply_sort` | the store can narrow or order |
+| `take_page` | the store has LIMIT/OFFSET or a cursor |
+| `count_records` | the store can count cheaply |
+| `to_record` | your source yields rows rather than the response model |
+
+`to_record` runs on the page only, never on the whole source. That is why conversion happens at the
+end: the earlier stages must carry your query object, because that is the only thing a filter or an
+ordering can be pushed into.
+
 ## Cursor pagination
 
 Not yet implemented — see `TODO.md`. Offset paging re-reads skipped rows and drifts when records

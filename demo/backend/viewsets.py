@@ -6,6 +6,8 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from demo.backend.data_generator import generate_music_library
+from demo.backend.django_setup import ensure_database, MusicTrackRow
+from fastapi_viewsets.backends.django_orm import DjangoORMViewSet
 from fastapi_viewsets.collection_viewset import CollectionViewSet
 from fastapi_viewsets.context import Context
 from fastapi_viewsets.mixins import (
@@ -46,9 +48,9 @@ class MusicTrack(BaseModel):
 
 MusicTrackFilter = make_all_optional(MusicTrack)
 
-database: dict[int, MusicTrack] = {
-    record["id"]: MusicTrack(**record) for record in generate_music_library(LIBRARY_SIZE)
-}
+_records = generate_music_library(LIBRARY_SIZE)
+database: dict[int, MusicTrack] = {record["id"]: MusicTrack(**record) for record in _records}
+ensure_database(_records)
 
 
 class MusicTrackViewSet(
@@ -88,6 +90,40 @@ class MusicTrackViewSet(
 
     def __init__(self):
         super().__init__(container=database, pk_field="id")
+
+
+class MusicTrackDbViewSet(
+    DjangoORMViewSet[int, MusicTrack],
+    PaginatedListMixin[MusicTrack, MusicTrackFilter],
+):
+    """
+    The same API as MusicTrackViewSet, over SQLite instead of a dict.
+
+    Worth comparing the two under `?limit=50&offset=4000`: the in-memory one walks four thousand
+    records to reach the page, this one seeks to it with LIMIT/OFFSET and reports a real `count`
+    from a COUNT(*) rather than a null.
+    """
+
+    model = MusicTrackRow
+    schema = MusicTrack
+    default_page_size = 50
+
+    def to_record(self, raw: Any) -> MusicTrack:
+        if isinstance(raw, MusicTrack):
+            return raw
+        return MusicTrack(
+            id=raw.id,
+            title=raw.title,
+            artist=raw.artist,
+            year=raw.year,
+            duration=raw.duration,
+            genres=raw.genres.split(",") if raw.genres else [],
+            rating=raw.rating,
+            favorite=raw.favorite,
+            play_count=raw.play_count,
+            moods=raw.moods.split(",") if raw.moods else [],
+            language=raw.language,
+        )
 
 
 if USE_CELERY:
