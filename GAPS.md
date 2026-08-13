@@ -137,15 +137,22 @@ and waiting for a worker dwarfs the difference between HTTP and a WebSocket fram
 restores it, and `celery_worker.py` sets it itself. The Celery path is consequently no longer
 exercised by simply running the demo, which is a real loss of coverage for it.
 
-### Cursor pagination needs a query object that does not exist yet
+### Cursor pagination: the ordering key tuple is the whole design
 
-Cursor paging works by pushing a comparison predicate down into whatever produces the rows. With
-`perform_list` returning a materialised `list[T]`, there is nothing to push into - we would load
-everything and then slice, which is all of the cost and none of the benefit.
+Built. The concern recorded here - that a materialised `list[T]` leaves nothing to push a
+comparison into - was answered by the pipeline rework and then by the filter API: the cursor
+predicate is a `Filter`, so it reaches a backend through the same registry as everything else and
+falls back to `matches()` when none can translate it.
 
-For an in-memory viewset that is fine and always will be: slicing a list is what it does. For a
-Celery-backed or DB-backed viewset it is not, and the predicate has to reach the worker so the
-query is composed there. That is the part still to be designed - see TODO.md.
+Two things about it are decisions rather than facts, and both are arguable:
 
-Plain limit/offset paging does *not* have this problem: it is a trim, and Django's ORM (or a
-generator, or a list) can all do it. So the two can ship separately, limit/offset first.
+**The cursor is not signed.** Base64 over JSON is transport encoding, not protection. It carries
+the ordering fields' values, so a client can read them and forge them. That is harmless when the
+ordering is `(year, id)` and not when it is `(salary, id)`. An HMAC would fix it; nothing does
+today.
+
+**Filters are in the fingerprint.** A cursor issued under one filter is refused under another,
+which means changing a filter restarts paging. That is defensible - the page you would get
+otherwise is one nobody asked for - but it is stricter than it has to be: the position is still
+well defined in the ordering regardless of the filter. Loosening it to bind only the ordering
+would let a client narrow a filter without losing its place.
