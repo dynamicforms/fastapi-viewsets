@@ -34,19 +34,19 @@ interface OpenedStream {
 function makeMockPeer() {
   const opened: OpenedStream[] = [];
   let nextBody: unknown = null;
-  let nextTrailers: Record<string, unknown> | null = { ':status': 200 };
+  let nextReplyHeaders: Record<string, unknown> | null = { ':status': 200 };
   let nextError: Error | null = null;
 
   const peer: MuxwsPeerLike = {
     open(payload, options) {
       opened.push({ payload, headers: (options?.headers ?? {}) as Record<string, unknown>, end: options?.end });
       const body = nextBody;
-      const trailers = nextTrailers;
+      const replyHeaders = nextReplyHeaders;
       const error = nextError;
       return {
         result: () => (error ? Promise.reject(error) : Promise.resolve(body)),
-        closed: Promise.resolve(),
-        trailers,
+        replyHeadersArrived: Promise.resolve(),
+        replyHeaders,
       };
     },
   };
@@ -54,9 +54,9 @@ function makeMockPeer() {
   return {
     peer,
     opened,
-    reply(body: unknown, trailers: Record<string, unknown> | null = { ':status': 200 }) {
+    reply(body: unknown, replyHeaders: Record<string, unknown> | null = { ':status': 200 }) {
       nextBody = body;
-      nextTrailers = trailers;
+      nextReplyHeaders = replyHeaders;
       nextError = null;
     },
     fail(error: Error) {
@@ -210,7 +210,7 @@ describe('MuxwsProxyImpl — responses', () => {
     await expect(proxy.list()).resolves.toEqual(MOCK_ITEMS);
   });
 
-  it('exposes non-pseudo trailers as response headers', async () => {
+  it('exposes non-pseudo reply headers as response headers', async () => {
     mock.reply(null, { ':status': 403, 'x-reason': 'no' });
     await expect(proxy.list()).rejects.toMatchObject({ response: { headers: { 'x-reason': 'no' } } });
   });

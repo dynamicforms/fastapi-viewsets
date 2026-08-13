@@ -47,7 +47,7 @@
     "axios": "^1.13.6",
     "lodash-es": "^4.17.12",
     "vue": "^3.4",
-    "muxws": "^0.2.0"
+    "muxws": "^0.3.1"
   },
   "devDependencies": {
     "@types/lodash-es": "^4.17.12",

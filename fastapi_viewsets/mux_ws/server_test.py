@@ -30,17 +30,26 @@ class FakeStream:
     def __init__(self, headers: dict[str, Any] | None):
         self.headers = headers
         self.payload: Any = None
+        self.reply_headers: dict[str, Any] = {}
         self.trailers: dict[str, Any] | None = None
         self.replies = 0
 
-    async def reply(self, payload: Any, *, trailers: dict[str, Any] | None = None) -> None:
+    async def reply(
+        self,
+        payload: Any,
+        *,
+        headers: dict[str, Any] | None = None,
+        trailers: dict[str, Any] | None = None,
+    ) -> None:
         self.payload = payload
+        self.reply_headers = headers or {}
         self.trailers = trailers
         self.replies += 1
 
     @property
     def status(self) -> int | None:
-        return (self.trailers or {}).get(":status")
+        """Read from the answering side's leading headers, as a real caller would."""
+        return self.reply_headers.get(":status")
 
 
 def make_viewset(register_muxws: bool | None = None) -> type:

@@ -93,12 +93,14 @@ async def process_command(
         # report - so the status is delivered normally and the traceback goes to the log, where it
         # would have gone anyway.
         logger.exception("muxws command %s %s failed", method, path)
-        await stream.reply(None, trailers=build_response_meta(500, {}))
+        await stream.reply(None, headers=build_response_meta(500, {}))
         return True
 
+    # Leading headers rather than trailers: the status is announced before the body, so a caller
+    # never has to read a response to find out it was an error. See protocol.py.
     await stream.reply(
         response.json(),
-        trailers=build_response_meta(response.status, _response_headers(response.headers)),
+        headers=build_response_meta(response.status, _response_headers(response.headers)),
     )
     return True
 

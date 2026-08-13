@@ -100,19 +100,6 @@ Postgres backend to hang it off.
 The demo drives paging with explicit prev/next buttons rather than guessing at it. If the grid
 expects to drive loading itself, `listPage` may need a different shape or an adapter.
 
-## muxws: response headers
-
-Response status currently rides in the stream's trailers, because a muxws `data` frame has no
-`headers` field. That is free for a unary reply but wrong for a streaming one, where the caller
-would have to consume the whole body before learning the status.
-
-muxws is expected to grow response headers on data frames. When it does:
-
-- flip `RESPONSE_META_VIA_TRAILERS` in `fastapi_viewsets/mux_ws/protocol.py`
-- update the matching branch in `vue/muxws-proxy.ts`
-- the client can then use `peer.request()` instead of `open()` + `result()` + `closed`, since it
-  will no longer need the Stream object just to read trailers
-
 ## Deprecation removal
 
 `setup_filter` / `setup_sort` warn but still work. Decide a version to drop them in.

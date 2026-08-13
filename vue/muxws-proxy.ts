@@ -30,8 +30,8 @@ import {
  */
 export interface MuxwsStreamLike {
   result(options?: { timeoutMs?: number }): Promise<unknown>;
-  readonly closed: Promise<void>;
-  readonly trailers: Record<string, unknown> | null | undefined;
+  readonly replyHeadersArrived: Promise<void>;
+  readonly replyHeaders: Record<string, unknown> | null | undefined;
 }
 
 export interface MuxwsPeerLike {
@@ -102,16 +102,14 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
     // end: true — this is a unary call, so the request is complete with its opening frame.
     const stream = peer.open(options.body, { headers, end: true });
 
+    // The status is announced before the body, in the answering side's leading headers (muxws
+    // 0.3.1+). Awaiting the gate first means an error status is known without reading the response
+    // at all — which is what makes this work for a streaming reply and not only a unary one.
+    await stream.replyHeadersArrived;
+    const status = readStatus(stream.replyHeaders);
+
     const body = await stream.result(this.timeoutMs === undefined ? undefined : { timeoutMs: this.timeoutMs });
-
-    // The response status rides in the trailers, because a muxws data frame has no headers field
-    // (SPEC §2.2). `closed` is awaited first because trailers only exist once the ending frame has
-    // been processed; for a unary reply that is the same frame the body came in, so this resolves
-    // immediately. When muxws grows response headers on data frames, this is what changes.
-    await stream.closed;
-    const status = readStatus(stream.trailers);
-
-    if (status >= 400) throw new ViewSetRequestError(status, body, readHeaders(stream.trailers));
+    if (status >= 400) throw new ViewSetRequestError(status, body, readHeaders(stream.replyHeaders));
     return body as R;
   }
 }
@@ -130,8 +128,8 @@ function cleanQuery(query: QueryParams): Record<string, unknown> {
  * looks like on a transport that has not been taught to say otherwise, and inventing a failure
  * for it would break every such server.
  */
-function readStatus(trailers: Record<string, unknown> | null | undefined): number {
-  const raw = trailers?.[':status'];
+function readStatus(replyHeaders: Record<string, unknown> | null | undefined): number {
+  const raw = replyHeaders?.[':status'];
   if (typeof raw === 'number') return raw;
   if (typeof raw === 'string') {
     const parsed = Number.parseInt(raw, 10);
@@ -140,9 +138,9 @@ function readStatus(trailers: Record<string, unknown> | null | undefined): numbe
   return 200;
 }
 
-function readHeaders(trailers: Record<string, unknown> | null | undefined): Record<string, string> {
+function readHeaders(replyHeaders: Record<string, unknown> | null | undefined): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(trailers ?? {})) {
+  for (const [key, value] of Object.entries(replyHeaders ?? {})) {
     if (!key.startsWith(':')) out[key] = String(value);
   }
   return out;
