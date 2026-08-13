@@ -5,14 +5,10 @@
     "paths": {
       "@/*": [
         "src/*"
-      ],
-      "@dynamicforms/vue-grid": [
-        "../../node_modules/@dynamicforms/vue-grid/dist/index.d.ts"
       ]
     }
   },
   "include": [
     "src/**/*"
-  ],
-  "//": "The vue-grid path mapping works around its package.json exports map having no \"types\" condition, which leaves TS unable to find the typings it does ship in dist/."
+  ]
 }
