@@ -64,3 +64,10 @@ def main():
     print("Documentation is available at http://127.0.0.1:8000/docs")
     print(f"muxws endpoint at ws://127.0.0.1:8000/ws (Celery {'on' if USE_CELERY else 'off'})")
     uvicorn.run(app, host="127.0.0.1", port=8000)
+
+
+if __name__ == "__main__":
+    # Without this `python -m demo.backend.main` imports the module, defines main(), and exits -
+    # leaving nothing listening, which the dev server reports as a 502 and muxws as a socket that
+    # never opened.
+    main()
