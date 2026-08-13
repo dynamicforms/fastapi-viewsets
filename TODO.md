@@ -14,6 +14,11 @@ The Celery half of this is a non-problem: the whole pipeline already runs in the
 GAPS.md), so the cursor is composed there, next to the data. What it needs is the filter plugin API
 below - a cursor is just one more declarative predicate, which is why it comes after it.
 
+The filter plugin API is the natural home: **a cursor predicate is just a filter**. It has a
+`matches()` for the in-memory case, and a compiler per backend that emits either the row-value form
+or the segment union. Nothing new is needed to carry it, and it inherits the all-or-nothing
+push-down rule for free.
+
 In-memory viewsets do not need any of this — slicing a list is what they do — so an implementation
 that only ever runs in-process could ship first and would still be useful.
 
@@ -25,12 +30,32 @@ Design carried over from the author's Django implementation (concepts only, to b
 - The primary key is **appended to the ordering automatically** when not already present. That
   makes every key tuple unique, so ties are eliminated structurally and DRF's tie-offset machinery
   (with its hard ~1000 cap that collapses on low-cardinality sort columns) is not needed at all.
-- Comparison is **lexicographic over the tuple**: key₁ strictly past the anchor; OR key₁ equal and
-  key₂ strictly past; OR … Use a **row-value comparison** where the backend has one —
-  `WHERE (year, month, day) > (2026, 8, 3)` — which is a single predicate a composite index serves
-  directly, instead of a union the planner usually degrades into a scan. Postgres has it; so does
-  SQLite, since 3.15. Django's ORM does **not** expose it, so it needs a small custom expression.
-  The segment union stays as the fallback for backends without it.
+- Comparison is **lexicographic over the tuple**, and **both forms have to be implemented**:
+  - **Row-value comparison** — `WHERE (year, id) > (2026, 5)` — one predicate a composite index
+    serves directly. Only usable when *every* key sorts the same way, because a row constructor
+    cannot express `a ASC, b DESC`.
+  - **Segment union** — key₁ past the anchor; OR key₁ equal and key₂ past; OR … — for mixed
+    directions, and for backends with no row values at all. Slower (the planner usually degrades
+    it to a scan) but always correct.
+
+  Verified against Django 5.2 + SQLite: the widely-cited `Func(..., function='ROW')` recipe is
+  Postgres-only (`no such function: ROW`), and even a portable `(a, b)` constructor fails if you
+  annotate it (`row value misused`). What works is one boolean expression used directly as a
+  filter condition:
+
+      class RowValues(Func):
+          template = "(%(expressions)s)"
+          arg_joiner = ", "
+
+      class RowGt(Func):
+          template = "%(expressions)s"
+          arg_joiner = " > "
+          output_field = BooleanField()
+
+      queryset.filter(RowGt(RowValues(F("a"), F("b")), RowValues(Value(1), Value(2))))
+      # -> WHERE ("a", "b") > (1, 2)
+
+  Support: Postgres yes, SQLite yes (3.15+), MySQL yes, SQL Server no.
 - Per-key direction is `XOR(field is descending, reading backwards)`, so mixed-direction ordering
   works.
 - **NULL is defined as the smallest value**, always, in both directions, with explicit `IS NULL` /
@@ -44,39 +69,30 @@ Deliberate departures from the original:
 - **Bind the cursor to the query.** Include a hash of the normalised ordering keys and active
   filters; on mismatch return 400 with a clear message instead of a `KeyError`/500. The original has
   no such check, so changing sort mid-pagination fails obscurely.
-- **Separate "next page exists" from "polling anchor".** The original always offers `next` and
-  `previous` so the client can re-poll both edges for newly inserted rows — but at the end of the
-  list `next` becomes null, which loses exactly the anchor the design existed to provide.
+- **Anchor on records that are actually in the page, not on the boundary between pages.** DRF's
+  `next`/`previous` encode a position *outside* the returned page. That leaves a blind spot: rows
+  inserted between the previous page's last record and this page's first record fall in the gap
+  between where `previous` points and where the page starts, and paging back skips them entirely.
+
+  Return `first` and `last` instead — the key tuples of the page's own first and last records.
+  Forward paging reads `> last`, exclusive, so no duplicate. Backward paging and polling read
+  `<= first`, **inclusive**, which costs one duplicate row (`first` itself, which the client
+  drops) and in exchange cannot skip anything inserted just before it, because the anchor is a row
+  that exists rather than a boundary that moves.
+
+  This also subsumes the "polling anchor" problem: `first` and `last` are properties of the page,
+  so they are present whenever the page is non-empty, whether or not more data exists in that
+  direction. Keep `next`/`previous` as the convenience links; make `first`/`last` available
+  alongside them.
 - **Drop `offset` from the protocol.** With a unique position it is dead weight, and where it is
   honoured it degrades into the offset paging cursors exist to avoid.
 - **Use the real PK name** from model metadata, not a literal `id`.
 
-## Filter plugin API
+## Filter operators still to translate
 
-The remaining piece, and the one the Django backend was built to constrain. Today
-`DjangoORMViewSet.build_filter_criteria` pushes down exact matches and nothing else, because
-anything richer would mean inventing a private lookup syntax that this API would then have to
-unpick.
-
-Shape, from the discussion:
-
-- A filter is **data, not a closure**: a registered `name` plus parameters, with `to_spec()` /
-  `from_spec()`. That is what lets it be introspected for the schema, and what would let it travel
-  if it ever needed to.
-- **Every filter has a working in-memory `apply()`.** That makes "the backend could not translate
-  this one" a non-event rather than an error - the same contract `apply_*` already has.
-- A backend opts in by **compiling** rather than applying: `compile_filter(fltr) -> bool`.
-- Push-down becomes **per filter**, not per stage. `query.applied` already takes arbitrary strings,
-  so `"filter:year__gte"` needs no wire change - but `apply_filter` currently marks the whole stage
-  or nothing, and that is what has to become finer.
-- **Trigger side:** the real decision is how many parameters land in OpenAPI. Generating every
-  field × every operator is combinatorial, so declare them per viewset:
-  `filters = {"year": ["exact", "gte"], "title": ["icontains"]}`. `make_all_optional` becomes the
-  special case of "every field, exact only".
-
-Hand-written `filter_list` must keep working. The plugin API earns its place on the boring 90%; for
-the awkward 10% a hand-written predicate beats any expression language, and forgetting that is how
-these things turn into half an ORM.
+`overlaps` has no Django compiler: `ArrayField.overlap` is Postgres-only, so a request touching it
+falls back to in-memory filtering. Worth adding a Postgres-specific compiler once there is a
+Postgres backend to hang it off.
 
 ## Grid integration
 
