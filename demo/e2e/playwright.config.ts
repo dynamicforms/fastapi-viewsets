@@ -17,6 +17,8 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   reporter: 'list',
+  // Kept out of the repo root, where it looked like a source directory. Gitignored either way.
+  outputDir: '../../test-results',
   timeout: 90_000,
   forbidOnly: !!process.env.CI,
 
