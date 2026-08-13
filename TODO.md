@@ -28,6 +28,3 @@ Postgres backend to hang it off.
   would fix it per database backend.
 - **Offset paging has no demo.** Both demo endpoints are cursor-paged now, so `PaginatedListMixin`
   is exercised only by tests.
-- **`vue-grid` ships typings its exports map hides.** `package.json` has no `types` condition, so
-  TypeScript cannot find `dist/index.d.ts` through the `.` export. The demo works around it with a
-  `paths` entry; the real fix belongs upstream.
