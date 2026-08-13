@@ -4,7 +4,7 @@
   "version": "0.3.6",
   "type": "module",
   "description": "RESTful viewsets for Vue",
-  "author": "Jure Erzno\u017enik",
+  "author": "Jure Erznožnik",
   "files": [
     "dist/*"
   ],
@@ -19,7 +19,8 @@
   },
   "workspaces": [
     "docs",
-    "demo/frontend"
+    "demo/frontend",
+    "demo/e2e"
   ],
   "scripts": {
     "build": "vite build",
@@ -29,7 +30,7 @@
     "docs:build": "npm run docs:build -w docs",
     "docs:preview": "npm run docs:preview -w docs",
     "demo:dev": "npm run dev -w demo-frontend",
-    "test:e2e": "playwright test --config demo/e2e/playwright.config.ts"
+    "test:e2e": "npm run test:e2e -w demo-e2e"
   },
   "keywords": [
     "vue",
@@ -65,8 +66,7 @@
     "vite-plugin-dts": "^5",
     "vite-plugin-eslint": "^1.8.1",
     "vitest": "^3",
-    "vue-tsc": "^2",
-    "@playwright/test": "^1.61.1"
+    "vue-tsc": "^2"
   },
   "peerDependenciesMeta": {
     "muxws": {

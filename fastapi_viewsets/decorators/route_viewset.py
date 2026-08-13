@@ -128,12 +128,17 @@ def route_viewset(
         lifecycle: LifecycleType = "singleton",
         pk_field_name: str = None,
         register_muxws: bool = None,
+        register_rest: bool = None,
 ):
     """
-    `register_muxws` decides whether this viewset is also reachable over the muxws transport (see
-    fastapi_viewsets/mux_ws/). True registers it, False does not, and None - the default - defers
-    to `settings.viewsets_register_muxws`. Individual endpoints can override it again with
+    `register_rest` and `register_muxws` decide which transports this viewset is published on.
+    True registers, False does not, and None - the default - defers: REST to "yes", muxws to
+    `settings.viewsets_register_muxws`. Individual endpoints override either again with
     `@transports(...)`.
+
+    Two parameters rather than one because there are two transports. If a third ever arrives, the
+    replacement is a single mapping - `transports={"rest": False}`, absent key meaning defer -
+    rather than a third `register_*`; see GAPS.md for why a set of flags is the worse shape.
     """
     def decorator(cls: type[T]):
         seen_routes = set()
@@ -287,7 +292,7 @@ def route_viewset(
             ]
             route_kwargs = route_to_add_api_route_kwargs(route, dependencies=dependencies)
 
-            if resolve_register_rest(route.endpoint):
+            if resolve_register_rest(route.endpoint, register_rest):
                 router.add_api_route(**route_kwargs)
 
             # The /schema route is deliberately not carried over: it closes over the REST app and

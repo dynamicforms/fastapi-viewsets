@@ -2,8 +2,8 @@
 node_modules
 coverage
 dist
-/test-results
-/playwright-report
+/demo/test-results
+/demo/backend/demo.sqlite3
 
 /celerybeat-schedule.db
 /demo/backend/demo.sqlite3

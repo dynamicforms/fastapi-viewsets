@@ -726,22 +726,6 @@ async def test_sort_via_http():
 
 
 @pytest.mark.asyncio
-async def test_sort_setup_hook_called():
-    calls = []
-
-    class HookViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
-        def __init__(self):
-            super().__init__(container=_DB, pk_field="id")
-
-        async def setup_sort(self, sort: SortState) -> None:
-            calls.append([col.column_name for col in sort])
-
-    route = _get_list_route(HookViewSet)
-    await route.endpoint(fltr=None, sort="name:asc")
-    assert calls == [["name"]]
-
-
-@pytest.mark.asyncio
 async def test_sort_setup_hook_not_called_without_sort():
     calls = []
 

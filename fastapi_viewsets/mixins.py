@@ -1,5 +1,3 @@
-import warnings
-
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Annotated, Any, final, Generic, get_args, get_origin, Union
@@ -243,38 +241,10 @@ class ListMixin(Generic[T, TFilter], ABC):
         call `super()` for the rest - a viewset that can sort in its database overrides
         `apply_sort`, marks the stage applied, and everything else keeps working unchanged.
         """
-        await self._run_legacy_setup_hooks(query)
         records = await self.perform_list(context)
         records = await self.apply_filter(context, query, records)
         records = await self.apply_sort(context, query, records)
         return await self.apply_pagination(context, query, records)
-
-    async def _run_legacy_setup_hooks(self, query: ListQuery) -> None:
-        """
-        Calls `setup_filter`/`setup_sort` for viewsets that still define them.
-
-        These are the old push-down side channel: they ran before `perform_list` and mutated
-        instance state, because `perform_list` had no way to be told what was being asked of it.
-        It does now - override `apply_filter`/`apply_sort` instead, where the records and the query
-        are both in hand.
-        """
-        for hook, active, argument in (
-            ("setup_filter", query.has_filter, query.fltr),
-            ("setup_sort", query.has_sort, query.sort),
-        ):
-            if not active:
-                continue
-            method = getattr(type(self), hook, None)
-            if method is None or getattr(method, "__is_default_hook__", False):
-                continue
-            warnings.warn(
-                f"{type(self).__name__}.{hook}() is deprecated; override "
-                f"apply_{'filter' if hook == 'setup_filter' else 'sort'}() instead, which "
-                f"receives the ListQuery together with the records",
-                DeprecationWarning,
-                stacklevel=3,
-            )
-            await getattr(self, hook)(argument)
 
     async def apply_filter(
         self: "ImplMixin[Any, T] | ListMixin[T]",
@@ -430,28 +400,11 @@ class ListMixin(Generic[T, TFilter], ABC):
             return rows
         return [self.to_record(row) for row in rows]
 
-    async def setup_filter(self, fltr: TFilter) -> None:
-        """
-        Deprecated. Pre-filter hook called before perform_list when a filter is active.
-        Override apply_filter() instead - it receives the query and the records together, so there
-        is no second method to keep in step with it.
-        """
-
-    setup_filter.__is_default_hook__ = True
-
     async def filter_list(self, fltr: TFilter, records: list[T]) -> list[T]:
         """
         Post-filter hook called after perform_list when a filter is active.
         Subclasses implement this to filter records in-memory.
         """
-
-    async def setup_sort(self, sort: SortState) -> None:
-        """
-        Deprecated. Pre-sort hook called before perform_list when a sort order is active.
-        Override apply_sort() instead.
-        """
-
-    setup_sort.__is_default_hook__ = True
 
     async def sort_list(self, sort: SortState, records: list[T]) -> list[T]:
         """

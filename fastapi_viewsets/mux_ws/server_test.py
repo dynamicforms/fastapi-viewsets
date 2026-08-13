@@ -301,3 +301,62 @@ def test_registry_reports_registered_viewsets():
     assert registered_viewsets()[cls] == "/tracks"
     assert schema_for("/tracks") is not None
     assert schema_for("/nope") is None
+
+
+@pytest.mark.asyncio
+async def test_register_rest_false_makes_a_viewset_muxws_only():
+    """
+    There was no way to say this before. `route_viewset` is what registers *both* transports, so
+    not calling it removed muxws too, and the only alternative was annotating every endpoint.
+    """
+    database = {1: Track(id=1, title="Kind of Blue")}
+    rest_router = APIRouter()
+
+    @route_viewset(rest_router, base_path="/wsonly", pk_field_name="id", register_rest=False)
+    class WsOnlyViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        def __init__(self):
+            super().__init__(container=database, pk_field="id")
+
+    assert rest_router.routes == []
+    assert is_registered(WsOnlyViewSet)
+
+    stream = FakeStream({":method": "GET", ":path": "/wsonly"})
+    await process_command(ABSENT, stream)
+    assert stream.status == 200
+
+
+@pytest.mark.asyncio
+async def test_an_endpoint_may_still_opt_back_into_rest():
+    """Endpoint beats viewset, the same way round as it does for muxws."""
+    database = {1: Track(id=1, title="Kind of Blue")}
+    rest_router = APIRouter()
+
+    @route_viewset(rest_router, base_path="/mostly-ws", pk_field_name="id", register_rest=False)
+    class MostlyWsViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        __router = APIRouter()
+
+        @transports(rest=True)
+        @__router.get("health", tags=["MostlyWs"])
+        async def health(self, context: Context) -> int:  # noqa: ARG002 - context is the hook
+            return 1
+
+        def __init__(self):
+            super().__init__(container=database, pk_field="id")
+
+    assert [route.path for route in rest_router.routes] == ["/mostly-ws/health"]
+
+
+def test_two_viewsets_on_one_base_path_warn():
+    """
+    Neither FastAPI nor this library would otherwise say anything, and the later viewset's
+    endpoints are simply unreachable.
+    """
+    make_viewset()
+    with pytest.warns(UserWarning, match="unreachable"):
+        database = {1: Track(id=1, title="Kind of Blue")}
+        router = APIRouter()
+
+        @route_viewset(router, base_path="/tracks", pk_field_name="id")
+        class ImpostorViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+            def __init__(self):
+                super().__init__(container=database, pk_field="id")
