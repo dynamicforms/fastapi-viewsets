@@ -305,23 +305,74 @@ class ListMixin(Generic[T, TFilter], ABC):
         """
         Cuts one page out of `records`, or returns the lot when the client asked for no page.
 
-        Only reads as far as the page needs, so paging a lazy source stays lazy. `count` is
-        reported only when it is already known - a list knows its length, a generator does not,
-        and draining it to find out would undo the point of paging it.
+        Only reads as far as the page needs, so paging a lazy source stays lazy. Conversion to the
+        response model happens here, on the page and nowhere else: the stages before this one carry
+        whatever the backend's own source is - a QuerySet, a cursor - because that is the only
+        thing they can push a filter or an ordering into. Converting earlier would hand them a bag
+        of records with nothing left to push into.
         """
         if not query.is_paginated:
-            return await materialize(records)
+            return self._to_records(await materialize(records))
 
-        count = len(records) if isinstance(records, (list, tuple)) else None
-        page, has_more = await take_page(records, query.offset, query.limit)
+        count = await self.count_records(context, query, records)
+        page, has_more = await self.take_page(query, records)
         return PaginatedList[Any](
-            results=page,
+            results=self._to_records(page),
             offset=query.offset,
             limit=query.limit,
             count=count,
             has_more=has_more,
             has_previous=query.offset > 0,
         )
+
+    async def take_page(
+        self: "ImplMixin[Any, T] | ListMixin[T]", query: ListQuery, records: ListRecords
+    ) -> tuple[list, bool]:
+        """
+        Reads one page out of `records`, and whether anything follows it.
+
+        The default walks the source and stops once the page is full, which keeps a generator from
+        being drained but still costs `offset` steps to get there - and, against a database, streams
+        every skipped row across the wire before discarding it. A backend with a real LIMIT/OFFSET
+        should override this and mark the "pagination" stage applied.
+        """
+        return await take_page(records, query.offset, query.limit)
+
+    async def count_records(
+        self: "ImplMixin[Any, T] | ListMixin[T]",
+        context: Context,  # noqa: ARG002 - part of the hook signature, for overrides to use
+        query: ListQuery,  # noqa: ARG002 - part of the hook signature, for overrides to use
+        records: ListRecords,
+    ) -> int | None:
+        """
+        How many records there are in total, or None when finding out would cost too much.
+
+        A list knows its length; a generator does not, and draining it to count would undo the
+        point of paging it. A backend that can answer cheaply should override this - a Django
+        viewset returns `await queryset.acount()`, one extra SELECT COUNT(*) rather than a full
+        read - and a client then gets a real total instead of a null.
+        """
+        return len(records) if isinstance(records, (list, tuple)) else None
+
+    def to_record(self, raw: Any) -> T:
+        """
+        Converts one row from whatever the backend produced into the response model.
+
+        The default is identity, for viewsets whose source already yields the model. An ORM-backed
+        one overrides it to build the pydantic model from a row. Deliberately synchronous: this is
+        CPU work, not I/O, and it runs once per record - anything needing I/O per row wants
+        prefetching in `perform_list` instead.
+        """
+        return raw
+
+    def _to_records(self, rows: list) -> list:
+        """
+        Skips the conversion pass entirely for viewsets that never override `to_record`, which is
+        most of them - the in-memory ones already hold the response model.
+        """
+        if type(self).to_record is ListMixin.to_record:
+            return rows
+        return [self.to_record(row) for row in rows]
 
     async def setup_filter(self, fltr: TFilter) -> None:
         """
