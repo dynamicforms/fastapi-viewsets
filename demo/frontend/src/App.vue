@@ -1,20 +1,22 @@
 <template>
   <v-app>
     <v-main>
-      <v-container fluid class="pa-4 d-flex flex-column fill-height">
+      <v-container fluid class="pa-4">
         <div class="d-flex align-center flex-wrap ga-4 mb-4">
           <h1 class="text-h5 mb-0">Music Library</h1>
           <v-btn-toggle v-model="transport" mandatory density="comfortable" color="primary">
-            <v-btn value="rest">REST</v-btn>
-            <v-btn value="muxws">muxws</v-btn>
+            <v-btn value="rest" data-testid="transport-rest">REST</v-btn>
+            <v-btn value="muxws" data-testid="transport-muxws">muxws</v-btn>
           </v-btn-toggle>
           <v-btn-toggle v-model="backend" mandatory density="comfortable" color="secondary">
-            <v-btn value="memory">in-memory</v-btn>
-            <v-btn value="db">SQLite</v-btn>
+            <v-btn value="memory" data-testid="backend-memory">in-memory</v-btn>
+            <v-btn value="db" data-testid="backend-db">SQLite</v-btn>
           </v-btn-toggle>
           <v-spacer />
           <span class="text-caption">
-            {{ records.length }} loaded<template v-if="!hasMore"> · end of list</template>
+            <span data-testid="loaded-count">{{ records.length }}</span> loaded<template
+              v-if="!hasMore"
+            > · end of list</template>
             <template v-if="lastLoadMs"> · last page {{ lastLoadMs.toFixed(0) }} ms</template>
           </span>
           <v-btn :loading="benchmarking" variant="tonal" @click="runComparison">Compare transports</v-btn>
@@ -51,7 +53,7 @@
           </div>
         </v-alert>
 
-        <div v-if="error" class="text-error mb-4">{{ error }}</div>
+        <div v-if="error" data-testid="error" class="text-error mb-4">{{ error }}</div>
 
         <df-grid
           v-model:sort-state="sortState"
@@ -61,8 +63,7 @@
           :loading="loading"
           key-field="id"
           :show-filter-row="true"
-          class="flex-grow-1"
-          style="min-height: 0"
+          style="height: 70vh"
           @sort="onSort"
           @filter="onFilter"
           @load="loadMore"

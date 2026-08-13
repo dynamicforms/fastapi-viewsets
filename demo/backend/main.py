@@ -3,13 +3,22 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI, WebSocket
 from muxws import accept, Stream
 
-from demo.backend.viewsets import MusicTrackDbViewSet, MusicTrackViewSet, USE_CELERY
+from asgiref.sync import sync_to_async
+
+from demo.backend.django_setup import ensure_database
+from demo.backend.viewsets import MusicTrackDbViewSet, MusicTrackViewSet, records, USE_CELERY
 from fastapi_viewsets.decorators.route_viewset import route_viewset
 from fastapi_viewsets.mux_ws import process_command
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAPI
+    # In a thread, because Django refuses a synchronous query from inside a running event loop -
+    # and the lifespan is always inside one. Doing it at import time only appeared to work: it
+    # depended on the app being imported before the loop started, which is true for
+    # `uvicorn.run(app)` and false for `uvicorn.run("demo.backend.main:app")`.
+    await sync_to_async(ensure_database, thread_sensitive=False)(records)
+
     if not USE_CELERY:
         yield
         return

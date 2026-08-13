@@ -28,7 +28,8 @@
     "docs:dev": "npm run docs:dev -w docs",
     "docs:build": "npm run docs:build -w docs",
     "docs:preview": "npm run docs:preview -w docs",
-    "demo:dev": "npm run dev -w demo-frontend"
+    "demo:dev": "npm run dev -w demo-frontend",
+    "test:e2e": "playwright test --config demo/e2e/playwright.config.ts"
   },
   "keywords": [
     "vue",
@@ -64,7 +65,8 @@
     "vite-plugin-dts": "^5",
     "vite-plugin-eslint": "^1.8.1",
     "vitest": "^3",
-    "vue-tsc": "^2"
+    "vue-tsc": "^2",
+    "@playwright/test": "^1.61.1"
   },
   "peerDependenciesMeta": {
     "muxws": {
