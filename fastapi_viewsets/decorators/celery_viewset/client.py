@@ -5,7 +5,6 @@ import uuid
 from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 
-from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
 from ...context import Context, serialize_context

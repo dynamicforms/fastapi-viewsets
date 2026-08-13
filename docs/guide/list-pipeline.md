@@ -268,8 +268,91 @@ ordering can be pushed into.
 
 ## Cursor pagination
 
-Not yet implemented — see `TODO.md`. Offset paging re-reads skipped rows and drifts when records
-are inserted or deleted between pages; a cursor fixes both by carrying an anchor instead of a
-count. It needs the comparison predicate to reach whatever produces the rows, which for a
-Celery-backed or database-backed viewset means reaching the worker, and that part is still being
-designed.
+`CursorListMixin` pages by *where you are* rather than by *how many you skipped*:
+
+```python
+class TrackViewSet(CollectionViewSet[int, Track], CursorListMixin[Track, TrackFilter]):
+    schema = Track          # the response model, used to coerce cursor values back from JSON
+    pk_field_name = "id"    # what makes every key tuple unique
+    default_page_size = 50
+```
+
+The endpoint takes `cursor` and `limit` — no `offset` — and answers:
+
+```json
+{
+  "results": [...],
+  "limit": 50,
+  "has_more": true,
+  "has_previous": false,
+  "next": "eyJwIjp7...",
+  "previous": null,
+  "first": "eyJwIjp7...",
+  "last": "eyJwIjp7..."
+}
+```
+
+Follow `next` to walk forward. What that buys over offset paging is two things offset paging
+cannot do: reaching page 500 does not re-read the 24 950 rows in front of it, and a row inserted
+or deleted behind you cannot make the next page repeat or skip anything.
+
+What it costs is jumping to an arbitrary page, and a total count — producing one is a second full
+pass on every request, and the number is stale by the time it is read.
+
+### Anchors are rows in the page, not the rows beside it
+
+DRF encodes the position of the record *before* the page into `previous`. Anything inserted between
+that record and the page's own first row then sits in a gap: the boundary moved, and paging back
+steps straight over it.
+
+`first` and `last` anchor on the page's **own** first and last rows, which cannot move like that.
+They are the same two edges as `next`/`previous` but read *inclusively*, so they return their own
+row again — one duplicate for the client to drop — and in exchange they cannot skip anything that
+arrived at that edge. They are also present whenever the page is non-empty, so a client polling the
+head of a live list keeps its anchor even when `next` is null.
+
+| cursor | anchor | direction | includes the anchor row |
+|---|---|---|---|
+| `next` | last row | forward | no |
+| `previous` | first row | backward | no |
+| `last` | last row | forward | yes |
+| `first` | first row | backward | yes |
+
+### What the cursor carries
+
+The **whole ordering key tuple**, not just the first key — which is what makes multi-key ordering
+work and what removes ties instead of counting through them. The primary key joins the ordering
+automatically, so every tuple is unique and every position holds exactly one row.
+
+Values travel as real JSON (`null` stays `null` rather than needing a sentinel string, which is a
+value a record could legitimately hold) and are coerced back through the response model's own field
+types on the way in.
+
+A cursor is fingerprinted against the ordering and the active filters. Send one to a differently
+sorted or filtered query and it is refused with a 400 rather than quietly describing a page nobody
+asked for.
+
+NULL is defined as the smallest value, in both directions. That is not SQL's rule — SQL makes every
+comparison with NULL unknown — but a definite answer is the only way a nullable column can take
+part in a total order at all.
+
+### On a database
+
+The predicate is a filter like any other, so it goes through the same registry and the same
+all-or-nothing push-down. The Django backend translates it two ways:
+
+- a **row-value comparison**, `WHERE (year, id) > (2003, 42)`, which a composite index on exactly
+  those columns can seek with. Used only when every key sorts the same way — a row constructor
+  cannot express `a ASC, b DESC` — and no key is nullable, since SQL's NULL rule and this
+  library's disagree and SQL's wins inside the database.
+- a **union of segments** otherwise, which spells the NULL handling out and copes with mixed
+  directions, at the cost of a plan the optimiser usually degrades to a scan.
+
+Support for row values: Postgres, SQLite 3.15+, MySQL. Not SQL Server.
+
+### On the client
+
+```ts
+let page = await tracks.listCursor({ sort: 'year:asc', limit: 50 });
+while (page.next) page = await tracks.listCursor({ sort: 'year:asc', cursor: page.next });
+```

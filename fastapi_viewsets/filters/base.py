@@ -39,6 +39,14 @@ class Filter(ABC):
     def matches(self, record: Any) -> bool:
         """Whether `record` passes. The universal implementation; never optional."""
 
+    def fields(self) -> tuple[str, ...]:
+        """
+        Which model fields this filter reads. Usually one; a filter spanning several - the cursor
+        predicate compares a whole key tuple - reports them all, so a backend can check it is able
+        to address every one of them before offering to translate it.
+        """
+        return (self.field,)
+
     def read(self, record: Any) -> Any:
         """
         The field's value on a record, whatever the record is.

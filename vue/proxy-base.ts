@@ -18,6 +18,8 @@
 
 import type {
   BulkViewSetMixin,
+  CursorPage,
+  CursorParams,
   DestroyReturnData,
   KeyType,
   ListParams,
@@ -237,6 +239,35 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    * declares, so only the envelope's own fields are renamed here. The records inside are passed
    * through untouched.
    */
+  /**
+   * Fetches one cursor page. Only meaningful against a viewset built on the BE CursorListMixin.
+   *
+   * Follow `next` to walk forward. Unlike offset paging, a row inserted or removed behind you
+   * cannot make the next page repeat or skip anything.
+   */
+  async listCursor(params?: CursorParams): Promise<CursorPage<T>> {
+    const page = await this.request<{
+      results: T[];
+      limit: number;
+      has_more: boolean;
+      has_previous: boolean;
+      next: string | null;
+      previous: string | null;
+      first: string | null;
+      last: string | null;
+    }>('GET', '', { query: params });
+    return {
+      results: page.results,
+      limit: page.limit,
+      hasMore: page.has_more,
+      hasPrevious: page.has_previous,
+      next: page.next,
+      previous: page.previous,
+      first: page.first,
+      last: page.last,
+    };
+  }
+
   async listPage(params?: PageParams): Promise<PaginatedList<T>> {
     const page = await this.request<{
       results: T[];

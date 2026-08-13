@@ -4,13 +4,24 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Annotated, Any, final, Generic, get_args, get_origin, Union
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, create_model
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
 from fastapi_viewsets.context import Context
-from fastapi_viewsets.filters import filters_from
+from fastapi_viewsets.cursor import (
+    cursor_keys,
+    CursorError,
+    CursorKeys,
+    CursorPage,
+    CursorState,
+    decode_cursor,
+    fingerprint,
+    make_predicate,
+    position_of,
+)
+from fastapi_viewsets.filters import filters_from, FilterSet
 from fastapi_viewsets.list_query import (
     build_list_query,
     ListQuery,
@@ -146,6 +157,15 @@ class FilterParam:
     pass
 
 
+def filter_set_for(query: ListQuery) -> FilterSet:
+    """
+    Every filter this request implies: what the client declared, plus what the pipeline added -
+    the cursor predicate. One set, so a backend compiles them together or declines them together.
+    """
+    declared = filters_from(query.fltr)
+    return FilterSet(list(declared or []) + list(query.extra_filters))
+
+
 ###################################################################################################
 # SORT
 ###################################################################################################
@@ -277,18 +297,21 @@ class ListMixin(Generic[T, TFilter], ABC):
         if not query.has_filter or not query.needs("filter"):
             return records
 
-        # A filter model built by make_filter_model knows which operators it stands for, so the
-        # filtering is already written; a hand-made one does not, and falls through to filter_list.
-        filter_set = filters_from(query.fltr)
-        if filter_set is not None:
-            return filter_set.apply(await self.land(query, records))
+        declared = filters_from(query.fltr)
+        combined = filter_set_for(query)
+        if combined:
+            records = combined.apply(await self.land(query, records))
 
-        materialized = await self.land(query, records)
-        filtered = await self.filter_list(query.fltr, materialized)
-        # filter_list has no default implementation and so returns None when a viewset declares a
-        # filter type but never implements filtering. Returning that verbatim would answer the
-        # request with null; keeping the unfiltered records is wrong too, but visibly so.
-        return materialized if filtered is None else filtered
+        # A filter model built by make_filter_model says which operators it stands for and needs no
+        # code; a hand-made one does not, and still goes through filter_list.
+        if query.fltr is not None and declared is None:
+            materialized = await self.land(query, records)
+            filtered = await self.filter_list(query.fltr, materialized)
+            # filter_list has no default implementation and so returns None when a viewset declares
+            # a filter type but never implements filtering. Returning that verbatim would answer
+            # the request with null; keeping the unfiltered records is wrong too, but visibly so.
+            records = materialized if filtered is None else filtered
+        return records
 
     async def apply_sort(
         self: "ImplMixin[Any, T] | ListMixin[T]",
@@ -504,6 +527,163 @@ class PaginatedListMixin(ListMixin[T, TFilter], ABC):
             limit=min(limit if limit is not None else self.default_page_size, self.max_page_size),
         )
         return await self.get_list(context, query)
+
+
+class CursorListMixin(ListMixin[T, TFilter], ABC):
+    """
+    List a queryset by cursor rather than by offset.
+
+    Use in place of ListMixin, exactly as PaginatedListMixin is:
+
+        class TrackViewSet(CollectionViewSet[int, Track], CursorListMixin[Track, TrackFilter]):
+            pk_field_name = "id"
+
+    Offset paging re-reads every skipped row to reach page 500, and drifts whenever rows are
+    inserted or removed between two requests. A cursor says where you are instead of how far you
+    counted, so neither happens - at the cost of not being able to jump to an arbitrary page,
+    which is the trade every cursor makes.
+    """
+    __router = APIRouter()
+
+    default_page_size: int = 100
+    max_page_size: int = 1000
+
+    pk_field_name: str = "id"
+    """
+    The field appended to the ordering to make every key tuple unique. Must actually be unique -
+    that is the entire basis of the scheme - and must be the model's real primary key name rather
+    than an assumed `id`.
+    """
+
+    @final
+    @__router.get("")
+    async def list_items(
+        self: "ImplMixin[Any, T] | CursorListMixin[T]",
+        context: Context,
+        fltr: Annotated[TFilter, Query()] = None,
+        sort: str | None = None,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> CursorPage[T]:
+        query = build_list_query(
+            fltr,
+            sort,
+            limit=min(limit if limit is not None else self.default_page_size, self.max_page_size),
+        )
+        query.cursor = cursor
+        return await self.get_list(context, query)
+
+    async def apply_pagination(
+        self: "ImplMixin[Any, T] | CursorListMixin[T]",
+        context: Context,  # noqa: ARG002 - part of the hook signature, for overrides to use
+        query: ListQuery,
+        records: ListRecords,
+    ) -> "CursorPage[T]":
+        page, has_more = await self.take_page(query, records)
+        backwards = getattr(query, "_cursor_backwards", False)
+        if backwards:
+            # The query ran in reversed order to read backwards; the page is handed back the way
+            # the client reads it.
+            page = list(reversed(page))
+        results = page if not query.needs("conversion") else self._to_records(page)
+
+        keys = getattr(query, "_cursor_keys", ())
+        fingerprint_value = getattr(query, "_cursor_query", "")
+        anchors = self._cursor_anchors(results, keys, fingerprint_value)
+
+        # Reading backwards, "more in the reading direction" means more *before* the page.
+        has_more_forward = has_more if not backwards else bool(query.cursor)
+        has_previous = bool(query.cursor) if not backwards else has_more
+
+        return CursorPage[Any](
+            results=results,
+            limit=query.limit,
+            has_more=has_more_forward,
+            has_previous=has_previous,
+            next=anchors["next"] if has_more_forward else None,
+            previous=anchors["previous"] if has_previous else None,
+            first=anchors["first"],
+            last=anchors["last"],
+        )
+
+    def _cursor_anchors(self, results: list, keys: CursorKeys, fingerprint_value: str) -> dict[str, str | None]:
+        """
+        Four cursors from the page's own two edge rows.
+
+        `next`/`previous` are exclusive so they never repeat a row. `first`/`last` are the same
+        anchors read inclusively - they return their own row again, and in exchange survive rows
+        being inserted at that edge, which is what a client polling a live list needs.
+        """
+        if not results or not keys:
+            return dict.fromkeys(("next", "previous", "first", "last"))
+
+        head = position_of(results[0], keys)
+        tail = position_of(results[-1], keys)
+        return {
+            "next": CursorState(tail, backwards=False, inclusive=False, query=fingerprint_value).encode(),
+            "previous": CursorState(head, backwards=True, inclusive=False, query=fingerprint_value).encode(),
+            "first": CursorState(head, backwards=True, inclusive=True, query=fingerprint_value).encode(),
+            "last": CursorState(tail, backwards=False, inclusive=True, query=fingerprint_value).encode(),
+        }
+
+    async def get_list(
+        self: "ImplMixin[Any, T] | CursorListMixin[T]", context: Context, query: ListQuery
+    ) -> "CursorPage[T]":
+        """
+        Sets the cursor up before the ordinary pipeline runs.
+
+        The ordering is rewritten to the full key list - the client's sort plus the primary key -
+        because the position tuple is read against exactly those keys, and reversed outright when
+        reading backwards so that both the backend and the in-memory sort produce the direction
+        the page is actually read in.
+        """
+        keys = cursor_keys(query.sort, self.pk_field_name)
+        fingerprint_value = fingerprint(keys, query.fltr)
+        state = None
+        if query.cursor:
+            try:
+                state = decode_cursor(query.cursor, keys, fingerprint_value, self._cursor_annotations())
+            except CursorError as error:
+                # The client sent something wrong, not the server - a stale cursor after a sort
+                # change is the ordinary case, and it deserves a message rather than a traceback.
+                raise HTTPException(status_code=400, detail=str(error)) from None
+            query.extra_filters.append(make_predicate(state, keys))
+
+        backwards = bool(state and state.backwards)
+        query.sort = [
+            SortStateColumn(
+                column_name=name,
+                direction=SortDirection.desc if descending != backwards else SortDirection.asc,
+            )
+            for name, descending in keys
+        ]
+        query._cursor_keys = keys
+        query._cursor_query = fingerprint_value
+        query._cursor_backwards = backwards
+
+        return await super().get_list(context, query)
+
+    def _cursor_annotations(self) -> dict[str, Any]:
+        """
+        The response model's field types, used to coerce cursor values back from JSON. Without them
+        a numeric key would be compared as a string and match nothing.
+        """
+        model = getattr(self, "schema", None)
+        if model is None or not hasattr(model, "model_fields"):
+            return {}
+        return {name: field_info.annotation for name, field_info in model.model_fields.items()}
+
+    async def count_records(
+        self: "ImplMixin[Any, T] | CursorListMixin[T]",
+        context: Context,  # noqa: ARG002 - part of the hook signature
+        query: ListQuery,  # noqa: ARG002 - part of the hook signature
+        records: ListRecords,  # noqa: ARG002 - part of the hook signature
+    ) -> int | None:
+        """
+        Never counted. A cursor page deliberately does not report a total: producing one costs a
+        second full-table pass on every request, and the number is stale by the time it is read.
+        """
+        return None
 
 
 ###################################################################################################

@@ -45,10 +45,17 @@ class ListQuery:
     offset: int = 0
     limit: int | None = None
     applied: set[str] = field(default_factory=set)
+    cursor: str | None = None
+    extra_filters: list = field(default_factory=list)
+    """
+    Filters the pipeline adds itself rather than the client asking for them - today only the
+    cursor predicate. They ride the same stage as declared filters so a backend translates them
+    through the same registry, and decline them the same way.
+    """
 
     @property
     def has_filter(self) -> bool:
-        return self.fltr is not None
+        return self.fltr is not None or bool(self.extra_filters)
 
     @property
     def has_sort(self) -> bool:
