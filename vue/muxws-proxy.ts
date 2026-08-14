@@ -20,6 +20,7 @@ import {
   type QueryParams,
   type RequestOptions,
   ViewSetProxyBase,
+  type ViewSetMixinDeclaration,
   ViewSetRequestError,
 } from './proxy-base';
 
@@ -150,8 +151,13 @@ function readHeaders(replyHeaders: Record<string, unknown> | null | undefined): 
  * Registers a muxws proxy for the given ViewSet class. The mirror of route_rest, and it takes the
  * same generic parameter for the same reason: TypeScript cannot inspect the Python class.
  */
-function route_muxws<M>(_viewSetClass: ViewSetClass, options: MuxwsProxyOptions): MuxwsProxy<M> {
-  return new MuxwsProxyImpl(options) as unknown as MuxwsProxy<M>;
+function route_muxws<M>(viewSetClass: ViewSetClass, options: MuxwsProxyOptions): MuxwsProxy<M> {
+  // The class is otherwise used only for its type. Its `declares` is the one thing on it the proxy
+  // needs at runtime, so it is carried across rather than lost.
+  return new MuxwsProxyImpl({
+    declares: (viewSetClass as { declares?: ViewSetMixinDeclaration[] }).declares,
+    ...options,
+  }) as unknown as MuxwsProxy<M>;
 }
 
 export { route_muxws };

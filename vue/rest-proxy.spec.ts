@@ -10,7 +10,16 @@
 import axios from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BulkViewSetMixin, ListMixin, LookupMixin, ReadOnlyViewSetMixin, RetrieveMixin, ViewSetMixin } from './mixins';
+import {
+  BulkViewSetMixin,
+  CursorListMixin,
+  ListMixin,
+  LookupMixin,
+  PaginatedListMixin,
+  ReadOnlyViewSetMixin,
+  RetrieveMixin,
+  ViewSetMixin,
+} from './mixins';
 import { RestProxyImpl, route_rest } from './rest-proxy';
 
 // ---------------------------------------------------------------------------
@@ -431,9 +440,22 @@ describe('schema validation — validateAgainstSchema()', () => {
     );
   }
 
-  async function createAndValidate(schema?: object) {
+  /** A ViewSet declaring the given mixins, the way a consumer writes one. */
+  function viewSetDeclaring(declares: readonly { actions: readonly string[] }[], extra: object = {}) {
+    class Declared extends RestProxyImpl<number, Item, 'id'> {
+      static declares = declares;
+    }
+    Object.assign(Declared.prototype, extra);
+    return Declared;
+  }
+
+  async function createAndValidate(
+    schema?: object,
+    declares: readonly { actions: readonly string[] }[] = [BulkViewSetMixin, LookupMixin],
+    extra: object = {},
+  ) {
     if (schema !== undefined) mockSchema(schema);
-    const proxy = new RestProxyImpl<number, Item, 'id'>({
+    const proxy = new (viewSetDeclaring(declares, extra))({
       basePath: '/items',
       pkFieldName: 'id',
       axiosInstance: http as unknown as typeof axios,
@@ -452,7 +474,7 @@ describe('schema validation — validateAgainstSchema()', () => {
     // constructor made every call throw on an undefined axios instance — and since the check
     // swallows its own errors, it went silently dead instead of failing.
     mockSchema(FULL_SCHEMA);
-    new RestProxyImpl<number, Item, 'id'>({
+    new (viewSetDeclaring([BulkViewSetMixin, LookupMixin]))({
       basePath: '/items',
       pkFieldName: 'id',
       axiosInstance: http as unknown as typeof axios,
@@ -460,63 +482,97 @@ describe('schema validation — validateAgainstSchema()', () => {
     await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema'));
   });
 
-  it('no warnings when BE matches FE (BulkViewSetMixin + LookupMixin)', async () => {
+  it('no warnings when BE matches what the ViewSet declared', async () => {
     await createAndValidate(FULL_SCHEMA);
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('warns for each FE method that has no matching BE endpoint', async () => {
+  it('a ViewSet declaring one mixin says nothing about actions it never claimed', async () => {
+    // The reported bug: a BE viewset built from a single mixin (or none) made the FE warn about
+    // every standard action, because the check asked which methods exist on the proxy — and they
+    // all do, unconditionally — instead of asking what this ViewSet declared.
+    await createAndValidate({ paths: { '/items': { get: {} }, '/items/schema': { get: {} } } }, [CursorListMixin]);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('a ViewSet that declares nothing is not checked at all, and costs no request', async () => {
+    mockSchema(FULL_SCHEMA);
+    const proxy = new RestProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    await (proxy as any).validateAgainstSchema();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(http.get).not.toHaveBeenCalledWith('/items/schema');
+  });
+
+  it('warns for each declared action the BE viewset does not serve', async () => {
     await createAndValidate(READONLY_SCHEMA);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const msg = warnSpy.mock.calls[0][0] as string;
     expect(msg).toContain('[ViewSet /items]');
-    // list and retrieve are present on BE → no warning for them
-    expect(msg).not.toContain("'list()'");
-    expect(msg).not.toContain("'retrieve()'");
-    // all others are absent → warned
-    expect(msg).toContain("'create()'");
-    expect(msg).toContain("'update()'");
-    expect(msg).toContain("'partialUpdate()'");
-    expect(msg).toContain("'destroy()'");
-    expect(msg).toContain("'bulkCreate()'");
-    expect(msg).toContain("'bulkUpdate()'");
-    expect(msg).toContain("'bulkPartialUpdate()'");
-    expect(msg).toContain("'bulkDestroy()'");
-    expect(msg).toContain("'lookup()'");
+    // list and retrieve are served → not warned about
+    expect(msg).not.toContain("declares 'list'");
+    expect(msg).not.toContain("declares 'retrieve'");
+    for (const action of [
+      'create',
+      'update',
+      'partialUpdate',
+      'destroy',
+      'bulkCreate',
+      'bulkUpdate',
+      'bulkPartialUpdate',
+      'bulkDestroy',
+      'lookup',
+    ]) {
+      expect(msg).toContain(`declares '${action}'`);
+    }
   });
 
-  it('warns about non-standard BE endpoints with no FE method', async () => {
-    await createAndValidate({
-      paths: {
-        ...FULL_SCHEMA.paths,
-        '/items/export': { get: {} },
-        '/items/import': { post: {} },
-      },
-    });
+  it('warns when the BE serves a standard endpoint the ViewSet never declared', async () => {
+    await createAndValidate(FULL_SCHEMA, [CursorListMixin]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const msg = warnSpy.mock.calls[0][0] as string;
-    expect(msg).toContain('GET /items/export');
-    expect(msg).toContain('POST /items/import');
-    expect(msg).toContain('non-standard endpoint');
+    expect(msg).toContain("BE serves 'POST /items'");
+    expect(msg).toContain("BE serves 'GET /items/lookup'");
+    // GET /items is satisfied by listCursor — one endpoint answers in whichever shape was declared
+    expect(msg).not.toContain("BE serves 'GET /items'\n");
+  });
+
+  it('a declared list shape is satisfied by the single GET the BE serves', async () => {
+    // cursor, page and plain are three shapes of one endpoint, not three endpoints
+    for (const shape of [CursorListMixin, PaginatedListMixin, ListMixin]) {
+      warnSpy.mockClear();
+      await createAndValidate({ paths: { '/items': { get: {} } } }, [shape]);
+      expect(warnSpy).not.toHaveBeenCalled();
+    }
+  });
+
+  it('checks custom endpoints against methods the ViewSet actually wrote', async () => {
+    // Here `typeof this[name]` IS honest: the base implements no custom actions, so whatever
+    // answers is something this ViewSet's own author wrote.
+    await createAndValidate(
+      { paths: { ...FULL_SCHEMA.paths, '/items/export': { get: {} } } },
+      [BulkViewSetMixin, LookupMixin],
+      { export: () => Promise.resolve(null) },
+    );
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('warns about a custom BE endpoint the ViewSet has no method for', async () => {
+    await createAndValidate({ paths: { ...FULL_SCHEMA.paths, '/items/import': { post: {} } } });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg = warnSpy.mock.calls[0][0] as string;
+    expect(msg).toContain("BE serves 'POST /items/import'");
+    expect(msg).toContain("no 'import()' method");
   });
 
   it('no warnings when schema fetch fails (non-critical)', async () => {
     http.get.mockRejectedValue(new Error('Network error'));
     await createAndValidate();
     expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it('no warnings when schema has no paths key (non-critical)', async () => {
-    http.get.mockImplementation((url: string) =>
-      url === '/items/schema' ? Promise.resolve({ data: {} }) : Promise.resolve({ data: [] }),
-    );
-    // data.paths is undefined → falls back to {} → beMethods is empty →
-    // all 11 standard FE methods warn
-    await createAndValidate();
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    const msg = warnSpy.mock.calls[0][0] as string;
-    expect(msg).toContain("'list()'");
-    expect(msg).toContain("'lookup()'");
   });
 
   it('skips the /schema endpoint itself from comparison', async () => {
@@ -533,22 +589,5 @@ describe('schema validation — validateAgainstSchema()', () => {
       },
     });
     expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it('warns about BE standard endpoint FE has not implemented (custom subclass)', async () => {
-    mockSchema(FULL_SCHEMA);
-    const proxy = new RestProxyImpl<number, Item, 'id'>({
-      basePath: '/items',
-      pkFieldName: 'id',
-      axiosInstance: http as unknown as typeof axios,
-    });
-    await new Promise((r) => setTimeout(r, 0));
-    warnSpy.mockClear();
-    // Shadow the prototype method with undefined to simulate a proxy that didn't implement lookup
-    (proxy as any).lookup = undefined;
-    await (proxy as any).validateAgainstSchema();
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    const msg = warnSpy.mock.calls[0][0] as string;
-    expect(msg).toContain("BE exposes 'lookup' endpoint but FE does not implement it");
   });
 });

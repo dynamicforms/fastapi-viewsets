@@ -1,12 +1,22 @@
 /**
- * FE counterpart of BE mixins.py — abstract mixin classes for ViewSet declarations.
+ * FE counterpart of BE mixins.py — the mixins a ViewSet declaration is composed of.
  *
- * Each mixin class corresponds to its BE counterpart. ViewSet classes on the FE
- * declare their capabilities by extending these mixins, mirroring the BE pattern:
+ * Each mixin corresponds to its BE counterpart and names the actions that one contributes:
  *
- *   class ItemViewSet extends BulkViewSetMixin<number, Item> implements LookupMixin {}
+ *   class ItemViewSet extends RestProxyImpl<number, Item, 'id'> {
+ *     static declares = [BulkViewSetMixin, LookupMixin];
+ *   }
  *
- * The actual HTTP implementation is provided by RestProxyImpl via route_rest().
+ * The `declares` list is what the startup schema check reads. It exists because a TypeScript
+ * `implements` clause cannot: it is erased before anything runs, and on these classes it does not
+ * even narrow the type, since the proxy base implements every action and therefore satisfies any
+ * subset trivially. So `declares` replaces the `implements` clause rather than repeating it.
+ *
+ * `actions` on a composite mixin is spread from the mixins it is composed of, so the list and the
+ * class hierarchy cannot drift apart.
+ *
+ * The methods stay `declare`-only: the implementation is one HTTP call in ViewSetProxyBase, and a
+ * mixin that carried its own would be a second copy of it.
  */
 
 export interface LookupItem {
@@ -23,18 +33,26 @@ export type DestroyReturnData = Record<KeyType, any>;
 // ---------------------------------------------------------------------------
 
 export class CreateMixin<T, PK extends keyof T> {
+  static readonly actions: readonly string[] = ['create'];
+
   declare create: (data: Omit<T, PK>) => Promise<T>;
 }
 
 export class BulkOnlyCreateMixin<T, PK extends keyof T> {
+  static readonly actions: readonly string[] = ['bulkCreate'];
+
   declare bulkCreate: (data: Omit<T, PK>[]) => Promise<T[]>;
 }
 
 export class BulkCreateMixin<T, PK extends keyof T> extends CreateMixin<T, PK> implements BulkOnlyCreateMixin<T, PK> {
+  static readonly actions: readonly string[] = [...CreateMixin.actions, ...BulkOnlyCreateMixin.actions];
+
   declare bulkCreate: (data: Omit<T, PK>[]) => Promise<T[]>;
 }
 
 export class ListMixin<T> {
+  static readonly actions: readonly string[] = ['list'];
+
   declare list: (params?: ListParams) => Promise<T[]>;
 }
 
@@ -94,6 +112,8 @@ export interface CursorParams extends ListParams {
 
 /** FE counterpart of the BE CursorListMixin. A ViewSet declares this or PaginatedListMixin. */
 export class CursorListMixin<T> {
+  static readonly actions: readonly string[] = ['listCursor'];
+
   declare listCursor: (params?: CursorParams) => Promise<CursorPage<T>>;
 }
 
@@ -102,45 +122,65 @@ export class CursorListMixin<T> {
  * endpoint answers with one shape or the other, decided per viewset, never per request.
  */
 export class PaginatedListMixin<T> {
+  static readonly actions: readonly string[] = ['listPage'];
+
   declare listPage: (params?: PageParams) => Promise<PaginatedList<T>>;
 }
 
 export class RetrieveMixin<K extends KeyType, T> {
+  static readonly actions: readonly string[] = ['retrieve'];
+
   declare retrieve: (pk: K) => Promise<T>;
 }
 
 export class UpdateMixin<K extends KeyType, T> {
+  static readonly actions: readonly string[] = ['update', 'partialUpdate'];
+
   declare update: (pk: K, data: T) => Promise<T>;
   declare partialUpdate: (pk: K, data: Partial<T>) => Promise<T>;
 }
 
 export class BulkOnlyUpdateMixin<K extends KeyType, T> {
+  static readonly actions: readonly string[] = ['bulkUpdate', 'bulkPartialUpdate'];
+
   declare bulkUpdate: (records: Record<K, T>) => Promise<T[]>;
   declare bulkPartialUpdate: (records: Record<K, Partial<T>>) => Promise<T[]>;
 }
 
 export class BulkUpdateMixin<K extends KeyType, T> extends UpdateMixin<K, T> implements BulkOnlyUpdateMixin<K, T> {
+  static readonly actions: readonly string[] = [...UpdateMixin.actions, ...BulkOnlyUpdateMixin.actions];
+
   declare bulkUpdate: (records: Record<K, T>) => Promise<T[]>;
   declare bulkPartialUpdate: (records: Record<K, Partial<T>>) => Promise<T[]>;
 }
 
 export class DestroyMixin<K extends KeyType> {
+  static readonly actions: readonly string[] = ['destroy'];
+
   declare destroy: (pk: K) => Promise<DestroyReturnData>;
 }
 
 export class BulkOnlyDestroyMixin<K extends KeyType> {
+  static readonly actions: readonly string[] = ['bulkDestroy'];
+
   declare bulkDestroy: (pks: K[]) => Promise<DestroyReturnData[]>;
 }
 
 export class BulkDestroyMixin<K extends KeyType> extends DestroyMixin<K> implements BulkOnlyDestroyMixin<K> {
+  static readonly actions: readonly string[] = [...DestroyMixin.actions, ...BulkOnlyDestroyMixin.actions];
+
   declare bulkDestroy: (pks: K[]) => Promise<DestroyReturnData[]>;
 }
 
 export class LookupMixin {
+  static readonly actions: readonly string[] = ['lookup'];
+
   declare lookup: () => Promise<LookupItem[]>;
 }
 
 export class ReadOnlyViewSetMixin<K extends KeyType, T> extends ListMixin<T> implements RetrieveMixin<K, T> {
+  static readonly actions: readonly string[] = [...ListMixin.actions, ...RetrieveMixin.actions];
+
   declare retrieve: (pk: K) => Promise<T>;
 }
 
@@ -148,6 +188,13 @@ export class ViewSetMixin<K extends KeyType, T, PK extends keyof T>
   extends ReadOnlyViewSetMixin<K, T>
   implements CreateMixin<T, PK>, UpdateMixin<K, T>, DestroyMixin<K>
 {
+  static readonly actions: readonly string[] = [
+    ...ReadOnlyViewSetMixin.actions,
+    ...CreateMixin.actions,
+    ...UpdateMixin.actions,
+    ...DestroyMixin.actions,
+  ];
+
   declare create: (data: Omit<T, PK>) => Promise<T>;
   declare update: (pk: K, data: T) => Promise<T>;
   declare partialUpdate: (pk: K, data: Partial<T>) => Promise<T>;
@@ -158,6 +205,13 @@ export class BulkViewSetMixin<K extends KeyType, T, PK extends keyof T>
   extends ViewSetMixin<K, T, PK>
   implements BulkCreateMixin<T, PK>, BulkUpdateMixin<K, T>, BulkDestroyMixin<K>
 {
+  static readonly actions: readonly string[] = [
+    ...ViewSetMixin.actions,
+    ...BulkOnlyCreateMixin.actions,
+    ...BulkOnlyUpdateMixin.actions,
+    ...BulkOnlyDestroyMixin.actions,
+  ];
+
   declare bulkCreate: (data: Omit<T, PK>[]) => Promise<T[]>;
   declare bulkUpdate: (records: Record<K, T>) => Promise<T[]>;
   declare bulkPartialUpdate: (records: Record<K, Partial<T>>) => Promise<T[]>;

@@ -186,30 +186,66 @@ Both produce the same underlying object — `route_rest` simply wraps `new RestP
 
 ## Schema validation
 
-When a `RestProxyImpl` instance is created, it automatically fetches `GET {basePath}/schema` in the background and 
-compares the BE's OpenAPI schema against the FE method set. If mismatches are found, a `console.warn` is emitted listing 
-each discrepancy.
+A ViewSet lists the mixins it is made of, and the proxy checks that list against the BE's schema
+when it is constructed:
 
-This check is **non-critical**: if the schema endpoint is unreachable (e.g. in unit tests) or returns an unexpected 
-format, the error is silently ignored and no warning is shown.
+```ts
+import { BulkViewSetMixin, LookupMixin } from '@dynamicforms/fastapi-viewsets';
+
+class ItemViewSet extends RestProxyImpl<number, Item, 'id'> {
+  static declares = [BulkViewSetMixin, LookupMixin];
+}
+```
+
+`declares` is the FE counterpart of a BE viewset's base classes, and it exists because a
+TypeScript `implements` clause cannot do the job: it is erased before anything runs. On these
+classes it does not even narrow the type — the proxy base implements every action, so any subset is
+satisfied trivially — which is why `declares` replaces the `implements` clause rather than
+repeating it.
+
+The proxy fetches `GET {basePath}/schema` in the background and emits one `console.warn` listing
+every disagreement. The check is **non-critical**: an unreachable schema endpoint or an unexpected
+format is ignored silently.
 
 ### What gets checked
 
 | Situation | Warning message |
 |-----------|----------------|
-| FE declares a standard method (e.g. `create`) but BE has no matching endpoint | `FE declares 'create()' but BE has no matching endpoint` |
-| BE has a standard endpoint but FE does not implement the corresponding method | `BE exposes 'create' endpoint but FE does not implement it` |
-| BE exposes a non-standard endpoint (e.g. `GET /items/export`) with no FE method | `BE has non-standard endpoint 'GET /items/export' with no FE method` |
+| The ViewSet declares an action the BE viewset does not serve | `declares 'create' but the BE viewset serves no such endpoint` |
+| The BE serves a standard endpoint the ViewSet never declared | `BE serves 'POST /items' but the ViewSet declares no create` |
+| The BE serves a custom endpoint the ViewSet has no method for | `BE serves 'GET /items/export' but the ViewSet has no 'export()' method` |
+
+`GET {basePath}` is one endpoint that answers in whichever shape the BE viewset declared, so
+`ListMixin`, `PaginatedListMixin` and `CursorListMixin` each satisfy it — declaring `listCursor`
+and being served `GET /items` is agreement, not a mismatch.
+
+Custom endpoints are the one place the check asks whether a method exists on the object, because
+there the answer means something: the base implements no custom actions, so whatever answers is
+something the ViewSet's own author wrote.
 
 ### Example output
 
 ```
 [ViewSet /items] FE/BE definition mismatch:
-  • FE declares 'create()' but BE has no matching endpoint
-  • FE declares 'update()' but BE has no matching endpoint
-  • FE declares 'partialUpdate()' but BE has no matching endpoint
-  • FE declares 'destroy()' but BE has no matching endpoint
-  • BE has non-standard endpoint 'GET /items/export' with no FE method
+  • declares 'create' but the BE viewset serves no such endpoint
+  • declares 'update' but the BE viewset serves no such endpoint
+  • BE serves 'GET /items/export' but the ViewSet has no 'export()' method
 ```
 
-This example would appear when the BE only exposes a read-only ViewSet (list + retrieve) plus a custom export endpoint, but the FE proxy was created with `RestProxyImpl` (which includes all CRUD methods).
+### A ViewSet that declares nothing
+
+It is not checked, and does not pay for the schema request. That is deliberate: a ViewSet that
+never said what it has cannot be caught contradicting itself, and guessing on its behalf is what
+made the check report actions nobody had claimed.
+
+To narrow a declaration in a subclass, state the smaller list — ordinary static lookup means it
+replaces the parent's rather than adding to it:
+
+```ts
+/** Same model, but this BE viewset was built from CursorListMixin alone. */
+class ItemDbViewSet extends ItemViewSet {
+  static declares = [CursorListMixin];
+}
+```
+
+Set `validateSchema: false` to skip the check entirely.

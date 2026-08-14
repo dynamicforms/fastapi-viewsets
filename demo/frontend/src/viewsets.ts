@@ -1,6 +1,6 @@
 import { connect, type Peer } from 'muxws';
 
-import { BulkViewSetMixin, LookupMixin, PaginatedListMixin } from '../../../vue/mixins';
+import { BulkViewSetMixin, CursorListMixin, LookupMixin, PaginatedListMixin } from '../../../vue/mixins';
 import { MuxwsProxyImpl } from '../../../vue/muxws-proxy';
 import type { HttpMethod, RequestOptions } from '../../../vue/proxy-base';
 import { RestProxyImpl } from '../../../vue/rest-proxy';
@@ -45,10 +45,9 @@ async function count(this: { request<R>(m: HttpMethod, p: string, o?: RequestOpt
   return this.request<number>('GET', '/count');
 }
 
-export class MusicTrackRestViewSet
-  extends RestProxyImpl<number, MusicTrack, 'id'>
-  implements BulkViewSetMixin<number, MusicTrack, 'id'>, PaginatedListMixin<MusicTrack>, LookupMixin
-{
+export class MusicTrackRestViewSet extends RestProxyImpl<number, MusicTrack, 'id'> {
+  static declares = [BulkViewSetMixin, CursorListMixin, PaginatedListMixin, LookupMixin];
+
   constructor(basePath: string) {
     super({ basePath, pkFieldName: 'id' });
   }
@@ -56,15 +55,23 @@ export class MusicTrackRestViewSet
   count = count;
 }
 
-export class MusicTrackMuxwsViewSet
-  extends MuxwsProxyImpl<number, MusicTrack, 'id'>
-  implements BulkViewSetMixin<number, MusicTrack, 'id'>, PaginatedListMixin<MusicTrack>, LookupMixin
-{
+/** The Django-backed viewset declares only CursorListMixin, because that is all the BE gave it. */
+export class MusicTrackDbRestViewSet extends MusicTrackRestViewSet {
+  static declares = [CursorListMixin];
+}
+
+export class MusicTrackMuxwsViewSet extends MuxwsProxyImpl<number, MusicTrack, 'id'> {
+  static declares = [BulkViewSetMixin, CursorListMixin, PaginatedListMixin, LookupMixin];
+
   constructor(basePath: string, peer: () => Promise<Peer>) {
     super({ basePath, pkFieldName: 'id', peer });
   }
 
   count = count;
+}
+
+export class MusicTrackDbMuxwsViewSet extends MusicTrackMuxwsViewSet {
+  static declares = [CursorListMixin];
 }
 
 /**
@@ -94,8 +101,11 @@ export function viewSetFor(transport: Transport, backend: Backend = 'memory') {
   if (!proxy) {
     proxy =
       transport === 'rest'
-        ? new MusicTrackRestViewSet(BASE_PATHS[backend])
-        : new MusicTrackMuxwsViewSet(BASE_PATHS[backend], muxwsPeer);
+        ? new (backend === 'db' ? MusicTrackDbRestViewSet : MusicTrackRestViewSet)(BASE_PATHS[backend])
+        : new (backend === 'db' ? MusicTrackDbMuxwsViewSet : MusicTrackMuxwsViewSet)(
+            BASE_PATHS[backend],
+            muxwsPeer,
+          );
     proxies.set(key, proxy);
   }
   return proxy;
