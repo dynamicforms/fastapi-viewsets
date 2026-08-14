@@ -1,158 +1,143 @@
 # GAPS
 
-Decisions taken without being able to ask, and the reasoning behind them. Each is a thing to
-argue about, not a thing that is settled.
+Decisions that could go the other way, and the reasoning behind the way they went. Each is a thing
+to argue about, not a thing that is settled. Entries that were argued about and settled are kept
+where the reasoning is worth having on record, and marked as such.
 
-## muxws transport
+## Still open
 
-### Dispatch goes through a synthetic ASGI request
+### The synthetic ASGI request costs a JSON round trip
 
-`process_command` builds an ASGI scope and calls the FastAPI app, rather than reaching into
-`lifecycle_runner` directly. The upside is total parity: parameter binding, validation,
-`Depends`, command middleware, context processors, response models and status codes are the
-same code on both transports, so they cannot drift.
+`process_command` builds an ASGI scope and calls the FastAPI app rather than reaching into
+`lifecycle_runner` directly. That buys total parity: parameter binding, validation, `Depends`,
+command middleware, context processors, response models and status codes are the same code on both
+transports, so they cannot drift.
 
-The cost is one JSON decode/re-encode round trip per call. muxws has already decoded the payload
-by the time we see it; we re-encode it to bytes for FastAPI to parse, and decode FastAPI's
-response bytes again to hand back to muxws. Direct dispatch would avoid this, at the price of
-re-implementing parameter binding - which is the duplication the transport exists to avoid.
+It costs a decode/re-encode. muxws has already decoded the payload; we re-encode it to bytes for
+FastAPI to parse, and decode FastAPI's response bytes again to hand back. Measured on a 50-record
+page:
 
-If profiling ever shows this matters, the honest fix is not to bypass FastAPI but to let it
-accept a pre-decoded body. Worth measuring before doing anything.
+| | per call | share |
+|---|---|---|
+| whole muxws command | 0.457 ms | |
+| the ASGI dispatch itself | 0.252 ms | 55% |
+| decoding the response | 0.068 ms | 15% |
+| encoding a 50-record request body | 0.076 ms | 17% |
 
-### Response status travels in leading headers
+A read pays about 15% for the round trip; a large write about a third. Real, and not where the time
+goes: over half the call is FastAPI's own dispatch, which is precisely what the parity is bought
+with. The honest fix is not to bypass FastAPI but to let it accept a pre-decoded body, and nothing
+here is worth doing before that exists.
 
-Resolved. It rode in `trailers` until muxws 0.3.1, which carries `headers` on the first `data`
-frame a peer sends as well as on `open` (WSM-FRM-016). Trailers only attach to a frame with
-`end: true`, so the status arrived *after* the body - free for a unary reply, wrong for a
-streaming one, where a caller would have had to read a whole response to discover it was an error.
+### A third transport wants a different parameter, not a third `register_*`
 
-The client now awaits `replyHeadersArrived` before reading the body, so the status is known first.
-Minimum muxws is 0.3.1 on both packages.
+`route_viewset` takes `register_rest` and `register_muxws`. A third transport would make it three,
+which is the shape that stops scaling.
 
-### An unhandled exception answers 500 rather than resetting the stream
+A set of flags — `{REGISTER_REST, NO_REGISTER_MUXWS}` — is the worse of the two options: the
+setting is tri-state (yes / no / defer), so a set needs a paired positive and negative member per
+transport and can express the contradiction of holding both. A mapping cannot:
+`transports={"rest": False}`, absent key meaning defer, is tri-state natively and grows by one key
+per transport rather than two members.
 
-muxws' own idiom is that a handler which raises produces `reset(APPLICATION_ERROR)`. We do not
-do that: by the time the app re-raises it has already produced a 500 response, and an HTTP client
-would simply have received it. Turning "the handler crashed" into "the transport failed" tells
-the caller something different and less useful, and it would mean the two transports report the
-same server bug in two different shapes. The traceback goes to the log instead.
-
-Open question: should a 5xx *also* be visible as a transport-level failure for callers that only
-watch for `RemoteError`? Currently it is not.
-
-### Two viewsets on one base path are not reported
-
-Routing picks the first match, so the second viewset's endpoints are silently unreachable. That
-looks like it deserves a warning, and it had one for a while - until it turned out to fire 75
-times in this project's own test suite, because building a throwaway viewset per test case is
-indistinguishable from the real mistake. A warning that noisy is one nobody reads.
-
-The registry does key on `module.qualname`, so a module reload replaces its registration cleanly
-instead of duplicating it. The unreported case is genuinely two *different* viewsets colliding.
-The REST side has always been silent about the same thing.
-
-Better answer, if one is wanted: a `check_registrations()` an application can call at startup,
-which reports collisions as an error where it can actually act on them, rather than a warning
-emitted at import time.
-
-### `register_rest` has no viewset-level or global switch
-
-`@transports(rest=False)` works per endpoint, but there is no `route_viewset(register_rest=False)`
-and no global default. Turning REST off for an entire viewset is what not calling `route_viewset`
-already does, so the knob would have exactly one use: a viewset that wants muxws for everything
-except a handful of endpoints. That did not seem worth a third resolution level. Easy to add if
-it turns out to be wanted.
-
-## Celery already carries the whole list pipeline
-
-A design was proposed where the list parameters (filter, sort, pagination) are shipped to the
-Celery worker, the worker reports back which of them it implemented, and the FastAPI side applies
-whatever is left. Half of that turned out to be already true and the other half should not be
-built.
-
-`celery_viewset_client` patches the **route endpoints** - `list_items`, not `perform_list` - so the
-entire pipeline already runs in the worker. Filter, sort and pagination parameters cross today and
-work (verified against a live worker, and pinned by
-`decorators/celery_viewset/list_params_test.py`), and the `PaginatedList` envelope comes back
-intact.
-
-Which means there is nothing to report back. `query.mark_applied()` is an intra-process contract,
-and the worker *is* that process: a backend that translated part of the query into its own query
-says so, and the in-memory stages skip that work, with both the query and the records in the same
-memory. Reporting back to the FastAPI side would require shipping unfiltered, unsorted, unpaginated
-records across the queue so they could be reduced somewhere else - the exact opposite of what
-push-down is for.
-
-The part of the proposal that survives intact is the filter plugin API: a Django-ORM-backed worker
-still needs filters expressed as data rather than as hand-written closures before it can translate
-them into queryset calls.
-
-## Pagination and the fetch pipeline
-
-### A separate mixin rather than two shapes on one endpoint
-
-Paging was first built as an opt-in per request: no `limit` meant a plain list, a `limit` meant an
-envelope, one endpoint returning `list[T] | PaginatedList[T]`. That is what the author's Django
-implementation does, and it is backwards compatible in the strongest sense — no existing client
-changes.
-
-It was abandoned for two reasons. The soft one: every client has to branch on the shape it got
-back, and the OpenAPI schema describes a union that no generator can do anything useful with. The
-hard one: `list[T] | PaginatedList[T]` broke TypeVar resolution outright. `types.UnionType` is not
-subscriptable, so the resolver silently returned the annotation unresolved, and pydantic collapses
-`PaginatedList[T]` to the bare class inside a union's `get_args`. The schema came out describing
-results as a list of anything, silently.
-
-`PaginatedListMixin` makes it a viewset-wide decision instead: one endpoint, one shape, one schema.
-The cost is that switching an existing viewset to paging is a breaking change for its clients,
-rather than something they can adopt at their own pace.
-
-### TypeVar resolution now knows about pydantic generics
-
-`build_schema` and `resolve_typevars` were extended to handle parameterised pydantic models, which
-are real classes rather than typing aliases and so were invisible to `get_origin`/`get_args`.
-Without it `PaginatedList[T]` reached FastAPI unresolved. This is a general fix - any pydantic
-generic in a return annotation was affected - but it was found because of pagination, and nothing
-else in the codebase exercises it yet.
+Not built, because a third transport does not exist and may never — muxws would likely absorb a
+Unix socket rather than sit beside one. When it does, the two `register_*` parameters become
+shorthand for the mapping rather than being removed.
 
 ### `count` is best-effort
 
-A list knows its length; a generator does not, and draining it to find out defeats the purpose. So
-`count` is null for lazy sources. A backend that can count cheaply overrides `count_records()` -
-the Django one answers with a `SELECT COUNT(*)` - so the null is a statement about the source, not
-about the pipeline.
+A list knows its length; a generator does not, and draining it to find out defeats the purpose, so
+`count` is null for lazy sources. A backend that can count cheaply overrides `count_records()` —
+the Django one answers with a `SELECT COUNT(*)` — so the null is a statement about the source, not
+about the pipeline. A cursor page never counts at all, deliberately.
 
-### Custom Vue endpoints changed idiom
+### OpenAPI cannot say that the response shape depends on a request header
 
-They used to be written against `this.http` (axios); they should now be written against
-`this.request()`, which each transport implements, so the same method body works on either.
-`this.http` still exists on `RestProxyImpl` and still works. The docs were updated; anyone with
-existing code has not been broken, only left on the REST-only idiom.
+A viewset offering several shapes documents them as an `anyOf`, with one named example per shape so
+the docs say `plain` rather than `ListOf_MusicTrack_`. What no part of the schema can state is that
+`X-List-Shape` selects between them — OpenAPI has no way to express a response that varies by
+request header. That stays prose in the endpoint's description, and a generated client gets a union
+it has to narrow itself.
 
-### The demo no longer uses Celery by default
+Which is why declaring a single shape stays the recommended default rather than the fallback.
 
-It used to, unconditionally. That made the transport benchmark meaningless - queueing through Redis
-and waiting for a worker dwarfs the difference between HTTP and a WebSocket frame. `DEMO_CELERY=1`
-restores it, and `celery_worker.py` sets it itself. The Celery path is consequently no longer
-exercised by simply running the demo, which is a real loss of coverage for it.
+### The demo no longer exercises Celery by default
 
-### Cursor pagination: the ordering key tuple is the whole design
+It used to, unconditionally, which made the transport benchmark meaningless: queueing through Redis
+and waiting for a worker dwarfs the difference between HTTP and a WebSocket frame. `demo.py
+--celery` turns it back on and an e2e spec covers that path, skipped when Redis is absent. So the
+path is covered — just not by simply running the demo.
 
-Built. The concern recorded here - that a materialised `list[T]` leaves nothing to push a
-comparison into - was answered by the pipeline rework and then by the filter API: the cursor
-predicate is a `Filter`, so it reaches a backend through the same registry as everything else and
-falls back to `matches()` when none can translate it.
+## Settled, kept for the reasoning
 
-Two things about it are decisions rather than facts, and both are arguable:
+### An unhandled exception answers 500 rather than resetting the stream
 
-**The cursor is not signed.** Base64 over JSON is transport encoding, not protection. It carries
-the ordering fields' values, so a client can read them and forge them. That is harmless when the
-ordering is `(year, id)` and not when it is `(salary, id)`. An HMAC would fix it; nothing does
-today.
+muxws' own idiom is that a handler which raises produces `reset(APPLICATION_ERROR)`. This does not.
+By the time the app re-raises it has already produced a 500, and an HTTP client would simply have
+received it: a status is an answer, not a transport failure. Resetting would tell the caller the
+connection misbehaved when the server in fact answered, and would make the two transports report
+the same server bug in two different shapes. The traceback goes to the log instead.
 
-**Filters are in the fingerprint.** A cursor issued under one filter is refused under another,
-which means changing a filter restarts paging. That is defensible - the page you would get
-otherwise is one nobody asked for - but it is stricter than it has to be: the position is still
-well defined in the ordering regardless of the filter. Loosening it to bind only the ordering
-would let a client narrow a filter without losing its place.
+### Two viewsets on one base path warn rather than raise
+
+Routing picks the first match, so the second viewset's endpoints are unreachable, and neither
+FastAPI nor this library would otherwise say so. A warning rather than an error, because that is
+proportionate to how easily it is fixed and because refusing would be a new way for an application
+that starts today to stop starting.
+
+It was briefly removed for firing 75 times in this project's own suite — test scaffolding is
+indistinguishable from the real mistake. That was letting test convenience decide a production
+question; the suite filters it in `pyproject.toml` instead.
+
+### Response status travels in leading headers
+
+It rode in `trailers` until muxws 0.3.1, which carries `headers` on the first `data` frame a peer
+sends as well as on `open`. Trailers only attach to a frame with `end: true`, so the status arrived
+*after* the body — free for a unary reply, wrong for a streaming one, where a caller would have had
+to read a whole response to discover it was an error.
+
+### The cursor is not signed
+
+Base64 over JSON is transport encoding, not protection: a client can read the ordering values and
+forge them. Dismissed on argument — the cursor only ever contains values from rows that client was
+already served, and the queryset it indexes into still comes from `get_queryset(context)`, so
+tampering moves you around inside data you could already reach, which a filter would do more
+easily. Sign it only if the ordering fields are themselves sensitive.
+
+### Filters are in the cursor's fingerprint
+
+A cursor issued under one filter is refused under another, so changing a filter restarts paging.
+Stricter than strictly necessary — the position is still well defined in the ordering — but it
+matches what a filter change already did, and the page you would otherwise get is one nobody asked
+for.
+
+### One list endpoint can serve several shapes
+
+Paging was first built as an opt-in per request, then abandoned, then rebuilt. The lesson is in the
+middle step.
+
+The soft reason to abandon it was that clients must branch on the shape they got. The hard one was
+that `list[T] | PaginatedList[T]` broke TypeVar resolution outright: `types.UnionType` is not
+subscriptable, so the resolver handed back the annotation unresolved, and pydantic collapsed
+`PaginatedList[T]` to the bare class inside a union's `get_args`. The schema silently described
+results as a list of anything.
+
+That blocker was removed as a side effect of later work — `PaginatedList` moved to its own TypeVar
+and `resolve_typevars` learned about pydantic generics — and nobody went back to re-examine the
+decision it had forced, until it came up again in conversation. `typing.Union` (not `X | Y`) now
+resolves correctly, so a viewset can declare `list_shapes` and offer all three.
+
+Worth keeping: a decision forced by a technical limit needs revisiting when the limit goes, and
+nothing prompts that on its own.
+
+### Celery already carried the whole list pipeline
+
+A design was proposed where the list parameters are shipped to the worker, the worker reports back
+which it implemented, and FastAPI applies the rest. Half was already true and the other half should
+not be built.
+
+`celery_viewset_client` patches the route endpoints — `list_items`, not `perform_list` — so the
+entire pipeline already runs in the worker, and filter, sort and pagination parameters already
+cross. Which means there is nothing to report back: `query.mark_applied()` is an intra-process
+contract and the worker *is* that process. Reporting back would mean shipping unreduced records
+across the queue to be reduced somewhere else, which is the opposite of what push-down is for.
