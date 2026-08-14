@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from demo.backend.data_generator import generate_music_library
-from demo.backend.django_setup import ensure_database, MusicTrackRow
+from demo.backend.django_setup import MusicTrackRow
 from fastapi_viewsets.backends.django_orm import DjangoORMViewSet
 from fastapi_viewsets.collection_viewset import CollectionViewSet
 from fastapi_viewsets.context import Context
@@ -88,6 +88,13 @@ class MusicTrackViewSet(
     schema = MusicTrack
     pk_field_name = "id"
     default_page_size = 50
+
+    list_shapes = ("cursor", "plain", "paginated")
+    """
+    All three, so the demo can show what the choice looks like in Swagger and ReDoc. A real viewset
+    usually declares none of this and answers in one shape - which keeps its schema to one model
+    instead of a union every client has to narrow.
+    """
 
     @__router.get("count", tags=["MusicTrack"], summary="Return the total number of tracks")
     async def count(self, context: Context) -> int:

@@ -46,6 +46,12 @@ class ListQuery:
     limit: int | None = None
     applied: set[str] = field(default_factory=set)
     cursor: str | None = None
+    shape: str | None = None
+    """
+    Which envelope the answer goes into. `list_items` sets it from the request; left unset - by a
+    test, or by one endpoint calling another - `get_list` fills in the viewset's own default, so a
+    direct call answers in the shape the viewset advertises rather than in a fixed one.
+    """
     extra_filters: list = field(default_factory=list)
     """
     Filters the pipeline adds itself rather than the client asking for them - today only the

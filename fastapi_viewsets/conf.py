@@ -32,6 +32,12 @@ class Settings:
         self.viewsets_command_middleware: list[CommandMiddleware] = []
         self.viewsets_auth_processors: list[AuthBackend] = []
         self.default_action_configuration: dict[Any, Any] = {}
+        self.default_list_shape: str = "plain"
+        """
+        The shape a list endpoint answers in when the viewset does not say - "plain", "paginated"
+        or "cursor". Left at "plain" so that adding this setting changed nothing for anybody;
+        an application that pages everything sets it once here instead of on every viewset.
+        """
         self.viewsets_register_muxws: bool = True
         """
         Whether a viewset is reachable over the muxws transport (see fastapi_viewsets/mux_ws/) when

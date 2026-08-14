@@ -1,9 +1,9 @@
 import inspect
 
 from functools import wraps
-from typing import Annotated, get_args, get_origin, TypeVar
+from typing import Annotated, get_args, get_origin, Literal, TypeVar
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from fastapi.params import FieldInfo
 from pydantic import BaseModel
 
@@ -172,8 +172,48 @@ def route_viewset(
                 return False
             return any(isinstance(m, FieldInfo) for m in metadata)
 
+        def _shape_signature(sig, endpoint):
+            """
+            Trims the shape-aware list endpoint down to this viewset's own shapes.
+
+            `ListMixin.list_items` declares every parameter any shape could need, because a method
+            on a shared mixin cannot know which viewset it will end up on. Here it can: parameters
+            no allowed shape uses are dropped so they never reach the schema, the `X-List-Shape`
+            header is kept only when there is a choice to make, and the return annotation becomes
+            the union of exactly the models this viewset can produce.
+            """
+            from fastapi_viewsets.list_shapes import response_model, SHAPE_HEADER
+            from fastapi_viewsets.mixins import T as ItemVar
+
+            default, allowed = cls.resolve_shapes()
+            uses = {
+                "offset": "paginated" in allowed,
+                "cursor": "cursor" in allowed,
+                "limit": bool({"paginated", "cursor"} & set(allowed)),
+                "x_list_shape": len(allowed) > 1,
+            }
+
+            params = []
+            for name, parameter in sig.parameters.items():
+                if uses.get(name) is False:
+                    continue
+                if name == "x_list_shape":
+                    parameter = parameter.replace(annotation=Annotated[
+                        Literal[(*allowed, None)],
+                        Header(
+                            alias=SHAPE_HEADER,
+                            description=f"Response shape. Omit for this endpoint's default ({default}).",
+                        ),
+                    ])
+                params.append(parameter)
+
+            item_type = type_map.get(ItemVar, ItemVar)
+            return sig.replace(parameters=params, return_annotation=response_model(allowed, item_type))
+
         def get_wrapper(original_endpoint, route_path, route_methods):
             sig = inspect.signature(original_endpoint)
+            if getattr(original_endpoint, "__list_shape_aware__", False):
+                sig = _shape_signature(sig, original_endpoint)
             new_params = []
             needs_context = False
 
