@@ -183,10 +183,13 @@ as real JSON and are coerced back through the response model's field types.
 A cursor is fingerprinted against the ordering and the active filters; sending one to a differently
 sorted or filtered query is a 400.
 
-NULLs are placed by the viewset's `nulls` attribute — `"first"` (the default) or `"last"` — as in
-SQL, so the placement does not move when the sort direction does. The in-memory sort, the cursor's
-comparison and the SQL a backend emits all use it, which is what keeps a cursor from stepping over
-NULL rows.
+NULLs sit at the end the viewset's `nulls` attribute names — `"first"` (the default) or `"last"` —
+**when sorting ascending**. Descending reverses it: `"last"` means NULL is the largest value there
+is, so a descending sort puts it in front. That is not SQL's `NULLS LAST`, which stays put; a
+backend flips the placement it emits per key.
+
+The in-memory sort, the cursor's comparison and the SQL a backend emits all use this one setting,
+which is what stops a cursor walking straight past the NULL rows.
 
 ### On a database
 

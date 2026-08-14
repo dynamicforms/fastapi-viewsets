@@ -380,7 +380,7 @@ def test_a_cursor_walk_over_a_nullable_column_visits_every_row(nulls, direction)
     assert len(seen) == len(set(seen))
 
 
-def test_nulls_sit_where_the_viewset_places_them():
+def test_nulls_sit_at_the_end_the_viewset_names_when_ascending():
     first = nullable_client(nulls="first").get("/tracks", params={"sort": "year:asc"}).json()
     assert first["results"][0]["year"] is None
 
@@ -389,10 +389,14 @@ def test_nulls_sit_where_the_viewset_places_them():
 
 
 @pytest.mark.parametrize("nulls", ["first", "last"])
-def test_the_placement_does_not_move_when_the_direction_does(nulls):
-    """SQL's meaning of NULLS FIRST: first, whichever way the values run."""
+def test_the_direction_reverses_which_end_nulls_are_at(nulls):
+    """
+    `nulls` names the end when ascending. NULL is a value below or above every other, not a row
+    pinned to an edge, so descending swaps it - unlike SQL's `NULLS FIRST`, which does not move.
+    """
     client = nullable_client(nulls=nulls)
-    for direction in ("asc", "desc"):
-        body = client.get("/tracks", params={"sort": f"year:{direction}"}).json()
-        leads = body["results"][0]["year"] is None
-        assert leads is (nulls == "first"), f"{nulls} broke on {direction}"
+    ascending = client.get("/tracks", params={"sort": "year:asc"}).json()
+    descending = client.get("/tracks", params={"sort": "year:desc"}).json()
+
+    assert (ascending["results"][0]["year"] is None) is (nulls == "first")
+    assert (descending["results"][0]["year"] is None) is (nulls == "last")

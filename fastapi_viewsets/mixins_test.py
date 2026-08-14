@@ -779,7 +779,7 @@ async def test_sort_nulls_last_asc():
 
 @pytest.mark.asyncio
 async def test_sort_nulls_first_desc():
-    """With `nulls = "first"` (the default) None sorts before real values, descending included."""
+    """`nulls = "last"` means NULL is the largest value, so descending puts it in front."""
 
     class ItemWithOptional(BaseModel):
         id: int
@@ -792,7 +792,7 @@ async def test_sort_nulls_first_desc():
     }
 
     class NullViewSet(CollectionViewSet[int, ItemWithOptional], BulkViewSetMixin[int, ItemWithOptional]):
-        nulls = "first"
+        nulls = "last"
 
         def __init__(self):
             super().__init__(container=db, pk_field="id")
@@ -800,4 +800,4 @@ async def test_sort_nulls_first_desc():
     route = _get_list_route(NullViewSet)
     result = await route.endpoint(fltr=None, sort="name:desc")
     names = [i.name for i in result]
-    assert names[0] is None  # placed first, and stays first under desc
+    assert names[0] is None  # largest, so first when descending
