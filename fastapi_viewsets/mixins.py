@@ -253,10 +253,15 @@ class ListMixin(Generic[T, TFilter], ABC):
 
     nulls: str = "first"
     """
-    Where NULL rows sit in a sorted result: `"first"` or `"last"`.
+    Where NULL rows sit **when sorting ascending**: `"first"` or `"last"`.
 
-    A placement, as in SQL: it does not move when the direction does. Applies to the in-memory
-    sort, to the cursor's comparison, and to what a backend is asked to emit, so all three agree.
+    Descending reverses it, because NULL is treated as a value below or above every other rather
+    than as a row pinned to an edge - `"last"` means "the largest thing there is", so descending
+    puts it in front. SQL's `NULLS LAST` is the other reading, fixed regardless of direction; a
+    backend translating this flips the placement it emits per key.
+
+    The in-memory sort, the cursor's comparison and the SQL a backend emits all use it, which is
+    what stops a cursor walking straight past the NULL rows.
     """
 
     @property

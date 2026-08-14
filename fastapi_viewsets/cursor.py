@@ -247,12 +247,12 @@ def wants_greater(descending: bool, backwards: bool) -> bool:
 
 def compare_in_order(left: Any, right: Any, descending: bool = False, nulls_first: bool = True) -> int:
     """
-    Three-way comparison **in sort order**, NULLs placed where `nulls_first` says.
+    Three-way comparison in sort order, with NULL sitting at one end of the value range.
 
-    Direction is folded in rather than applied afterwards, and that is what makes the placement a
-    placement: `NULLS FIRST` means first whichever way the values run, exactly as SQL means it.
-    Flipping the result of a direction-agnostic comparison cannot express that - it would move the
-    NULLs every time the direction changed.
+    `nulls_first` says which end **when ascending**; reversing the direction reverses it, because
+    NULL is being treated as a value smaller or larger than every other, not as a row pinned to an
+    edge. This is not SQL's `NULLS FIRST`/`NULLS LAST`, which stay put when the direction changes -
+    a backend translating this has to flip the placement it emits for a descending key.
 
     SQL makes every comparison with NULL unknown; a definite answer is the only way a nullable
     column can take part in the total order a cursor is built on. `sort_list` compares with this
@@ -260,15 +260,16 @@ def compare_in_order(left: Any, right: Any, descending: bool = False, nulls_firs
     disagree about where NULLs went.
     """
     if left is None and right is None:
-        return 0
-    if left is None:
-        return -1 if nulls_first else 1
-    if right is None:
-        return 1 if nulls_first else -1
-    try:
-        order = (left > right) - (left < right)
-    except TypeError:
-        return 0
+        order = 0
+    elif left is None:
+        order = -1 if nulls_first else 1
+    elif right is None:
+        order = 1 if nulls_first else -1
+    else:
+        try:
+            order = (left > right) - (left < right)
+        except TypeError:
+            return 0
     return -order if descending else order
 
 

@@ -150,16 +150,16 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         if not all(column.column_name in concrete for column in query.sort):
             return await super().apply_sort(context, query, records)
 
-        # One or the other, and only ever True: Django rejects False and refuses both at once.
-        placement = {"nulls_first": True} if self.nulls_first else {"nulls_last": True}
-        ordering = [
-            (
-                F(column.column_name).desc(**placement)
-                if column.direction == SortDirection.desc
-                else F(column.column_name).asc(**placement)
-            )
-            for column in query.sort
-        ]
+        # `nulls` says where NULLs go when ascending, so a descending key needs the opposite SQL
+        # placement to mean the same thing. One flag or the other, and only ever True: Django
+        # rejects False and refuses both at once.
+        ordering = []
+        for column in query.sort:
+            descending = column.direction == SortDirection.desc
+            first = self.nulls_first != descending
+            placement = {"nulls_first": True} if first else {"nulls_last": True}
+            field = F(column.column_name)
+            ordering.append(field.desc(**placement) if descending else field.asc(**placement))
         queryset = queryset.order_by(*ordering)
         query.mark_applied("sort")
         return await super().apply_sort(context, query, queryset)
@@ -377,9 +377,9 @@ def _segment_condition(keys, position, backwards: bool, inclusive: bool, nulls_f
 
         value = position[name]
         greater = wants_greater(descending, backwards)
-        # Whether NULLs come before the values as the page is being read. The placement is fixed in
-        # sort order; reading backwards reverses the page, so it reverses this too.
-        nulls_lead = nulls_first != backwards
+        # Whether NULLs come before the values as this page is read. Two reversals on top of where
+        # `nulls` puts them ascending: a descending key, and reading the page backwards.
+        nulls_lead = (nulls_first != descending) != backwards
 
         if value is None:
             if not nulls_lead:
