@@ -6,17 +6,10 @@
 falls back to in-memory filtering. Worth adding a Postgres-specific compiler once there is a
 Postgres backend to hang it off.
 
-## Deprecation removal
-
-`setup_filter` / `setup_sort` warn but still work. Decide a version to drop them in.
-
 ## Cursor pagination: what is not done
 
 `CursorListMixin` is in. Left over:
 
-- **Signing.** The cursor is base64 over JSON, which is transport encoding rather than protection:
-  it carries ordering-field values, so a client can read them and edit them. Where the ordering
-  fields are sensitive it wants an HMAC, or encryption.
 - **Row values need the right index.** The fast path only pays off with a composite index on
   exactly the ordering columns, in order. Nothing checks or warns; a viewset can page correctly and
   slowly without anyone noticing.
@@ -26,5 +19,7 @@ Postgres backend to hang it off.
 - **Django `DESC NULLS` is still declined.** `apply_sort` refuses to push down any descending
   ordering, so a cursor page sorted descending sorts in memory. `F(col).desc(nulls_last=True)`
   would fix it per database backend.
-- **Offset paging has no demo.** Both demo endpoints are cursor-paged now, so `PaginatedListMixin`
-  is exercised only by tests.
+- **No demo of a viewset pinned to offset paging.** The demo's viewsets default to `cursor` and
+  offer the other two through `X-List-Shape`, so offset paging is reachable but never the declared
+  shape. That is the more interesting configuration to show; it does leave `list_shape =
+  "paginated"` on its own exercised only by tests.
