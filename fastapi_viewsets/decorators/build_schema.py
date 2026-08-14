@@ -1,9 +1,30 @@
 import warnings
 
-from typing import get_args, get_origin, TypeVar
+from typing import get_args, TypeVar
 
 from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
+
+
+def _generic_args(annotation) -> tuple:
+    """Type arguments of an annotation, from either the typing machinery or pydantic's own."""
+    metadata = getattr(annotation, "__pydantic_generic_metadata__", None)
+    if metadata and metadata.get("args"):
+        return tuple(metadata["args"])
+    return get_args(annotation)
+
+
+def has_typevars(annotation) -> bool:
+    """
+    Whether anything anywhere inside this annotation is still an unbound TypeVar.
+
+    Recursive and source-agnostic, because a response model can nest either kind of generic in the
+    other: `Union[ListOf[T], PaginatedList[T]]` is a typing alias holding two pydantic models, and
+    neither `get_args` alone nor pydantic's metadata alone sees all the way down.
+    """
+    if isinstance(annotation, TypeVar):
+        return True
+    return any(has_typevars(argument) for argument in _generic_args(annotation))
 
 
 def _pydantic_generic_args(annotation) -> tuple[type, tuple] | None:
@@ -136,15 +157,9 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
             if disable_response_model:
                 response_model = None
             else:
-                use_resolved = (
-                    route.response_model is None or isinstance(route.response_model, TypeVar) or
-                    (get_origin(route.response_model) and
-                     any(isinstance(arg, TypeVar) for arg in get_args(route.response_model))) or
-                    # A parameterised pydantic generic (PaginatedList[T]) is a class, not a typing
-                    # alias, so get_origin/get_args see nothing in it. Without this the unresolved
-                    # model is kept and the schema describes PaginatedList__T_ with results of Any.
-                    bool(_pydantic_generic_args(route.response_model))
-                )
+                # Anything still holding a TypeVar is the mixin's generic declaration, not an
+                # answer: only route_viewset knows what this viewset bound it to.
+                use_resolved = route.response_model is None or has_typevars(route.response_model)
                 response_model = resolved_response_model if use_resolved else route.response_model
 
             class_router.add_api_route(**route_to_add_api_route_kwargs(

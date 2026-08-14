@@ -278,9 +278,9 @@ async def test_viewset_generic_resolution():
     sig = inspect.signature(list_route.endpoint)
     return_type = sig.return_annotation
 
-    # Check that T is correctly resolved to MyItem within List and Dict
-    args = get_args(return_type) # (GenericItem[MyItem],)
-    item_type = args[0]
+    # The plain shape returns ListOf[T] - a pydantic model rather than a typing alias, so the item
+    # type lives in its generic metadata instead of in get_args().
+    item_type = return_type.__pydantic_generic_metadata__["args"][0]
 
     item_origin = get_origin(item_type)
     if item_origin is None:

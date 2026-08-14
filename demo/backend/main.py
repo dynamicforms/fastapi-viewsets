@@ -1,11 +1,14 @@
 from contextlib import asynccontextmanager
 
+from asgiref.sync import sync_to_async
 from fastapi import APIRouter, FastAPI, WebSocket
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import HTMLResponse
 from muxws import accept, Stream
 
-from asgiref.sync import sync_to_async
-
 from demo.backend.django_setup import ensure_database
+from demo.backend.openapi_docs import add_try_links, REDOC_HEAD, SWAGGER_HEAD
 from demo.backend.viewsets import MusicTrackDbViewSet, MusicTrackViewSet, records, USE_CELERY
 from fastapi_viewsets.decorators.route_viewset import route_viewset
 from fastapi_viewsets.mux_ws import process_command
@@ -35,7 +38,32 @@ async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAP
     await stop_result_reader()
 
 
-app = FastAPI(title="Demo ViewSet App", lifespan=lifespan)
+# Both doc pages are served by hand: FastAPI's built-ins have no hook for the extra <head> the
+# "Try it in Swagger UI" link needs (see demo/backend/openapi_docs.py).
+app = FastAPI(title="Demo ViewSet App", lifespan=lifespan, docs_url=None, redoc_url=None)
+
+
+def custom_openapi():
+    if not app.openapi_schema:
+        app.openapi_schema = add_try_links(get_openapi(
+            title=app.title, version=app.version, routes=app.routes,
+        ))
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_ui_page() -> HTMLResponse:
+    html = get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - Swagger UI")
+    return HTMLResponse(html.body.decode().replace("</head>", SWAGGER_HEAD + "</head>"))
+
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_page() -> HTMLResponse:
+    html = get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - ReDoc")
+    return HTMLResponse(html.body.decode().replace("</head>", REDOC_HEAD + "</head>"))
 router = APIRouter()
 
 route_viewset(router, base_path="/music", pk_field_name="id")(MusicTrackViewSet)

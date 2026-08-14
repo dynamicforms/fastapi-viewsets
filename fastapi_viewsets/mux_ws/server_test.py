@@ -352,11 +352,12 @@ def test_two_viewsets_on_one_base_path_warn():
     endpoints are simply unreachable.
     """
     make_viewset()
-    with pytest.warns(UserWarning, match="unreachable"):
-        database = {1: Track(id=1, title="Kind of Blue")}
-        router = APIRouter()
+    database = {1: Track(id=1, title="Kind of Blue")}
+    router = APIRouter()
 
-        @route_viewset(router, base_path="/tracks", pk_field_name="id")
-        class ImpostorViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
-            def __init__(self):
-                super().__init__(container=database, pk_field="id")
+    class ImpostorViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        def __init__(self):
+            super().__init__(container=database, pk_field="id")
+
+    with pytest.warns(UserWarning, match="unreachable"):
+        route_viewset(router, base_path="/tracks", pk_field_name="id")(ImpostorViewSet)
