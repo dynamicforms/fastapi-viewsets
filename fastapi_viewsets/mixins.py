@@ -10,6 +10,7 @@ from typing_extensions import TypeVar
 from fastapi_viewsets.conf import settings
 from fastapi_viewsets.context import Context
 from fastapi_viewsets.cursor import (
+    compare_in_order,
     cursor_keys,
     CursorError,
     CursorKeys,
@@ -250,6 +251,18 @@ class ListMixin(Generic[T, TFilter], ABC):
     pk_field_name: str = "id"
     """Appended to the ordering by the cursor shape, to make every key tuple unique."""
 
+    nulls: str = "first"
+    """
+    Where NULL rows sit in a sorted result: `"first"` or `"last"`.
+
+    A placement, as in SQL: it does not move when the direction does. Applies to the in-memory
+    sort, to the cursor's comparison, and to what a backend is asked to emit, so all three agree.
+    """
+
+    @property
+    def nulls_first(self) -> bool:
+        return self.nulls != "last"
+
     @classmethod
     def resolve_shapes(cls) -> tuple:
         return resolve_shapes(cls.list_shape, cls.list_shapes, settings.default_list_shape)
@@ -414,7 +427,7 @@ class ListMixin(Generic[T, TFilter], ABC):
                 # The client sent something wrong, not the server - a stale cursor after a sort
                 # change is the ordinary case, and it deserves a message rather than a traceback.
                 raise HTTPException(status_code=400, detail=str(error)) from None
-            query.extra_filters.append(make_predicate(state, keys))
+            query.extra_filters.append(make_predicate(state, keys, self.nulls_first))
 
         backwards = bool(state and state.backwards)
         query.sort = [
@@ -583,29 +596,23 @@ class ListMixin(Generic[T, TFilter], ABC):
     async def sort_list(self, sort: SortState, records: list[T]) -> list[T]:
         """
         Post-sort hook called after perform_list (and filter_list) when a sort order is active.
-        Default implementation performs a stable in-memory multi-key sort. Null values sort last
-        for asc, first for desc. Override for custom behaviour.
+        Default implementation performs a stable in-memory multi-key sort, placing NULLs where
+        `nulls` says - through the same comparison the cursor uses. They share it because a cursor
+        walking a nullable column against a differently-ordered sort loses every NULL row without
+        saying so.
         """
         import functools
 
         def compare(a: T, b: T) -> int:
             for col in sort:
-                val_a = getattr(a, col.column_name, None)
-                val_b = getattr(b, col.column_name, None)
-                if val_a is None and val_b is None:
-                    continue
-                if val_a is None:
-                    return 1 if col.direction == SortDirection.asc else -1
-                if val_b is None:
-                    return -1 if col.direction == SortDirection.asc else 1
-                try:
-                    cmp = (val_a > val_b) - (val_a < val_b)
-                except TypeError:
-                    continue
-                if col.direction == SortDirection.desc:
-                    cmp = -cmp
-                if cmp != 0:
-                    return cmp
+                order = compare_in_order(
+                    getattr(a, col.column_name, None),
+                    getattr(b, col.column_name, None),
+                    col.direction == SortDirection.desc,
+                    self.nulls_first,
+                )
+                if order != 0:
+                    return order
             return 0
 
         return sorted(records, key=functools.cmp_to_key(compare))

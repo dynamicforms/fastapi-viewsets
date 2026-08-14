@@ -1,12 +1,8 @@
 # Documenting endpoints
 
-Most of a viewset's endpoints come from mixins. `list_items`, `create`, `retrieve` and the rest are
-shared library code, so their docstrings — the only thing OpenAPI has to describe them — are
-identical for every viewset in your application. A generated API reference ends up saying "List the
-collection" eleven times and explaining nothing, and there is no per-viewset method to attach a
-better docstring to.
-
-There are two ways to fix that. They solve different halves of the problem and compose.
+Most of a viewset's endpoints come from mixins, so their docstrings — the only thing OpenAPI has to
+describe them — are the same for every viewset in an application. Three mechanisms replace that
+text, at three scopes.
 
 ## Per viewset: its own docstring
 
@@ -25,12 +21,11 @@ class MusicTrackViewSet(CollectionViewSet[int, MusicTrack], CursorListMixin[Musi
     """
 ```
 
-Markdown, rendered by ReDoc as the section intro. Only the viewset's *own* docstring counts — a
-viewset that says nothing stays silent rather than inheriting "List a queryset" from a mixin, which
-would be worse than an empty section because it would look deliberate.
+Markdown, rendered by ReDoc as the section intro. Only the viewset's own docstring counts; one
+inherited from a mixin is ignored, so a viewset that documents nothing has no group description.
 
-OpenAPI keeps these at the root of the document rather than on the operations, so they have to be
-applied to the application once, after the viewsets are decorated:
+Tag descriptions live at the root of an OpenAPI document, so they are applied to the application
+once, after the viewsets are decorated:
 
 ```python
 from fastapi_viewsets.endpoint_docs import apply_viewset_tags
@@ -39,8 +34,8 @@ app.include_router(router)
 apply_viewset_tags(app)
 ```
 
-Pass `extra=[{"name": ..., "description": ...}]` for groups the application owns itself; anything it
-defines wins, since a viewset's docstring is a default rather than the last word.
+Pass `extra=[{"name": ..., "description": ...}]` for groups the application owns itself; anything
+it defines overrides the viewset's docstring.
 
 ::: warning If you replace `app.openapi`
 `get_openapi(...)` does not read `app.openapi_tags` on its own. Pass `tags=app.openapi_tags`
@@ -66,14 +61,12 @@ class MusicTrackViewSet(CollectionViewSet[int, MusicTrack], BulkViewSetMixin[int
     ...
 ```
 
-**It goes below `@route_viewset`.** Decorators apply bottom-up, and `route_viewset` reads the
-documentation while it builds the routes — written the other way round it would run too late, so
-that order is refused with a message rather than silently documenting nothing.
+**It goes below `@route_viewset`**, which reads it while building the routes. The other order
+raises.
 
 Keys are action names: the mixin action (`list_items`, `bulk_create`, `partial_update`, …) or a
-custom endpoint's own method name. They are the same names `@action_configuration` uses, so there
-is no second vocabulary. A name that matches no endpoint raises — a typo would otherwise leave the
-endpoint on the mixin's generic docstring, which looks exactly like not having written the entry.
+custom endpoint's own method name — the same names `@action_configuration` uses. A name that
+matches no endpoint raises.
 
 Every field is optional and anything omitted is left alone:
 
@@ -90,11 +83,8 @@ subclasses share and each subclass override only what it disagrees with.
 
 ## Across the whole schema: post-processing
 
-Some documentation is not per-endpoint at all — renaming tag groups, giving each group an intro,
-adding the same error responses everywhere, appending the same link to every operation. Doing that
-one endpoint at a time would mean repeating yourself once per route.
-
-For those, replace `app.openapi`:
+For edits that apply to the document as a whole — renaming tag groups, adding the same error
+responses everywhere, appending the same link to every operation — replace `app.openapi`:
 
 ```python
 from fastapi.openapi.utils import get_openapi
@@ -114,22 +104,18 @@ def custom_openapi():
 app.openapi = custom_openapi
 ```
 
-The demo does exactly this to add a **Try it in Swagger UI** button to every operation, so that
-ReDoc — which renders beautifully and cannot execute anything — links to the page that can. See
-`demo/backend/openapi_docs.py`; the fiddly parts there are load-bearing and commented.
+The demo uses this to add a **Try it in Swagger UI** button to every operation, so that ReDoc — which
+cannot execute requests — links to the page that can. See `demo/backend/openapi_docs.py`.
 
 ## Which to use
 
-Use `@endpoint_docs` when the text is *about this viewset's endpoint*. It lives next to the code it
-describes, it is checked against the endpoints that exist, and it needs no schema-shaped
-vocabulary.
+| scope | mechanism |
+|---|---|
+| what a group of endpoints is | the viewset's docstring |
+| what one endpoint does | `@endpoint_docs` |
+| the document as a whole | post-processing `app.openapi` |
 
-Use post-processing when the edit is *about the schema* — group names, group intros, a rule applied
-to every operation. Expressing those per endpoint means writing them once per route and keeping
-them in step by hand.
-
-Neither replaces the other and using both is normal: `@endpoint_docs` for what each endpoint means,
-a post-processor for what the document as a whole should look like.
+They compose; using all three is normal.
 
 ## Response examples
 

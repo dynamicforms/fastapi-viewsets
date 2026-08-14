@@ -753,7 +753,7 @@ async def test_sort_and_filter_combined():
 
 @pytest.mark.asyncio
 async def test_sort_nulls_last_asc():
-    """None values sort after real values for asc direction."""
+    """With `nulls = "last"`, None sorts after real values."""
 
     class ItemWithOptional(BaseModel):
         id: int
@@ -766,6 +766,8 @@ async def test_sort_nulls_last_asc():
     }
 
     class NullViewSet(CollectionViewSet[int, ItemWithOptional], BulkViewSetMixin[int, ItemWithOptional]):
+        nulls = "last"
+
         def __init__(self):
             super().__init__(container=db, pk_field="id")
 
@@ -777,7 +779,7 @@ async def test_sort_nulls_last_asc():
 
 @pytest.mark.asyncio
 async def test_sort_nulls_first_desc():
-    """None values sort before real values for desc direction."""
+    """With `nulls = "first"` (the default) None sorts before real values, descending included."""
 
     class ItemWithOptional(BaseModel):
         id: int
@@ -790,10 +792,12 @@ async def test_sort_nulls_first_desc():
     }
 
     class NullViewSet(CollectionViewSet[int, ItemWithOptional], BulkViewSetMixin[int, ItemWithOptional]):
+        nulls = "first"
+
         def __init__(self):
             super().__init__(container=db, pk_field="id")
 
     route = _get_list_route(NullViewSet)
     result = await route.endpoint(fltr=None, sort="name:desc")
     names = [i.name for i in result]
-    assert names[0] is None  # null first
+    assert names[0] is None  # placed first, and stays first under desc

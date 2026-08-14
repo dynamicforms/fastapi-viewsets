@@ -14,10 +14,10 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
 - **Bulk operations** — first-class support for bulk create, update, partial update and destroy.
 - **muxws transport** — reach the same viewsets over a single WebSocket instead of one HTTP request
   per call, dispatched through the same FastAPI app so validation, middleware and response models
-  behave identically. Multiplexing sidesteps the browser's ~6 connections per host: in the demo, a
-  burst of 100 requests takes 156 ms over REST and 37 ms over muxws.
-- **Pagination** — `PaginatedListMixin` for offset/limit, `CursorListMixin` for cursor paging that
-  neither re-reads skipped rows nor drifts when the collection changes underneath the client.
+  behave identically. In the demo, a burst of 100 requests takes 156 ms over REST and 37 ms over
+  muxws.
+- **Three list shapes** — a bare array, offset paging, or cursor paging. A viewset declares which,
+  and may let a client pick per request with an `X-List-Shape` header.
 - **Declarative filters** — declare which fields accept which operators and get query parameters,
   an OpenAPI schema and filtering for free; backends translate what they can into their own query.
 - **Vue / TypeScript counterpart** — mirror mixin classes and a `route_rest` factory give you a fully
@@ -76,16 +76,17 @@ pagination, the muxws transport, and the Vue client.
 ## Demo
 
 ```bash
-python -m demo.backend.main          # http://127.0.0.1:8000, muxws at ws://127.0.0.1:8000/ws
-npm run demo:dev                     # http://127.0.0.1:5173
+python demo.py                       # backend on :8000, frontend on :5173
+python demo.py --celery              # ... with every viewset call routed through a Celery worker
+npm run test:e2e                     # drives the demo in a browser
 ```
 
-The demo scrolls through a 5000-track library - cursor-paged, loading the next page as you reach
-the end - and lets you switch the whole grid between the REST and muxws transports and between the
-in-memory and SQLite backends, with a side-by-side latency comparison. Sorting and filtering are
-server-side; changing either restarts from the first page. Celery is off by default so the benchmark
-measures the transport rather than the queue; set `DEMO_CELERY=1` and run the worker to exercise
-that path instead.
+An infinite-scrolling grid over a 5000-track library, cursor-paged. Switch the whole grid between
+the REST and muxws transports and between the in-memory and SQLite backends, and compare their
+latency side by side. Sorting and filtering are server-side.
+
+`--celery` needs Redis on localhost:6379. The end-to-end suite starts its own backend and dev
+server on their own ports.
 
 ## License
 

@@ -16,9 +16,6 @@ Postgres backend to hang it off.
 - **Mutable ordering keys.** If the value of a column you are ordering by changes between two
   pages, that row can be visited twice or not at all. The PK tiebreaker bounds the damage to that
   row; nothing else can. Worth documenting rather than solving.
-- **Django `DESC NULLS` is still declined.** `apply_sort` refuses to push down any descending
-  ordering, so a cursor page sorted descending sorts in memory. `F(col).desc(nulls_last=True)`
-  would fix it per database backend.
 - **No demo of a viewset pinned to offset paging.** The demo's viewsets default to `cursor` and
   offer the other two through `X-List-Shape`, so offset paging is reachable but never the declared
   shape. That is the more interesting configuration to show; it does leave `list_shape =

@@ -105,17 +105,15 @@ The global setting is read at decoration time, so set it before any viewset clas
 
 ## Schema
 
-`GET /{base_path}/schema` answers over both transports, and each answers for the transport it was
-asked over. That matters once an endpoint is published on only one of them: the muxws schema then
-legitimately differs from the REST one, and a client validating against the schema it can actually
-reach gets the right answer without having to be told which transport it is on.
+`GET /{base_path}/schema` answers over both transports, and each reports the endpoints reachable
+over the transport it was asked on. When an endpoint is published on only one of them, the two
+schemas differ.
 
 ## The wire format
 
-muxws deliberately does no routing of its own — its specification forbids it from looking at the
-opening payload to pick a handler — so the addressing comes from us. Rather than invent a
-vocabulary, it mirrors HTTP/2, which muxws already models: an `open` frame carries `headers` plus a
-`payload`, exactly as HTTP/2 carries HEADERS followed by DATA.
+muxws does no routing of its own — its specification forbids looking at the opening payload to pick
+a handler — so the addressing is this library's. It mirrors HTTP/2: an `open` frame carries
+`headers` plus a `payload`, as HTTP/2 carries HEADERS followed by DATA.
 
 ```js
 peer.open(
@@ -145,25 +143,21 @@ exactly as HTTP/2 puts `:status` in HEADERS ahead of DATA:
 
 muxws carries `headers` on the first `data` frame a peer sends as well as on `open` (0.3.1+, SPEC
 WSM-FRM-016). The client reads them from `stream.replyHeaders` once `stream.replyHeadersArrived`
-resolves — `reply_headers` / `reply_headers_arrived` in Python — so an error status is known
-without reading the response at all, which is what makes this work for a streaming reply and not
-only a unary one.
+resolves — `reply_headers` / `reply_headers_arrived` in Python — so the status is known before the
+body, for a streaming reply as much as a unary one.
 
 ### Errors
 
-A 404 or a 422 comes back as a normal reply carrying that status, **not** as a stream reset. A status is an answer, not a transport failure, and resetting would tell the caller the
-connection misbehaved when the server in fact answered perfectly well. Resets are reserved for
-genuine transport and protocol failures.
+A 404 or a 422 comes back as a normal reply carrying that status. Stream resets are reserved for
+transport and protocol failures.
 
-On the client both transports throw the same shape — `error.response.status` and
-`error.response.data` — so error handling written against axios keeps working over muxws unchanged.
+Both transports throw the same shape on the client — `error.response.status` and
+`error.response.data` — so error handling written against axios works over muxws unchanged.
 
 ## Authentication
 
-The WebSocket handshake's own headers are the baseline every command inherits, which is usually the
-whole story: the session was established when the socket was opened. A single connection can
-outlive a token, though, so anything stated on an individual stream replaces the handshake's value
-for that call:
+The WebSocket handshake's headers are the baseline every command inherits. Anything stated on an
+individual stream replaces the handshake's value for that call:
 
 ```ts
 route_muxws(TrackViewSet, {
@@ -180,25 +174,22 @@ muxws interprets no credential anywhere.
 ## Reconnection
 
 Nothing survives a muxws reconnect: every in-flight stream fails with `ConnectionLost` and the id
-space restarts. The proxy propagates that to the caller rather than retrying, because whether a
-call is safe to repeat is the application's question, not the transport's. Hook `peer.onReconnect`
-if you want to refresh state when the socket comes back.
+space restarts. The proxy propagates that to the caller; it does not retry. Hook `peer.onReconnect`
+to refresh state when the socket comes back.
 
-## What it costs, and what it buys
+## Performance
 
-Dispatch builds a synthetic ASGI request and calls the FastAPI app. That is what buys total parity
-with REST, and it costs one JSON decode/re-encode round trip per call — muxws has already decoded
-the payload, and we re-encode it for FastAPI to parse.
+Dispatch builds a synthetic ASGI request and calls the FastAPI app, which is what keeps the two
+transports identical. It costs one JSON decode/re-encode per call: about 15% of a read, a third of
+a large write.
 
-Measured against the demo (5000 records, localhost, Python client, so no browser connection limit
-in play):
+Measured against the demo — 5000 records, localhost, Python client, so no browser connection limit
+in play:
 
 | | sequential p50 | sequential p95 | 100 requests at once |
 |---|---|---|---|
 | REST | 1.02 ms | 1.18 ms | 155.7 ms |
 | muxws | 0.44 ms | 0.57 ms | 36.6 ms |
 
-The sequential column is the honest per-call difference. The burst column is where it matters, and
-in a browser the gap is wider still: a browser opens about six concurrent HTTP/1.1 connections per
-host, so the seventh request waits for the first to finish, while muxws multiplexes every call onto
-one socket.
+In a browser the burst gap is wider: about six concurrent HTTP/1.1 connections are allowed per
+host, so a seventh request waits, while muxws multiplexes every call onto one socket.
