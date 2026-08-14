@@ -12,6 +12,9 @@ export default defineConfig({
     proxy: {
       '/music': api,
       '/music-db': api,
+      '/redoc': api,
+      '/docs': api,
+      '/openapi.json': api,
       '/ws': { target: api.replace('http', 'ws'), ws: true },
     },
   },

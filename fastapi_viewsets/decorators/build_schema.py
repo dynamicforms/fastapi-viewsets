@@ -5,6 +5,8 @@ from typing import get_args, TypeVar
 from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
 
+from ..endpoint_docs import docs_for
+
 
 def _generic_args(annotation) -> tuple:
     """Type arguments of an annotation, from either the typing machinery or pydantic's own."""
@@ -162,12 +164,18 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
                 use_resolved = route.response_model is None or has_typevars(route.response_model)
                 response_model = resolved_response_model if use_resolved else route.response_model
 
+            # Per-viewset wording, applied here because this is where the schema-serving app is
+            # built; patching the caller's router afterwards would leave /schema showing the
+            # mixin's generic docstring. See endpoint_docs.py.
             class_router.add_api_route(**route_to_add_api_route_kwargs(
                 route,
                 path=full_path,
                 endpoint=endpoint_wrapper,
                 response_model=response_model,
                 tags=route.tags or default_tags,
+                openapi_extra=getattr(endpoint_wrapper, "__shape_openapi_extra__", None)
+                or route.openapi_extra,
+                **docs_for(cls, route.endpoint.__name__),
             ))
 
         app.include_router(class_router)

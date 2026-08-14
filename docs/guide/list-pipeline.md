@@ -87,6 +87,55 @@ async def apply_sort(self, context, query, records):
 `filter_list` and `sort_list` are not deprecated: they remain the place to implement in-memory
 filtering and sorting, and the default `apply_*` stages call them.
 
+## Declaring a shape
+
+A list endpoint answers in one of three shapes, and they are different contracts rather than
+variations on a theme:
+
+| shape | response | good for | bad at |
+|---|---|---|---|
+| `plain` | a bare array | a lookup table | anything that grows |
+| `paginated` | `{results, offset, limit, count, …}` | jumping to page 40 | re-reads the 39 in front; drifts on insert |
+| `cursor` | `{results, next, previous, first, last, …}` | walking a live list | cannot jump, cannot count |
+
+The viewset says which:
+
+```python
+class TrackViewSet(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter]):
+    list_shape = "cursor"
+```
+
+`PaginatedListMixin` and `CursorListMixin` are shorthands for exactly that. Unset, the shape comes
+from `settings.default_list_shape`, which starts at `"plain"`.
+
+Everything else follows from the declaration. An endpoint that answers `cursor` advertises `cursor`
+and `limit` and no `offset`; one that answers `plain` advertises neither; and the response is one
+model, not a union:
+
+```
+plain      →  {"$ref": ".../ListOf_Track_"}
+cursor     →  {"$ref": ".../CursorPage_Track_"}
+```
+
+### Letting the client choose
+
+Add `list_shapes` and a client may ask for any of them with an `X-List-Shape` header:
+
+```python
+class TrackViewSet(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter]):
+    list_shape = "cursor"                            # the default
+    list_shapes = ("cursor", "plain", "paginated")   # what a client may request
+```
+
+The endpoint then takes the header, the response becomes a union of exactly those models, and each
+one is documented with an example named after the header value that produces it — so the docs say
+`plain` rather than `ListOf_Track_`. A value the viewset did not list is a 422.
+
+This is worth doing when clients genuinely differ — a grid wants cursor paging, an export wants the
+lot. It is not free: the schema becomes a union every generated client has to narrow, and OpenAPI
+cannot express that the choice depends on a request header, so that part stays prose. Declaring one
+shape is the normal case.
+
 ## Pagination
 
 Use `PaginatedListMixin` in place of `ListMixin`:
