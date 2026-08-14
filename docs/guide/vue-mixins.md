@@ -50,7 +50,7 @@ interface LookupItem {
 
 ## Declaring a viewset class
 
-Declare a class that extends the appropriate mixin. The class body is empty — it is only used as a type token for `route_rest`:
+Declare a class that extends the appropriate mixin, and list the same mixins in `declares`:
 
 ```ts
 import { BulkViewSetMixin, LookupMixin } from '@dynamicforms/fastapi-viewsets';
@@ -61,8 +61,14 @@ interface Item {
   price: number;
 }
 
-class ItemViewSet extends BulkViewSetMixin<number, Item, 'id'> implements LookupMixin {}
+class ItemViewSet extends BulkViewSetMixin<number, Item, 'id'> {
+  static declares = [BulkViewSetMixin, LookupMixin];
+}
 ```
+
+`extends` gives the type; `declares` is the same statement in a form that survives to runtime, which
+is what the [schema check](./route-rest#schema-validation) reads. Leave `declares` out and the
+ViewSet is simply not checked.
 
 Then pass it to `route_rest`:
 

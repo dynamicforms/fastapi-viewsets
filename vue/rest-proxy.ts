@@ -15,7 +15,13 @@
 import axios, { type AxiosInstance } from 'axios';
 
 import type { KeyType } from './mixins';
-import { type HttpMethod, type ProxyBaseOptions, type RequestOptions, ViewSetProxyBase } from './proxy-base';
+import {
+  type HttpMethod,
+  type ProxyBaseOptions,
+  type RequestOptions,
+  type ViewSetMixinDeclaration,
+  ViewSetProxyBase,
+} from './proxy-base';
 
 // ---------------------------------------------------------------------------
 // Helper types
@@ -137,7 +143,7 @@ function route_rest<M>(
 ): RestProxy<M>;
 function route_rest<M>(_viewSetClass: ViewSetClass, options: RestProxyOptions): RestProxy<M>;
 function route_rest<M>(
-  _viewSetClass: ViewSetClass,
+  viewSetClass: ViewSetClass,
   basePathOrOptions: string | RestProxyOptions,
   pkFieldName?: string,
   axiosInstance?: AxiosInstance,
@@ -150,7 +156,12 @@ function route_rest<M>(
           axiosInstance,
         }
       : basePathOrOptions;
-  return new RestProxyImpl(options) as unknown as RestProxy<M>;
+  // The class is otherwise used only for its type. Its `declares` is the one thing on it the proxy
+  // needs at runtime, so it is carried across rather than lost.
+  return new RestProxyImpl({
+    declares: (viewSetClass as { declares?: ViewSetMixinDeclaration[] }).declares,
+    ...options,
+  }) as unknown as RestProxy<M>;
 }
 
 export { route_rest };

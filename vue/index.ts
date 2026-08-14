@@ -1,4 +1,6 @@
-export type {
+// Values, not types: a ViewSet lists them in `static declares`, which is read at runtime. Exporting
+// them with `export type` is what previously left the declaration invisible to the schema check.
+export {
   BulkCreateMixin,
   BulkDestroyMixin,
   BulkOnlyCreateMixin,
@@ -8,21 +10,17 @@ export type {
   BulkViewSetMixin,
   CreateMixin,
   CursorListMixin,
-  CursorPage,
-  CursorParams,
   DestroyMixin,
   ListMixin,
-  ListParams,
-  LookupItem,
   LookupMixin,
-  PageParams,
-  PaginatedList,
   PaginatedListMixin,
   ReadOnlyViewSetMixin,
   RetrieveMixin,
   UpdateMixin,
   ViewSetMixin,
 } from './mixins';
+
+export type { CursorPage, CursorParams, ListParams, LookupItem, PageParams, PaginatedList } from './mixins';
 
 export type { HttpMethod, ProxyBaseOptions, QueryParams, RequestOptions } from './proxy-base';
 export { ViewSetProxyBase, ViewSetRequestError } from './proxy-base';

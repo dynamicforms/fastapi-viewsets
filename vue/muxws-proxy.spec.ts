@@ -266,9 +266,14 @@ describe('route_muxws', () => {
   });
 
   it('fetches the schema over muxws when validation is left on', async () => {
+    // Declared, because a ViewSet that claims nothing is not checked and so fetches nothing -
+    // what this asserts is that the fetch travels over muxws, not that it happens at all.
+    class Declared extends ItemViewSet {
+      static declares = [BulkViewSetMixin];
+    }
     const mock = makeMockPeer();
     mock.reply({ paths: {} });
-    route_muxws<BulkViewSetMixin<number, Item, 'id'>>(ItemViewSet, {
+    route_muxws<BulkViewSetMixin<number, Item, 'id'>>(Declared, {
       basePath: '/items',
       pkFieldName: 'id',
       peer: mock.peer,

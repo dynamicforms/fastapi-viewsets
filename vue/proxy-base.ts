@@ -64,29 +64,35 @@ export class ViewSetRequestError extends Error {
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
 
 /**
- * Maps (path type, HTTP method) → FE method name for standard ViewSet endpoints.
+ * Maps (path type, HTTP method) → the actions that endpoint can satisfy.
  * Path types: 'base' = root, 'pk' = /{pk}, 'bulk' = /bulk, 'lookup' = /lookup.
+ *
+ * A list is a list of alternatives rather than one name because `GET {base}` is a single BE
+ * endpoint that answers in whichever shape the viewset declared - see list_shapes.py. Declaring
+ * `listCursor` and being served `GET {base}` is agreement, not a mismatch.
  */
-const ENDPOINT_TO_FE_METHOD: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  base: { GET: 'list', POST: 'create' },
+const ENDPOINT_TO_FE_METHOD: Readonly<Record<string, Readonly<Record<string, readonly string[]>>>> = {
+  base: { GET: ['list', 'listPage', 'listCursor'], POST: ['create'] },
   pk: {
-    GET: 'retrieve',
-    PUT: 'update',
-    PATCH: 'partialUpdate',
-    DELETE: 'destroy',
+    GET: ['retrieve'],
+    PUT: ['update'],
+    PATCH: ['partialUpdate'],
+    DELETE: ['destroy'],
   },
   bulk: {
-    POST: 'bulkCreate',
-    PUT: 'bulkUpdate',
-    PATCH: 'bulkPartialUpdate',
-    DELETE: 'bulkDestroy',
+    POST: ['bulkCreate'],
+    PUT: ['bulkUpdate'],
+    PATCH: ['bulkPartialUpdate'],
+    DELETE: ['bulkDestroy'],
   },
-  lookup: { GET: 'lookup' },
+  lookup: { GET: ['lookup'] },
 };
 
 /** All standard FE method names, in a stable order for warning output. */
 const STANDARD_FE_METHODS: readonly string[] = [
   'list',
+  'listPage',
+  'listCursor',
   'create',
   'retrieve',
   'update',
@@ -99,6 +105,30 @@ const STANDARD_FE_METHODS: readonly string[] = [
   'lookup',
 ];
 
+/** One entry of a ViewSet's `static declares` list: a mixin naming the actions it contributes. */
+export interface ViewSetMixinDeclaration {
+  readonly actions: readonly string[];
+}
+
+/**
+ * Which actions this ViewSet claims to have, from the `static declares` list on its class.
+ *
+ * Ordinary static lookup, so a subclass that declares its own list replaces its parent's rather
+ * than adding to it - which is what a subclass pointed at a smaller BE viewset means. To extend
+ * instead, spread the parent's: `static declares = [...Base.declares!, LookupMixin]`.
+ *
+ * A ViewSet that declares nothing yields null rather than an empty set: "said nothing" and "said
+ * it has no actions" are different claims, and only the second is worth checking against.
+ */
+function declaredActions(instance: object, fromOptions?: readonly ViewSetMixinDeclaration[]): Set<string> | null {
+  const declares = fromOptions ?? (instance.constructor as { declares?: readonly ViewSetMixinDeclaration[] }).declares;
+  if (!Array.isArray(declares)) return null;
+
+  const actions = new Set<string>();
+  for (const mixin of declares) for (const action of mixin?.actions ?? []) actions.add(action);
+  return actions;
+}
+
 export interface ProxyBaseOptions {
   /** Base path to the resource, e.g. '/items'. */
   basePath: string;
@@ -106,21 +136,43 @@ export interface ProxyBaseOptions {
   pkFieldName: string;
   /** Set false to skip the startup schema check (it is advisory and costs one request). */
   validateSchema?: boolean;
+  /**
+   * The mixins the ViewSet declares, for the `route_rest` / `route_muxws` path: those build a bare
+   * proxy and use the ViewSet class only for typing, so a `static declares` on it would otherwise
+   * never reach the object being checked.
+   */
+  declares?: readonly ViewSetMixinDeclaration[];
 }
 
 export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   implements BulkViewSetMixin<K, T, PK>, LookupMixin
 {
+  /**
+   * The mixins this ViewSet is composed of — the FE counterpart of a BE viewset's base classes.
+   *
+   *     class ItemViewSet extends RestProxyImpl<number, Item, 'id'> {
+   *       static declares = [ReadOnlyViewSetMixin, LookupMixin];
+   *     }
+   *
+   * Left undefined, the ViewSet is not checked against the BE schema at all. That is deliberate:
+   * a ViewSet that never said what it has cannot be caught contradicting itself, and guessing on
+   * its behalf is what made the check report actions nobody ever claimed.
+   */
+  static declares?: readonly ViewSetMixinDeclaration[];
+
   protected readonly basePath: string;
 
   protected readonly pkFieldName: string;
 
   private readonly schemaValidationEnabled: boolean;
 
+  private readonly declaredMixins?: readonly ViewSetMixinDeclaration[];
+
   protected constructor(options: ProxyBaseOptions) {
     this.basePath = options.basePath.replace(/\/$/, '');
     this.pkFieldName = options.pkFieldName;
     this.schemaValidationEnabled = options.validateSchema !== false;
+    this.declaredMixins = options.declares;
   }
 
   /**
@@ -143,8 +195,13 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   protected abstract request<R>(method: HttpMethod, path: string, options?: RequestOptions): Promise<R>;
 
   /**
-   * Fetches the BE schema and compares it against the FE method set.
+   * Fetches the BE schema and compares it against what this ViewSet declared.
    * Logs a console warning for any mismatch found.
+   *
+   * The comparison is against `static declares`, not against which methods exist on the object:
+   * every action is implemented unconditionally on this class, so `typeof this[action]` is true for
+   * every ViewSet and answers a question nobody asked. `declares` is the only place the FE says
+   * anything a BE viewset could disagree with.
    *
    * Non-critical: errors during fetch or parsing are silently ignored. Note that the schema is
    * fetched over this proxy's own transport, so a muxws proxy validates against the muxws
@@ -152,15 +209,24 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    * allowed to differ.
    */
   private async validateAgainstSchema(): Promise<void> {
+    // A ViewSet that declares nothing is not checked, and does not pay for the schema request
+    // either. The alternative - assuming it meant "all of them" - is what the previous
+    // implementation effectively did, and it is why a viewset built from one mixin reported every
+    // action it had never claimed to have.
+    const declared = declaredActions(this, this.declaredMixins);
+    if (declared === null) return;
+
     try {
       const schema = await this.request<{ paths?: Record<string, Record<string, unknown>> }>('GET', '/schema');
       const paths = schema?.paths ?? {};
 
-      const beMethods = new Set<string>();
-      const unknownBeEndpoints: string[] = [];
+      const beActions = new Set<string>();
+      const beAlternatives: { endpoint: string; actions: readonly string[] }[] = [];
+      const customEndpoints: { endpoint: string; method: string }[] = [];
 
       for (const [path, pathItem] of Object.entries(paths)) {
         const suffix = path.slice(this.basePath.length).replace(/^\//, '');
+        const verbs = Object.keys(pathItem).filter((v) => HTTP_METHODS.has(v.toLowerCase()));
 
         let pathType: string;
         if (suffix === '') {
@@ -171,41 +237,45 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
           pathType = 'lookup';
         } else if (suffix === 'schema') {
           continue;
-        } else if (suffix.startsWith('{')) {
+        } else if (suffix.startsWith('{') && !suffix.includes('/')) {
           pathType = 'pk';
         } else {
-          for (const httpMethod of Object.keys(pathItem)) {
-            if (HTTP_METHODS.has(httpMethod.toLowerCase())) {
-              unknownBeEndpoints.push(`${httpMethod.toUpperCase()} ${path}`);
-            }
+          // A custom endpoint. Here - and only here - asking whether the proxy has a method of that
+          // name is honest: the base implements no custom actions, so whatever answers is something
+          // this ViewSet's own author wrote.
+          for (const verb of verbs) {
+            customEndpoints.push({ endpoint: `${verb.toUpperCase()} ${path}`, method: suffix.split('/')[0] });
           }
           continue;
         }
 
         const methodMap = ENDPOINT_TO_FE_METHOD[pathType] ?? {};
-        for (const httpMethod of Object.keys(pathItem)) {
-          if (!HTTP_METHODS.has(httpMethod.toLowerCase())) continue;
-          const feMethod = methodMap[httpMethod.toUpperCase()];
-          if (feMethod) beMethods.add(feMethod);
+        for (const verb of verbs) {
+          const actions = methodMap[verb.toUpperCase()];
+          if (!actions) continue;
+          beAlternatives.push({ endpoint: `${verb.toUpperCase()} ${path}`, actions });
+          for (const action of actions) beActions.add(action);
         }
       }
 
       const warnings: string[] = [];
 
-      for (const method of STANDARD_FE_METHODS) {
-        if (typeof (this as unknown as Record<string, unknown>)[method] === 'function' && !beMethods.has(method)) {
-          warnings.push(`FE declares '${method}()' but BE has no matching endpoint`);
+      for (const action of STANDARD_FE_METHODS) {
+        if (declared.has(action) && !beActions.has(action)) {
+          warnings.push(`declares '${action}' but the BE viewset serves no such endpoint`);
         }
       }
 
-      for (const method of beMethods) {
+      for (const { endpoint, actions } of beAlternatives) {
+        if (!actions.some((action) => declared.has(action))) {
+          warnings.push(`BE serves '${endpoint}' but the ViewSet declares no ${actions.join(' / ')}`);
+        }
+      }
+
+      for (const { endpoint, method } of customEndpoints) {
         if (typeof (this as unknown as Record<string, unknown>)[method] !== 'function') {
-          warnings.push(`BE exposes '${method}' endpoint but FE does not implement it`);
+          warnings.push(`BE serves '${endpoint}' but the ViewSet has no '${method}()' method`);
         }
-      }
-
-      for (const endpoint of unknownBeEndpoints) {
-        warnings.push(`BE has non-standard endpoint '${endpoint}' with no FE method`);
       }
 
       if (warnings.length > 0) {
