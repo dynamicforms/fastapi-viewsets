@@ -36,11 +36,9 @@ Combines `CreateMixin` + `BulkOnlyCreateMixin`.
 - When `TFilter` is provided, filter fields are also exposed as individual query parameters.
 
 Filter hooks:
-- `setup_filter(fltr: TFilter)` — pre-filter hook (no-op by default)
 - `filter_list(fltr: TFilter, records: list[T]) -> list[T]` — post-filter hook (no default; subclasses must implement)
 
 Sort hooks:
-- `setup_sort(sort: SortState)` — pre-sort hook (no-op by default)
 - `sort_list(sort: SortState, records: list[T]) -> list[T]` — post-sort hook (default: stable multi-key in-memory sort; nulls last for asc, nulls first for desc)
 
 ### RetrieveMixin `[K, T]`

@@ -206,22 +206,23 @@ class CursorPredicate(Filter):
     position: dict[str, Any] = None  # noqa: RUF009 - frozen dataclass, never mutated
     backwards: bool = False
     inclusive: bool = False
+    nulls_first: bool = True
 
     def fields(self) -> tuple[str, ...]:
         return tuple(name for name, _ in self.keys)
 
     def matches(self, record: Any) -> bool:
         for name, descending in self.keys:
-            order = _compare(_read(record, name), self.position.get(name))
-            if descending:
-                order = -order
+            order = compare_in_order(
+                _read(record, name), self.position.get(name), descending, self.nulls_first,
+            )
             if order != 0:
                 # `order > 0` means the row sorts after the anchor; reading backwards wants before.
                 return order < 0 if self.backwards else order > 0
         return self.inclusive  # every key equal: this is the anchor row itself
 
 
-def make_predicate(state: CursorState, keys: CursorKeys) -> CursorPredicate:
+def make_predicate(state: CursorState, keys: CursorKeys, nulls_first: bool = True) -> CursorPredicate:
     return CursorPredicate(
         field="",
         value=state.position,
@@ -229,6 +230,7 @@ def make_predicate(state: CursorState, keys: CursorKeys) -> CursorPredicate:
         position=state.position,
         backwards=state.backwards,
         inclusive=state.inclusive,
+        nulls_first=nulls_first,
     )
 
 
@@ -243,24 +245,31 @@ def wants_greater(descending: bool, backwards: bool) -> bool:
     return (not descending) != backwards
 
 
-def _compare(left: Any, right: Any) -> int:
+def compare_in_order(left: Any, right: Any, descending: bool = False, nulls_first: bool = True) -> int:
     """
-    Three-way, with NULL defined as the smallest value there is.
+    Three-way comparison **in sort order**, NULLs placed where `nulls_first` says.
 
-    Not SQL's semantics - SQL makes every comparison with NULL unknown - but a definite answer is
-    the only way a NULL-able column can take part in a total order at all, and a total order is
-    what the whole scheme rests on. Backends that cannot express it decline and let this run.
+    Direction is folded in rather than applied afterwards, and that is what makes the placement a
+    placement: `NULLS FIRST` means first whichever way the values run, exactly as SQL means it.
+    Flipping the result of a direction-agnostic comparison cannot express that - it would move the
+    NULLs every time the direction changed.
+
+    SQL makes every comparison with NULL unknown; a definite answer is the only way a nullable
+    column can take part in the total order a cursor is built on. `sort_list` compares with this
+    too, so the rows a cursor steps through and the rows the in-memory sort produces cannot
+    disagree about where NULLs went.
     """
     if left is None and right is None:
         return 0
     if left is None:
-        return -1
+        return -1 if nulls_first else 1
     if right is None:
-        return 1
+        return 1 if nulls_first else -1
     try:
-        return (left > right) - (left < right)
+        order = (left > right) - (left < right)
     except TypeError:
         return 0
+    return -order if descending else order
 
 
 def _read(record: Any, name: str) -> Any:

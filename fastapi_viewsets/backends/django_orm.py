@@ -136,27 +136,31 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
 
     async def apply_sort(self, context: Context, query: ListQuery, records: ListRecords) -> ListRecords:
         """
-        Translates the sort order into `.order_by(...)`.
+        Translates the sort order into `.order_by(...)`, with the viewset's NULL placement.
 
-        Not pushed down when any column is descending, because this library defines NULL as the
-        smallest value in *both* directions while SQL's DESC puts NULLs first. Django can express
-        the fix (`F(col).desc(nulls_last=True)`), but only per backend and not on every version, so
-        the honest thing is to decline and let the in-memory sort - which already implements the
-        intended semantics - do it. That fallback is not a wart in the design; it is the design
-        working.
+        `F(col).asc(nulls_first=...)` states the placement outright, which is the same thing
+        `nulls` means and the same thing the in-memory comparison does - so both directions push
+        down and the two agree about where NULLs went.
         """
         queryset = _as_queryset(records)
         if queryset is None or not query.has_sort or not query.needs("sort"):
-            return await super().apply_sort(context, query, records)
-
-        if any(column.direction == SortDirection.desc for column in query.sort):
             return await super().apply_sort(context, query, records)
 
         concrete = {field.name for field in self.model._meta.get_fields() if getattr(field, "concrete", False)}
         if not all(column.column_name in concrete for column in query.sort):
             return await super().apply_sort(context, query, records)
 
-        queryset = queryset.order_by(*(column.column_name for column in query.sort))
+        # One or the other, and only ever True: Django rejects False and refuses both at once.
+        placement = {"nulls_first": True} if self.nulls_first else {"nulls_last": True}
+        ordering = [
+            (
+                F(column.column_name).desc(**placement)
+                if column.direction == SortDirection.desc
+                else F(column.column_name).asc(**placement)
+            )
+            for column in query.sort
+        ]
+        queryset = queryset.order_by(*ordering)
         query.mark_applied("sort")
         return await super().apply_sort(context, query, queryset)
 
@@ -346,7 +350,9 @@ def _cursor_condition(viewset: "DjangoORMViewSet", fltr: CursorPredicate) -> Q:
     uniform = len({descending for _, descending in keys}) == 1
     if uniform and not fltr.inclusive and not any(name in nullable for name, _ in keys):
         return _row_value_condition(keys, fltr.position, fltr.backwards)
-    return _segment_condition(keys, fltr.position, fltr.backwards, fltr.inclusive)
+    return _segment_condition(
+        keys, fltr.position, fltr.backwards, fltr.inclusive, fltr.nulls_first,
+    )
 
 
 def _row_value_condition(keys, position, backwards: bool) -> Q:
@@ -361,7 +367,7 @@ def _equals(name: str, value: Any) -> Q:
     return Q(**{f"{name}__isnull": True}) if value is None else Q(**{name: value})
 
 
-def _segment_condition(keys, position, backwards: bool, inclusive: bool) -> Q:
+def _segment_condition(keys, position, backwards: bool, inclusive: bool, nulls_first: bool = True) -> Q:
     segments: list[Q] = []
 
     for index, (name, descending) in enumerate(keys):
@@ -371,17 +377,20 @@ def _segment_condition(keys, position, backwards: bool, inclusive: bool) -> Q:
 
         value = position[name]
         greater = wants_greater(descending, backwards)
+        # Whether NULLs come before the values as the page is being read. The placement is fixed in
+        # sort order; reading backwards reverses the page, so it reverses this too.
+        nulls_lead = nulls_first != backwards
+
         if value is None:
-            if not greater:
-                # Nothing sorts below NULL, so this segment can match nothing at all.
+            if not nulls_lead:
+                # Nothing lies past a NULL when the NULLs are at the far end already.
                 continue
             segment &= Q(**{f"{name}__isnull": False})
-        elif greater:
-            segment &= Q(**{f"{name}__gt": value})
         else:
-            # NULLs are below every value, so they belong in a "less than" segment - which SQL
-            # would otherwise drop, since NULL < anything is unknown rather than true.
-            segment &= Q(**{f"{name}__lt": value}) | Q(**{f"{name}__isnull": True})
+            beyond = Q(**{f"{name}__gt" if greater else f"{name}__lt": value})
+            # SQL drops NULLs from every comparison - they are unknown, not true - so when the
+            # ordering puts them past this anchor they have to be added back by hand.
+            segment &= beyond if nulls_lead else beyond | Q(**{f"{name}__isnull": True})
         segments.append(segment)
 
     if inclusive:

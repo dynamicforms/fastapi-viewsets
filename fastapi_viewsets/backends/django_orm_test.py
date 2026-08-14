@@ -143,14 +143,14 @@ async def test_an_ascending_sort_is_pushed_into_sql(viewset):
 
 
 @pytest.mark.asyncio
-async def test_a_descending_sort_falls_back_and_still_sorts(viewset):
+async def test_a_descending_sort_is_pushed_into_sql_too(viewset):
     """
-    Declined on purpose: this library puts NULL lowest in both directions, SQL's DESC does not.
-    The answer must still be right - the fallback is the design working, not a gap in it.
+    `F(col).desc(nulls_first=True)` states the NULL placement outright, which is what `nulls`
+    means, so both directions reach SQL and agree with the in-memory comparison.
     """
     query = ListQuery(sort=[SortStateColumn(column_name="year", direction="desc")], limit=5)
     page = await viewset.get_list(None, query)
-    assert "sort" not in query.applied
+    assert "sort" in query.applied
     assert [track.year for track in page.results] == sorted(
         (track.year for track in page.results), reverse=True
     )

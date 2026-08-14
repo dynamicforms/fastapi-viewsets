@@ -6,6 +6,8 @@ skips a row when the collection changes underneath it - and the ones a single-ke
 wrong, which is everything to do with multi-key ordering and ties.
 """
 
+import types
+
 import pytest
 
 from fastapi import APIRouter, FastAPI
@@ -325,3 +327,72 @@ def test_the_schema_describes_the_cursor_parameters_and_the_item_type():
 
 def test_position_of_reads_the_key_tuple_off_a_record():
     assert position_of(track(7, 1999), KEYS) == {"year": 1999, "id": 7}
+
+
+# ---------------------------------------------------------------------------
+# NULL ordering
+# ---------------------------------------------------------------------------
+
+def nullable_client(**attributes) -> TestClient:
+    """A library where every third record has no year."""
+    app = FastAPI()
+    router = APIRouter()
+    database = {n: Track(id=n, title=f"T{n:03d}", year=(None if n % 3 == 0 else 2000 + n))
+                for n in range(1, 13)}
+
+    def body(namespace):
+        namespace.update(attributes)
+        namespace["schema"] = Track
+        namespace["default_page_size"] = 4
+        namespace["__init__"] = lambda self: CollectionViewSet.__init__(
+            self, container=database, pk_field="id",
+        )
+
+    viewset = types.new_class(
+        "NullableViewSet", (CollectionViewSet[int, Track], CursorListMixin[Track, TrackFilter]), {}, body,
+    )
+    route_viewset(router, base_path="/tracks", pk_field_name="id")(viewset)
+    app.include_router(router)
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("nulls", ["first", "last"])
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+def test_a_cursor_walk_over_a_nullable_column_visits_every_row(nulls, direction):
+    """
+    Regression: the in-memory sort put NULLs at one end and the cursor's comparison assumed the
+    other, so a walk silently dropped every row with a NULL - four of twelve, with no error
+    anywhere. The two now share one definition of where NULL sits.
+    """
+    client = nullable_client(nulls=nulls)
+    seen, cursor = [], None
+    for _ in range(20):
+        params = {"sort": f"year:{direction}", "limit": 4}
+        if cursor:
+            params["cursor"] = cursor
+        body = client.get("/tracks", params=params).json()
+        seen += [record["id"] for record in body["results"]]
+        cursor = body["next"]
+        if not cursor:
+            break
+
+    assert sorted(seen) == list(range(1, 13))
+    assert len(seen) == len(set(seen))
+
+
+def test_nulls_sit_where_the_viewset_places_them():
+    first = nullable_client(nulls="first").get("/tracks", params={"sort": "year:asc"}).json()
+    assert first["results"][0]["year"] is None
+
+    last = nullable_client(nulls="last").get("/tracks", params={"sort": "year:asc"}).json()
+    assert last["results"][0]["year"] is not None
+
+
+@pytest.mark.parametrize("nulls", ["first", "last"])
+def test_the_placement_does_not_move_when_the_direction_does(nulls):
+    """SQL's meaning of NULLS FIRST: first, whichever way the values run."""
+    client = nullable_client(nulls=nulls)
+    for direction in ("asc", "desc"):
+        body = client.get("/tracks", params={"sort": f"year:{direction}"}).json()
+        leads = body["results"][0]["year"] is None
+        assert leads is (nulls == "first"), f"{nulls} broke on {direction}"

@@ -257,7 +257,7 @@ settings.viewsets_context_json_decoder = DTDecoder
 ## Known limitations
 
 - `context` is threaded through the 11 standard router methods and their `perform_*`
-  counterparts. It is **not** threaded through the secondary hooks `setup_filter`/`filter_list`/
-  `setup_sort`/`sort_list`/`setup_lookup_filter`/`filter_lookup`.
+  counterparts. It is **not** threaded through the in-memory hooks `filter_list`/`sort_list`/
+  `setup_lookup_filter`/`filter_lookup`. The `apply_*` stages do receive it.
 - `load_state`/`save_state` (see [ViewSet Lifecycle](./lifecycle)) remain a separate mechanism -
   context processors don't replace them.

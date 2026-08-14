@@ -43,15 +43,16 @@ class MyViewSet(BulkCreateMixin[int, Item]):
 exposes a `sort` query parameter (comma-separated `column:direction` pairs). When a filter model
 is also provided, its fields appear as individual query parameters.
 
-**Filter pipeline** (active when any filter field is set):
-1. `setup_filter(fltr)` — pre-filter hook (e.g., build a DB query). No-op by default.
-2. `filter_list(fltr, records)` — post-filter hook for in-memory filtering. No default
-   implementation; subclasses must implement this.
+**Filtering** (active when any filter field is set): `filter_list(fltr, records)` filters in
+memory. It has no default implementation, so a viewset that declares a filter type implements it —
+or declares the filter with `make_filter_model`, which needs no code at all. See
+[Declarative filters](./list-pipeline.md#declarative-filters).
 
-**Sort pipeline** (active when `sort` query param is provided):
-1. `setup_sort(sort)` — pre-sort hook (e.g., add ORDER BY to a DB query). No-op by default.
-2. `sort_list(sort, records)` — post-sort hook. Default implements stable in-memory multi-key
-   sort with nulls-last (asc) / nulls-first (desc).
+**Sorting** (active when the `sort` query parameter is given): `sort_list(sort, records)` sorts in
+memory. The default is a stable multi-key sort with nulls lowest in both directions.
+
+To do either in the backend instead, override `apply_filter` or `apply_sort` — see
+[the list pipeline](./list-pipeline.md#the-stages).
 
 ```python
 from fastapi_viewsets.context import Context
@@ -65,7 +66,7 @@ class MyViewSet(ListMixin[Item, ItemFilter], RetrieveMixin[int, Item]):
         return list(db.values())
 
     async def filter_list(self, fltr: ItemFilter, records: list[Item]) -> list[Item]:
-        # filter_list/setup_filter don't receive context - see Context Processors "Known limitations"
+        # filter_list does not receive context - see Context Processors "Known limitations"
         if fltr.name is not None:
             records = [r for r in records if fltr.name.lower() in r.name.lower()]
         return records
@@ -82,16 +83,15 @@ class MyViewSet(ListMixin[Item, ItemFilter], RetrieveMixin[int, Item]):
 GET /items?sort=name:asc,score:desc
 ```
 
-For server-side sorting (e.g. SQL ORDER BY), override `setup_sort` and return pre-sorted results
-from `perform_list` (then override `sort_list` to be a no-op):
+For server-side sorting, override `apply_sort`, order the records in the backend and mark the stage
+applied so the in-memory sort leaves them alone:
 
 ```python
-async def setup_sort(self, sort: SortState) -> None:
-    # store sort state for use in perform_list
-    self._sort = sort
-
-async def sort_list(self, sort: SortState, records: list[Item]) -> list[Item]:
-    return records  # already sorted by perform_list
+async def apply_sort(self, context, query, records):
+    if query.has_sort:
+        records = records.order_by(*(column.column_name for column in query.sort))
+        query.mark_applied("sort")
+    return await super().apply_sort(context, query, records)
 ```
 
 ### Update
