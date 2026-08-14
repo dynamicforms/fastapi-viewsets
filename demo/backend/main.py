@@ -11,6 +11,7 @@ from demo.backend.django_setup import ensure_database
 from demo.backend.openapi_docs import add_try_links, REDOC_HEAD, SWAGGER_HEAD
 from demo.backend.viewsets import MusicTrackDbViewSet, MusicTrackViewSet, records, USE_CELERY
 from fastapi_viewsets.decorators.route_viewset import route_viewset
+from fastapi_viewsets.endpoint_docs import apply_viewset_tags
 from fastapi_viewsets.mux_ws import process_command
 
 
@@ -45,8 +46,10 @@ app = FastAPI(title="Demo ViewSet App", lifespan=lifespan, docs_url=None, redoc_
 
 def custom_openapi():
     if not app.openapi_schema:
+        # tags= is not optional here: replacing app.openapi bypasses FastAPI's own use of
+        # app.openapi_tags, so the viewsets' group descriptions would silently vanish.
         app.openapi_schema = add_try_links(get_openapi(
-            title=app.title, version=app.version, routes=app.routes,
+            title=app.title, version=app.version, routes=app.routes, tags=app.openapi_tags,
         ))
     return app.openapi_schema
 
@@ -72,6 +75,11 @@ route_viewset(router, base_path="/music", pk_field_name="id")(MusicTrackViewSet)
 route_viewset(router, base_path="/music-db", pk_field_name="id")(MusicTrackDbViewSet)
 
 app.include_router(router)
+
+# The viewsets' own docstrings become the description of each group in the schema - the section
+# intro ReDoc shows above the endpoints. Called after they are decorated, which is why it is not
+# something passed to FastAPI() up there.
+apply_viewset_tags(app)
 
 
 @app.websocket("/ws")
