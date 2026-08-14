@@ -266,12 +266,15 @@ class ListMixin(Generic[T, TFilter], ABC):
         cursor: str | None = None,
         x_list_shape: Annotated[str | None, Header()] = None,
     ) -> Union[ListOf[T], PaginatedList[T], CursorPage[T]]:  # noqa: UP007 - see list_shapes.response_model
-        """
-        Every parameter and every shape any viewset could ask for. `route_viewset` narrows both
-        before FastAPI sees them: parameters this viewset's shapes cannot use are dropped, and the
-        return type shrinks to exactly the models it can produce - usually one. Declared in full
-        here rather than as `Any` so that reading the method tells you what it can return.
-        """
+        """List the collection."""
+        # Declares every parameter and every shape any viewset could ask for; route_viewset narrows
+        # both before FastAPI sees them, dropping the parameters this viewset's shapes cannot use
+        # and shrinking the return type to the models it can actually produce. Spelled out rather
+        # than left as `Any` so that reading the method tells you what it can return.
+        #
+        # The docstring is deliberately one plain line: FastAPI publishes it as the endpoint's
+        # description, identically on every viewset in an application. Anything worth saying about
+        # a particular one belongs in @endpoint_docs.
         default, allowed = self.resolve_shapes()
         shape = x_list_shape or default
         if shape not in allowed:

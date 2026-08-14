@@ -15,6 +15,7 @@ except ImportError:
 from fastapi_viewsets.action_configuration import extra_middlewares_for, resolve_action_configuration
 from fastapi_viewsets.conf import settings
 from fastapi_viewsets.context import get_shared_context
+from fastapi_viewsets.endpoint_docs import DOCS_ATTRIBUTE, docs_for
 from fastapi_viewsets.middleware import Middleware
 from fastapi_viewsets.mixins import FilterParam
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
@@ -182,7 +183,7 @@ def route_viewset(
             header is kept only when there is a choice to make, and the return annotation becomes
             the union of exactly the models this viewset can produce.
             """
-            from fastapi_viewsets.list_shapes import response_model, SHAPE_HEADER
+            from fastapi_viewsets.list_shapes import response_model, SHAPE_HEADER, shape_examples
             from fastapi_viewsets.mixins import T as ItemVar
 
             default, allowed = cls.resolve_shapes()
@@ -208,9 +209,15 @@ def route_viewset(
                 params.append(parameter)
 
             item_type = type_map.get(ItemVar, ItemVar)
+            nonlocal shape_openapi_extra
+            shape_openapi_extra = shape_examples(allowed, item_type)
             return sig.replace(parameters=params, return_annotation=response_model(allowed, item_type))
 
+        shape_openapi_extra = None
+
         def get_wrapper(original_endpoint, route_path, route_methods):
+            nonlocal shape_openapi_extra
+            shape_openapi_extra = None
             sig = inspect.signature(original_endpoint)
             if getattr(original_endpoint, "__list_shape_aware__", False):
                 sig = _shape_signature(sig, original_endpoint)
@@ -314,6 +321,9 @@ def route_viewset(
                 )
 
             wrapper.__signature__ = new_sig
+            # Carried on the wrapper because build_schema, which registers the route, has no other
+            # way to learn what get_wrapper worked out about this endpoint's shapes.
+            wrapper.__shape_openapi_extra__ = shape_openapi_extra
             return wrapper, new_return_annotation
 
         # Command middleware (see fastapi_viewsets/middleware.py) can reshape the response body via
@@ -325,12 +335,17 @@ def route_viewset(
         )
 
         muxws_routes = []
+        documented = set()
         for route in cls.__router.routes:
             action_name = route.endpoint.__name__  # survives @wraps(original_endpoint) in get_wrapper
+            documented.add(action_name)
             dependencies = list(route.dependencies or []) + [
                 Depends(_make_middleware_depends(cls, action_name))
             ]
             route_kwargs = route_to_add_api_route_kwargs(route, dependencies=dependencies)
+            # Per-viewset wording for an endpoint the mixin provided - the mixin's own docstring is
+            # the same sentence on every viewset in the application. See endpoint_docs.py.
+            route_kwargs.update(docs_for(cls, action_name))
 
             if resolve_register_rest(route.endpoint, register_rest):
                 router.add_api_route(**route_kwargs)
@@ -341,6 +356,16 @@ def route_viewset(
             is_schema_route = getattr(route.endpoint, "__viewset_schema_endpoint__", False)
             if not is_schema_route and resolve_register_muxws(route.endpoint, register_muxws):
                 muxws_routes.append(route_kwargs)
+
+        # Checked here rather than in the decorator, which runs before any route exists. A name
+        # that matches nothing would otherwise leave that endpoint on the mixin's generic
+        # docstring - indistinguishable from never having written the entry.
+        unknown = set(getattr(cls, DOCS_ATTRIBUTE, {})) - documented
+        if unknown:
+            raise ValueError(
+                f"@endpoint_docs on {cls.__name__} names endpoint(s) it does not have: "
+                f"{', '.join(sorted(unknown))}; it has {', '.join(sorted(documented))}"
+            )
 
         if muxws_routes:
             register_viewset(cls, base_path, muxws_routes, default_tags)

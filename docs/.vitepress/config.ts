@@ -36,6 +36,7 @@ export default defineConfig({
             { text: 'CollectionViewSet', link: '/guide/collection-viewset' },
             { text: 'Custom Endpoints', link: '/guide/custom-endpoints' },
             { text: 'List Pipeline & Pagination', link: '/guide/list-pipeline' },
+            { text: 'Documenting Endpoints', link: '/guide/endpoint-docs' },
             { text: 'muxws Transport', link: '/guide/muxws' },
             { text: 'Context Processors', link: '/guide/context-processors' },
             { text: 'Command Middleware', link: '/guide/command-middleware' },

@@ -13,6 +13,16 @@
             <v-btn value="db" data-testid="backend-db">SQLite</v-btn>
           </v-btn-toggle>
           <v-spacer />
+          <v-btn
+            variant="text"
+            size="small"
+            href="/redoc"
+            target="_blank"
+            rel="noopener"
+            prepend-icon="mdi-book-open-variant"
+          >
+            See API documentation
+          </v-btn>
           <span class="text-caption">
             <span data-testid="loaded-count">{{ records.length }}</span> loaded<template
               v-if="!hasMore"

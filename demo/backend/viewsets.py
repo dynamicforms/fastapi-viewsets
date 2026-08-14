@@ -10,6 +10,7 @@ from demo.backend.django_setup import MusicTrackRow
 from fastapi_viewsets.backends.django_orm import DjangoORMViewSet
 from fastapi_viewsets.collection_viewset import CollectionViewSet
 from fastapi_viewsets.context import Context
+from fastapi_viewsets.endpoint_docs import endpoint_docs
 from fastapi_viewsets.filters import make_filter_model
 from fastapi_viewsets.mixins import BulkViewSetMixin, CursorListMixin, LookupItem, LookupMixin
 
@@ -71,6 +72,21 @@ refuses a synchronous query outright. It is seeded from the lifespan instead, in
 """
 
 
+@endpoint_docs({
+    "list_items": {
+        "summary": "Browse the library",
+        "description": (
+            "Cursor-paged by default - follow `next` to walk forward. Send `X-List-Shape: plain` "
+            "for a bare array or `paginated` for offset paging; the response examples below are "
+            "named after the value that produces them."
+        ),
+    },
+    "retrieve": {"summary": "One track by id"},
+    "create": {"summary": "Add a track"},
+    "bulk_create": {"summary": "Add several tracks at once"},
+    "lookup": {"summary": "Titles and ids, for a select box"},
+    "count": {"summary": "How many tracks there are"},
+})
 class MusicTrackViewSet(
     CollectionViewSet[int, MusicTrack],
     BulkViewSetMixin[int, MusicTrack, MusicTrackFilter],
