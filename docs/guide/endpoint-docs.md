@@ -8,6 +8,45 @@ better docstring to.
 
 There are two ways to fix that. They solve different halves of the problem and compose.
 
+## Per viewset: its own docstring
+
+A viewset's endpoints are grouped under one tag, and that group's description is the intro a reader
+sees before any of them. It comes from the viewset's own docstring:
+
+```python
+@route_viewset(router, base_path="/music", pk_field_name="id")
+class MusicTrackViewSet(CollectionViewSet[int, MusicTrack], CursorListMixin[MusicTrack]):
+    """
+    The music library, held in memory.
+
+    Listing is cursor-paged: send `X-List-Shape: plain` for a bare array instead. Filtering and
+    sorting are declared rather than written - see the `year__gte` and `title__icontains`
+    parameters, neither of which has any code behind it.
+    """
+```
+
+Markdown, rendered by ReDoc as the section intro. Only the viewset's *own* docstring counts — a
+viewset that says nothing stays silent rather than inheriting "List a queryset" from a mixin, which
+would be worse than an empty section because it would look deliberate.
+
+OpenAPI keeps these at the root of the document rather than on the operations, so they have to be
+applied to the application once, after the viewsets are decorated:
+
+```python
+from fastapi_viewsets.endpoint_docs import apply_viewset_tags
+
+app.include_router(router)
+apply_viewset_tags(app)
+```
+
+Pass `extra=[{"name": ..., "description": ...}]` for groups the application owns itself; anything it
+defines wins, since a viewset's docstring is a default rather than the last word.
+
+::: warning If you replace `app.openapi`
+`get_openapi(...)` does not read `app.openapi_tags` on its own. Pass `tags=app.openapi_tags`
+explicitly or the descriptions vanish without a word.
+:::
+
 ## Per endpoint: `@endpoint_docs`
 
 ```python

@@ -5,7 +5,7 @@ from typing import get_args, TypeVar
 from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
 
-from ..endpoint_docs import docs_for
+from ..endpoint_docs import docs_for, viewset_tags
 
 
 def _generic_args(annotation) -> tuple:
@@ -130,7 +130,7 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
     class_router = APIRouter()
 
     if not celery_mode:
-        app = FastAPI()
+        app = FastAPI(openapi_tags=viewset_tags())
 
         def schema():
             return app.openapi()

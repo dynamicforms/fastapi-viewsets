@@ -94,9 +94,19 @@ class MusicTrackViewSet(
     LookupMixin,
 ):
     """
-    Cursor-paged rather than offset-paged, because the grid loads by scrolling rather than by page
-    number - and because a table being scrolled through while rows arrive is exactly the case
-    offset paging gets wrong.
+    The music library, held in memory.
+
+    Everything here is served from a plain Python dict, which is what `CollectionViewSet` is for:
+    no database, no setup, and every stage of the list pipeline running in memory. **Music Track
+    Db** exposes the identical API over SQLite through the Django ORM - same records, same
+    ordering, same cursors - so the two can be compared side by side.
+
+    Listing is **cursor-paged** by default: the demo's grid loads by scrolling rather than by page
+    number, and a table being scrolled while rows arrive is exactly the case offset paging gets
+    wrong. Send `X-List-Shape: plain` or `paginated` to get one of the other two shapes instead.
+
+    Filtering and sorting are declared rather than written - see the `year__gte`, `title__icontains`
+    and `genres__overlaps` parameters, none of which has any code behind it.
     """
 
     __router = APIRouter()
@@ -128,7 +138,12 @@ class MusicTrackDbViewSet(
     CursorListMixin[MusicTrack, MusicTrackFilter],
 ):
     """
-    The same API as MusicTrackViewSet, over SQLite instead of a dict.
+    The same music library, over SQLite through the Django ORM.
+
+    Identical API to **Music Track**, identical records, and a backend that can answer part of the
+    query itself: exact filters become `WHERE` clauses, ascending sorts become `ORDER BY`, and the
+    page becomes `LIMIT`/`OFFSET` - each reported back so the in-memory pipeline does not redo it.
+    Anything it cannot translate falls back rather than failing, which is the contract.
 
     Worth watching while scrolling: the in-memory one walks the collection to find each page
     boundary, this one seeks to it - and with `year` in the ordering, the composite index on

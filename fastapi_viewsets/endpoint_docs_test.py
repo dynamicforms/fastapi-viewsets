@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from .collection_viewset import CollectionViewSet
 from .decorators import route_viewset
-from .endpoint_docs import docs_for, endpoint_docs
+from .endpoint_docs import apply_viewset_tags, docs_for, endpoint_docs
 from .mixins import BulkViewSetMixin
 
 
@@ -115,3 +115,72 @@ def test_documentation_is_inherited_and_overridable():
     endpoint_docs({"list_items": {"summary": "derived"}})(Derived)
 
     assert docs_for(Derived, "list_items") == {"summary": "derived", "description": "kept"}
+
+
+# ---------------------------------------------------------------------------
+# Viewset-level description
+# ---------------------------------------------------------------------------
+
+def test_a_viewsets_docstring_describes_its_group():
+    """
+    However well each endpoint is documented, the section they sit in was blank - and that intro is
+    the first thing a reader of the API reference meets.
+    """
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/described", pk_field_name="id")
+    class DescribedViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        """The catalogue, and what you can do to it."""
+
+        def __init__(self):
+            super().__init__(container=DATABASE, pk_field="id")
+
+    app = apply_viewset_tags(FastAPI())
+    described = {tag["name"]: tag["description"] for tag in app.openapi_tags}
+    assert described["Described"] == "The catalogue, and what you can do to it."
+
+
+def test_a_viewset_that_says_nothing_stays_silent():
+    """Inheriting a mixin's "List a queryset" would look deliberate, which is worse than blank."""
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/silent", pk_field_name="id")
+    class SilentViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        def __init__(self):
+            super().__init__(container=DATABASE, pk_field="id")
+
+    app = apply_viewset_tags(FastAPI())
+    assert "Silent" not in {tag["name"] for tag in app.openapi_tags}
+
+
+def test_the_application_can_override_a_viewsets_description():
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/overridden", pk_field_name="id")
+    class OverriddenViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        """What the library says."""
+
+        def __init__(self):
+            super().__init__(container=DATABASE, pk_field="id")
+
+    app = apply_viewset_tags(
+        FastAPI(), extra=[{"name": "Overridden", "description": "What the application says."}],
+    )
+    described = {tag["name"]: tag["description"] for tag in app.openapi_tags}
+    assert described["Overridden"] == "What the application says."
+
+
+def test_the_description_reaches_the_per_viewset_schema_without_any_wiring():
+    """/schema is served by the library's own app, so it should not need apply_viewset_tags."""
+    app, router = FastAPI(), APIRouter()
+
+    @route_viewset(router, base_path="/wired", pk_field_name="id")
+    class WiredViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        """Documented without the application lifting a finger."""
+
+        def __init__(self):
+            super().__init__(container=DATABASE, pk_field="id")
+
+    app.include_router(router)
+    tags = TestClient(app).get("/wired/schema").json().get("tags", [])
+    assert any(t["name"] == "Wired" and "lifting a finger" in t["description"] for t in tags)

@@ -15,7 +15,12 @@ except ImportError:
 from fastapi_viewsets.action_configuration import extra_middlewares_for, resolve_action_configuration
 from fastapi_viewsets.conf import settings
 from fastapi_viewsets.context import get_shared_context
-from fastapi_viewsets.endpoint_docs import DOCS_ATTRIBUTE, docs_for
+from fastapi_viewsets.endpoint_docs import (
+    DOCS_ATTRIBUTE,
+    docs_for,
+    register_tag,
+    viewset_description,
+)
 from fastapi_viewsets.middleware import Middleware
 from fastapi_viewsets.mixins import FilterParam
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
@@ -152,6 +157,11 @@ def route_viewset(
         if cls_name.endswith("ViewSet"):
             cls_name = cls_name[:-len("ViewSet")]
         default_tags = [cls_name] if cls_name else None
+        # The viewset's own docstring becomes the description of the group its endpoints appear
+        # under - the section intro that was otherwise blank however well each endpoint was
+        # documented. See endpoint_docs.apply_viewset_tags.
+        if cls_name:
+            register_tag(cls_name, viewset_description(cls))
 
         def _is_filter_param(annotation) -> bool:
             """Return True when annotation is Annotated[T, FilterParam()]."""

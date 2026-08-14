@@ -29,6 +29,8 @@ edits are not per-endpoint at all - renaming tag groups, adding a section intro,
 link to every operation. The two compose; see docs/guide/endpoint-docs.md.
 """
 
+import inspect
+
 from typing import Any, TypedDict
 
 DOCS_ATTRIBUTE = "__endpoint_docs__"
@@ -84,3 +86,62 @@ def docs_for(cls: type, action: str) -> dict[str, Any]:
         if entry:
             merged.update(entry)
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Viewset-level description
+# ---------------------------------------------------------------------------
+
+_tag_descriptions: dict[str, str] = {}
+
+
+def viewset_description(cls: type) -> str | None:
+    """
+    What a viewset says about itself: its own docstring, cleaned of indentation.
+
+    `cls.__dict__` rather than `cls.__doc__`, so a viewset that says nothing stays silent instead
+    of inheriting "List a queryset" from a mixin - which would be worse than an empty section,
+    because it would look deliberate.
+    """
+    own = cls.__dict__.get("__doc__")
+    return inspect.cleandoc(own).strip() if own and own.strip() else None
+
+
+def register_tag(tag: str, description: str | None) -> None:
+    """
+    Records a viewset's description against the tag its endpoints are grouped under.
+
+    OpenAPI keeps tag descriptions at the root of the document rather than on the operations, so
+    this cannot be attached while a route is built - it has to be collected and applied to the
+    application once, which is what `apply_viewset_tags` does.
+    """
+    if description:
+        _tag_descriptions[tag] = description
+
+
+def viewset_tags() -> list[dict[str, str]]:
+    """Every registered (tag, description) pair, in the OpenAPI `tags` shape."""
+    return [{"name": name, "description": text} for name, text in _tag_descriptions.items()]
+
+
+def apply_viewset_tags(app: Any, extra: list[dict[str, str]] | None = None) -> Any:
+    """
+    Puts the viewsets' own descriptions into an application's schema.
+
+    Call once, after the viewsets are decorated - which is why this is a function rather than
+    something passed to `FastAPI(...)`: the app usually exists before the viewsets do.
+
+        route_viewset(router, base_path="/music", pk_field_name="id")(MusicTrackViewSet)
+        app.include_router(router)
+        apply_viewset_tags(app)
+
+    `extra` is merged in for tags the application owns itself; anything it defines wins, since a
+    viewset's docstring is a default rather than the last word. Groups a viewset never described
+    are left out entirely - a tag with no description renders exactly as it did before.
+    """
+    by_name = {tag["name"]: tag for tag in viewset_tags()}
+    for tag in extra or []:
+        by_name[tag["name"]] = tag
+    app.openapi_tags = list(by_name.values())
+    app.openapi_schema = None  # already-generated schemas would not have the descriptions
+    return app
