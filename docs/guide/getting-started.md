@@ -105,20 +105,31 @@ This registers the following endpoints automatically:
 
 ### 5. Connect from Vue / TypeScript
 
+The frontend ViewSet is declared the same way as the backend one — by listing the mixins it is
+composed of. `restViewSet` builds the base class; you extend it:
+
 ```ts
-import type { BulkViewSetMixin, LookupMixin } from '@dynamicforms/fastapi-viewsets';
-import { route_rest } from '@dynamicforms/fastapi-viewsets';
+import { BulkViewSetMixin, LookupMixin, restViewSet } from '@dynamicforms/fastapi-viewsets';
 
 interface Item { id: number; name: string; description: string | null }
 
-const itemsApi = route_rest<BulkViewSetMixin<number, Item, 'id'> & LookupMixin>(
-  ItemViewSet,
-  '/items',
-  'id',
-);
+class ItemApi extends restViewSet<Item>()('id', [BulkViewSetMixin, LookupMixin]) {}
 
-const all     = await itemsApi.list();
-const one     = await itemsApi.retrieve(1);
-const created = await itemsApi.create({ name: 'Widget', description: null });
-const lookup  = await itemsApi.lookup();
+const itemsApi = new ItemApi({ basePath: '/items' });
+
+const all = await itemsApi.list();
 ```
+
+The empty `()` is required. TypeScript has no partial type-argument inference, so `Item` cannot be
+given explicitly while the pk field and the mixin list are inferred from arguments of the same call
+(TS2558); currying is what makes both possible.
+
+`'id'` is an argument, not a type argument. It is checked against the fields of `Item` — a name that
+is not a field, or a field that cannot be a key, is TS2345 — and the pk type is read off `Item['id']`,
+so `retrieve(1)` compiles and `retrieve('1')` does not. It is not repeated in the constructor
+options: those are `{ basePath, validateSchema?, axiosInstance? }`, and passing `pkFieldName` or
+`declares` is TS2353.
+
+The mixin list decides the ViewSet's public surface. `itemsApi.listCursor()` is a compile error
+(TS2339), not a 404 at runtime. The same list reaches the proxy, which fetches `GET /items/schema`
+on construction and `console.warn`s anything the backend and the declaration disagree about.

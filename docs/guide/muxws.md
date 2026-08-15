@@ -51,32 +51,106 @@ async def on_stream(payload, stream: Stream) -> None:
 
 ## Client
 
+A ViewSet is a class built by `muxwsViewSet`, given the name of the pk field and the mixins the BE
+viewset is made of:
+
 ```ts
 import { connect } from 'muxws';
-import { route_muxws } from '@dynamicforms/fastapi-viewsets';
+import {
+  muxwsViewSet, BulkViewSetMixin, LookupMixin, PaginatedListMixin,
+  CursorListMixin, ReadOnlyViewSetMixin, RetrieveMixin,
+} from '@dynamicforms/fastapi-viewsets';
+
+class TrackViewSet extends muxwsViewSet<Track>()('id', [BulkViewSetMixin, PaginatedListMixin, LookupMixin]) {
+  /** A custom endpoint, written against request() so the same body works on either transport. */
+  async count(): Promise<number> {
+    return this.request<number>('GET', '/count');
+  }
+}
 
 const peer = await connect('ws://localhost:8000/ws');
-
-const tracks = route_muxws<BulkViewSetMixin<number, Track, 'id'>>(TrackViewSet, {
-  basePath: '/music',
-  pkFieldName: 'id',
-  peer,
-});
+const tracks = new TrackViewSet({ basePath: '/music', peer });
 
 const page = await tracks.listPage({ offset: 0, limit: 50 });
+const total = await tracks.count();
 ```
 
-A proxy speaks one transport. To offer both, create both — `route_rest(...)` and
-`route_muxws(...)` — and pick between them; they share nothing but the ViewSet's own type.
+The mixin list is written once, as values, and does three jobs: it decides which actions the class
+exposes to callers, it types them, and it is handed to the proxy so the startup schema check can
+compare it against `GET /music/schema`. Calling an action the ViewSet did not declare is a compile
+error (TS2339) rather than a 404 at runtime.
 
-Because the proxy is usually constructed at module scope, before `connect()` has resolved, `peer`
+The empty `()` is required. TypeScript has no partial type-argument inference, so `Track` cannot be
+given explicitly while the pk field and the mixin list are inferred from arguments of the same call
+(TS2558).
+
+`'id'` is an argument, not a type argument: it is checked against `Track`'s fields — a name that is
+not a field, or a field that cannot be a key, is TS2345 — and the pk type of `retrieve` and
+`destroy` is read off `Track['id']`. It is not repeated in the constructor options, which are
+`{ basePath, peer, validateSchema?, timeoutMs?, headers? }`; `pkFieldName` and `declares` are bound
+by the factory and are TS2353 if passed.
+
+Inside the class body, `this.request(method, path, options?)` and `this.basePath` are reachable.
+They are protected, so a caller cannot touch them (TS2445).
+
+To narrow a ViewSet — the same model, served by a BE viewset built from fewer mixins — call the
+factory again with the smaller list:
+
+```ts
+class TrackDbViewSet extends muxwsViewSet<Track>()('id', [CursorListMixin, RetrieveMixin]) {}
+```
+
+A subclass cannot restate `static declares` instead: the type surface still comes from the factory
+call above it, and the restated list is checked against the one the factory was given (TS2417).
+
+A declared action can be overridden with a method, `super` included:
+
+```ts
+class CachedTrackViewSet extends muxwsViewSet<Track>()('id', [ReadOnlyViewSetMixin]) {
+  private cache?: Track[];
+
+  override async list(): Promise<Track[]> {
+    return (this.cache ??= await super.list());
+  }
+}
+```
+
+A ViewSet speaks one transport. To offer both, build both — `restViewSet(...)` and
+`muxwsViewSet(...)` — and pick between them; they share nothing but the model and the mixin list,
+and a custom endpoint written against `request()` works unchanged on either.
+
+Because the ViewSet is usually constructed at module scope, before `connect()` has resolved, `peer`
 also accepts a function. It is called once and its result cached: a muxws Peer survives its own
 reconnects, so there is nothing to re-resolve.
 
 ```ts
 let peerPromise: Promise<Peer> | undefined;
 const peer = () => (peerPromise ??= connect('ws://localhost:8000/ws'));
+
+const tracks = new TrackViewSet({ basePath: '/music', peer });   // constructed at module scope
 ```
+
+### route_muxws
+
+The older form. It takes the ViewSet class as a type token and returns a bare proxy, cast to the
+mixin interface named as `M`:
+
+```ts
+import { route_muxws, BulkViewSetMixin, LookupMixin, PaginatedListMixin } from '@dynamicforms/fastapi-viewsets';
+
+class TrackApi extends BulkViewSetMixin<number, Track, 'id'> {
+  static declares = [BulkViewSetMixin, PaginatedListMixin, LookupMixin];
+}
+
+const tracks = route_muxws<BulkViewSetMixin<number, Track, 'id'> & PaginatedListMixin<Track>>(TrackApi, {
+  basePath: '/music',
+  pkFieldName: 'id',
+  peer,
+});
+```
+
+It is still supported, and its limitation is worth knowing: the object is that bare proxy rather
+than your own class, so a custom endpoint named in `M` type-checks and is `undefined` when called.
 
 ## Choosing which viewsets are published
 
@@ -156,13 +230,13 @@ Both transports throw the same shape on the client — `error.response.status` a
 
 ## Authentication
 
-The WebSocket handshake's headers are the baseline every command inherits. Anything stated on an
-individual stream replaces the handshake's value for that call:
+The WebSocket handshake's headers are the baseline every command inherits. A ViewSet's own
+`headers` replace the handshake's value on every call it makes — the client sets them once, per
+proxy, not per call:
 
 ```ts
-route_muxws(TrackViewSet, {
+new TrackViewSet({
   basePath: '/music',
-  pkFieldName: 'id',
   peer,
   headers: { authorization: `Bearer ${token}` },   // sent on every call
 });

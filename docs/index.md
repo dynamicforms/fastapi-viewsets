@@ -26,7 +26,7 @@ features:
   - title: Transparent Celery delegation
     details: Move a viewset's execution to a Celery worker with a single decorator — no code changes to the viewset itself.
   - title: Vue / TypeScript counterpart
-    details: Mirror mixin classes and a route_rest factory give you a fully typed HTTP client that matches your backend viewset exactly.
+    details: Mirror mixin classes and the restViewSet / muxwsViewSet class factory give you a fully typed client that matches your backend viewset exactly — calling an action it did not declare is a compile error.
   - title: Bulk operations
     details: First-class support for bulk create, update, partial update and destroy — on both the backend and the frontend.
 ---

@@ -1,6 +1,6 @@
-# DynamicForms Vue Forms Documentation
+# Documentation
 
-This directory contains the VitePress documentation for `@dynamicforms/vuetify-forms`.
+This directory contains the VitePress documentation for `@dynamicforms/fastapi-viewsets`.
 
 ## Development
 
@@ -23,8 +23,6 @@ The site will be available at http://localhost:5173/
   - `config.ts` - VitePress configuration
 - `guide/` - User guide documentation
 - `api/` - API reference documentation
-- `examples/` - Interactive examples
-- `components/` - Vue components used in the documentation
 
 ## Building
 

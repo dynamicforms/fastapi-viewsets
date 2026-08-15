@@ -20,8 +20,10 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
   and may let a client pick per request with an `X-List-Shape` header.
 - **Declarative filters** — declare which fields accept which operators and get query parameters,
   an OpenAPI schema and filtering for free; backends translate what they can into their own query.
-- **Vue / TypeScript counterpart** — mirror mixin classes and a `route_rest` factory give you a fully
-  typed HTTP client that matches your backend viewset exactly (published separately as
+- **Vue / TypeScript counterpart** — mirror mixin classes and the `restViewSet` / `muxwsViewSet` class
+  factory give you a fully typed client that matches your backend viewset exactly: the mixins a ViewSet
+  declares are its public surface, so calling an action it did not declare is a compile error rather
+  than a runtime 404 (published separately as
   [`@dynamicforms/fastapi-viewsets`](https://www.npmjs.com/package/@dynamicforms/fastapi-viewsets) on npm).
 
 ## Installation
