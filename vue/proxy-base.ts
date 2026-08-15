@@ -17,7 +17,9 @@
  */
 
 import type {
+  ActionName,
   BulkViewSetMixin,
+  CursorListMixin,
   CursorPage,
   CursorParams,
   DestroyReturnData,
@@ -27,6 +29,7 @@ import type {
   LookupMixin,
   PageParams,
   PaginatedList,
+  PaginatedListMixin,
 } from './mixins';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -71,7 +74,7 @@ const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', '
  * endpoint that answers in whichever shape the viewset declared - see list_shapes.py. Declaring
  * `listCursor` and being served `GET {base}` is agreement, not a mismatch.
  */
-const ENDPOINT_TO_FE_METHOD: Readonly<Record<string, Readonly<Record<string, readonly string[]>>>> = {
+const ENDPOINT_TO_FE_METHOD: Readonly<Record<string, Readonly<Record<string, readonly ActionName[]>>>> = {
   base: { GET: ['list', 'listPage', 'listCursor'], POST: ['create'] },
   pk: {
     GET: ['retrieve'],
@@ -89,7 +92,7 @@ const ENDPOINT_TO_FE_METHOD: Readonly<Record<string, Readonly<Record<string, rea
 };
 
 /** All standard FE method names, in a stable order for warning output. */
-const STANDARD_FE_METHODS: readonly string[] = [
+const STANDARD_FE_METHODS: readonly ActionName[] = [
   'list',
   'listPage',
   'listCursor',
@@ -114,8 +117,9 @@ export interface ViewSetMixinDeclaration {
  * Which actions this ViewSet claims to have, from the `static declares` list on its class.
  *
  * Ordinary static lookup, so a subclass that declares its own list replaces its parent's rather
- * than adding to it - which is what a subclass pointed at a smaller BE viewset means. To extend
- * instead, spread the parent's: `static declares = [...Base.declares!, LookupMixin]`.
+ * than adding to it - which is what a subclass pointed at a smaller BE viewset means. The new list
+ * still has to be assignable to the parent's, since TypeScript checks a subclass's static side
+ * against its base; a list the parent's type does not cover needs its own ViewSet.
  *
  * A ViewSet that declares nothing yields null rather than an empty set: "said nothing" and "said
  * it has no actions" are different claims, and only the second is worth checking against.
@@ -144,8 +148,44 @@ export interface ProxyBaseOptions {
   declares?: readonly ViewSetMixinDeclaration[];
 }
 
+/**
+ * What a ViewSet's own methods may reach - everything a custom endpoint needs, and nothing a caller
+ * does.
+ *
+ * A real base class rather than a type, because `protected` is checked nominally: a subclass body
+ * reaches `request()` only if it genuinely descends from the class that declared it. The ViewSet
+ * factory hands back a class typed as this plus the declared actions, which is how a factory-built
+ * ViewSet ends up with a narrow public surface and a usable private one.
+ */
+export abstract class ViewSetInternals {
+  protected readonly basePath: string;
+
+  protected constructor(basePath: string) {
+    this.basePath = basePath.replace(/\/$/, '');
+  }
+
+  /**
+   * Sends one request and returns the decoded response body.
+   *
+   * `path` is relative to `basePath` — '' for the collection, '/1' for a record, '/bulk', and so
+   * on. Implementations must throw on a non-2xx status, with `response.status` readable on the
+   * thrown value.
+   *
+   * Concrete here, and never reached: ViewSetProxyBase re-declares it abstract, which is where a
+   * transport is actually held to implementing it. It cannot be abstract at this level because
+   * TypeScript propagates an abstract member through a constructor type, and the factory hands one
+   * back - every ViewSet a consumer wrote would then fail TS2515 for a method the transport
+   * underneath it has always implemented.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the signature is the point; the body cannot run
+  protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): Promise<R> {
+    throw new Error('ViewSetInternals.request: no transport');
+  }
+}
+
 export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
-  implements BulkViewSetMixin<K, T, PK>, LookupMixin
+  extends ViewSetInternals
+  implements BulkViewSetMixin<K, T, PK>, CursorListMixin<T>, PaginatedListMixin<T>, LookupMixin
 {
   /**
    * The mixins this ViewSet is composed of — the FE counterpart of a BE viewset's base classes.
@@ -160,8 +200,6 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    */
   static declares?: readonly ViewSetMixinDeclaration[];
 
-  protected readonly basePath: string;
-
   protected readonly pkFieldName: string;
 
   private readonly schemaValidationEnabled: boolean;
@@ -169,7 +207,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   private readonly declaredMixins?: readonly ViewSetMixinDeclaration[];
 
   protected constructor(options: ProxyBaseOptions) {
-    this.basePath = options.basePath.replace(/\/$/, '');
+    super(options.basePath);
     this.pkFieldName = options.pkFieldName;
     this.schemaValidationEnabled = options.validateSchema !== false;
     this.declaredMixins = options.declares;
@@ -185,14 +223,8 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     if (this.schemaValidationEnabled) void this.validateAgainstSchema();
   }
 
-  /**
-   * Sends one request and returns the decoded response body.
-   *
-   * `path` is relative to `basePath` — '' for the collection, '/1' for a record, '/bulk', and so
-   * on. Implementations must throw on a non-2xx status, with `response.status` readable on the
-   * thrown value.
-   */
-  protected abstract request<R>(method: HttpMethod, path: string, options?: RequestOptions): Promise<R>;
+  /** Abstract here, where a transport is actually held to it. See ViewSetInternals.request. */
+  protected abstract override request<R>(method: HttpMethod, path: string, options?: RequestOptions): Promise<R>;
 
   /**
    * Fetches the BE schema and compares it against what this ViewSet declared.

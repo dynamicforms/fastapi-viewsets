@@ -1,9 +1,14 @@
 import { connect, type Peer } from 'muxws';
 
-import { BulkViewSetMixin, CursorListMixin, LookupMixin, PaginatedListMixin } from '../../../vue/mixins';
-import { MuxwsProxyImpl } from '../../../vue/muxws-proxy';
-import type { HttpMethod, RequestOptions } from '../../../vue/proxy-base';
-import { RestProxyImpl } from '../../../vue/rest-proxy';
+import {
+  BulkViewSetMixin,
+  CursorListMixin,
+  LookupMixin,
+  PaginatedListMixin,
+  RetrieveMixin,
+} from '../../../vue/mixins';
+import { ViewSetInternals } from '../../../vue/proxy-base';
+import { muxwsViewSet, restViewSet } from '../../../vue/viewset';
 
 export interface MusicTrack {
   id: number;
@@ -40,39 +45,37 @@ interface MusicTrackMethods {
   count(): Promise<number>;
 }
 
-/** Custom endpoint: the method name must match the BE path segment (GET /music/count → count). */
-async function count(this: { request<R>(m: HttpMethod, p: string, o?: RequestOptions): Promise<R> }): Promise<number> {
-  return this.request<number>('GET', '/count');
-}
-
-export class MusicTrackRestViewSet extends RestProxyImpl<number, MusicTrack, 'id'> {
-  static declares = [BulkViewSetMixin, CursorListMixin, PaginatedListMixin, LookupMixin];
-
-  constructor(basePath: string) {
-    super({ basePath, pkFieldName: 'id' });
+/**
+ * The custom endpoint, written once and mixed into all four ViewSets.
+ *
+ * A class-expression mixin rather than a plain method, because the four classes have no common
+ * ancestor to put it on: each comes from its own `restViewSet`/`muxwsViewSet` call. The body is
+ * written against `request()`, which is why the same one serves both transports.
+ *
+ * The return type is annotated on purpose: an inferred one names the anonymous class and leaks its
+ * protected members into the emitted .d.ts (TS4094).
+ */
+function WithCount<TBase extends abstract new (...args: any[]) => ViewSetInternals>(
+  Base: TBase,
+): TBase & (abstract new (...args: any[]) => MusicTrackMethods) {
+  abstract class Counting extends Base {
+    /** The method name must match the BE path segment (GET /music/count → count). */
+    async count(): Promise<number> {
+      return this.request<number>('GET', '/count');
+    }
   }
-
-  count = count;
+  return Counting;
 }
 
-/** The Django-backed viewset declares only CursorListMixin, because that is all the BE gave it. */
-export class MusicTrackDbRestViewSet extends MusicTrackRestViewSet {
-  static declares = [CursorListMixin];
-}
+/** What the in-memory BE viewset serves. */
+const MEMORY = [BulkViewSetMixin, CursorListMixin, PaginatedListMixin, LookupMixin];
+/** What the Django-backed one serves - it was built from two mixins, not six. */
+const DB = [CursorListMixin, RetrieveMixin];
 
-export class MusicTrackMuxwsViewSet extends MuxwsProxyImpl<number, MusicTrack, 'id'> {
-  static declares = [BulkViewSetMixin, CursorListMixin, PaginatedListMixin, LookupMixin];
-
-  constructor(basePath: string, peer: () => Promise<Peer>) {
-    super({ basePath, pkFieldName: 'id', peer });
-  }
-
-  count = count;
-}
-
-export class MusicTrackDbMuxwsViewSet extends MusicTrackMuxwsViewSet {
-  static declares = [CursorListMixin];
-}
+export class MusicTrackRestViewSet extends WithCount(restViewSet<MusicTrack>()('id', MEMORY)) {}
+export class MusicTrackDbRestViewSet extends WithCount(restViewSet<MusicTrack>()('id', DB)) {}
+export class MusicTrackMuxwsViewSet extends WithCount(muxwsViewSet<MusicTrack>()('id', MEMORY)) {}
+export class MusicTrackDbMuxwsViewSet extends WithCount(muxwsViewSet<MusicTrack>()('id', DB)) {}
 
 /**
  * One peer for the whole application, connected on first use.
@@ -90,10 +93,18 @@ export function muxwsPeer(): Promise<Peer> {
   return peerPromise;
 }
 
-export type MusicTrackViewSet = MusicTrackRestViewSet & MusicTrackMethods;
+/**
+ * Any of the four. A union rather than an intersection: the db ViewSets are no longer subtypes of
+ * the memory ones, so what callers may rely on is what all four have.
+ */
+export type MusicTrackViewSet =
+  | MusicTrackRestViewSet
+  | MusicTrackDbRestViewSet
+  | MusicTrackMuxwsViewSet
+  | MusicTrackDbMuxwsViewSet;
 
 /** One proxy per (transport, backend) pair, built once - each does a schema check on construction. */
-const proxies = new Map<string, MusicTrackRestViewSet | MusicTrackMuxwsViewSet>();
+const proxies = new Map<string, MusicTrackViewSet>();
 
 export function viewSetFor(transport: Transport, backend: Backend = 'memory') {
   const key = `${transport}:${backend}`;
@@ -101,11 +112,13 @@ export function viewSetFor(transport: Transport, backend: Backend = 'memory') {
   if (!proxy) {
     proxy =
       transport === 'rest'
-        ? new (backend === 'db' ? MusicTrackDbRestViewSet : MusicTrackRestViewSet)(BASE_PATHS[backend])
-        : new (backend === 'db' ? MusicTrackDbMuxwsViewSet : MusicTrackMuxwsViewSet)(
-            BASE_PATHS[backend],
-            muxwsPeer,
-          );
+        ? new (backend === 'db' ? MusicTrackDbRestViewSet : MusicTrackRestViewSet)({
+            basePath: BASE_PATHS[backend],
+          })
+        : new (backend === 'db' ? MusicTrackDbMuxwsViewSet : MusicTrackMuxwsViewSet)({
+            basePath: BASE_PATHS[backend],
+            peer: muxwsPeer,
+          });
     proxies.set(key, proxy);
   }
   return proxy;

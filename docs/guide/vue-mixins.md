@@ -1,6 +1,9 @@
 # Vue / TypeScript Mixins
 
-The `@dynamicforms/fastapi-viewsets` package ships TypeScript mixin classes that mirror the Python backend mixins. They serve as type declarations — you use them to tell TypeScript which operations your viewset supports, and `route_rest` provides the actual HTTP implementation.
+The `@dynamicforms/fastapi-viewsets` package ships TypeScript mixin classes that mirror the Python
+backend mixins. You list them in a ViewSet declaration to say which operations that viewset has; the
+list types the class and is what the startup schema check compares against the BE. The HTTP calls
+themselves live in the proxy underneath.
 
 ## Individual operation mixins
 
@@ -9,7 +12,9 @@ The `@dynamicforms/fastapi-viewsets` package ships TypeScript mixin classes that
 | `CreateMixin<T, PK>` | `create(data)` |
 | `BulkOnlyCreateMixin<T, PK>` | `bulkCreate(data[])` |
 | `BulkCreateMixin<T, PK>` | `create`, `bulkCreate` |
-| `ListMixin<T>` | `list()` |
+| `ListMixin<T>` | `list(params?)` |
+| `PaginatedListMixin<T>` | `listPage(params?)` |
+| `CursorListMixin<T>` | `listCursor(params?)` |
 | `RetrieveMixin<K, T>` | `retrieve(pk)` |
 | `UpdateMixin<K, T>` | `update(pk, data)`, `partialUpdate(pk, data)` |
 | `BulkOnlyUpdateMixin<K, T>` | `bulkUpdate(records)`, `bulkPartialUpdate(records)` |
@@ -25,7 +30,7 @@ The `@dynamicforms/fastapi-viewsets` package ships TypeScript mixin classes that
 |-------|---------|
 | `ReadOnlyViewSetMixin<K, T>` | `ListMixin`, `RetrieveMixin` |
 | `ViewSetMixin<K, T, PK>` | `ReadOnlyViewSetMixin` + `CreateMixin`, `UpdateMixin`, `DestroyMixin` |
-| `BulkViewSetMixin<K, T, PK>` | `ViewSetMixin` + `BulkCreateMixin`, `BulkUpdateMixin`, `BulkDestroyMixin` |
+| `BulkViewSetMixin<K, T, PK>` | `ViewSetMixin` + `BulkOnlyCreateMixin`, `BulkOnlyUpdateMixin`, `BulkOnlyDestroyMixin` |
 
 ## Type parameters
 
@@ -50,10 +55,13 @@ interface LookupItem {
 
 ## Declaring a viewset class
 
-Declare a class that extends the appropriate mixin, and list the same mixins in `declares`:
+A ViewSet is a class extending what `restViewSet` — or `muxwsViewSet`, for the same surface over a
+muxws stream — hands back:
 
 ```ts
-import { BulkViewSetMixin, LookupMixin } from '@dynamicforms/fastapi-viewsets';
+import {
+  restViewSet, ReadOnlyViewSetMixin, LookupMixin, CursorListMixin,
+} from '@dynamicforms/fastapi-viewsets';
 
 interface Item {
   id: number;
@@ -61,25 +69,85 @@ interface Item {
   price: number;
 }
 
-class ItemViewSet extends BulkViewSetMixin<number, Item, 'id'> {
-  static declares = [BulkViewSetMixin, LookupMixin];
+class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin, LookupMixin]) {
+  /** GET /items/count */
+  async count(): Promise<number> {
+    return this.request<number>('GET', '/count');
+  }
+}
+
+const api = new ItemApi({ basePath: '/items' });
+
+await api.list();
+await api.count();
+await api.create({ name: 'Widget', price: 9.99 });  // TS2339: create was not declared
+```
+
+The mixin list is written once, as values, and does three jobs: it decides which actions the class
+exposes to callers, it types them, and it is handed to the proxy so that the startup
+[schema check](./route-rest#schema-validation) can compare it against the BE. Calling an action the
+ViewSet did not declare is a compile error rather than a 404 at runtime.
+
+The empty `()` is required. TypeScript has no partial type-argument inference, so the model cannot be
+given explicitly while the pk field and the mixin list are inferred from arguments in the same call
+(TS2558); currying is the only way to have both.
+
+### The primary key
+
+`'id'` is an argument, not a type argument. It is checked against the model's fields — a name that is
+not a field of `Item`, or a field that cannot be a key, is TS2345 — and the pk *type* is read off
+`Item['id']`, so `api.retrieve('1')` does not compile against the model above. It is not repeated in
+the constructor options.
+
+### Constructor options
+
+| Option | Factory | Description |
+|--------|---------|-------------|
+| `basePath` | both | Base path to the resource, e.g. `'/items'` |
+| `validateSchema` | both | Set `false` to skip the startup schema check |
+| `axiosInstance` | `restViewSet` | Custom axios instance; defaults to the global one |
+| `peer` | `muxwsViewSet` | The muxws peer, or a function returning one (required) |
+| `headers` | `muxwsViewSet` | Sent on every command, on top of the handshake's |
+| `timeoutMs` | `muxwsViewSet` | Per-call timeout |
+
+`pkFieldName` and `declares` are bound by the factory and are TS2353 if passed.
+
+### Inside the class body
+
+A ViewSet's own methods reach `this.request(method, path, options?)` and `this.basePath`. Both are
+`protected`, so a caller touching them is TS2445. `this.http` is not among them — a method that needs
+axios directly extends [`RestProxyImpl`](./vue-custom-endpoints) instead, at the cost of working on
+one transport only.
+
+### Overriding a declared action
+
+A declared action is an ordinary method and can be overridden, `super` included:
+
+```ts
+class Cached extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin]) {
+  override async list(): Promise<Item[]> {
+    return super.list();
+  }
 }
 ```
 
-`extends` gives the type; `declares` is the same statement in a form that survives to runtime, which
-is what the [schema check](./route-rest#schema-validation) reads. Leave `declares` out and the
-ViewSet is simply not checked.
+### Narrowing
 
-Then pass it to `route_rest`:
+To point the same model at a BE viewset that serves less, call the factory again with the smaller
+list:
 
 ```ts
-import { route_rest } from '@dynamicforms/fastapi-viewsets';
-
-const itemsApi = route_rest<BulkViewSetMixin<number, Item, 'id'> & LookupMixin>(
-  ItemViewSet,
-  '/items',
-  'id',
-);
+/** Same model, but this BE viewset was built from CursorListMixin alone. */
+class ItemDbApi extends restViewSet<Item>()('id', [CursorListMixin]) {}
 ```
 
-See [route_rest](./route-rest) for full usage details.
+Subclassing the wider ViewSet and restating `static declares` does not work: a factory-built class
+pins the list to the tuple the factory was given, and the subclass is TS2417. The separate class is
+also the honest type — it has `listCursor` and nothing else.
+
+### route_rest
+
+[`route_rest`](./route-rest) and `route_muxws` are the older form and still work. They return a bare
+proxy cast to the mixin interface named in `M`: the standard actions are there, but a custom endpoint
+named in that interface type-checks and is `undefined` when called, because the object is not the
+consumer's own class.

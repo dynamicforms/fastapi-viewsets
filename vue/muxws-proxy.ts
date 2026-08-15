@@ -56,9 +56,9 @@ export interface MuxwsProxyOptions extends ProxyBaseOptions {
   /** Per-request timeout in milliseconds. muxws resets the stream with TIMEOUT when it expires. */
   timeoutMs?: number;
   /**
-   * Headers added to every request — the per-call half of the auth story. The WebSocket handshake
-   * already carries whatever identified the session, and the server treats that as the baseline;
-   * anything set here (or passed to a single call) overrides it for that call.
+   * Headers added to every request this proxy makes. The WebSocket handshake already carries
+   * whatever identified the session and the server treats that as the baseline; these override it
+   * for this proxy's calls. There is no per-call header: `RequestOptions` is `{ query, body }`.
    */
   headers?: Record<string, string>;
 }

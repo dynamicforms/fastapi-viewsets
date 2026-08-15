@@ -114,11 +114,23 @@ prose in the endpoint's description.
 
 ### On the client
 
+A ViewSet declares the mixin matching the shape its endpoint answers in - see
+[the ViewSet factory](../api/viewset-factory.md). Each of the three reads the same `GET {basePath}`:
+
 ```ts
-const all  = await tracks.list({ sort: 'year:desc' });
-const page = await tracks.listPage({ offset: 0, limit: 50 });   // paginated
-let   next = await tracks.listCursor({ limit: 50 });            // cursor
+import { restViewSet, CursorListMixin } from '@dynamicforms/fastapi-viewsets';
+
+interface Track { id: number; title: string; year: number }
+
+class TrackViewSet extends restViewSet<Track>()('id', [CursorListMixin]) {}
+
+const tracks = new TrackViewSet({ basePath: '/tracks' });
+let next = await tracks.listCursor({ limit: 50 });
 ```
+
+`list()` and `listPage()` are the same call against a viewset whose default is `plain` or
+`paginated`. The client sends no `X-List-Shape` header, so a viewset offering several shapes still
+answers this client in its default one.
 
 The envelope's `snake_case` fields are renamed to `hasMore`, `hasPrevious`; the records inside are
 untouched.

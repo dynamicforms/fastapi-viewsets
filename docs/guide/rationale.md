@@ -84,21 +84,31 @@ Every HTTP operation is an independent mixin. Combine only what you need:
 
 ### Same API on the frontend
 
-The Vue/TypeScript side mirrors the backend exactly. `route_rest` creates a typed HTTP
-proxy that exposes the same method names (`list`, `retrieve`, `create`, `update`, …):
+The Vue/TypeScript side mirrors the backend exactly. A frontend ViewSet is declared the same way as
+a backend one — by listing the mixins it is composed of — and exposes the same method names
+(`list`, `retrieve`, `create`, `update`, …):
 
 ```ts
-const itemsApi = route_rest<BulkViewSetMixin<number, Item, 'id'>>(
-  ItemViewSet, '/items', 'id',
-);
+interface Item { id: number; name: string }
+
+class ItemApi extends restViewSet<Item>()('id', [BulkViewSetMixin, LookupMixin]) {}
+
+const itemsApi = new ItemApi({ basePath: '/items' });
 
 const all    = await itemsApi.list();
 const one    = await itemsApi.retrieve(1);
 const saved  = await itemsApi.create({ name: 'Widget' });
+
+await itemsApi.listCursor();   // TS2339: this ViewSet declares no cursor list
 ```
 
-TypeScript enforces that you only call methods the backend ViewSet actually exposes —
-the generic parameter `M` is the single source of truth for the contract.
+The empty `()` is required: TypeScript has no partial type-argument inference, so `Item` cannot be
+given explicitly while the pk field and the mixin list are inferred in the same call.
+
+TypeScript enforces that you only call methods the backend ViewSet actually exposes — the mixin list
+is the single source of truth for the contract. It is written once, as values, and does three jobs:
+it decides which actions the class exposes to callers, it types them, and it is handed to the proxy,
+which compares it against `GET /items/schema` on construction and warns about any disagreement.
 
 ---
 

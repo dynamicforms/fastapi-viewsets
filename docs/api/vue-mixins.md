@@ -4,6 +4,10 @@
 import { ... } from '@dynamicforms/fastapi-viewsets';
 ```
 
+Each mixin is an interface merged with a class of the same name. The interface names the actions and their signatures; the class carries `static readonly actions`, the same statement in a form that survives to runtime. A ViewSet declaration lists the mixin classes themselves: the list types the ViewSet's public surface, and is what the schema check compares against the BE.
+
+The members are methods, not function-valued properties, so a ViewSet may override an action with a method of its own.
+
 ## Types
 
 ```ts
@@ -16,73 +20,123 @@ interface LookupItem {
   title: string;
   icon: string | null;
 }
+
+/** `sort` is 'column:asc,other:desc'; the rest are filters. */
+interface ListParams {
+  sort?: string;
+  [key: string]: string | number | boolean | null | undefined | Array<string | number>;
+}
+
+interface PageParams extends ListParams {
+  offset?: number;
+  limit?: number;
+}
+
+interface PaginatedList<T> {
+  results: T[];
+  offset: number;
+  limit: number | null;
+  count: number | null;
+  hasMore: boolean;
+  hasPrevious: boolean;
+}
+
+interface CursorParams extends ListParams {
+  cursor?: string;
+  limit?: number;
+}
+
+interface CursorPage<T> {
+  results: T[];
+  limit: number;
+  hasMore: boolean;
+  hasPrevious: boolean;
+  next: string | null;
+  previous: string | null;
+  first: string | null;
+  last: string | null;
+}
 ```
 
 ## Individual operation mixins
 
 ### CreateMixin `<T, PK extends keyof T>`
 ```ts
-declare create: (data: Omit<T, PK>) => Promise<T>;
+create(data: Omit<T, PK>): Promise<T>;
 ```
 
 ### BulkOnlyCreateMixin `<T, PK extends keyof T>`
 ```ts
-declare bulkCreate: (data: Omit<T, PK>[]) => Promise<T[]>;
+bulkCreate(data: Omit<T, PK>[]): Promise<T[]>;
 ```
 
-### BulkCreateMixin `<T, PK>`
-Extends `CreateMixin`, implements `BulkOnlyCreateMixin`.
+### BulkCreateMixin `<T, PK extends keyof T>`
+Interface extends `CreateMixin<T, PK>` and `BulkOnlyCreateMixin<T, PK>`; `actions` spreads both.
 
 ### ListMixin `<T>`
 ```ts
-declare list: () => Promise<T[]>;
+list(params?: ListParams): Promise<T[]>;
 ```
+
+### PaginatedListMixin `<T>`
+```ts
+listPage(params?: PageParams): Promise<PaginatedList<T>>;
+```
+
+### CursorListMixin `<T>`
+```ts
+listCursor(params?: CursorParams): Promise<CursorPage<T>>;
+```
+
+`GET {basePath}` is one endpoint that answers in whichever shape the BE viewset declared as its default. This client sends no `X-List-Shape` header, so declare the mixin matching that default - declaring several does not let you choose between them.
 
 ### RetrieveMixin `<K extends KeyType, T>`
 ```ts
-declare retrieve: (pk: K) => Promise<T>;
+retrieve(pk: K): Promise<T>;
 ```
 
 ### UpdateMixin `<K extends KeyType, T>`
 ```ts
-declare update: (pk: K, data: T) => Promise<T>;
-declare partialUpdate: (pk: K, data: Partial<T>) => Promise<T>;
+update(pk: K, data: T): Promise<T>;
+partialUpdate(pk: K, data: Partial<T>): Promise<T>;
 ```
 
 ### BulkOnlyUpdateMixin `<K extends KeyType, T>`
 ```ts
-declare bulkUpdate: (records: Record<K, T>) => Promise<T[]>;
-declare bulkPartialUpdate: (records: Record<K, Partial<T>>) => Promise<T[]>;
+bulkUpdate(records: Record<K, T>): Promise<T[]>;
+bulkPartialUpdate(records: Record<K, Partial<T>>): Promise<T[]>;
 ```
 
 ### BulkUpdateMixin `<K extends KeyType, T>`
-Extends `UpdateMixin`, implements `BulkOnlyUpdateMixin`.
+Interface extends `UpdateMixin<K, T>` and `BulkOnlyUpdateMixin<K, T>`; `actions` spreads both.
 
 ### DestroyMixin `<K extends KeyType>`
 ```ts
-declare destroy: (pk: K) => Promise<DestroyReturnData>;
+destroy(pk: K): Promise<DestroyReturnData>;
 ```
 
 ### BulkOnlyDestroyMixin `<K extends KeyType>`
 ```ts
-declare bulkDestroy: (pks: K[]) => Promise<DestroyReturnData[]>;
+bulkDestroy(pks: K[]): Promise<DestroyReturnData[]>;
 ```
 
 ### BulkDestroyMixin `<K extends KeyType>`
-Extends `DestroyMixin`, implements `BulkOnlyDestroyMixin`.
+Interface extends `DestroyMixin<K>` and `BulkOnlyDestroyMixin<K>`; `actions` spreads both.
 
 ### LookupMixin
 ```ts
-declare lookup: () => Promise<LookupItem[]>;
+lookup(): Promise<LookupItem[]>;
 ```
 
 ## Combined viewset mixins
 
-### ReadOnlyViewSetMixin `<K, T>`
-Extends `ListMixin<T>`, implements `RetrieveMixin<K, T>`.
+A composite restates no signature: its interface extends the leaves its `actions` names, so each action is written in exactly one place.
 
-### ViewSetMixin `<K, T, PK>`
-Extends `ReadOnlyViewSetMixin<K, T>`, implements `CreateMixin<T, PK>`, `UpdateMixin<K, T>`, `DestroyMixin<K>`.
+### ReadOnlyViewSetMixin `<K extends KeyType, T>`
+Interface extends `ListMixin<T>` and `RetrieveMixin<K, T>`; `actions` spreads both.
 
-### BulkViewSetMixin `<K, T, PK>`
-Extends `ViewSetMixin<K, T, PK>`, implements `BulkCreateMixin<T, PK>`, `BulkUpdateMixin<K, T>`, `BulkDestroyMixin<K>`.
+### ViewSetMixin `<K extends KeyType, T, PK extends keyof T>`
+Interface extends `ReadOnlyViewSetMixin<K, T>`, `CreateMixin<T, PK>`, `UpdateMixin<K, T>` and `DestroyMixin<K>`; `actions` spreads all four.
+
+### BulkViewSetMixin `<K extends KeyType, T, PK extends keyof T>`
+Interface extends `ViewSetMixin<K, T, PK>`, `BulkOnlyCreateMixin<T, PK>`, `BulkOnlyUpdateMixin<K, T>` and `BulkOnlyDestroyMixin<K>`; `actions` spreads all four.

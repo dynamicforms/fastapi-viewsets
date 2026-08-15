@@ -12,7 +12,7 @@ from fastapi_viewsets.collection_viewset import CollectionViewSet
 from fastapi_viewsets.context import Context
 from fastapi_viewsets.endpoint_docs import endpoint_docs
 from fastapi_viewsets.filters import make_filter_model
-from fastapi_viewsets.mixins import BulkViewSetMixin, CursorListMixin, LookupItem, LookupMixin
+from fastapi_viewsets.mixins import BulkViewSetMixin, CursorListMixin, LookupItem, LookupMixin, RetrieveMixin
 
 USE_CELERY = os.environ.get("DEMO_CELERY", "").lower() in ("1", "true", "yes")
 """
@@ -136,13 +136,15 @@ class MusicTrackViewSet(
 class MusicTrackDbViewSet(
     DjangoORMViewSet[int, MusicTrack],
     CursorListMixin[MusicTrack, MusicTrackFilter],
+    RetrieveMixin[int, MusicTrack],
 ):
     """
     The same music library, over SQLite through the Django ORM.
 
-    Identical API to **Music Track**, identical records, and a backend that can answer part of the
-    query itself: exact filters become `WHERE` clauses, ascending sorts become `ORDER BY`, and the
-    page becomes `LIMIT`/`OFFSET` - each reported back so the in-memory pipeline does not redo it.
+    Lists and reads one record - the two the transport benchmark exercises - over the same records
+    as **Music Track**, on a backend that can answer part of the query itself: exact filters become
+    `WHERE` clauses, ascending sorts become `ORDER BY`, and the page becomes `LIMIT`/`OFFSET` - each
+    reported back so the in-memory pipeline does not redo it.
     Anything it cannot translate falls back rather than failing, which is the contract.
 
     Worth watching while scrolling: the in-memory one walks the collection to find each page
