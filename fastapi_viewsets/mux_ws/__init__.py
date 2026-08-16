@@ -11,8 +11,10 @@ single WebSocket instead. A command is dispatched into the app `get_dispatch_app
 endpoints published on muxws, each registered with the route kwargs `route_viewset` built for it -
 the same ones the REST router is given for an endpoint published on both - so validation,
 dependencies, command middleware, context processors and response models behave identically.
-That app is this library's, not the application object you created: middleware installed on yours
-runs for a command only when you pass `app=` to `process_command`.
+That app is this library's, not the application object you created: what a command carries is what
+`route_viewset` put on the route, and nothing you attached elsewhere. `request.app` inside an
+endpoint reached this way is the dispatch app. docs/guide/muxws.md lists what that leaves behind and
+what to use instead; `app=` on `process_command` sends a command through your application instead.
 
 Server side:
 

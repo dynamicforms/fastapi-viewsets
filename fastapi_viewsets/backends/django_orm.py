@@ -140,8 +140,10 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         Django row to pydantic model. Runs on the page alone for as long as no stage has landed the
         source, which means the filter and the sort each pushed down or had nothing to do; a
         declined `take_page` still cuts its page out of the queryset. A declined filter or sort runs
-        this on the whole queryset instead, because the in-memory pass goes through `land()`, which
-        converts what it materialises.
+        this on whatever reached that stage instead - the whole table where the filter declined -
+        because the in-memory pass goes through `land()`, which converts what it materialises. Every
+        one of those rows and its pydantic model are held at once, before the page is cut, so
+        `limit=10` against a table of hundreds of thousands of rows can exhaust memory.
         """
         if isinstance(raw, self.schema):
             return raw

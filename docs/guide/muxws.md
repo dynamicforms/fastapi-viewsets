@@ -11,9 +11,28 @@ dependencies, command middleware, context processors and response models therefo
 identically.
 
 That app is the library's own, rebuilt whenever a viewset registers, and not the application object
-you created. Middleware installed on yours
-(`@app.middleware("http")`, or any ASGI middleware) therefore never sees a command; pass
-`app=your_app` to `process_command` when a command has to go through it.
+you created. What travels with a command is the route kwargs `route_viewset` built for the endpoint
+itself; what you attached anywhere else does not. So a command reached over muxws does not see:
+
+- middleware installed on your app — `@app.middleware("http")`, or any ASGI middleware;
+- exception handlers registered with `@app.exception_handler(...)`. What answers instead depends on
+  the type: the dispatch app is a plain `FastAPI`, so it carries the framework's own handlers for
+  `HTTPException` and `RequestValidationError` and answers those with the default response, while an
+  exception of a type only your handler knows escapes the endpoint and is logged and answered 500;
+- dependencies declared on the `APIRouter` you hand to `route_viewset`
+  (`APIRouter(dependencies=[Depends(...)])`). The muxws routes are taken from the viewset's own
+  router, before FastAPI folds yours in, so a gate declared there guards REST and not muxws — put it
+  on the endpoint, or in command middleware;
+- `app.state`. `request.app` in the endpoint is the dispatch app, so `request.app.state` is that
+  app's own, empty state — what your lifespan or startup handler put on your app is not there, and
+  the dispatch app runs no lifespan of its own;
+- `app.dependency_overrides`, which is why a test that overrides a dependency has to drive the same
+  route over REST or hand its app to `process_command`.
+
+Cross-cutting concerns therefore belong on the route: in `settings.viewsets_command_middleware` —
+both its `depends()` phase and its onion chain — or in a route's own `dependencies=[Depends(...)]`.
+When a command genuinely has to go through your application, its middleware stack and exception
+handlers included, pass `app=your_app` to `process_command`.
 
 ## Installation
 

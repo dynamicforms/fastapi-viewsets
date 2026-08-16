@@ -24,7 +24,7 @@ features:
   - title: Backends in the box
     details: CollectionViewSet is a zero-boilerplate viewset backed by any Python list, set or dict. DjangoORMViewSet backs one with a QuerySet, absorbing filtering, ordering and slicing into SQL.
   - title: muxws WebSocket transport
-    details: Reach the same viewsets over a single WebSocket instead of one HTTP request per call. Commands dispatch into an app the library builds from the endpoints published on muxws, each carrying the route kwargs REST is given, so validation, dependencies, response models and command middleware behave identically. HTTP middleware on your own app sees a command only if you hand that app to process_command.
+    details: Reach the same viewsets over a single WebSocket instead of one HTTP request per call. Commands dispatch into an app the library builds from the endpoints published on muxws, each carrying the route kwargs REST is given, so validation, dependencies, response models and command middleware behave identically. What you attached anywhere but the endpoint itself sees a command only if you hand your app to process_command.
   - title: Three list shapes
     details: A bare array, offset paging that carries a total wherever the source can be counted — a materialised collection, or a backend that counts in its store — and null where it cannot, or cursor paging whose next and previous links never re-read a row and never drift. A viewset declares which, and may let a client pick per request with an X-List-Shape header.
   - title: Declarative filters

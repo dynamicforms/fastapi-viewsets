@@ -62,6 +62,9 @@ class ImplMixin(Generic[K, T], ABC):
         `apply_sort` or `take_page` pushes its work into, so returning one is what lets a backend
         answer part of the query in its own store. The defaults push into nothing: they land the
         source and work in memory, which is what a materialised list gets either way.
+
+        The return type is bare, which is `ListRecords[Any]`: what a backend yields is its own row
+        type, and records are `T` only once `to_record` has run over them.
         """
         raise NotImplementedError("Method 'perform_list' must be implemented.")
 

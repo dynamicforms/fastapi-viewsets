@@ -744,22 +744,22 @@ async def test_sort_via_http():
 
 
 @pytest.mark.asyncio
-async def test_sort_setup_hook_not_called_without_sort():
+async def test_sort_list_hook_not_called_without_sort():
+    """sort_list is NOT called when the request carries no sort."""
     calls = []
 
     class HookViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
         def __init__(self):
             super().__init__(container=_DB, pk_field="id")
 
-        async def setup_sort(
-            self,
-            sort: SortState,  # noqa: ARG002 - the library defines no `setup_sort` hook, so this method never runs
-        ) -> None:
-            calls.append("called")
+        async def sort_list(self, sort: SortState, records: list[Item]) -> list[Item]:
+            calls.append([col.column_name for col in sort])
+            return await super().sort_list(sort, records)
 
     route = _get_list_route(HookViewSet)
-    await route.endpoint(fltr=None, sort=None)
+    result = await route.endpoint(fltr=None, sort=None)
     assert calls == []
+    assert len(result) == len(_DB)
 
 
 @pytest.mark.asyncio

@@ -109,8 +109,8 @@ async def test_apply_sort_can_be_overridden_and_chained_with_super():
 @pytest.mark.asyncio
 async def test_mark_applied_stops_the_default_stage_redoing_the_work():
     """
-    This is what replaces the setup_sort side channel: a backend that sorted in its own query says
-    so, and the in-memory sort leaves the rows alone instead of re-sorting them.
+    A backend that sorted in its own query says so, and the in-memory sort leaves the rows alone
+    instead of re-sorting them.
     """
     class PushdownViewSet(ListMixin[Track, None]):
         async def perform_list(self, _context: Context):

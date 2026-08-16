@@ -23,9 +23,16 @@ class ImplMixin(Generic[K, T], ABC):
 from fastapi_viewsets.list_query import ListRecords
 ```
 
-`ListRecords` is `Iterable[Any] | AsyncIterable[Any]`. `materialize()` drains a lazy source when an
-in-memory stage needs a list and returns a list untouched; `take_page()` walks a lazy source only as
-far as the page it is cutting.
+`ListRecords` is `Iterable[TItem] | AsyncIterable[TItem]`. Written bare — as `perform_list` and every
+pipeline stage write it — it means `ListRecords[Any]`: what a backend yields is its own row type, and
+records are `T` only once `to_record` has run over them.
+
+The same module carries the two helpers the pipeline reads a source with.
+`materialize(records: ListRecords[TItem]) -> list[TItem]` drains a lazy source when an in-memory
+stage needs a list and returns a list untouched;
+`take_page(records: ListRecords[TItem], offset: int, limit: int) -> tuple[list[TItem], bool]` walks a
+lazy source only as far as the page it is cutting. Both hand back the item type they were given. The
+`ListMixin.take_page` hook below is the overridable stage of the same name and delegates to this one.
 
 ## Operation mixins
 

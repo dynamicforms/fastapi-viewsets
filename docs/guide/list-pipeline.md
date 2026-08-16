@@ -38,6 +38,9 @@ async def apply_sort(self, context, query: ListQuery, records: ListRecords) -> L
     return await super().apply_sort(context, query, records)
 ```
 
+`ListRecords` is generic in its item type and a stage writes it bare — see
+[the reference](../api/python-mixins.md) for what that leaves the items as.
+
 `query.mark_applied("sort")` tells the in-memory default that this stage is done, so it leaves the
 rows alone. Each stage is marked independently: push down the sort, leave the filter to the
 default, and neither needs to know about the other.
