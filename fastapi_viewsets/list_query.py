@@ -1,15 +1,10 @@
 """
 What a client asked a list endpoint for, and what it gets back.
 
-`perform_list` used to have to return a materialised `list[T]`, which meant filtering, sorting and
-paging could only ever happen in memory: a database-backed viewset had no way to push any of it
-down into its query. The `setup_filter`/`setup_sort` hooks existed only to work around that, by
-mutating instance state before `perform_list` ran - a pre/post pair that had to be kept in step by
-hand.
-
-Now `perform_list` may return any iterable or async iterable, and receives the `ListQuery` so a
-backend that can answer part of it directly is free to. Whatever it does not answer, the default
-transformations in `ListMixin` still do, in memory. See docs/guide/list-pipeline.md.
+`perform_list` receives the `Context` alone and answers with `ListRecords`. The `ListQuery` arrives
+one stage later: `apply_filter`, `apply_sort`, `take_page` and `count_records` each take it as a
+parameter, so a backend that can answer part of the query in its own store does it by overriding one
+of those. Whatever no stage answers, `ListMixin` answers in memory. See docs/guide/list-pipeline.md.
 """
 
 from collections.abc import AsyncIterable, AsyncIterator, Iterable

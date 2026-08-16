@@ -134,7 +134,12 @@ class CollectionViewSet(AsyncCollectionViewSet[K, T]):
         raise NotFoundError(pk)
 
     # Set helpers
-    def _update_set(self, pk: K, data: T, partial: bool):
+    def _update_set(
+        self,
+        pk: K,
+        data: T,
+        partial: bool,  # noqa: ARG002 - `container_update` passes `(pk, data, partial)` whichever helper is bound
+    ):
         for item in self.container:
             if self._get_pk(item) == pk:
                 self.container.remove(item)

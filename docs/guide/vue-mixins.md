@@ -151,3 +151,43 @@ also the honest type — it has `listCursor` and nothing else.
 proxy cast to the mixin interface named in `M`: the standard actions are there, but a custom endpoint
 named in that interface type-checks and is `undefined` when called, because the object is not the
 consumer's own class.
+
+## Handling a failed call
+
+A status of 400 or above rejects on both transports, and which class is thrown depends on which one
+is in use:
+
+| Transport | Thrown |
+|-----------|--------|
+| `restViewSet`, `route_rest` | axios' own `AxiosError` |
+| `muxwsViewSet`, `route_muxws` | `ViewSetRequestError`, exported by the package |
+
+Below 400 the two disagree: axios rejects on any status outside 200-299 — its default
+`validateStatus`, which this package never sets and an `axiosInstance` of your own may — while the
+muxws proxy throws only at 400 and above. Most 3xx replies never reach a REST caller, because the
+transport follows the redirect itself; one it does not follow — a 304, or a redirect with no
+`Location` — is what actually rejects there, while muxws returns any 3xx as a body.
+
+Both classes carry `error.response.status`, `error.response.data` and `error.response.headers`, so a
+handler reading those three reads the same fields whichever was thrown. `data` is the decoded
+response body — FastAPI's `{ detail: ... }` for a 404, the validation report for a 422.
+
+They differ in whether `response` is there at all: `ViewSetRequestError` always sets it, while
+`AxiosError.response` is `undefined` when the request never got a reply. A handler that also has to
+cover a connection failure therefore checks it before reading a status:
+
+```ts
+async function retrieveOrNull(id: number): Promise<Item | null> {
+  try {
+    return await api.retrieve(id);
+  } catch (error) {
+    const response = (error as { response?: { status: number; data: unknown } }).response;
+    if (response?.status === 404) return null;
+    throw error;
+  }
+}
+```
+
+A muxws call whose socket dies mid-flight rejects with muxws' `ConnectionLost`, not with
+`ViewSetRequestError`: it carries no `response`, so the check above sends it down the same branch as
+an `AxiosError` that never got a reply. See [reconnection](./muxws#reconnection).

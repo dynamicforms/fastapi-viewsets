@@ -60,11 +60,20 @@ class ItemViewSet(BulkViewSetMixin[int, Item]):
     async def perform_retrieve(self, _context: Context, pk: int) -> Item:
         return Item(id=pk, name="test")
 
-    async def perform_update(self, _context: Context, _pk: int, data: Item, partial: bool = False) -> Item:
+    async def perform_update(
+        self,
+        _context: Context,
+        _pk: int,
+        data: Item,
+        partial: bool = False,  # noqa: ARG002 - part of the hook signature the override must match
+    ) -> Item:
         return data
 
     async def perform_bulk_update(
-        self, _context: Context, records: dict[int, Item], partial: bool = False
+        self,
+        _context: Context,
+        records: dict[int, Item],
+        partial: bool = False,  # noqa: ARG002 - part of the hook signature the override must match
     ) -> list[Item]:
         return list(records.values())
 
@@ -91,7 +100,13 @@ class StandardItemViewSet(ViewSetMixin[int, Item]):
     async def perform_retrieve(self, _context: Context, pk: int) -> Item:
         return Item(id=pk, name="test")
 
-    async def perform_update(self, _context: Context, _pk: int, data: Item, partial: bool = False) -> Item:
+    async def perform_update(
+        self,
+        _context: Context,
+        _pk: int,
+        data: Item,
+        partial: bool = False,  # noqa: ARG002 - part of the hook signature the override must match
+    ) -> Item:
         return data
 
     async def perform_destroy(self, _context: Context, pk: int) -> dict[int, Any]:
@@ -538,7 +553,10 @@ async def test_lookup_setup_filter_hook_not_called_without_q():
         async def perform_lookup(self, _context: Context) -> list[LookupItem]:
             return list(_LOOKUP_DB)
 
-        async def setup_lookup_filter(self, fltr: LookupFilter) -> None:
+        async def setup_lookup_filter(
+            self,
+            fltr: LookupFilter,  # noqa: ARG002 - part of the hook signature the override must match
+        ) -> None:
             calls.append("called")
 
     router = APIRouter()
@@ -733,7 +751,10 @@ async def test_sort_setup_hook_not_called_without_sort():
         def __init__(self):
             super().__init__(container=_DB, pk_field="id")
 
-        async def setup_sort(self, sort: SortState) -> None:
+        async def setup_sort(
+            self,
+            sort: SortState,  # noqa: ARG002 - the library defines no `setup_sort` hook, so this method never runs
+        ) -> None:
             calls.append("called")
 
     route = _get_list_route(HookViewSet)

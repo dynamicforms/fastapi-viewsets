@@ -1,7 +1,7 @@
 {
-  "name": "@dynamicforms/vuetify-inputs-docs",
+  "name": "@dynamicforms/fastapi-viewsets-docs",
   "version": "1.0.0",
-  "description": "Documentation for @dynamicforms/vuetify-inputs",
+  "description": "Documentation for @dynamicforms/fastapi-viewsets",
   "type": "module",
   "private": true,
   "scripts": {
@@ -11,8 +11,7 @@
   },
   "dependencies": {
     "vue": "^3.4.19",
-    "vuetify": "^3.9",
-    "countries-and-timezones": "^3.7.2"
+    "vuetify": "^3.9"
   },
   "devDependencies": {
     "sass": "^1.85.1",

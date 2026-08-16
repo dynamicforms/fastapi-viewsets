@@ -209,9 +209,10 @@ The cursor predicate is a filter, so it goes through the same registry and the s
 push-down. The Django backend translates it two ways:
 
 - a **row-value comparison**, `WHERE (year, id) > (2003, 42)`, which a composite index on those
-  columns can seek with. Used when every key sorts the same way and no key is nullable.
-- a **union of segments** otherwise, which spells out the NULL handling and copes with mixed
-  directions.
+  columns can seek with. Used when the cursor excludes its anchor row, every key sorts the same way,
+  and no key is nullable.
+- a **union of segments** otherwise, which spells out the NULL handling, copes with mixed
+  directions, and adds the anchor row back for the two inclusive cursors.
 
 Row values are supported by Postgres, SQLite 3.15+ and MySQL; not by SQL Server.
 
@@ -297,10 +298,10 @@ class TrackViewSet(DjangoORMViewSet[int, Track], CursorListMixin[Track, TrackFil
     schema = Track          # pydantic model rows are converted into
 ```
 
-It returns the queryset unevaluated from `perform_list`, translates exact filters into `.filter()`,
-ascending sorts into `.order_by()`, and the page into `LIMIT`/`OFFSET`, marking each stage applied.
-`count` comes from a `COUNT(*)`. Requires the `django` extra; every ORM call uses Django's async
-API or `sync_to_async`.
+It returns the queryset unevaluated from `perform_list`, translates the filter set into `.filter()`,
+the sort into `.order_by()` in either direction with the NULL placement `nulls` names, and the page
+into `LIMIT`/`OFFSET`, marking each stage applied. `count` comes from a `COUNT(*)`. Requires the
+`django` extra; every ORM call uses Django's async API or `sync_to_async`.
 
 `pk_field_name` needs no declaration here: the backend takes it from the model's primary key, so a
 model keyed on `uuid` or `code` pages correctly without being told. The cursor orders by that name
@@ -316,8 +317,9 @@ list, as above. The other order finds `ListMixin`'s plain `"id"` first and the m
 The `pk_field_name` argument to `route_viewset` is a different thing — it names the field stripped
 from the `POST` body — and is passed explicitly.
 
-What it declines and leaves to the in-memory pass: anything but exact matches, and any operator
-with no registered compiler.
+What it declines and leaves to the in-memory pass: a filter or a sort naming anything but a concrete
+model field, and any operator with no registered compiler — `overlaps`, of the built-in ones, whose
+Django equivalent is Postgres-only.
 
 A declined stage is handled by the default, never an error.
 
@@ -333,7 +335,63 @@ Override the stages your store can answer and chain the rest:
 | `count_records` | the store can count cheaply |
 | `to_record` | your source yields rows rather than the response model |
 
-`to_record` runs on the page only. Conversion happens at the end of the pipeline so that the
-earlier stages carry your query object, and it must tolerate an already-converted record: an
-in-memory stage converts when it materialises the source, because a filter declaration names the
-response model's fields while the source yields whatever the backend stores.
+A stage receives whatever the stage before it passed on — your own lazy object for as long as
+nothing has materialised it — and returns records. Four library calls make up the contract:
+
+| call | what it is for |
+|---|---|
+| `filter_set_for(query)` (`fastapi_viewsets.mixins`) | every filter the request implies: the client's declared ones plus what the pipeline added, the cursor predicate among them. Each filter reports the model fields it reads through `fields()` |
+| `filters_from(query.fltr)` (`fastapi_viewsets.filters`) | None when the filter model was not built from a declaration — the viewset is on the hand-written `filter_list` path, and there is nothing to translate |
+| `can_compile_all(type(self), filter_set)` / `compile_all(type(self), self, filter_set, queryset)` | whether every filter in the set has a compiler registered for your backend, and applying them in turn to your query object. The last parameter is your backend's query — the signature calls it `query`, and it is not the `ListQuery` the stage was handed |
+| `query.mark_applied("filter")` / `query.needs("filter")` | reporting a stage as absorbed, and asking whether it still wants doing |
+
+Chain to `super()` whichever way the decision went. `DjangoORMViewSet.apply_filter`, minus the check
+that every filtered name is a concrete model field:
+
+```python
+async def apply_filter(self, context, query, records):
+    queryset = _as_queryset(records)
+    if queryset is None or not query.has_filter or not query.needs("filter"):
+        return await super().apply_filter(context, query, records)
+
+    filter_set = filter_set_for(query)
+    if not filter_set and filters_from(query.fltr) is None:
+        return await super().apply_filter(context, query, records)
+
+    if not can_compile_all(type(self), filter_set):
+        return await super().apply_filter(context, query, records)
+
+    queryset = compile_all(type(self), self, filter_set, queryset)
+    query.mark_applied("filter")
+    return await super().apply_filter(context, query, queryset)
+```
+
+`_as_queryset` returning None is how the backend notices that an earlier stage already fell back:
+what flows on from there is a list rather than a lazy source, and every push-down below it has to
+decline. `apply_sort` and `count_records` open the same way; `take_page` returns `(page, has_more)`
+and marks `"pagination"`.
+
+[`land(query, records)`](../api/python-mixins.md) is where the lazy part ends, and an override
+decides whether it gets that far: a stage you push down never calls it, the lazy object being the
+only thing a filter or an ordering goes into; a filter or a sort you decline is landed by the
+default that picks it up. `take_page` and `count_records` never land anything — their defaults walk
+the source only as far as the page.
+
+`to_record` runs on the page alone for as long as no stage has landed the source, which means the
+filter and the sort each either pushed down or had nothing to do. Pagination is not part of that
+condition: decline it and the default `take_page` still cuts its page out of your lazy object, and
+the conversion still happens on that page. What declining it costs is the walk to the offset — the
+default reads the source row by row until the page is full, and against a database every skipped row
+crosses the wire before being discarded. That is cheap at the head of the list and grows with the
+offset, which is why `take_page` is worth overriding wherever the store has a real LIMIT/OFFSET.
+
+Conversion sits at the end of the pipeline so the earlier stages carry your query object, and
+`to_record` must tolerate an already-converted record: an in-memory stage converts when it
+materialises the source, because a filter declaration names the response model's fields while the
+source yields whatever the backend stores. That is what makes a declined filter or sort expensive
+rather than merely slower — `land()` reads and converts everything that reached it, the whole table
+where the filter declined and the filtered set where only the sort did, before the page is cut. The
+answer is right either way and the response looks identical, so the only place the difference shows
+is `query.applied`, in process: assert on it from your own tests, or a stage you meant to push down
+can stop pushing down without anything saying so. An unpaginated request lands the whole source in
+any case, there being no page to cut.

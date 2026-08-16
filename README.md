@@ -8,14 +8,21 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
   Handles type resolution, lifecycle management and OpenAPI schema automatically.
 - **`CollectionViewSet`** — zero-boilerplate in-memory viewset backed by any Python list, set or dict.
   Great for prototyping and testing.
+- **`DjangoORMViewSet`** — back a viewset with a Django QuerySet. The filters it can compile, the
+  sort order with its NULL placement, the page as LIMIT/OFFSET and the total as `COUNT(*)` all
+  become SQL; a stage it declines falls back to the in-memory pass instead of failing, and
+  `pk_field_name` comes from the model's primary key (requires the `django` extra).
 - **`celery_viewset` decorator** — move a viewset's execution to a Celery worker with no code changes
   to the viewset itself, for long-running or background processing scenarios (requires the `celery`
   extra).
 - **Bulk operations** — first-class support for bulk create, update, partial update and destroy.
 - **muxws transport** — reach the same viewsets over a single WebSocket instead of one HTTP request
-  per call, dispatched through the same FastAPI app so validation, middleware and response models
-  behave identically. In the demo, a burst of 100 requests takes 156 ms over REST and 37 ms over
-  muxws.
+  per call. A command is dispatched into an app built from the endpoints published on muxws, each
+  carrying the route kwargs REST is given, so validation, dependencies, response models and the
+  command middleware from `settings.viewsets_command_middleware` behave identically; that app is
+  the library's own, so HTTP
+  middleware installed on your application runs only if you pass your app to `process_command`. In
+  the demo, a burst of 100 requests takes 156 ms over REST and 37 ms over muxws.
 - **Three list shapes** — a bare array, offset paging, or cursor paging. A viewset declares which,
   and may let a client pick per request with an `X-List-Shape` header.
 - **Declarative filters** — declare which fields accept which operators and get query parameters,
@@ -36,6 +43,9 @@ pip install "dynamicforms-fastapi-viewsets[celery]"
 
 # with the muxws WebSocket transport
 pip install "dynamicforms-fastapi-viewsets[muxws]"
+
+# with the Django ORM backend (Django 4.2+ and asgiref)
+pip install "dynamicforms-fastapi-viewsets[django]"
 ```
 
 Requires Python 3.10+, FastAPI and Pydantic v2.
@@ -72,8 +82,8 @@ app.include_router(router)
 ```
 
 See the [full documentation](https://docs.velis.si/dynamicforms/fastapi-viewsets/) for guides on
-the mixin system, `route_viewset`, `CollectionViewSet`, `celery_viewset`, the list pipeline and
-pagination, the muxws transport, and the Vue client.
+the mixin system, `route_viewset`, `CollectionViewSet`, `DjangoORMViewSet`, `celery_viewset`, the
+list pipeline and pagination, the muxws transport, and the Vue client.
 
 ## Demo
 

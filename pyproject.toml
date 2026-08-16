@@ -109,6 +109,7 @@ unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 [tool.ruff.lint.per-file-ignores]
+# S101: assert is how a test states its claim.
 "*_test.py" = ["S101"]
 
 [tool.ruff.format]

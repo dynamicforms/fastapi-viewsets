@@ -147,7 +147,6 @@ def route_viewset(
     rather than a third `register_*`; see GAPS.md for why a set of flags is the worse shape.
     """
     def decorator(cls: type[T]):
-        seen_routes = set()
         instance = cls() if lifecycle == "singleton" else None
 
         type_map = build_type_map(cls)
@@ -183,7 +182,7 @@ def route_viewset(
                 return False
             return any(isinstance(m, FieldInfo) for m in metadata)
 
-        def _shape_signature(sig, endpoint):
+        def _shape_signature(sig):
             """
             Trims the shape-aware list endpoint down to this viewset's own shapes.
 
@@ -193,7 +192,7 @@ def route_viewset(
             header is kept only when there is a choice to make, and the return annotation becomes
             the union of exactly the models this viewset can produce.
             """
-            from fastapi_viewsets.list_shapes import response_model, SHAPE_HEADER, shape_examples
+            from fastapi_viewsets.list_shapes import response_model, shape_examples, SHAPE_HEADER
             from fastapi_viewsets.mixins import T as ItemVar
 
             default, allowed = cls.resolve_shapes()
@@ -230,7 +229,7 @@ def route_viewset(
             shape_openapi_extra = None
             sig = inspect.signature(original_endpoint)
             if getattr(original_endpoint, "__list_shape_aware__", False):
-                sig = _shape_signature(sig, original_endpoint)
+                sig = _shape_signature(sig)
             new_params = []
             needs_context = False
 

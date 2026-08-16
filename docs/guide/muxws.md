@@ -4,9 +4,16 @@ A viewset registered with `route_viewset` can also be reached over a single WebS
 [muxws](https://docs.velis.si/muxws) — a library that gives HTTP/2 stream semantics over one
 WebSocket connection.
 
-Both transports dispatch into the same FastAPI application object, so validation, dependencies,
-command middleware, context processors and response models behave identically. There is no second
-implementation to keep in step.
+There is no second implementation to keep in step: a command is dispatched into a FastAPI app built
+from the endpoints published on muxws, each registered with the route kwargs `route_viewset` built
+for it — the same ones the REST router is given for an endpoint published on both. Validation,
+dependencies, command middleware, context processors and response models therefore behave
+identically.
+
+That app is the library's own, rebuilt whenever a viewset registers, and not the application object
+you created. Middleware installed on yours
+(`@app.middleware("http")`, or any ASGI middleware) therefore never sees a command; pass
+`app=your_app` to `process_command` when a command has to go through it.
 
 ## Installation
 
@@ -225,8 +232,9 @@ body, for a streaming reply as much as a unary one.
 A 404 or a 422 comes back as a normal reply carrying that status. Stream resets are reserved for
 transport and protocol failures.
 
-Both transports throw the same shape on the client — `error.response.status` and
-`error.response.data` — so error handling written against axios works over muxws unchanged.
+On the client that status becomes a `ViewSetRequestError`, whose shape is the one axios raises —
+`error.response.status`, `error.response.data` — so error handling written against axios works over
+muxws unchanged. See [handling a failed call](./vue-mixins#handling-a-failed-call).
 
 ## Authentication
 
@@ -253,9 +261,8 @@ to refresh state when the socket comes back.
 
 ## Performance
 
-Dispatch builds a synthetic ASGI request and calls the FastAPI app, which is what keeps the two
-transports identical. It costs one JSON decode/re-encode per call: about 15% of a read, a third of
-a large write.
+Dispatch builds a synthetic ASGI request and calls the dispatch app. It costs one JSON
+decode/re-encode per call: about 15% of a read, a third of a large write.
 
 Measured against the demo — 5000 records, localhost, Python client, so no browser connection limit
 in play:

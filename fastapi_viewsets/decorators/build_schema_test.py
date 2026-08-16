@@ -82,5 +82,5 @@ def test_route_sort_key_is_a_valid_total_order_for_varying_depths():
     async def b():  # pragma: no cover - never called
         ...
 
-    routes = [r for r in router.routes]
+    routes = list(router.routes)
     sorted(routes, key=route_sort_key, reverse=True)  # must not raise

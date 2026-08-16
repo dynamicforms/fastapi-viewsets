@@ -54,9 +54,14 @@ class ImplMixin(Generic[K, T], ABC):
         raise NotImplementedError("Method 'perform_bulk_create' must be implemented.")
 
     @abstractmethod
-    async def perform_list(self, context: Context) -> list[T]:
+    async def perform_list(self, context: Context) -> ListRecords:
         """
         Subclasses should implement this method to perform the actual listing.
+
+        A lazy source - a generator, an unevaluated QuerySet - is what an overridden `apply_filter`,
+        `apply_sort` or `take_page` pushes its work into, so returning one is what lets a backend
+        answer part of the query in its own store. The defaults push into nothing: they land the
+        source and work in memory, which is what a materialised list gets either way.
         """
         raise NotImplementedError("Method 'perform_list' must be implemented.")
 

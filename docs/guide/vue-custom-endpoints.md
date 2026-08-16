@@ -70,8 +70,8 @@ muxws.
 | `options` | `{ query?, body? }`, both optional |
 
 An array-valued query entry becomes a repeated key, which is how FastAPI binds a `list[str]`
-parameter. A non-2xx status throws, with `error.response.status` and `error.response.data` readable
-on the thrown value on both transports.
+parameter. A status of 400 or above throws on both transports, and what is thrown and what a handler
+reads off it is in [handling a failed call](./vue-mixins#handling-a-failed-call).
 
 ## Accessing protected members
 
