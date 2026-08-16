@@ -51,6 +51,27 @@ A list knows its length; a generator does not, and draining it to find out defea
 the Django one answers with a `SELECT COUNT(*)` — so the null is a statement about the source, not
 about the pipeline. A cursor page never counts at all, deliberately.
 
+### A declined push-down reads the whole table, and says nothing
+
+The pipeline lets a backend absorb a stage and report it with `mark_applied`; what it declines
+falls to the in-memory default. Declining is all-or-nothing per stage — `DjangoORMViewSet.apply_filter`
+marks `filter` applied only when every field in the set translated, because a filter half-done in
+SQL and half-forgotten returns too many rows. One operator without a compiler is therefore enough
+to send the entire filter set to Python, the client's own filters with it.
+
+What that costs is not a slower query. The in-memory pass goes through `land()`, which materialises
+the source and converts every row it materialised into the response model, and it runs before the
+page is cut — so both the read and the validation are bounded by the table rather than by `limit`.
+Nothing says so. `query.applied` records where each stage ran and dies with the request: no log, no
+metric, no field on the response.
+
+Left as it is because the obvious fix is noise. A backend that pushes nothing down — the collection
+one — would log on every request, and a viewset filtering ten rows in memory is doing exactly the
+right thing. For a message to mean anything the backend has to declare first that it *can* push
+down, so the log can say that a stage it was able to absorb was declined, and why. Raising instead
+of falling back is a third setting again: it trades a slow correct answer for a 500, which is right
+for someone who knows the table is large and wrong as a default.
+
 ### OpenAPI cannot say that the response shape depends on a request header
 
 A viewset offering several shapes documents them as an `anyOf`, with one named example per shape so

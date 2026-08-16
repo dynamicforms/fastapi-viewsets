@@ -12,6 +12,10 @@ placement).
         model = TrackModel
         schema = Track
 
+The backend comes before the list mixin, and that order is required: `pk_field_name` is a property
+here and a plain class attribute on `ListMixin`, so a viewset that lists the mixin first finds the
+mixin's `"id"` and never asks the model.
+
 Requires the `django` extra. Django's ORM is synchronous underneath; every call here uses either
 its native async API (`aget`, `acount`, `__aiter__`, added in Django 4.1) or `sync_to_async`, so
 nothing blocks the event loop.
@@ -50,6 +54,13 @@ from ..filters import (
 from ..list_query import ListQuery, ListRecords
 from ..mixins import filter_set_for, ImplMixin, SortDirection
 
+try:
+    from django.db.models import CompositePrimaryKey
+
+    _COMPOSITE_PK: tuple[type, ...] = (CompositePrimaryKey,)
+except ImportError:  # Django below 5.2 has no composite primary keys; the empty tuple matches nothing
+    _COMPOSITE_PK = ()
+
 if TYPE_CHECKING:
     from django.db.models import Model, QuerySet
 
@@ -66,9 +77,53 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
 
     pk_field: ClassVar[str] = "pk"
     """
-    Name of the primary key field. `pk` is Django's own alias and works whatever the field is
-    really called, which is why it is the default rather than a literal `id`.
+    The lookup `_get_or_404` hands to `aget()` when a record is fetched by its key. `pk` is Django's
+    alias for whichever field carries the primary key, so a renamed primary key needs no change
+    here; what that field is *called* is `pk_field_name`.
     """
+
+    @property
+    def pk_field_name(self) -> str:
+        """
+        The primary key's name, taken from `Model._meta.pk`.
+
+        The cursor appends it to the ordering and filters on it - and this backend pushes a filter
+        set down only when every name in it is a concrete model field - while the position the
+        cursor emits is read off the converted *response* record. The name therefore has to be one
+        both the model and `schema` carry, or the cursor's own key would take the whole set, the
+        client's own filters with it, to the in-memory pass, and emit a position read off a field
+        that is not there.
+
+        `_meta.pk` offers two such names, and the first that `schema` declares wins: `name`, and
+        `attname` for a relation primary key, which is `owner` on the model and `owner_id` on the
+        response model. Neither on the schema means the schema names the key something else - a
+        multi-table-inheritance child, whose `_meta.pk` is the parent link - and the default
+        declared further along the MRO stands.
+
+        Assigning `pk_field_name` on a subclass overrides this at any depth; assigning it on an
+        instance raises `AttributeError`, because this is a read-only property. A subclass with no
+        `model` yet takes the same default, so an abstract base is free to leave the model to its
+        own subclasses.
+        """
+        model = getattr(self, "model", None)
+        if model is None:
+            return super().pk_field_name
+
+        pk = model._meta.pk
+        if isinstance(pk, _COMPOSITE_PK):
+            raise TypeError(
+                f"{type(self).__name__}: {model.__name__} has a composite primary key, which no single "
+                f"`pk_field_name` can name. Assign `pk_field_name` on the class, naming one field that is "
+                f"unique per row."
+            )
+
+        declared = getattr(getattr(self, "schema", None), "model_fields", None)
+        if declared is None:
+            return pk.name
+        for name in (pk.name, pk.attname):
+            if name in declared:
+                return name
+        return super().pk_field_name
 
     def get_queryset(self, context: Context) -> "QuerySet":  # noqa: ARG002 - for overrides to narrow per user
         """
@@ -83,8 +138,10 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
 
     def to_record(self, raw: Any) -> T:
         """
-        Django row to pydantic model. Runs on the page only, never on the whole queryset - see
-        `ListMixin.apply_pagination`.
+        Django row to pydantic model. Runs on the page only for as long as the backend absorbs
+        every stage - see `ListMixin.apply_pagination`. A stage that falls back runs it on the
+        whole queryset instead, because the in-memory pass goes through `land()`, which converts
+        what it materialises.
         """
         if isinstance(raw, self.schema):
             return raw
@@ -132,7 +189,18 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         return await super().apply_filter(context, query, queryset)
 
     def _concrete_fields(self) -> set[str]:
-        return {field.name for field in self.model._meta.get_fields() if getattr(field, "concrete", False)}
+        """
+        Every name that names a column in a query, both halves of a relation's pair: a foreign key
+        is `author` and `author_id`, and both are lookups Django accepts. The response model
+        carries the second, so leaving it out would decline push-down for a schema field that maps
+        to a column perfectly well.
+        """
+        names = set()
+        for field in self.model._meta.get_fields():
+            if getattr(field, "concrete", False):
+                names.add(field.name)
+                names.add(field.attname)
+        return names
 
     async def apply_sort(self, context: Context, query: ListQuery, records: ListRecords) -> ListRecords:
         """
@@ -146,7 +214,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         if queryset is None or not query.has_sort or not query.needs("sort"):
             return await super().apply_sort(context, query, records)
 
-        concrete = {field.name for field in self.model._meta.get_fields() if getattr(field, "concrete", False)}
+        concrete = self._concrete_fields()
         if not all(column.column_name in concrete for column in query.sort):
             return await super().apply_sort(context, query, records)
 

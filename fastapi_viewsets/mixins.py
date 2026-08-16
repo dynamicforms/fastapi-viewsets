@@ -249,7 +249,14 @@ class ListMixin(Generic[T, TFilter], ABC):
     """Ceiling on `limit`, so paging cannot be turned back into "fetch everything"."""
 
     pk_field_name: str = "id"
-    """Appended to the ordering by the cursor shape, to make every key tuple unique."""
+    """
+    Appended to the ordering by the cursor shape, to make every key tuple unique.
+
+    A backend that can read its store's schema supplies the real name instead: `DjangoORMViewSet`
+    takes the model's primary key. This default is what a store the library cannot introspect uses,
+    and what such a backend falls back to when the response model names the key something the store
+    does not.
+    """
 
     nulls: str = "first"
     """

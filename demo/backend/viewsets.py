@@ -152,7 +152,6 @@ class MusicTrackDbViewSet(
 
     model = MusicTrackRow
     schema = MusicTrack
-    pk_field_name = "id"
     default_page_size = 50
 
     def to_record(self, raw: Any) -> MusicTrack:
