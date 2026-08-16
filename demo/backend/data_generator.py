@@ -97,7 +97,7 @@ def generate_music_library(count: int = 100, seed: int | None = 20240101) -> lis
     on first run, silently drifts away from whatever the next process invents, and the two
     backends start disagreeing about how many rows match a filter.
     """
-    rng = random.Random(seed) if seed is not None else random
+    rng = random.Random(seed) if seed is not None else random  # noqa: S311 - demo data, never a key or a token
     library = []
     for i in range(count):
         record = {

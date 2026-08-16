@@ -58,6 +58,23 @@ interface CursorPage<T> {
 }
 ```
 
+## Errors
+
+```ts
+class ViewSetRequestError extends Error {
+  readonly response: { status: number; data: unknown; headers: Record<string, string> };
+
+  constructor(status: number, data: unknown, headers?: Record<string, string>);
+}
+```
+
+`headers` are the reply headers with the `:`-prefixed pseudo-headers dropped and every value
+stringified, `{}` when the constructor is not given any. `name` is `'ViewSetRequestError'` and the
+message is `Request failed with status code {status}`.
+
+Which transport throws this and which throws axios' own `AxiosError`, and what a handler may read off
+either, is in [handling a failed call](../guide/vue-mixins#handling-a-failed-call).
+
 ## Individual operation mixins
 
 ### CreateMixin `<T, PK extends keyof T>`

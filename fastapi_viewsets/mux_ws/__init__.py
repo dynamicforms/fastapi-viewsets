@@ -7,9 +7,14 @@ identically named module inside this package would make every import in this fil
 the reader even where it is unambiguous to Python. Nothing here is a typo.
 
 What this gives you is the same viewsets you already registered over REST, reachable over a
-single WebSocket instead - dispatched through the very same FastAPI application object, so
-validation, dependencies, command middleware, context processors and response models behave
-identically on both transports.
+single WebSocket instead. A command is dispatched into the app `get_dispatch_app()` builds from the
+endpoints published on muxws, each registered with the route kwargs `route_viewset` built for it -
+the same ones the REST router is given for an endpoint published on both - so validation,
+dependencies, command middleware, context processors and response models behave identically.
+That app is this library's, not the application object you created: what a command carries is what
+`route_viewset` put on the route, and nothing you attached elsewhere. `request.app` inside an
+endpoint reached this way is the dispatch app. docs/guide/muxws.md lists what that leaves behind and
+what to use instead; `app=` on `process_command` sends a command through your application instead.
 
 Server side:
 

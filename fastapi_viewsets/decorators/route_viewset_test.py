@@ -231,7 +231,13 @@ async def test_viewset_pk_not_hidden_in_update():
         name: str
 
     class SimpleViewSet(UpdateMixin[int, SimpleItem]):
-        async def perform_update(self, _context, _pk: int, data: SimpleItem, partial: bool = True) -> SimpleItem:
+        async def perform_update(
+            self,
+            _context,
+            _pk: int,
+            data: SimpleItem,
+            partial: bool = True,  # noqa: ARG002 - part of the hook signature the override must match
+        ) -> SimpleItem:
             return data
 
     router = APIRouter()

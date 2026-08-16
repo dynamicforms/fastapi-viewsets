@@ -5,8 +5,7 @@ This is the second real backend, and it exists as much to constrain the design a
 abstraction built only against an in-memory dict inevitably assumes the records are already in
 memory, and you find out when the second backend arrives. A QuerySet is lazy, iterates
 asynchronously, and can absorb a filter, an ordering and a slice into SQL - so it exercises every
-push-down path the pipeline offers, and one it cannot (see `apply_sort` on descending NULL
-placement).
+push-down path the pipeline offers.
 
     class TrackViewSet(DjangoORMViewSet[int, Track], PaginatedListMixin[Track, TrackFilter]):
         model = TrackModel
@@ -138,10 +137,13 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
 
     def to_record(self, raw: Any) -> T:
         """
-        Django row to pydantic model. Runs on the page only for as long as the backend absorbs
-        every stage - see `ListMixin.apply_pagination`. A stage that falls back runs it on the
-        whole queryset instead, because the in-memory pass goes through `land()`, which converts
-        what it materialises.
+        Django row to pydantic model. Runs on the page alone for as long as no stage has landed the
+        source, which means the filter and the sort each pushed down or had nothing to do; a
+        declined `take_page` still cuts its page out of the queryset. A declined filter or sort runs
+        this on whatever reached that stage instead - the whole table where the filter declined -
+        because the in-memory pass goes through `land()`, which converts what it materialises. Every
+        one of those rows and its pydantic model are held at once, before the page is cut, so
+        `limit=10` against a table of hundreds of thousands of rows can exhaust memory.
         """
         if isinstance(raw, self.schema):
             return raw

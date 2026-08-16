@@ -52,7 +52,7 @@ def celery_viewset_client(
                 continue
             seen_tasks.add(task_name)
 
-            _patch_method(cls, route.endpoint, task_name, celery_app, redis_client, queue_key)
+            _patch_method(cls, route.endpoint, task_name, celery_app, queue_key)
 
         cls.__celery_viewset_metadata__ = {
             "task_prefix": task_prefix,
@@ -77,7 +77,7 @@ async def _serialize_value(value):
     return value
 
 
-def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, redis_client, queue_key: str):
+def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, queue_key: str):
     """Replace the method on cls with an async version that sends a Celery task and awaits the result."""
     method_name = original_endpoint.__name__
 

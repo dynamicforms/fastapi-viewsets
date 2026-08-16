@@ -2,8 +2,11 @@
 Runs one request through a FastAPI app without a socket underneath it.
 
 The muxws transport deliberately does not re-implement parameter binding, validation, dependency
-resolution or response-model serialisation - it hands the request to the very same FastAPI
-application object the REST transport would have used, so the two transports cannot drift apart.
+resolution or response-model serialisation - it hands the request to a FastAPI app carrying the
+route kwargs `route_viewset` built, the same ones the REST router is given, so the two transports
+cannot drift apart on anything a route declares. Which app that is, and what it therefore does not
+carry, is in `fastapi_viewsets.mux_ws`.
+
 What that costs is one synthetic ASGI round trip per call, which is still nothing next to an
 actual HTTP request: no connection setup, no header parsing, no socket at all.
 """

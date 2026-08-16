@@ -1,15 +1,10 @@
 """
 What a client asked a list endpoint for, and what it gets back.
 
-`perform_list` used to have to return a materialised `list[T]`, which meant filtering, sorting and
-paging could only ever happen in memory: a database-backed viewset had no way to push any of it
-down into its query. The `setup_filter`/`setup_sort` hooks existed only to work around that, by
-mutating instance state before `perform_list` ran - a pre/post pair that had to be kept in step by
-hand.
-
-Now `perform_list` may return any iterable or async iterable, and receives the `ListQuery` so a
-backend that can answer part of it directly is free to. Whatever it does not answer, the default
-transformations in `ListMixin` still do, in memory. See docs/guide/list-pipeline.md.
+`perform_list` receives the `Context` alone and answers with `ListRecords`. The `ListQuery` arrives
+one stage later: `apply_filter`, `apply_sort`, `take_page` and `count_records` each take it as a
+parameter, so a backend that can answer part of the query in its own store does it by overriding one
+of those. Whatever no stage answers, `ListMixin` answers in memory. See docs/guide/list-pipeline.md.
 """
 
 from collections.abc import AsyncIterable, AsyncIterator, Iterable
@@ -20,13 +15,19 @@ from pydantic import BaseModel
 
 TItem = TypeVar("TItem")
 """
-Deliberately not the same TypeVar the mixins use for their item type. Pydantic treats `M[X]`,
-where X is M's *own* parameter, as a no-op and hands back the bare class - which would strip the
-item type out of `PaginatedList[T]` before FastAPI ever saw it.
+The item type of `ListRecords` and of `PaginatedList`, deliberately not the same TypeVar the mixins
+use for their item type. Pydantic treats `M[X]`, where X is M's *own* parameter, as a no-op and
+hands back the bare class - which would strip the item type out of `PaginatedList[T]` before FastAPI
+ever saw it.
 """
 
-ListRecords = Iterable[Any] | AsyncIterable[Any]
-"""What flows through the list pipeline: anything iterable, lazily or not."""
+ListRecords = Iterable[TItem] | AsyncIterable[TItem]
+"""
+What flows through the list pipeline: anything iterable, lazily or not, over items of one type.
+
+Written bare it means `ListRecords[Any]`, which is what a pipeline stage writes: what flows through
+it is whatever the backend's source yields, and only `to_record` turns that into the response model.
+"""
 
 
 @dataclass
@@ -122,7 +123,7 @@ def build_list_query(fltr: Any, sort: str | None, offset: int = 0, limit: int | 
     )
 
 
-async def materialize(records: ListRecords) -> list:
+async def materialize(records: ListRecords[TItem]) -> list[TItem]:
     """Drains a lazy source into a list. Anything already a list is returned as-is."""
     if isinstance(records, list):
         return records
@@ -131,7 +132,7 @@ async def materialize(records: ListRecords) -> list:
     return list(records)
 
 
-async def take_page(records: ListRecords, offset: int, limit: int) -> tuple[list, bool]:
+async def take_page(records: ListRecords[TItem], offset: int, limit: int) -> tuple[list[TItem], bool]:
     """
     Reads one page out of `records`, plus whether anything follows it.
 
@@ -147,7 +148,7 @@ async def take_page(records: ListRecords, offset: int, limit: int) -> tuple[list
         return page[:limit], len(page) > limit
 
     iterator = _as_async_iterator(records)
-    page: list = []
+    page: list[TItem] = []
     has_more = False
     index = 0
     async for record in iterator:
@@ -162,7 +163,7 @@ async def take_page(records: ListRecords, offset: int, limit: int) -> tuple[list
     return page, has_more
 
 
-async def _as_async_iterator(records: ListRecords) -> AsyncIterator:
+async def _as_async_iterator(records: ListRecords[TItem]) -> AsyncIterator[TItem]:
     if isinstance(records, AsyncIterable):
         async for record in records:
             yield record

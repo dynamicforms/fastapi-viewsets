@@ -1,5 +1,6 @@
-// Values, not types: a ViewSet lists them in `static declares`, which is read at runtime. Exporting
-// them with `export type` is what previously left the declaration invisible to the schema check.
+// Values, not types: a ViewSet names them in a value position — `static declares =
+// [ReadOnlyViewSetMixin]` — which is TS1362 for a name exported as a type, so the list cannot be
+// written at all. The schema check reads each mixin's `actions` off that list at runtime.
 export {
   BulkCreateMixin,
   BulkDestroyMixin,

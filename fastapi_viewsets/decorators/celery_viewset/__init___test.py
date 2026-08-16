@@ -50,7 +50,8 @@ def test_celery_viewset_auto_detect_server():
                 return [Item(id=1, name="test")]
 
         assert "items.list_items" in registered_tasks
-        assert ItemViewSet.__celery_viewset_metadata__["mode"] if "mode" in ItemViewSet.__celery_viewset_metadata__ else True
+        metadata = ItemViewSet.__celery_viewset_metadata__
+        assert metadata["mode"] if "mode" in metadata else True
     finally:
         set_is_celery_worker(None)
 

@@ -4,9 +4,35 @@ A viewset registered with `route_viewset` can also be reached over a single WebS
 [muxws](https://docs.velis.si/muxws) — a library that gives HTTP/2 stream semantics over one
 WebSocket connection.
 
-Both transports dispatch into the same FastAPI application object, so validation, dependencies,
-command middleware, context processors and response models behave identically. There is no second
-implementation to keep in step.
+There is no second implementation to keep in step: a command is dispatched into a FastAPI app built
+from the endpoints published on muxws, each registered with the route kwargs `route_viewset` built
+for it — the same ones the REST router is given for an endpoint published on both. Validation,
+dependencies, command middleware, context processors and response models therefore behave
+identically.
+
+That app is the library's own, rebuilt whenever a viewset registers, and not the application object
+you created. What travels with a command is the route kwargs `route_viewset` built for the endpoint
+itself; what you attached anywhere else does not. So a command reached over muxws does not see:
+
+- middleware installed on your app — `@app.middleware("http")`, or any ASGI middleware;
+- exception handlers registered with `@app.exception_handler(...)`. What answers instead depends on
+  the type: the dispatch app is a plain `FastAPI`, so it carries the framework's own handlers for
+  `HTTPException` and `RequestValidationError` and answers those with the default response, while an
+  exception of a type only your handler knows escapes the endpoint and is logged and answered 500;
+- dependencies declared on the `APIRouter` you hand to `route_viewset`
+  (`APIRouter(dependencies=[Depends(...)])`). The muxws routes are taken from the viewset's own
+  router, before FastAPI folds yours in, so a gate declared there guards REST and not muxws — put it
+  on the endpoint, or in command middleware;
+- `app.state`. `request.app` in the endpoint is the dispatch app, so `request.app.state` is that
+  app's own, empty state — what your lifespan or startup handler put on your app is not there, and
+  the dispatch app runs no lifespan of its own;
+- `app.dependency_overrides`, which is why a test that overrides a dependency has to drive the same
+  route over REST or hand its app to `process_command`.
+
+Cross-cutting concerns therefore belong on the route: in `settings.viewsets_command_middleware` —
+both its `depends()` phase and its onion chain — or in a route's own `dependencies=[Depends(...)]`.
+When a command genuinely has to go through your application, its middleware stack and exception
+handlers included, pass `app=your_app` to `process_command`.
 
 ## Installation
 
@@ -225,8 +251,9 @@ body, for a streaming reply as much as a unary one.
 A 404 or a 422 comes back as a normal reply carrying that status. Stream resets are reserved for
 transport and protocol failures.
 
-Both transports throw the same shape on the client — `error.response.status` and
-`error.response.data` — so error handling written against axios works over muxws unchanged.
+On the client that status becomes a `ViewSetRequestError`, whose shape is the one axios raises —
+`error.response.status`, `error.response.data` — so error handling written against axios works over
+muxws unchanged. See [handling a failed call](./vue-mixins#handling-a-failed-call).
 
 ## Authentication
 
@@ -253,9 +280,8 @@ to refresh state when the socket comes back.
 
 ## Performance
 
-Dispatch builds a synthetic ASGI request and calls the FastAPI app, which is what keeps the two
-transports identical. It costs one JSON decode/re-encode per call: about 15% of a read, a third of
-a large write.
+Dispatch builds a synthetic ASGI request and calls the dispatch app. It costs one JSON
+decode/re-encode per call: about 15% of a read, a third of a large write.
 
 Measured against the demo — 5000 records, localhost, Python client, so no browser connection limit
 in play:

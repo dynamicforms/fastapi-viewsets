@@ -43,12 +43,15 @@ export interface RequestOptions {
 }
 
 /**
- * What a failed call throws, on both transports.
+ * What a failed call throws over muxws, where there is no axios to raise anything.
  *
- * The shape deliberately mirrors `AxiosError` — `error.response.status` and
- * `error.response.data` — so that error handling written against the REST proxy keeps working
- * unchanged when the same code is pointed at muxws. Over HTTP axios throws its own error and this
- * class is not used; over muxws there is no axios, so it is.
+ * The shape mirrors `AxiosError` — `error.response.status`, `error.response.data` and
+ * `error.response.headers` — so a caller reads the same fields whichever transport the ViewSet
+ * speaks. Over HTTP axios raises its own error, already in that shape, and it is passed through
+ * untouched.
+ *
+ * `response` is always set here, unlike `AxiosError.response`, which is absent when the request
+ * never reached a reply.
  */
 export class ViewSetRequestError extends Error {
   readonly response: { status: number; data: unknown; headers: Record<string, string> };
@@ -168,8 +171,10 @@ export abstract class ViewSetInternals {
    * Sends one request and returns the decoded response body.
    *
    * `path` is relative to `basePath` — '' for the collection, '/1' for a record, '/bulk', and so
-   * on. Implementations must throw on a non-2xx status, with `response.status` readable on the
-   * thrown value.
+   * on. Implementations must throw on a status of 400 or above, with `response.status` readable on
+   * the thrown value. Below 400 the two differ, on a band a caller rarely sees: the muxws proxy
+   * returns the body for any 3xx, while the REST proxy follows a redirect it can follow and rejects
+   * whatever axios' default `validateStatus` then leaves outside 200-299.
    *
    * Concrete here, and never reached: ViewSetProxyBase re-declares it abstract, which is where a
    * transport is actually held to implementing it. It cannot be abstract at this level because
