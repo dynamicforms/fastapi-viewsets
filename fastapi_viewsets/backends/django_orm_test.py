@@ -18,7 +18,7 @@ import pytest
 from django.db import connection, models
 from pydantic import BaseModel
 
-from ..cursor import CursorPredicate
+from ..cursor import CursorPredicate, decode_cursor
 from ..filters import Filter, make_filter_model, register_operator
 from ..list_query import build_list_query, ListQuery
 from ..mixins import CursorListMixin, make_all_optional, PaginatedListMixin, SortStateColumn
@@ -330,7 +330,6 @@ class CursorTrackViewSet(DjangoORMViewSet[int, Track], CursorListMixin[Track, Tr
     model = TrackModel
     schema = Track
     default_page_size = 4
-    pk_field_name = "id"
 
 
 async def _walk(viewset, sort):
@@ -414,3 +413,322 @@ async def test_walking_a_multi_key_ordering_with_ties_visits_every_row_once():
     titles = [title for page in pages for title in page]
     assert sorted(titles) == [f"Track {n:03d}" for n in range(1, 31)]
     assert len(titles) == len(set(titles))
+
+
+# ---------------------------------------------------------------------------
+# A primary key that is not called `id`
+# ---------------------------------------------------------------------------
+# The cursor appends the primary key to its ordering and filters on it, and this backend pushes a
+# filter set down only when every name in it is a concrete model field. The viewsets below declare
+# no `pk_field_name`; the backend takes it from the model.
+
+class CodedTrackModel(models.Model):
+    code = models.CharField(max_length=20, primary_key=True)
+    title = models.CharField(max_length=200)
+    year = models.IntegerField()
+
+    class Meta:
+        app_label = "backends"
+
+
+class CodedTrack(BaseModel):
+    code: str
+    title: str
+    year: int
+
+
+CodedTrackFilter = make_filter_model(CodedTrack, {"title": ["icontains"], "year": ["gte"]})
+
+
+class CodedTrackViewSet(DjangoORMViewSet[str, CodedTrack], CursorListMixin[CodedTrack, CodedTrackFilter]):
+    model = CodedTrackModel
+    schema = CodedTrack
+    default_page_size = 4
+
+
+@pytest.fixture
+def coded_rows():
+    """Sync, because Django refuses schema and ORM calls from inside a running event loop."""
+    with connection.schema_editor() as editor:
+        editor.create_model(CodedTrackModel)
+    CodedTrackModel.objects.bulk_create([
+        CodedTrackModel(code=f"T{n:03d}", title=f"Track {n:03d}", year=2000 + (n % 5))
+        for n in range(1, 31)
+    ])
+    yield
+    with connection.schema_editor() as editor:
+        editor.delete_model(CodedTrackModel)
+
+
+def test_the_primary_key_name_comes_from_the_model():
+    assert CodedTrackViewSet().pk_field_name == "code"
+
+
+def test_an_explicit_primary_key_name_still_wins():
+    """A response schema that renames the primary key is the case the model cannot answer."""
+    class OverriddenViewSet(CodedTrackViewSet):
+        pk_field_name = "title"
+
+    assert OverriddenViewSet().pk_field_name == "title"
+
+
+def test_an_abstract_viewset_with_no_model_yet_keeps_the_default():
+    """A base that leaves the model to its subclasses has to survive being defined and read."""
+    class AbstractCodedViewSet(DjangoORMViewSet[str, CodedTrack], CursorListMixin[CodedTrack, CodedTrackFilter]):
+        schema = CodedTrack
+
+    assert AbstractCodedViewSet().pk_field_name == "id"
+
+
+@pytest.mark.asyncio
+async def test_a_renamed_primary_key_joins_the_ordering_and_reaches_sql(coded_rows):  # noqa: ARG001
+    """The derived primary key joins the ordering on page one, where no cursor exists yet, and the
+    sort and the page still reach SQL."""
+    query = build_list_query(None, "title:asc", limit=4)
+    page = await CodedTrackViewSet().get_list(None, query)
+    assert query._cursor_keys == (("title", False), ("code", False))
+    assert query.applied == {"sort", "pagination"}
+    assert [record.title for record in page.results] == [
+        "Track 001", "Track 002", "Track 003", "Track 004",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_cursor_carries_the_real_primary_key_value(coded_rows):  # noqa: ARG001
+    viewset = CodedTrackViewSet()
+    query = build_list_query(None, "title:asc", limit=4)
+    page = await viewset.get_list(None, query)
+
+    state = decode_cursor(page.next, query._cursor_keys, query._cursor_query, viewset._cursor_annotations())
+    assert state.position == {"title": "Track 004", "code": "T004"}
+
+
+@pytest.mark.asyncio
+async def test_walking_a_renamed_primary_key_visits_every_row_once(coded_rows):  # noqa: ARG001
+    """
+    `year:asc`, not `title:asc`: a unique first key settles every comparison before the appended
+    primary key is read, so a wrong primary key name would still walk the whole table. A tie-heavy
+    key reaches the appended key, and a key the ordering cannot compare drops every row tied with
+    the anchor.
+    """
+    pages = await _walk(CodedTrackViewSet(), "year:asc")
+    titles = [title for page in pages for title in page]
+    assert sorted(titles) == [f"Track {n:03d}" for n in range(1, 31)]
+    assert len(titles) == len(set(titles))
+
+
+@pytest.mark.asyncio
+async def test_a_client_filter_survives_the_cursor_on_a_renamed_primary_key(coded_rows):  # noqa: ARG001
+    """
+    Push-down is all or nothing, and the cursor's predicate shares the filter set with the client's
+    own filters: an ordering key the model does not have would take `year__gte` out of SQL with it
+    from the second page on. The key comes from the model, so the whole set stays in SQL and page
+    two is filtered, sorted and limited by the database.
+    """
+    viewset = CodedTrackViewSet()
+    first = build_list_query(CodedTrackFilter(year__gte=2002), "title:asc", limit=4)
+    page = await viewset.get_list(None, first)
+
+    second = build_list_query(CodedTrackFilter(year__gte=2002), "title:asc", limit=4)
+    second.cursor = page.next
+    page_two = await viewset.get_list(None, second)
+
+    assert second.applied == {"filter", "sort", "pagination"}
+    assert all(record.year >= 2002 for record in page_two.results)
+    assert [record.title for record in page_two.results] == [
+        "Track 008", "Track 009", "Track 012", "Track 013",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_renamed_primary_key_retrieves_updates_and_destroys(coded_rows):  # noqa: ARG001
+    """
+    `pk_field` answers a different question and needs no derivation: `pk` is Django's alias for
+    whichever field holds the key, so a lookup by key works whatever it is called. The destroy
+    response names it `id` regardless of the field.
+    """
+    viewset = CodedTrackViewSet()
+    assert (await viewset.perform_retrieve(None, "T005")).title == "Track 005"
+
+    updated = await viewset.perform_update(None, "T005", CodedTrack(code="T005", title="Renamed", year=1999))
+    assert updated.title == "Renamed"
+
+    assert await viewset.perform_destroy(None, "T005") == {"id": "T005"}
+
+
+# ---------------------------------------------------------------------------
+# Primary keys the model and the response schema call different things
+# ---------------------------------------------------------------------------
+# `_meta.pk` is a relation on both of these: the parent link of an inherited model, and a
+# one-to-one field declared as the key. The model knows it as `artist`, the response schema
+# carries `artist_id`, and the cursor reads its ordering out of the model and its position out of
+# the schema - so only a name both of them have walks the table.
+
+class MediaModel(models.Model):
+    title = models.CharField(max_length=200)
+
+    class Meta:
+        app_label = "backends"
+
+
+class SongModel(MediaModel):
+    year = models.IntegerField()
+
+    class Meta:
+        app_label = "backends"
+
+
+class Song(BaseModel):
+    id: int
+    title: str
+    year: int
+
+
+SongFilter = make_filter_model(Song, {"title": ["icontains"], "year": ["gte"]})
+
+
+class SongViewSet(DjangoORMViewSet[int, Song], CursorListMixin[Song, SongFilter]):
+    model = SongModel
+    schema = Song
+    default_page_size = 4
+
+
+class ArtistModel(models.Model):
+    name = models.CharField(max_length=50)
+
+    class Meta:
+        app_label = "backends"
+
+
+class ArtistProfileModel(models.Model):
+    artist = models.OneToOneField(ArtistModel, primary_key=True, on_delete=models.CASCADE)
+    title = models.CharField(max_length=200)
+    year = models.IntegerField()
+
+    class Meta:
+        app_label = "backends"
+
+
+class ArtistProfile(BaseModel):
+    artist_id: int
+    title: str
+    year: int
+
+
+ArtistProfileFilter = make_filter_model(ArtistProfile, {"title": ["icontains"], "year": ["gte"]})
+
+
+class ArtistProfileViewSet(
+    DjangoORMViewSet[int, ArtistProfile], CursorListMixin[ArtistProfile, ArtistProfileFilter]
+):
+    model = ArtistProfileModel
+    schema = ArtistProfile
+    default_page_size = 4
+
+
+@pytest.fixture
+def song_rows():
+    """Nine rows on one year, so the sort key ties on every pair and the appended key decides."""
+    with connection.schema_editor() as editor:
+        editor.create_model(MediaModel)
+        editor.create_model(SongModel)
+    for n in range(1, 10):
+        SongModel.objects.create(title=f"Song {n:03d}", year=2000)
+    yield
+    with connection.schema_editor() as editor:
+        editor.delete_model(SongModel)
+        editor.delete_model(MediaModel)
+
+
+@pytest.fixture
+def artist_profile_rows():
+    """Nine rows on one year, so the sort key ties on every pair and the appended key decides."""
+    with connection.schema_editor() as editor:
+        editor.create_model(ArtistModel)
+        editor.create_model(ArtistProfileModel)
+    for n in range(1, 10):
+        artist = ArtistModel.objects.create(name=f"Artist {n:03d}")
+        ArtistProfileModel.objects.create(artist=artist, title=f"Profile {n:03d}", year=2000)
+    yield
+    with connection.schema_editor() as editor:
+        editor.delete_model(ArtistProfileModel)
+        editor.delete_model(ArtistModel)
+
+
+def test_an_inherited_model_keys_on_the_name_its_schema_carries():
+    """
+    `SongModel._meta.pk` is the parent link, `mediamodel_ptr`. Django reports it as concrete, so it
+    would push down and then read a null position off a response model that has no such field.
+    """
+    assert SongModel._meta.pk.name == "mediamodel_ptr"
+    assert SongViewSet().pk_field_name == "id"
+
+
+@pytest.mark.asyncio
+async def test_walking_an_inherited_model_on_a_tied_key_visits_every_row_once(song_rows):  # noqa: ARG001
+    pages = await _walk(SongViewSet(), "year:asc")
+    titles = [title for page in pages for title in page]
+    assert sorted(titles) == [f"Song {n:03d}" for n in range(1, 10)]
+    assert len(titles) == len(set(titles))
+
+
+def test_a_relation_primary_key_keys_on_the_column_its_schema_carries():
+    """A one-to-one primary key is `artist` on the model and `artist_id` on the response model."""
+    assert ArtistProfileModel._meta.pk.name == "artist"
+    assert ArtistProfileViewSet().pk_field_name == "artist_id"
+
+
+@pytest.mark.asyncio
+async def test_walking_a_relation_primary_key_on_a_tied_key_visits_every_row_once(
+    artist_profile_rows,  # noqa: ARG001
+):
+    pages = await _walk(ArtistProfileViewSet(), "year:asc")
+    titles = [title for page in pages for title in page]
+    assert sorted(titles) == [f"Profile {n:03d}" for n in range(1, 10)]
+    assert len(titles) == len(set(titles))
+
+
+@pytest.mark.asyncio
+async def test_a_relation_primary_key_still_pushes_the_cursor_down(artist_profile_rows):  # noqa: ARG001
+    """
+    `artist_id` is the attribute name of a field Django calls `artist`, and both name the same
+    column in a lookup - so the cursor's predicate on it goes into SQL rather than taking the whole
+    filter set to the in-memory pass.
+    """
+    viewset = ArtistProfileViewSet()
+    first = build_list_query(None, "year:asc", limit=4)
+    page = await viewset.get_list(None, first)
+
+    second = build_list_query(None, "year:asc", limit=4)
+    second.cursor = page.next
+    await viewset.get_list(None, second)
+
+    assert second._cursor_keys == (("year", False), ("artist_id", False))
+    assert second.applied == {"filter", "sort", "pagination"}
+
+
+def test_a_composite_primary_key_says_so():
+    """No single `pk_field_name` names a composite key, and a silent fallback would page wrongly."""
+    composite = pytest.importorskip("django.db.models.fields.composite")
+
+    class CompositeKeyModel(models.Model):
+        pk = composite.CompositePrimaryKey("label", "revision")
+        label = models.CharField(max_length=20)
+        revision = models.IntegerField()
+
+        class Meta:
+            app_label = "backends"
+
+    class CompositeKey(BaseModel):
+        label: str
+        revision: int
+
+    class CompositeKeyViewSet(
+        DjangoORMViewSet[str, CompositeKey],
+        CursorListMixin[CompositeKey, make_filter_model(CompositeKey, {"label": ["exact"]})],
+    ):
+        model = CompositeKeyModel
+        schema = CompositeKey
+
+    with pytest.raises(TypeError, match="composite primary key"):
+        _ = CompositeKeyViewSet().pk_field_name

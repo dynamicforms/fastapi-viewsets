@@ -138,7 +138,7 @@ cheaply overrides `count_records()`. A cursor page never reports a total.
 ```python
 class TrackViewSet(CollectionViewSet[int, Track], CursorListMixin[Track, TrackFilter]):
     schema = Track          # the response model, used to coerce cursor values back from JSON
-    pk_field_name = "id"    # what makes every key tuple unique
+    pk_field_name = "id"    # what makes every key tuple unique; the default
     default_page_size = 50
 ```
 
@@ -289,6 +289,20 @@ It returns the queryset unevaluated from `perform_list`, translates exact filter
 ascending sorts into `.order_by()`, and the page into `LIMIT`/`OFFSET`, marking each stage applied.
 `count` comes from a `COUNT(*)`. Requires the `django` extra; every ORM call uses Django's async
 API or `sync_to_async`.
+
+`pk_field_name` needs no declaration here: the backend takes it from the model's primary key, so a
+model keyed on `uuid` or `code` pages correctly without being told. The cursor orders by that name
+in SQL and reads its position off the converted record, so the name has to be one both the model and
+`schema` carry — `artist_id` rather than `artist` for a one-to-one primary key, and the `id` the
+schema carries rather than the parent link for an inherited model. Where `schema` names the key
+something else again, assigning `pk_field_name` on the class wins. A composite primary key raises:
+no single name expresses it, so name a field that is unique per row on the class instead.
+
+The derivation is a property on `DjangoORMViewSet`, which is why the backend comes first in the base
+list, as above. The other order finds `ListMixin`'s plain `"id"` first and the model is never asked.
+
+The `pk_field_name` argument to `route_viewset` is a different thing — it names the field stripped
+from the `POST` body — and is passed explicitly.
 
 What it declines and leaves to the in-memory pass: anything but exact matches, and any operator
 with no registered compiler.
