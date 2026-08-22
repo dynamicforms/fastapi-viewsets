@@ -6,6 +6,12 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-08-22
+
+### Changed
+- `vuetify-inputs` in the demo moves to `^0.10.0` and `vue-grid` to `^0.3.1`. Dev dependencies
+  `@types/node` and `eslint-config-velis` move to `^26` and `^3`.
+
 ## [0.5.0] - 2026-08-22
 
 ### Changed
