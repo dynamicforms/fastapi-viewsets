@@ -10,15 +10,15 @@
   },
   "dependencies": {
     "@dynamicforms/vue-forms": "^0.17.1",
-    "@dynamicforms/vue-grid": "^0.3.0",
-    "@dynamicforms/vuetify-inputs": "^0.9.2",
+    "@dynamicforms/vue-grid": "^0.3.1",
+    "@dynamicforms/vuetify-inputs": "^0.10.0",
+    "@mdi/font": "^7.4.47",
+    "@pdanpdan/virtual-scroll": "^0.10.3",
     "axios": "^1.16.1",
+    "muxws": "^0.3.1",
     "vue": "^3.5.35",
     "vue-markdown-render": "^2.3.0",
-    "vuetify": "^3.12.7",
-    "muxws": "^0.3.1",
-    "@pdanpdan/virtual-scroll": "^0.10.3",
-    "@mdi/font": "^7.4.47"
+    "vuetify": "^3.12.7"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6",

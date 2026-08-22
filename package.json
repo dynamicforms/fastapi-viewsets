@@ -53,12 +53,12 @@
   },
   "devDependencies": {
     "@types/lodash-es": "^4.17.12",
-    "@types/node": "^24",
+    "@types/node": "^26",
     "@vitejs/plugin-vue": "^6",
     "@vitest/coverage-v8": "^3",
     "@vue/test-utils": "^2.2.4",
     "@vue/tsconfig": "^0.7.0",
-    "eslint-config-velis": "^2.0.12",
+    "eslint-config-velis": "^3",
     "jsdom": "^26.0.0",
     "rollup-plugin-visualizer": "^5.14.0",
     "typescript": "^5",
@@ -72,5 +72,10 @@
     "muxws": {
       "optional": true
     }
+  },
+  "allowScripts": {
+    "@parcel/watcher@2.6.0": true,
+    "esbuild@0.28.2": true,
+    "unrs-resolver@1.12.2": true
   }
 }
