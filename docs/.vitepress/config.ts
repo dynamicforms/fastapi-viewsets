@@ -64,6 +64,12 @@ export default defineConfig({
             { text: 'route_rest (older form)', link: '/guide/route-rest' },
           ],
         },
+        {
+          text: 'Changelog',
+          items: [
+            { text: 'Changelog', link: '/guide/changelog' },
+          ],
+        },
       ],
       '/api/': [
         {
