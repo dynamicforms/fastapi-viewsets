@@ -67,7 +67,7 @@ def test_celery_viewset_client_sends_task():
 
         instance = ItemViewSet()
         # Client patches the mixin endpoint method name ("list"), not "perform_list"
-        result = asyncio.get_event_loop().run_until_complete(instance.list_items())
+        result = asyncio.run(instance.list_items())
         assert result == ["mocked"]
         celery_app.send_task.assert_called_once()
         call_kwargs = celery_app.send_task.call_args
@@ -101,7 +101,7 @@ def test_celery_viewset_client_sends_date_fields_as_json_safe_strings():
 
         instance = ItemViewSet()
         payload = ItemWithDate(id=1, created=date(2026, 8, 1), updated=datetime(2026, 8, 1, 12, 30))
-        asyncio.get_event_loop().run_until_complete(instance.create(data=payload))
+        asyncio.run(instance.create(data=payload))
 
         sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
         assert sent_kwargs["data"] == {"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}
@@ -137,7 +137,7 @@ def test_celery_viewset_client_serializes_positional_basemodel_args():
         instance = ItemViewSet()
         payload = ItemWithDate(id=1, created=date(2026, 8, 1), updated=datetime(2026, 8, 1, 12, 30))
         # Call with a positional arg rather than a keyword arg.
-        asyncio.get_event_loop().run_until_complete(instance.create(payload))
+        asyncio.run(instance.create(payload))
 
         sent_args = celery_app.send_task.call_args.kwargs["args"]
         assert sent_args == [{"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}]
@@ -168,7 +168,7 @@ def test_celery_viewset_client_unregisters_future_on_send_task_error():
         # Future should be unregistered after error
         assert len(result_reader._pending_futures) == 0
 
-    asyncio.get_event_loop().run_until_complete(run())
+    asyncio.run(run())
 
 
 def test_celery_viewset_client_metadata():
@@ -216,7 +216,7 @@ def test_celery_dispatch_hook_none_preserves_existing_behavior():
                 return [Item(id=1, name="test")]
 
         instance = ItemViewSet()
-        asyncio.get_event_loop().run_until_complete(instance.list_items())
+        asyncio.run(instance.list_items())
 
         sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
         assert set(sent_kwargs) == {"_correlation_id", "_result_queue_key"}
@@ -254,7 +254,7 @@ def test_celery_dispatch_hook_awaited_before_send_task():
                 return []
 
         instance = ItemViewSet()
-        asyncio.get_event_loop().run_until_complete(instance.list_items())
+        asyncio.run(instance.list_items())
 
         assert call_order == ["hook", "send_task"]
         sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
@@ -290,7 +290,7 @@ def test_celery_dispatch_hook_empty_dict_adds_nothing():
                 return []
 
         instance = ItemViewSet()
-        asyncio.get_event_loop().run_until_complete(instance.list_items())
+        asyncio.run(instance.list_items())
 
         sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
         assert set(sent_kwargs) == {"_correlation_id", "_result_queue_key"}
