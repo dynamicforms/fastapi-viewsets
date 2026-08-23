@@ -392,6 +392,119 @@ def test_reconstruct_kwargs_with_typevar_missing_field():
     assert result["data"].name == "no id"
 
 
+# ---------------------------------------------------------------------------
+# celery kwargs hook
+# ---------------------------------------------------------------------------
+
+def test_celery_kwargs_hook_none_preserves_existing_behavior():
+    """With no hook registered, the sync wrapper behaves exactly as before."""
+    from fastapi_viewsets.decorators.celery_viewset import server
+
+    celery_app = MagicMock()
+    registered_tasks = {}
+
+    def mock_task(name):
+        def deck(func):
+            registered_tasks[name] = func
+            return func
+        return deck
+
+    celery_app.task.side_effect = mock_task
+
+    assert server._celery_kwargs_hook is None
+
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items")
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self, _context) -> list[Item]:
+            return [Item(id=1, name="test")]
+
+    sync_func = registered_tasks["items.list_items"]
+    result = sync_func(context={})
+    assert result == [Item(id=1, name="test")]
+
+
+def test_celery_kwargs_hook_called_before_reconstruct_kwargs():
+    """The hook receives raw kwargs, before _reconstruct_kwargs has turned dicts into models."""
+    from fastapi_viewsets.decorators.celery_viewset import server
+    from fastapi_viewsets.decorators.celery_viewset.server import set_celery_kwargs_hook
+
+    celery_app = MagicMock()
+    registered_tasks = {}
+
+    def mock_task(name):
+        def deck(func):
+            registered_tasks[name] = func
+            return func
+        return deck
+
+    celery_app.task.side_effect = mock_task
+
+    seen_kwargs = {}
+
+    def hook(run, kwargs):
+        seen_kwargs.update(kwargs)
+        return run, kwargs
+
+    set_celery_kwargs_hook(hook)
+    try:
+        @celery_viewset_server(celery_app=celery_app, task_prefix="items")
+        class ItemViewSet(CreateMixin[int, Item]):
+            async def perform_create(self, _context, data: Item) -> Item:
+                return data
+
+        create_func = registered_tasks["items.create"]
+        create_func(context={}, data={"id": 1, "name": "raw"})
+
+        # If the hook ran after reconstruction, this would be an Item instance, not a dict.
+        assert seen_kwargs["data"] == {"id": 1, "name": "raw"}
+    finally:
+        set_celery_kwargs_hook(None)
+        assert server._celery_kwargs_hook is None
+
+
+def test_celery_kwargs_hook_can_replace_runner_and_consume_kwargs():
+    """The hook may swap out the runner and strip a kwarg the endpoint never declared."""
+    from fastapi_viewsets.decorators.celery_viewset.server import set_celery_kwargs_hook
+
+    celery_app = MagicMock()
+    registered_tasks = {}
+
+    def mock_task(name):
+        def deck(func):
+            registered_tasks[name] = func
+            return func
+        return deck
+
+    celery_app.task.side_effect = mock_task
+
+    calls = []
+
+    def hook(run, kwargs):
+        kwargs = dict(kwargs)
+        kwargs.pop("_extra_field", None)
+
+        def wrapped_run(coro):
+            calls.append("wrapped_run")
+            return run(coro)
+
+        return wrapped_run, kwargs
+
+    set_celery_kwargs_hook(hook)
+    try:
+        @celery_viewset_server(celery_app=celery_app, task_prefix="items")
+        class ItemViewSet(ListMixin[Item]):
+            async def perform_list(self, _context) -> list[Item]:
+                return [Item(id=1, name="test")]
+
+        sync_func = registered_tasks["items.list_items"]
+        result = sync_func(context={}, _extra_field="unused-by-endpoint")
+
+        assert result == [Item(id=1, name="test")]
+        assert calls == ["wrapped_run"]
+    finally:
+        set_celery_kwargs_hook(None)
+
+
 def test_reconstruct_kwargs_with_full_model():
     """_reconstruct_kwargs should use model_validate when all fields are present."""
     from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs

@@ -3,6 +3,7 @@ import inspect
 import json
 import logging
 
+from collections.abc import Callable
 from functools import wraps
 from typing import get_type_hints, TYPE_CHECKING, TypeVar
 
@@ -22,6 +23,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+_celery_kwargs_hook: Callable[[Callable, dict], tuple[Callable, dict]] | None = None
+
+
+def set_celery_kwargs_hook(hook: Callable[[Callable, dict], tuple[Callable, dict]] | None) -> None:
+    """Register a callable that may wrap the runner and/or consume kwargs before reconstruction.
+
+    Receives (runner, kwargs), must return (runner, kwargs). Called with kwargs still raw - before
+    _reconstruct_kwargs, which passes through any key it has no type hint for, so a key the hook
+    does not consume would otherwise reach the action as an argument it never declared.
+    """
+    global _celery_kwargs_hook
+    _celery_kwargs_hook = hook
 
 
 def _to_jsonable(value):
@@ -102,10 +116,11 @@ def celery_viewset_server(
 
                 logger.info("Celery task executing: %s (correlation_id=%s)", task_name, correlation_id)
                 try:
+                    run = loop.run_until_complete
+                    if _celery_kwargs_hook is not None:
+                        run, kwargs = _celery_kwargs_hook(run, kwargs)
                     kwargs = _reconstruct_kwargs(original_endpoint, kwargs, cls)
-                    result = loop.run_until_complete(
-                        lifecycle_runner(original_endpoint, instance, cls, lifecycle, *args, **kwargs)
-                    )
+                    result = run(lifecycle_runner(original_endpoint, instance, cls, lifecycle, *args, **kwargs))
                     logger.info("Celery task completed: %s (correlation_id=%s)", task_name, correlation_id)
                     if correlation_id and result_queue_key and redis_client is not None:
                         redis_client.rpush(result_queue_key, json.dumps({
