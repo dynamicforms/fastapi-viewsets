@@ -1,4 +1,5 @@
 import inspect
+import sys
 
 from typing import Any, TypeVar
 
@@ -150,10 +151,8 @@ async def test_viewset_methods():
     assert await viewset.bulk_destroy(context, [1]) == [{1: "deleted"}]
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="typing.final only sets __final__ from Python 3.11")
 def test_final_methods():
-    # Check if methods are marked as @final (in Python 3.8+ typing.final adds __final__ attribute)
-    assert getattr(CreateMixin.create, "__final__", False) or "final" in str(CreateMixin.create)
-    # In reality, typing.final in Python adds __final__ = True attribute to the function
     assert CreateMixin.create.__final__ is True
     assert ListMixin.list_items.__final__ is True
     assert RetrieveMixin.retrieve.__final__ is True

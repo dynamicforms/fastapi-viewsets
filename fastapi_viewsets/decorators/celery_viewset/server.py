@@ -2,10 +2,11 @@ import asyncio
 import inspect
 import json
 import logging
+import types
 
 from collections.abc import Callable
 from functools import wraps
-from typing import get_type_hints, TYPE_CHECKING, TypeVar
+from typing import get_args, get_origin, get_type_hints, TYPE_CHECKING, TypeVar, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -36,6 +37,17 @@ def set_celery_kwargs_hook(hook: Callable[[Callable, dict], tuple[Callable, dict
     """
     global _celery_kwargs_hook
     _celery_kwargs_hook = hook
+
+
+def _unwrap_optional(hint):
+    """Before Python 3.11, `get_type_hints()` implicitly wraps a None-defaulted parameter's
+    annotation in `Optional[...]`, so a hint that is actually a bare model class arrives as
+    `Union[Model, None]` and the `inspect.isclass` check below sees a `Union`, not a class."""
+    if get_origin(hint) in (Union, types.UnionType):
+        args = [arg for arg in get_args(hint) if arg is not type(None)]
+        if len(args) == 1:
+            return args[0]
+    return hint
 
 
 def _to_jsonable(value):
@@ -73,7 +85,7 @@ def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> di
     for key, value in remaining.items():
         hint = hints.get(key)
         if hint is not None:
-            hint = resolve_typevars(type_map, hint)
+            hint = _unwrap_optional(resolve_typevars(type_map, hint))
         if hint is not None and isinstance(value, dict) and inspect.isclass(hint) and issubclass(hint, BaseModel):
             try:
                 result[key] = hint.model_validate(value)

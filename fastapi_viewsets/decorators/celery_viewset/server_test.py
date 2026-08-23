@@ -536,3 +536,23 @@ def test_reconstruct_kwargs_with_full_model():
     assert isinstance(result["data"], Item)
     assert result["data"].id == 5
     assert result["data"].name == "full item"
+
+
+def test_reconstruct_kwargs_with_none_defaulted_optional_model():
+    """A None-defaulted parameter reconstructs from a dict just like a required one.
+
+    Before Python 3.11, `get_type_hints()` implicitly wraps a None-defaulted parameter's annotation
+    in `Optional[...]`, so `data: Item = None` arrives here as `Union[Item, None]` rather than
+    `Item` - which must still be recognised as a BaseModel hint.
+    """
+    from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
+
+    async def endpoint(data: Item = None) -> Item:
+        return data
+
+    kwargs = {"data": {"id": 5, "name": "full item"}}
+    result = _reconstruct_kwargs(endpoint, kwargs)
+
+    assert isinstance(result["data"], Item)
+    assert result["data"].id == 5
+    assert result["data"].name == "full item"
