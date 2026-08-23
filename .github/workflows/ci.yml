@@ -72,12 +72,14 @@ jobs:
           coverage-files: |
             coverage.json
             coverage/clover.xml
-          # docs/ is the VitePress site and demo/ the sample app - neither is library code, and
-          # neither is covered by pytest or vitest, whose coverage is scoped to fastapi_viewsets/
-          # and vue/ respectively. vue/index.ts is a re-export barrel excluded from vitest's own
-          # coverage config for the same reason.
+          # docs/ is the VitePress site and demo.py/demo/ the sample app - neither is library code,
+          # and neither is covered by pytest or vitest, whose coverage is scoped to
+          # fastapi_viewsets/ and vue/ respectively (pyproject.toml's own [tool.coverage.run] omits
+          # the same paths). vue/index.ts is a re-export barrel excluded from vitest's own coverage
+          # config for the same reason.
           extra-ignore-patterns: |
             docs/**
+            demo.py
             demo/**
             vue/index.ts
           github-token: ${{ secrets.GITHUB_TOKEN }}
