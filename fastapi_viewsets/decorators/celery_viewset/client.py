@@ -21,15 +21,15 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
-_celery_dispatch_hook: Callable[[], Awaitable[dict]] | None = None
+_celery_dispatch_hook: Callable[[dict], Awaitable[dict]] | None = None
 
 
-def set_celery_dispatch_hook(hook: Callable[[], Awaitable[dict]] | None) -> None:
+def set_celery_dispatch_hook(hook: Callable[[dict], Awaitable[dict]] | None) -> None:
     """Register a callable awaited just before send_task; its return dict is merged into kwargs.
 
-    Takes no arguments - anything it needs (an operation token, a session) it reads from its own
-    ambient state. Returns {} when there is nothing to add, so a caller with nothing registered pays
-    for one no-op await and nothing else.
+    Receives the call's current kwargs (context included, if the action declares one) so a
+    registered hook can read what a context processor already put there instead of needing its own
+    request-level plumbing. Returns {} when there is nothing to add.
     """
     global _celery_dispatch_hook
     _celery_dispatch_hook = hook
@@ -112,7 +112,7 @@ def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, queu
                 else:
                     serializable_kwargs[k] = await _serialize_value(v)
             logger.info("Celery task scheduling: %s (correlation_id=%s)", task_name, correlation_id)
-            extra_kwargs = await _celery_dispatch_hook() if _celery_dispatch_hook is not None else {}
+            extra_kwargs = await _celery_dispatch_hook(kwargs) if _celery_dispatch_hook is not None else {}
             celery_app.send_task(
                 task_name,
                 args=serializable_args,

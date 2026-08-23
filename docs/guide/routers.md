@@ -243,13 +243,14 @@ session around task execution) without this repo depending on that package. Both
 and are no-ops until set.
 
 `set_celery_dispatch_hook` (client side, in `celery_viewset_client`) registers an
-`async () -> dict`, awaited just before `send_task`; its returned dict is merged into the task
+`async (kwargs: dict) -> dict`, awaited just before `send_task` with the call's current kwargs
+(a `Context`, if the action declares one, included); its returned dict is merged into the task
 kwargs:
 
 ```python
 from fastapi_viewsets.decorators.celery_viewset import set_celery_dispatch_hook
 
-async def dispatch_hook() -> dict:
+async def dispatch_hook(kwargs: dict) -> dict:
     return {"_operation_token": current_operation_token()}
 
 set_celery_dispatch_hook(dispatch_hook)

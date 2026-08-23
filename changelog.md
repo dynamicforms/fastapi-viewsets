@@ -6,6 +6,13 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2026-08-23
+
+### Changed
+- `set_celery_dispatch_hook` now receives the call's current kwargs (a `Context`, if the action
+  declares one, included), instead of taking no arguments. This lets a registered hook read what a
+  context processor already put there instead of needing its own request-level plumbing.
+
 ## [0.5.3] - 2026-08-23
 
 ### Changed
