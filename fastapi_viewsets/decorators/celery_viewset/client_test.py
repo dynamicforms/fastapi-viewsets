@@ -233,9 +233,11 @@ def test_celery_dispatch_hook_awaited_before_send_task():
     redis_mock = MagicMock()
 
     call_order = []
+    received_kwargs = {}
     celery_app.send_task.side_effect = lambda *_args, **_kwargs: call_order.append("send_task")
 
-    async def hook():
+    async def hook(kwargs):
+        received_kwargs.update(kwargs)
         call_order.append("hook")
         return {"_extra_field": "abc"}
 
@@ -259,6 +261,44 @@ def test_celery_dispatch_hook_awaited_before_send_task():
         assert call_order == ["hook", "send_task"]
         sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
         assert sent_kwargs["_extra_field"] == "abc"
+        assert received_kwargs == {}
+    finally:
+        set_celery_dispatch_hook(None)
+        result_reader.register_future = original_register
+
+
+def test_celery_dispatch_hook_receives_call_kwargs():
+    """The hook receives the action's own kwargs, e.g. a Context put there by a context processor."""
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+    from fastapi_viewsets.decorators.celery_viewset.client import set_celery_dispatch_hook
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+
+    received_kwargs = {}
+
+    async def hook(kwargs):
+        received_kwargs.update(kwargs)
+        return {}
+
+    original_register = result_reader.register_future
+
+    def mock_register(_correlation_id, future):
+        asyncio.get_event_loop().call_soon(lambda: future.set_result(None))
+
+    result_reader.register_future = mock_register
+    set_celery_dispatch_hook(hook)
+    try:
+
+        @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+        class ItemViewSet(ListMixin[Item]):
+            async def perform_list(self) -> list[Item]:
+                return []
+
+        instance = ItemViewSet()
+        asyncio.run(instance.list_items(fltr="mine"))
+
+        assert received_kwargs == {"fltr": "mine"}
     finally:
         set_celery_dispatch_hook(None)
         result_reader.register_future = original_register
@@ -272,7 +312,7 @@ def test_celery_dispatch_hook_empty_dict_adds_nothing():
     celery_app = MagicMock()
     redis_mock = MagicMock()
 
-    async def hook():
+    async def hook(_kwargs):
         return {}
 
     original_register = result_reader.register_future
