@@ -12,6 +12,8 @@ from fastapi_viewsets.context import Context
 from fastapi_viewsets.decorators import route_viewset
 from fastapi_viewsets.mixins import BulkViewSetMixin, LookupItem, LookupMixin
 
+from .conftest import iter_routes
+
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -70,7 +72,7 @@ def make_search_app():
 def test_custom_search_endpoint_is_registered():
     """Custom __router GET route is picked up by route_viewset."""
     app = make_search_app()
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in iter_routes(app.routes)}
     assert "/items/search" in paths
 
 
@@ -105,7 +107,7 @@ def test_custom_search_endpoint_no_results():
 def test_standard_routes_still_present_with_custom_router():
     """Standard mixin routes are still registered alongside the custom one."""
     app = make_search_app()
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in iter_routes(app.routes)}
     for expected in ["/items", "/items/{pk}", "/items/bulk", "/items/lookup"]:
         assert expected in paths, f"Expected path {expected!r} not found"
 
@@ -139,7 +141,7 @@ def make_clone_app():
 def test_custom_clone_endpoint_is_registered():
     """Custom __router POST route is picked up by route_viewset."""
     app = make_clone_app()
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in iter_routes(app.routes)}
     assert "/items/clone" in paths
 
 
@@ -195,7 +197,7 @@ def make_combined_app():
 def test_combined_both_custom_routes_registered():
     """Both search and clone are registered when declared on the same __router."""
     app = make_combined_app()
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in iter_routes(app.routes)}
     assert "/items/search" in paths
     assert "/items/clone" in paths
 

@@ -17,6 +17,8 @@ from fastapi_viewsets.decorators import route_viewset
 from fastapi_viewsets.middleware import Middleware, ViewSetResult
 from fastapi_viewsets.mixins import CreateMixin, ListMixin
 
+from .conftest import iter_routes
+
 
 @pytest.fixture(autouse=True)
 def reset_settings():
@@ -105,7 +107,7 @@ def test_dependency_overrides_can_bypass_the_middleware_bridge():
     app = FastAPI()
     app.include_router(router)
 
-    route = next(r for r in app.routes if r.path == "/items" and "GET" in r.methods)
+    route = next(r for r in iter_routes(app.routes) if r.path == "/items" and "GET" in r.methods)
     bridge_dependency = route.dependencies[-1].dependency
 
     async def _allow(_request=None) -> None:
