@@ -89,38 +89,6 @@ and waiting for a worker dwarfs the difference between HTTP and a WebSocket fram
 --celery` turns it back on and an e2e spec covers that path, skipped when Redis is absent. So the
 path is covered — just not by simply running the demo.
 
-### `fastapi` is capped below 0.137, and needs unpinning ASAP
-
-`fastapi` 0.137.0 replaced `include_router`'s flattened route list with a lazy view
-(`_IncludedRouter` / `_EffectiveRouteContext` in `fastapi.routing`): a router that has been included
-into another no longer contributes plain `APIRoute` objects to `app.routes`, so any code walking
-that list and reading `.path` off what it finds breaks with `AttributeError: '_IncludedRouter'
-object has no attribute 'path'`. Bisected precisely: `fastapi==0.136.3` is clean, `0.137.0` is the
-first broken release; the current PyPI latest (`0.141.1`) is on the new engine throughout.
-
-The library's own runtime is not on that path: `route_viewset.py`, `build_schema.py` and
-`celery_viewset/{server,client}.py` only ever walk `cls.__router.routes` — the per-viewset router
-this library builds directly and never passes through `include_router` itself — so schema building,
-dispatch and Celery task registration are unaffected, and every test that exercises them through a
-real request (`TestClient(...).get(...)`) passes unmodified against `0.141.1`. The five tests that
-broke (`custom_endpoints_test.py` ×4, `route_viewset_depends_test.py` ×1) all read
-`{route.path for route in app.routes}` directly against the *app's* post-include route list to
-assert a route got registered — an assumption about `app.routes`'s internal shape, not about this
-library's dispatch. Confirmed independent of Starlette: the full suite is green against
-`fastapi==0.135.1` paired with `starlette==1.6.0`, so only the `fastapi` version is load-bearing
-here — nothing needs pinning on `starlette`.
-
-Pinned rather than fixed immediately because the fix needs to land as its own change: rewrite those
-five assertions off the internal route list (recurse through `_IncludedRouter.original_router`, or
-switch to asserting against `app.openapi()["paths"]` / an actual request instead, which is the more
-future-proof form and stops relying on `include_router`'s internal shape at all), then re-run the
-full matrix (3.10-3.13) and sweep the rest of the codebase for the same `app.routes`/`.path`
-assumption (`mux_ws/registry.py`, `endpoint_docs.py`, the docs guide examples) in case something
-there hits the same wall under real usage rather than just in a test. Estimated at half a day for
-the five known assertions plus verification, and up to a full day with the sweep and matrix re-run
-included, since `fastapi` has moved four more feature releases past 0.137.0 by the time this is
-picked up and the sweep may turn up more than the five known sites.
-
 ## The ViewSet class factory
 
 Fifteen judgement calls made while building `restViewSet` / `muxwsViewSet`, recorded because they
