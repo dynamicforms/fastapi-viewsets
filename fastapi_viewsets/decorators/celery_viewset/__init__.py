@@ -2,7 +2,7 @@ import logging
 import sys
 
 from ..lifecycle_runner import LifecycleType
-from .client import celery_viewset_client, get_registered_queue_keys
+from .client import celery_viewset_client, get_registered_queue_keys, set_celery_dispatch_hook
 from .result_reader import (
     get_result_queue_key,
     get_running_queue_keys,
@@ -10,7 +10,7 @@ from .result_reader import (
     start_result_reader,
     stop_result_reader,
 )
-from .server import celery_viewset_server
+from .server import celery_viewset_server, set_celery_kwargs_hook
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,8 @@ __all__ = [
     "celery_viewset_client",
     "celery_viewset_server",
     "set_is_celery_worker",
+    "set_celery_kwargs_hook",
+    "set_celery_dispatch_hook",
     "start_result_reader",
     "stop_result_reader",
     "check_result_readers",

@@ -6,6 +6,17 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-08-23
+
+### Added
+- `celery_viewset_server` and `celery_viewset_client` each expose a hook slot for external
+  packages to attach dispatch/execute logic without this repo depending on them.
+  `set_celery_kwargs_hook` registers a `Callable[[Callable, dict], tuple[Callable, dict]]` run on
+  the worker side just before `_reconstruct_kwargs`, receiving the run-callable and the raw kwargs
+  and returning both, possibly changed. `set_celery_dispatch_hook` registers a
+  `Callable[[], Awaitable[dict]]` awaited on the client side just before `send_task`, its returned
+  dict merged into the task kwargs. Both default to `None`, leaving current behavior unchanged.
+
 ## [0.5.1] - 2026-08-22
 
 ### Changed

@@ -235,6 +235,48 @@ For explicit control over which mode is applied, use the low-level decorators di
 from fastapi_viewsets.decorators.celery_viewset import celery_viewset_client, celery_viewset_server
 ```
 
+### Extension hooks
+
+`celery_viewset_client` and `celery_viewset_server` each expose one module-level hook slot so an
+external package can attach dispatch/execute logic (e.g. propagating an operation token, opening a
+session around task execution) without this repo depending on that package. Both default to `None`
+and are no-ops until set.
+
+`set_celery_dispatch_hook` (client side, in `celery_viewset_client`) registers an
+`async () -> dict`, awaited just before `send_task`; its returned dict is merged into the task
+kwargs:
+
+```python
+from fastapi_viewsets.decorators.celery_viewset import set_celery_dispatch_hook
+
+async def dispatch_hook() -> dict:
+    return {"_operation_token": current_operation_token()}
+
+set_celery_dispatch_hook(dispatch_hook)
+```
+
+`set_celery_kwargs_hook` (worker side, in `celery_viewset_server`) registers a
+`(run, kwargs) -> (run, kwargs)` callable, called with the task's raw kwargs before
+`_reconstruct_kwargs` turns them into typed arguments — a key the hook doesn't consume would
+otherwise reach the action as an argument it never declared. `run` is the callable that executes
+the coroutine (`loop.run_until_complete` unless the hook replaces it), letting the hook wrap
+execution (e.g. to open a session for the duration of the task):
+
+```python
+from fastapi_viewsets.decorators.celery_viewset import set_celery_kwargs_hook
+
+def kwargs_hook(run, kwargs):
+    token = kwargs.pop("_operation_token", None)
+
+    def run_with_session(coro):
+        with session_scope(token):
+            return run(coro)
+
+    return run_with_session, kwargs
+
+set_celery_kwargs_hook(kwargs_hook)
+```
+
 ---
 
 ## Combining both decorators
