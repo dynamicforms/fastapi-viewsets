@@ -50,7 +50,7 @@ Returns a `RestProxy<M>`, which is `M` — an instance of `RestProxyImpl` cast t
 
 The object is a bare `RestProxyImpl`, not an instance of `viewSetClass`: methods written on that class do not survive the cast. To have a ViewSet's own methods exist on the object, subclass `RestProxyImpl` as below, or build the class with the `restViewSet` factory.
 
-Do not pass a factory-built class to `route_rest`. It type-checks and hands back an object without that class's own methods. A factory-built ViewSet is constructed directly: `new ItemApi({ basePath: '/items' })`.
+Passing a factory-built class to `route_rest` fails to compile — it would otherwise type-check and hand back an object without that class's own methods. A factory-built ViewSet is constructed directly: `new ItemApi({ basePath: '/items' })`.
 
 ## RestProxyImpl
 

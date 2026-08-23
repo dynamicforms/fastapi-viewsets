@@ -16,6 +16,7 @@ import axios, { type AxiosInstance } from 'axios';
 
 import type { KeyType } from './mixins';
 import {
+  FACTORY_BUILT,
   type HttpMethod,
   type ProxyBaseOptions,
   type RequestOptions,
@@ -30,6 +31,30 @@ import {
 /** ViewSet class constructor (for type-level introspection only). */
 
 type ViewSetClass = abstract new (...args: any[]) => any;
+
+/**
+ * The shape a factory-built class's constructor has, purely to give `route_rest` an overload that
+ * rejects it - a type parameter conditioned on the argument (`C extends FactoryBuiltClass ? ... :
+ * C`) cannot be inferred from that position at all, so an overload with this as a plain parameter
+ * type is the only form that actually sees the real argument.
+ *
+ * `route_rest` uses its `viewSetClass` argument only for the `declares` on it (see the function
+ * body - the class itself is never `new`'d), then builds a bare `RestProxyImpl` and hands it back
+ * cast to `M`. Pass a factory-built class and this still type-checks without the overload below -
+ * `M` is usually inferred as `InstanceType<typeof ItemApi>` - but the object it returns is not an
+ * `ItemApi`, so any custom method the factory-built class added is `undefined` at runtime despite
+ * compiling. `declares` is required here, not optional: a hand-written class
+ * (`class ItemViewSet extends RestProxyImpl<...> {}`) may have no `declares` at all, or one that is
+ * a plain array rather than carrying `FACTORY_BUILT`, and either must fall through to the real
+ * overload below rather than match this one.
+ */
+type FactoryBuiltClass = (abstract new (...args: any[]) => any) & {
+  declares: { readonly [FACTORY_BUILT]: any };
+};
+
+/** Never assigned; its only use is `typeof FACTORY_BUILT_REJECTION` as a self-describing return type. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- type-only, read via `typeof` below
+declare const FACTORY_BUILT_REJECTION: 'route_rest cannot take a factory-built class - extend it directly instead';
 
 /**
  * The REST proxy type is simply the mixin interface `M` the caller declares.
@@ -135,6 +160,21 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
  * const item  = await restItems.retrieve(1);
  * ```
  */
+// These two overloads exist only to reject a factory-built class with a message at the call site;
+// nothing implements or calls them - overload resolution tries them first, and a factory-built
+// class's constructor matches FactoryBuiltClass before it ever reaches the real overloads below.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- M keeps the call syntax identical to the real overload
+function route_rest<M = never>(
+  viewSetClass: FactoryBuiltClass,
+  basePath: string,
+  pkFieldName: string,
+  axiosInstance?: AxiosInstance,
+): typeof FACTORY_BUILT_REJECTION;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- M keeps the call syntax identical to the real overload
+function route_rest<M = never>(
+  viewSetClass: FactoryBuiltClass,
+  options: RestProxyOptions,
+): typeof FACTORY_BUILT_REJECTION;
 function route_rest<M>(
   _viewSetClass: ViewSetClass,
   basePath: string,

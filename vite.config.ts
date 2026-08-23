@@ -31,8 +31,8 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      '@': resolve(__dirname, './vue'),
-      // '~': resolve(__dirname, '../../node_modules'),
+      '@': resolve(import.meta.dirname, './vue'),
+      // '~': resolve(import.meta.dirname, '../../node_modules'),
     },
     extensions: [
       '.js',
@@ -44,7 +44,7 @@ export default defineConfig({
     target: 'es2015',
     sourcemap: true,
     lib: {
-      entry: resolve(__dirname, 'vue/index.ts'),
+      entry: resolve(import.meta.dirname, 'vue/index.ts'),
       formats: ['umd', 'es'],
       fileName: 'fastapi-viewsets',
       name: 'fastapi-viewsets.[name]',

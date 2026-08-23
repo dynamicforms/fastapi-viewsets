@@ -143,13 +143,7 @@ Deliberate: `http` is the one member that ties a method body to HTTP, and the wh
 
 What would change it: a real need that `request()` cannot express — a blob response, a progress callback, an interceptor-specific config. The escape hatch today is to keep extending RestProxyImpl, which is fully supported and unchanged. If that turns out to be common, the answer is to widen `request()`'s options, not to put axios back on the surface.
 
-### `static declares` on a factory-built class is a compile error
-
-The returned class type carries `readonly declares: D`, so a subclass restating it — `class ItemDbApi extends ItemApi { static declares = [CursorListMixin] }` — fails with TS2417. On a factory-built class that is right: the type and the declaration come from one call, and a subclass that changes one without the other is the exact divergence this library exists to catch. To narrow, call the factory again.
-
-Worth knowing before this is filed as a regression: it is the same error a hand-written `extends RestProxyImpl` subclass already gets today for any list that is not a subset of its parent's — I reproduced it against the unmodified repo, identical message. The demo escapes it today only because CursorListMixin happens to be in the parent's list. So the rule is not new; the factory just makes it apply to the narrowing case too.
-
-The message is not great — it bottoms out in 'Property 'lookup' is missing in type CursorListMixin' — but the head line names `declares`, and the alternative I tested (a branded array type with a self-describing property name) buys a better sentence at the cost of an invented concept in the public types. What would change it: if the error turns out to confuse people in practice, the brand is a two-line change.
+Confirmed as the standing decision: no such need has surfaced in the demo or anywhere else in the repo, so `request()` stays the only surface and this entry stays open rather than settled — it is reopened the day a concrete case for widening `request()` shows up, not preemptively.
 
 ### An empty or annotated `declares` list is an error whose type is the message
 
@@ -173,14 +167,6 @@ What would change it: a backend whose pk field name is not a property of the FE 
 
 The duplication is six lines. What would change it: a third transport, at which point the shape to reach for is probably a transport descriptor passed to one factory rather than a third sibling — the same argument the BE `route_viewset` entry in this file makes about `register_rest`/`register_muxws`.
 
-### route_rest and route_muxws stay, and remain a way to lose your own methods
-
-They are not deprecated and not changed. Removing them is a semver-major and you are away; the docs present the factory as the way to declare a ViewSet and leave the old pages standing as the older form.
-
-One sharp edge is worth naming rather than fixing: `route_rest<InstanceType<typeof ItemApi>>(ItemApi, '/items', 'id')` type-checks and hands back an object on which `ItemApi`'s own methods do not exist, because route_rest builds a bare RestProxyImpl and throws the class away (rest-proxy.ts:161-164). That hole is not new — it is the same one that exists today for any hand-written subclass with custom methods — but the factory makes classes-with-methods the normal thing to write, so it becomes easier to hit. docs/api/route-rest.md says plainly not to pass a factory-built class to route_rest.
-
-What would change it: making route_rest reject a class that carries the factory's brand would close it at compile time, at the cost of another invented type. If the two forms are going to coexist for a long time, that may be worth doing.
-
 ### The cross-transport custom endpoint needs a class-expression mixin, and the library does not ship one
 
 Sharing one method body across the REST and muxws twins requires a mixin function over the factory's returned class — `WithCount(restViewSet<T>()(...))`. The demo's previous trick, a free function with a structural `this: { request(...) }` assigned as a field, could not have worked: `request` is protected, so calling it is TS2684. It survived only because nothing called `count()`. The demo now uses the class-expression mixin.
@@ -188,22 +174,6 @@ Sharing one method body across the REST and muxws twins requires a mixin functio
 Two things a reader must be told, both measured. The helper's return type must be annotated `TBase & (abstract new (...args: any[]) => Counts)` — an inferred return fails declaration emit with `TS4094: Property 'basePath' of exported anonymous class type may not be private or protected`, on the helper and on every class built from it. And the helper's body reaches only `ViewSetInternals`, so it can call `request()` but not `list()`; sharing a method that composes a declared action needs a wider constraint that restates the model and the action subset.
 
 The library does not ship the helper. It is four lines, it is standard TypeScript, and a wrapper would have to guess at the constraint. What would change it: if every consumer ends up writing the same wrapper, exporting a typed one is a small addition — but I would rather see the copies first.
-
-### The SQLite demo backend gains a retrieve endpoint instead of the benchmark losing one
-
-demo/frontend/src/benchmark.ts calls `retrieve()` on whichever backend the UI has selected, and the Django-backed viewset serves no such endpoint — a live 404 that the current FE types cannot see, because `declares` narrows nothing. Under the factory it becomes a compile error, so one side has to give. I added `RetrieveMixin` to MusicTrackDbViewSet: one line, verified to register `GET /{pk}`, and it keeps the benchmark comparing the two backends on the same operation.
-
-The alternative — benchmarking only the in-memory backend — would leave App.vue's backend toggle feeding a number that does not depend on it, which is a demo that lies.
-
-What would change it: if the Django viewset is meant to demonstrate a deliberately minimal surface, then the benchmark is the thing to change, and it should say in the UI that it always measures the in-memory backend.
-
-### `STANDARD_FE_METHODS` is typed but not proved exhaustive
-
-Both constant tables in proxy-base.ts are now typed `readonly ActionName[]`, so a typo or a renamed action fails to compile. Neither is checked for coverage: a list naming twelve of the thirteen actions still compiles, and the missing one would simply never be reported by the schema check.
-
-A coverage check is possible — one `Record<ActionName, true>` assertion — and I left it out because it is a second concept in a file that reads well without it, and because the realistic failure is a typo rather than an omission.
-
-What would change it: an action being added and quietly not reported. That is a cheap five-line insurance policy if it ever happens once.
 
 ### A ViewSet cannot ask for a list shape, so declaring more than one is a claim it cannot honour
 
@@ -309,3 +279,65 @@ entire pipeline already runs in the worker, and filter, sort and pagination para
 cross. Which means there is nothing to report back: `query.mark_applied()` is an intra-process
 contract and the worker *is* that process. Reporting back would mean shipping unreduced records
 across the queue to be reduced somewhere else, which is the opposite of what push-down is for.
+
+### `STANDARD_FE_METHODS` is now the exhaustiveness proof, not a list beside one
+
+`ENDPOINT_TO_FE_METHOD` and `STANDARD_FE_METHODS` in proxy-base.ts are two independently hand-written
+tables sharing the same thirteen action names, each typed `readonly ActionName[]`; a typo or a
+renamed action failed to compile, but nothing checked that either table named all thirteen, so an
+action added to `ActionName` without a matching entry in both would have compiled clean and simply
+never been reported by the schema check.
+
+`STANDARD_FE_METHODS` is now `Object.keys()` of `ACTION_NAME_COVERAGE`, a `Record<ActionName, true>`
+object literal: TypeScript checks an object literal against a `Record` for both a missing key and an
+excess one, so dropping an entry here - or `ActionName` gaining one with no matching entry - fails to
+compile instead of silently narrowing what the mismatch check can report. `ENDPOINT_TO_FE_METHOD`
+stays a separate table, since it maps each BE endpoint/verb pair to the action names *that* endpoint
+answers for rather than merely naming actions, and the two cannot collapse into one without losing
+that mapping.
+
+### `static declares` on a factory-built class names itself in the whole error, not just the head line
+
+The returned class type carries `readonly declares: D`, so a subclass restating it — `class
+ItemDbApi extends ItemApi { static declares = [CursorListMixin] }` — fails with TS2417. On a
+factory-built class that is right: the type and the declaration come from one call, and a subclass
+that changes one without the other is the exact divergence this library exists to catch. To narrow,
+call the factory again.
+
+The head line named `declares`, but the message used to bottom out several levels down in which
+specific method one mixin was missing relative to another - noise once the head line had already
+said enough. `declares` is now typed `FactoryDeclares<D>`, a record type keying `D` behind the
+`FACTORY_BUILT` `unique symbol` (declared in proxy-base.ts, not viewset.ts - see the next entry for
+why) rather than `D & {brand}`: an intersection would still expose `D`'s own array shape to the
+comparison and recurse into it exactly as before, but a plain array literal (which is all a restated
+`static declares` ever is) has no property at all under that key, so the mismatch now stops at one
+flat "Property '[FACTORY_BUILT]' is missing... required in type 'FactoryDeclares<...>'" line. Erased
+at runtime: `bindViewSet` casts through `unknown` to produce the base class in the first place, and
+every internal reader of `declares` (rest-proxy.ts, muxws-proxy.ts, proxy-base.ts's
+`declaredActions`) already read it through its own cast rather than through this type, so none of
+them needed to change.
+
+### route_rest and route_muxws now refuse a factory-built class at compile time
+
+`route_rest<InstanceType<typeof ItemApi>>(ItemApi, '/items', 'id')` used to type-check and hand back
+an object on which `ItemApi`'s own methods did not exist, because route_rest builds a bare
+RestProxyImpl and throws the class away rather than using it - the same hole any hand-written
+subclass with custom methods always had, just easier to hit now that the factory makes
+classes-with-methods the normal thing to write. docs/api/route-rest.md said plainly not to do it;
+nothing enforced that.
+
+Both `route_rest` and `route_muxws` gain a pair of overloads, tried first, whose parameter type is
+`FactoryBuiltClass` - the same `{ declares: { [FACTORY_BUILT]: any } }` shape `viewset.ts`'s
+`FactoryDeclares<D>` produces - and whose return type is a self-describing string literal rather
+than a usable proxy. `FACTORY_BUILT` moved to proxy-base.ts, the one module both `viewset.ts` and
+the two proxy modules already import from, so all three sides check the same `unique symbol` without
+a new import cycle. A `C extends ViewSetClass` type parameter conditioned on the argument
+(`C extends FactoryBuiltClass ? Message : C`) was tried first and does not work: TypeScript cannot
+infer a type parameter that appears only inside a conditional's checked position, so `C` silently
+fell back to its default and the check never saw the real argument - a plain overload parameter is
+the only form that does. One more consequence of the return type being a string rather than `never`
+or throwing: a call whose result is never used produces no diagnostic regardless of which overload
+matched (an unused expression is not itself an error), so the visible `TS2339` lands on the first
+property or method the caller accesses on the result, not on the `route_rest`/`route_muxws` call -
+both test files' `@ts-expect-error` sit there for exactly that reason, and so does the sentence
+saying so in the two API doc pages.

@@ -94,27 +94,45 @@ const ENDPOINT_TO_FE_METHOD: Readonly<Record<string, Readonly<Record<string, rea
   lookup: { GET: ['lookup'] },
 };
 
+/**
+ * Every `ActionName` mapped to `true`, in a stable order for warning output. A `Record<ActionName,
+ * true>` rather than a plain array: an action added to (or dropped from) the `ActionName` union
+ * without a matching change here fails to compile - a missing key or an excess one - instead of
+ * silently narrowing what the mismatch check below is able to report.
+ */
+const ACTION_NAME_COVERAGE: Record<ActionName, true> = {
+  list: true,
+  listPage: true,
+  listCursor: true,
+  create: true,
+  retrieve: true,
+  update: true,
+  partialUpdate: true,
+  destroy: true,
+  bulkCreate: true,
+  bulkUpdate: true,
+  bulkPartialUpdate: true,
+  bulkDestroy: true,
+  lookup: true,
+};
+
 /** All standard FE method names, in a stable order for warning output. */
-const STANDARD_FE_METHODS: readonly ActionName[] = [
-  'list',
-  'listPage',
-  'listCursor',
-  'create',
-  'retrieve',
-  'update',
-  'partialUpdate',
-  'destroy',
-  'bulkCreate',
-  'bulkUpdate',
-  'bulkPartialUpdate',
-  'bulkDestroy',
-  'lookup',
-];
+const STANDARD_FE_METHODS: readonly ActionName[] = Object.keys(ACTION_NAME_COVERAGE) as ActionName[];
 
 /** One entry of a ViewSet's `static declares` list: a mixin naming the actions it contributes. */
 export interface ViewSetMixinDeclaration {
   readonly actions: readonly string[];
 }
+
+/**
+ * Marks a class's `declares` as coming from the ViewSet factory (viewset.ts's `FactoryDeclares<D>`)
+ * rather than being hand-written. Declared here, the module both viewset.ts and the two proxy
+ * implementations already import from, so all three sides see the same `unique symbol` and a
+ * structural check against it type-checks identically everywhere - `route_rest`/`route_muxws` use it
+ * to reject a factory-built class at the call site (see rest-proxy.ts, muxws-proxy.ts), which would
+ * otherwise type-check and hand back a bare proxy missing the class's own custom methods.
+ */
+export declare const FACTORY_BUILT: unique symbol;
 
 /**
  * Which actions this ViewSet claims to have, from the `static declares` list on its class.
