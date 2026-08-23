@@ -31,6 +31,7 @@ def compiles(backend: type, filter_type: type[Filter]) -> Callable[[Compiler], C
         def _(viewset, fltr, queryset):
             return queryset.filter(**{fltr.field: fltr.value})
     """
+
     def decorator(compiler: Compiler) -> Compiler:
         _compilers[(backend, filter_type)] = compiler
         return compiler

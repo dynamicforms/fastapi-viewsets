@@ -4,6 +4,7 @@ _make_middleware_depends). Uses a generic dummy Middleware (not Session/Authoriz
 to keep these tests focused on the bridging mechanism itself, decoupled from any specific built-in
 middleware's own behavior (those have their own end-to-end coverage already).
 """
+
 import pytest
 
 from fastapi import APIRouter, FastAPI, HTTPException

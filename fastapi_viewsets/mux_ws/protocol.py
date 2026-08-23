@@ -93,11 +93,7 @@ def parse_request(headers: dict[str, Any] | None) -> tuple[str, str, bytes, dict
     else:
         raise EnvelopeError(f"{QUERY_KEY} must be a string or a mapping, got {type(query).__name__}")
 
-    http_headers = {
-        str(key).lower(): str(value)
-        for key, value in headers.items()
-        if not str(key).startswith(":")
-    }
+    http_headers = {str(key).lower(): str(value) for key, value in headers.items() if not str(key).startswith(":")}
     return method.upper(), path, query_string, http_headers
 
 

@@ -135,9 +135,7 @@ def decode_cursor(raw: str, keys: CursorKeys, expected_query: str, annotations: 
         raise CursorError("cursor is not readable: no position in it")
 
     if payload.get("q") != expected_query:
-        raise CursorError(
-            "this cursor was issued for a different ordering or filter - start from the first page"
-        )
+        raise CursorError("this cursor was issued for a different ordering or filter - start from the first page")
 
     position = payload["p"]
     missing = [name for name, _ in keys if name not in position]
@@ -214,7 +212,10 @@ class CursorPredicate(Filter):
     def matches(self, record: Any) -> bool:
         for name, descending in self.keys:
             order = compare_in_order(
-                _read(record, name), self.position.get(name), descending, self.nulls_first,
+                _read(record, name),
+                self.position.get(name),
+                descending,
+                self.nulls_first,
             )
             if order != 0:
                 # `order > 0` means the row sorts after the anchor; reading backwards wants before.

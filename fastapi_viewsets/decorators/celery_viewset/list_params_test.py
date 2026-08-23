@@ -37,6 +37,7 @@ def worker_tasks_for(viewset_factory) -> dict:
         def decorator(func):
             registered[name] = func
             return func
+
         return decorator
 
     celery_app.task.side_effect = mock_task
@@ -102,6 +103,7 @@ def test_a_stage_the_backend_handled_is_not_redone_in_the_worker():
     back to the FastAPI side, which would mean shipping unsorted records across the queue only to
     sort them somewhere else.
     """
+
     def pushdown_viewset(decorate):
         @decorate
         class PushdownViewSet(PaginatedListMixin[Track, TrackFilter]):

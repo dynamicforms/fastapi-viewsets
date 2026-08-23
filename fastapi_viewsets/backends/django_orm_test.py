@@ -41,11 +41,15 @@ class Track(BaseModel):
     year: int
 
 
-TrackFilter = make_filter_model(Track, {
-    "title": ["exact", "icontains"],
-    "artist": ["exact"],
-    "year": ["exact", "gte", "lte", "in"],
-})
+TrackFilter = make_filter_model(
+    Track,
+    {
+        "title": ["exact", "icontains"],
+        "artist": ["exact"],
+        "year": ["exact", "gte", "lte", "in"],
+    },
+)
+
 
 class _Tagged(BaseModel):
     id: int
@@ -70,8 +74,7 @@ def _database():
     with connection.schema_editor() as editor:
         editor.create_model(TrackModel)
     TrackModel.objects.bulk_create(
-        TrackModel(title=f"Track {n:03d}", artist=f"Artist {n % 5}", year=2000 + (n % 5))
-        for n in range(1, 31)
+        TrackModel(title=f"Track {n:03d}", artist=f"Artist {n % 5}", year=2000 + (n % 5)) for n in range(1, 31)
     )
     yield
     with connection.schema_editor() as editor:
@@ -86,6 +89,7 @@ def viewset() -> TrackViewSet:
 # ---------------------------------------------------------------------------
 # Laziness
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_perform_list_returns_an_unevaluated_queryset(viewset):
@@ -125,6 +129,7 @@ async def test_count_is_a_real_total_not_a_null(viewset):
 # Push-down
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_an_exact_filter_is_pushed_into_sql(viewset):
     query = ListQuery(fltr=TrackFilter(year=2003), limit=50)
@@ -151,9 +156,7 @@ async def test_a_descending_sort_is_pushed_into_sql_too(viewset):
     query = ListQuery(sort=[SortStateColumn(column_name="year", direction="desc")], limit=5)
     page = await viewset.get_list(None, query)
     assert "sort" in query.applied
-    assert [track.year for track in page.results] == sorted(
-        (track.year for track in page.results), reverse=True
-    )
+    assert [track.year for track in page.results] == sorted((track.year for track in page.results), reverse=True)
 
 
 @dataclass(frozen=True)
@@ -199,6 +202,7 @@ async def test_a_declared_operator_is_pushed_down_once_every_filter_has_a_compil
 @pytest.mark.asyncio
 async def test_a_hand_made_filter_model_still_uses_filter_list():
     """No declaration means nothing declarative to translate, and the older path takes it."""
+
     class LegacyViewSet(TrackViewSet):
         async def filter_list(self, fltr, records):
             return [track for track in records if fltr.title is None or fltr.title == track.title]
@@ -233,6 +237,7 @@ async def test_filter_and_sort_compose_in_one_query(viewset):
 # ---------------------------------------------------------------------------
 # Conversion and single-record operations
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_rows_are_converted_to_the_response_model(viewset):
@@ -298,10 +303,12 @@ def tagged_rows():
     """Sync, because Django refuses schema and ORM calls from inside a running event loop."""
     with connection.schema_editor() as editor:
         editor.create_model(TagModel)
-    TagModel.objects.bulk_create([
-        TagModel(title="one", tags="jazz,bop"),
-        TagModel(title="two", tags="rock"),
-    ])
+    TagModel.objects.bulk_create(
+        [
+            TagModel(title="one", tags="jazz,bop"),
+            TagModel(title="two", tags="rock"),
+        ]
+    )
     yield
     with connection.schema_editor() as editor:
         editor.delete_model(TagModel)
@@ -325,6 +332,7 @@ async def test_the_in_memory_fallback_sees_response_models_not_raw_rows(tagged_r
 # ---------------------------------------------------------------------------
 # Cursor pagination
 # ---------------------------------------------------------------------------
+
 
 class CursorTrackViewSet(DjangoORMViewSet[int, Track], CursorListMixin[Track, TrackFilter]):
     model = TrackModel
@@ -395,7 +403,10 @@ async def test_the_cursor_predicate_reaches_sql(viewset):  # noqa: ARG001
     page_two = await CursorTrackViewSet().get_list(None, second)
     assert "filter" in second.applied  # translated, not filtered in memory
     assert [record.title for record in page_two.results] == [
-        "Track 005", "Track 006", "Track 007", "Track 008",
+        "Track 005",
+        "Track 006",
+        "Track 007",
+        "Track 008",
     ]
 
 
@@ -421,6 +432,7 @@ async def test_walking_a_multi_key_ordering_with_ties_visits_every_row_once():
 # The cursor appends the primary key to its ordering and filters on it, and this backend pushes a
 # filter set down only when every name in it is a concrete model field. The viewsets below declare
 # no `pk_field_name`; the backend takes it from the model.
+
 
 class CodedTrackModel(models.Model):
     code = models.CharField(max_length=20, primary_key=True)
@@ -451,10 +463,9 @@ def coded_rows():
     """Sync, because Django refuses schema and ORM calls from inside a running event loop."""
     with connection.schema_editor() as editor:
         editor.create_model(CodedTrackModel)
-    CodedTrackModel.objects.bulk_create([
-        CodedTrackModel(code=f"T{n:03d}", title=f"Track {n:03d}", year=2000 + (n % 5))
-        for n in range(1, 31)
-    ])
+    CodedTrackModel.objects.bulk_create(
+        [CodedTrackModel(code=f"T{n:03d}", title=f"Track {n:03d}", year=2000 + (n % 5)) for n in range(1, 31)]
+    )
     yield
     with connection.schema_editor() as editor:
         editor.delete_model(CodedTrackModel)
@@ -466,6 +477,7 @@ def test_the_primary_key_name_comes_from_the_model():
 
 def test_an_explicit_primary_key_name_still_wins():
     """A response schema that renames the primary key is the case the model cannot answer."""
+
     class OverriddenViewSet(CodedTrackViewSet):
         pk_field_name = "title"
 
@@ -474,6 +486,7 @@ def test_an_explicit_primary_key_name_still_wins():
 
 def test_an_abstract_viewset_with_no_model_yet_keeps_the_default():
     """A base that leaves the model to its subclasses has to survive being defined and read."""
+
     class AbstractCodedViewSet(DjangoORMViewSet[str, CodedTrack], CursorListMixin[CodedTrack, CodedTrackFilter]):
         schema = CodedTrack
 
@@ -489,7 +502,10 @@ async def test_a_renamed_primary_key_joins_the_ordering_and_reaches_sql(coded_ro
     assert query._cursor_keys == (("title", False), ("code", False))
     assert query.applied == {"sort", "pagination"}
     assert [record.title for record in page.results] == [
-        "Track 001", "Track 002", "Track 003", "Track 004",
+        "Track 001",
+        "Track 002",
+        "Track 003",
+        "Track 004",
     ]
 
 
@@ -536,7 +552,10 @@ async def test_a_client_filter_survives_the_cursor_on_a_renamed_primary_key(code
     assert second.applied == {"filter", "sort", "pagination"}
     assert all(record.year >= 2002 for record in page_two.results)
     assert [record.title for record in page_two.results] == [
-        "Track 008", "Track 009", "Track 012", "Track 013",
+        "Track 008",
+        "Track 009",
+        "Track 012",
+        "Track 013",
     ]
 
 
@@ -563,6 +582,7 @@ async def test_a_renamed_primary_key_retrieves_updates_and_destroys(coded_rows):
 # one-to-one field declared as the key. The model knows it as `artist`, the response schema
 # carries `artist_id`, and the cursor reads its ordering out of the model and its position out of
 # the schema - so only a name both of them have walks the table.
+
 
 class MediaModel(models.Model):
     title = models.CharField(max_length=200)
@@ -618,9 +638,7 @@ class ArtistProfile(BaseModel):
 ArtistProfileFilter = make_filter_model(ArtistProfile, {"title": ["icontains"], "year": ["gte"]})
 
 
-class ArtistProfileViewSet(
-    DjangoORMViewSet[int, ArtistProfile], CursorListMixin[ArtistProfile, ArtistProfileFilter]
-):
+class ArtistProfileViewSet(DjangoORMViewSet[int, ArtistProfile], CursorListMixin[ArtistProfile, ArtistProfileFilter]):
     model = ArtistProfileModel
     schema = ArtistProfile
     default_page_size = 4

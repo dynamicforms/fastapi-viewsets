@@ -87,22 +87,29 @@ def main() -> int:
         ("the frontend", spawn(["npm", "run", "demo:dev"], env)),  # noqa: S607
     ]
     if args.celery:
-        children.append((
-            "the Celery worker",
-            spawn(
-                ["celery", "-A", "demo.backend.celery_worker", "worker",  # noqa: S607
-                 "--loglevel=info", "--concurrency=4"],
-                env,
-            ),
-        ))
+        children.append(
+            (
+                "the Celery worker",
+                spawn(
+                    [
+                        "celery",
+                        "-A",
+                        "demo.backend.celery_worker",
+                        "worker",  # noqa: S607
+                        "--loglevel=info",
+                        "--concurrency=4",
+                    ],
+                    env,
+                ),
+            )
+        )
 
     print("FastAPI docs:  http://127.0.0.1:8000/docs")
     print("API reference: http://127.0.0.1:8000/redoc")
     print(f"Celery:        {'on' if args.celery else 'off (--celery to enable)'}")
 
     backend = spawn(
-        [sys.executable, "-m", "uvicorn", "demo.backend.main:app",
-         "--host", "127.0.0.1", "--port", "8000"],
+        [sys.executable, "-m", "uvicorn", "demo.backend.main:app", "--host", "127.0.0.1", "--port", "8000"],
         env,
     )
     children.insert(0, ("the backend", backend))

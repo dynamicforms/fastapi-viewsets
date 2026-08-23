@@ -123,10 +123,15 @@ def celery_viewset_server(
                     result = run(lifecycle_runner(original_endpoint, instance, cls, lifecycle, *args, **kwargs))
                     logger.info("Celery task completed: %s (correlation_id=%s)", task_name, correlation_id)
                     if correlation_id and result_queue_key and redis_client is not None:
-                        redis_client.rpush(result_queue_key, json.dumps({
-                            "correlation_id": correlation_id,
-                            "result": _to_jsonable(result),
-                        }))
+                        redis_client.rpush(
+                            result_queue_key,
+                            json.dumps(
+                                {
+                                    "correlation_id": correlation_id,
+                                    "result": _to_jsonable(result),
+                                }
+                            ),
+                        )
                     return result
                 except Exception as e:
                     if isinstance(e, HTTPException):

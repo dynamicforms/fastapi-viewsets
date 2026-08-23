@@ -29,6 +29,7 @@ class Item(BaseModel):
 # auto-detect celery_viewset tests
 # ---------------------------------------------------------------------------
 
+
 def test_celery_viewset_auto_detect_server():
     """celery_viewset uses server mode when running in Celery worker."""
     celery_app = MagicMock()
@@ -38,12 +39,14 @@ def test_celery_viewset_auto_detect_server():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
 
     set_is_celery_worker(True)
     try:
+
         @celery_viewset(celery_app=celery_app, task_prefix="items")
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self) -> list[Item]:
@@ -63,6 +66,7 @@ def test_celery_viewset_auto_detect_client():
 
     set_is_celery_worker(False)
     try:
+
         @celery_viewset(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self) -> list[Item]:
@@ -80,6 +84,7 @@ def test_celery_viewset_auto_detect_client_requires_redis():
     set_is_celery_worker(False)
     try:
         with pytest.raises(ValueError, match="redis_client"):
+
             @celery_viewset(celery_app=celery_app, task_prefix="items")
             class ItemViewSet(ListMixin[Item]):
                 async def perform_list(self) -> list[Item]:
@@ -101,6 +106,7 @@ def test_detect_is_celery_worker_via_sys_argv():
 # check_result_readers
 # ---------------------------------------------------------------------------
 
+
 def test_check_result_readers_warns_when_reader_missing(caplog):
     """check_result_readers reports (and logs) a queue_key registered but with no running reader."""
     celery_app = MagicMock()
@@ -108,6 +114,7 @@ def test_check_result_readers_warns_when_reader_missing(caplog):
 
     set_is_celery_worker(False)
     try:
+
         @celery_viewset(celery_app=celery_app, task_prefix="check-readers-missing", redis_client=redis_mock)
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self) -> list[Item]:
@@ -134,6 +141,7 @@ async def test_check_result_readers_clean_once_reader_started():
     set_is_celery_worker(False)
     queue_key = get_result_queue_key("check-readers-running")
     try:
+
         @celery_viewset(celery_app=celery_app, task_prefix="check-readers-running", redis_client=redis_mock)
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self) -> list[Item]:

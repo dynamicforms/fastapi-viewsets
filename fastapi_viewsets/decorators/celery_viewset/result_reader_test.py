@@ -16,6 +16,7 @@ from fastapi_viewsets.decorators.celery_viewset.result_reader import (
 # register / unregister future
 # ---------------------------------------------------------------------------
 
+
 def test_register_and_unregister_future():
     """register_future adds future to registry, unregister_future removes it."""
     loop = asyncio.new_event_loop()
@@ -37,6 +38,7 @@ def test_unregister_nonexistent_future_does_not_raise():
 # get_result_queue_key
 # ---------------------------------------------------------------------------
 
+
 def test_get_result_queue_key():
     """get_result_queue_key returns correct Redis key."""
     assert get_result_queue_key("myapp") == "celery_viewset_results:myapp"
@@ -46,6 +48,7 @@ def test_get_result_queue_key():
 # ---------------------------------------------------------------------------
 # push_result
 # ---------------------------------------------------------------------------
+
 
 def test_push_result_success():
     """push_result pushes JSON with result to Redis."""
@@ -81,6 +84,7 @@ def test_push_result_error():
 # ---------------------------------------------------------------------------
 # result_reader_loop
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_result_reader_loop_resolves_future():
@@ -145,12 +149,14 @@ async def test_result_reader_loop_sets_http_exception():
     queue_key = "celery_viewset_results:test"
     correlation_id = "loop-test-http-err"
 
-    payload = json.dumps({
-        "correlation_id": correlation_id,
-        "error": "404: Item with pk 5 not found",
-        "http_status_code": 404,
-        "http_detail": "Item with pk 5 not found",
-    })
+    payload = json.dumps(
+        {
+            "correlation_id": correlation_id,
+            "error": "404: Item with pk 5 not found",
+            "http_status_code": 404,
+            "http_detail": "Item with pk 5 not found",
+        }
+    )
     redis_mock.lpop.side_effect = [payload.encode(), None, None]
 
     future = asyncio.get_event_loop().create_future()
@@ -193,6 +199,7 @@ async def test_result_reader_loop_ignores_unknown_correlation_id():
 # ---------------------------------------------------------------------------
 # start / stop result_reader
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_start_and_stop_result_reader():

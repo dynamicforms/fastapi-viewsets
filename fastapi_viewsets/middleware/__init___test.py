@@ -19,6 +19,7 @@ def reset_settings():
 # ViewSetResult / run_command_chain
 # ---------------------------------------------------------------------------
 
+
 def test_viewset_result_defaults():
     result = ViewSetResult(body="hello")
     assert result.body == "hello"
@@ -127,6 +128,7 @@ async def test_run_command_chain_middleware_receives_request_viewset_context():
 # replacement) and reshapes the body, exactly like the old finalize_response hook did.
 # ---------------------------------------------------------------------------
 
+
 class LoginResult(BaseModel):
     is_authenticated: bool
     session_key: str | None = None
@@ -229,6 +231,7 @@ def test_command_middleware_does_not_run_in_celery_worker_path():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task

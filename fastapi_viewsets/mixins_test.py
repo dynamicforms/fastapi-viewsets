@@ -83,12 +83,14 @@ class ItemViewSet(BulkViewSetMixin[int, Item]):
     async def perform_bulk_destroy(self, _context: Context, pk: list[int]) -> list[dict[int, Any]]:
         return [{p: "deleted"} for p in pk]
 
+
 class ReadOnlyItemViewSet(ReadOnlyViewSetMixin[int, Item]):
     async def perform_list(self, _context: Context) -> list[Item]:
         return [Item(id=1, name="test")]
 
     async def perform_retrieve(self, _context: Context, pk: int) -> Item:
         return Item(id=pk, name="test")
+
 
 class StandardItemViewSet(ViewSetMixin[int, Item]):
     async def perform_create(self, _context: Context, data: Item) -> Item:
@@ -111,6 +113,7 @@ class StandardItemViewSet(ViewSetMixin[int, Item]):
 
     async def perform_destroy(self, _context: Context, pk: int) -> dict[int, Any]:
         return {pk: "deleted"}
+
 
 class FilterableItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item, ItemFilter]):
     """ViewSet used in multiple tests; shares the module-level _DB."""
@@ -146,6 +149,7 @@ async def test_viewset_methods():
     assert await viewset.destroy(context, 1) == {1: "deleted"}
     assert await viewset.bulk_destroy(context, [1]) == [{1: "deleted"}]
 
+
 def test_final_methods():
     # Check if methods are marked as @final (in Python 3.8+ typing.final adds __final__ attribute)
     assert getattr(CreateMixin.create, "__final__", False) or "final" in str(CreateMixin.create)
@@ -156,11 +160,13 @@ def test_final_methods():
     assert UpdateMixin.update.__final__ is True
     assert DestroyMixin.destroy.__final__ is True
 
+
 """
 Testing abstract declarations
 """
 T = TypeVar("T")
 K = TypeVar("K")
+
 
 def test_cannot_instantiate_abstract_mixin():
     # Action mixins no longer declare perform_xxx as abstractmethods — they can be instantiated standalone.
@@ -201,6 +207,7 @@ def test_cannot_instantiate_combined_mixins():
 # make_all_optional
 # ---------------------------------------------------------------------------
 
+
 def test_make_optional_filter_model_all_fields_optional():
     for field_name, field_info in ItemFilter.model_fields.items():
         assert field_info.is_required() is False, f"Field '{field_name}' should not be required"
@@ -227,6 +234,7 @@ def test_make_optional_filter_model_instantiation():
 # ---------------------------------------------------------------------------
 # FilterableMixin – route registration
 # ---------------------------------------------------------------------------
+
 
 def test_filterable_mixin_registers_list_route():
     router = APIRouter()
@@ -265,6 +273,7 @@ def test_filterable_mixin_filter_param_uses_optional_model():
 # ---------------------------------------------------------------------------
 # FilterableMixin – runtime behaviour (direct endpoint calls)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_list_without_filter_returns_all():
@@ -349,6 +358,7 @@ async def test_list_filter_by_id():
 # FilterableMixin does NOT break other viewset operations
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_retrieve_still_works_with_filterable_mixin():
     router = APIRouter()
@@ -362,6 +372,7 @@ async def test_retrieve_still_works_with_filterable_mixin():
 # ---------------------------------------------------------------------------
 # OpenAPI schema – filter params appear in Swagger
 # ---------------------------------------------------------------------------
+
 
 def test_filter_params_visible_in_openapi():
     router = APIRouter()
@@ -435,6 +446,7 @@ class LookupItemViewSet(CollectionViewSet[int, Item], LookupMixin):
 # route registration
 # ---------------------------------------------------------------------------
 
+
 def test_lookup_registers_route():
     router = APIRouter()
     route_viewset(router, base_path="/items")(LookupItemViewSet)
@@ -458,6 +470,7 @@ def test_lookup_q_param_visible_in_openapi():
 # ---------------------------------------------------------------------------
 # runtime behaviour – default filter
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_lookup_without_q_returns_all():
@@ -518,6 +531,7 @@ async def test_lookup_fltr_none_returns_all():
 # setup_lookup_filter pre-event hook
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_lookup_setup_filter_hook_called():
     """setup_lookup_filter is called before perform_lookup when filter is active."""
@@ -571,6 +585,7 @@ async def test_lookup_setup_filter_hook_not_called_without_q():
 # custom filter model
 # ---------------------------------------------------------------------------
 
+
 class ExtendedLookupFilter(LookupFilter):
     group: str | None = None
 
@@ -622,6 +637,7 @@ async def test_lookup_custom_filter_filters_correctly():
 # Sort — parse_sort_param
 # ===========================================================================
 
+
 def test_parse_sort_param_single_asc():
     result = parse_sort_param("name:asc")
     assert result == [SortStateColumn(column_name="name", direction=SortDirection.asc)]
@@ -668,6 +684,7 @@ def test_sort_state_column_camel_alias():
 # ===========================================================================
 # Sort — ListMixin runtime behaviour
 # ===========================================================================
+
 
 class SortableItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
     def __init__(self):

@@ -24,6 +24,7 @@ class Item(BaseModel):
     id: int
     name: str
 
+
 def test_viewset_decorator():
     router = APIRouter()
 
@@ -53,6 +54,7 @@ def test_viewset_decorator():
 
     assert MyViewSet.__viewset_metadata__["base_path"] == "/items"
     assert MyViewSet.__viewset_metadata__["lifecycle"] == "singleton"
+
 
 @pytest.mark.asyncio
 async def test_viewset_execution():
@@ -138,7 +140,6 @@ async def test_viewset_instance_key():
     assert StateStore.data["val"] == "modified_saved"  # stays same because we always set it to modified_saved
 
 
-
 def test_viewset_endpoint_signature():
     router = APIRouter()
 
@@ -160,6 +161,7 @@ def test_viewset_endpoint_signature():
     assert "self" not in params, f"Endpoint should not have 'self' parameter: {params}"
     # Also we don't want *args and **kwargs if they weren't in the original method
     # (unless FastAPI necessarily needs them, but usually we don't want to expose them in OpenAPI)
+
 
 def test_viewset_endpoint_signature_with_params():
     router = APIRouter()
@@ -183,6 +185,7 @@ def test_viewset_endpoint_signature_with_params():
     # Annotation might be Generic (TypeVar) because RetrieveMixin is Generic
     # but we just want to ensure it is there.
 
+
 @pytest.mark.asyncio
 async def test_viewset_autoinc_and_pk_hiding():
 
@@ -190,9 +193,7 @@ async def test_viewset_autoinc_and_pk_hiding():
         id: int = Field(json_schema_extra={"autoinc_int": True})
         name: str
 
-    database: dict[int, AutoIncItem] = {
-        1: AutoIncItem(id=1, name="Item 1")
-    }
+    database: dict[int, AutoIncItem] = {1: AutoIncItem(id=1, name="Item 1")}
 
     class AutoIncViewSet(CollectionViewSet[int, AutoIncItem], ViewSetMixin[int, AutoIncItem]):
         def __init__(self):
@@ -221,6 +222,7 @@ async def test_viewset_autoinc_and_pk_hiding():
     assert result.id == 2
     assert database[2].name == "Item 2"
     assert isinstance(database[2], AutoIncItem)
+
 
 @pytest.mark.asyncio
 async def test_viewset_pk_not_hidden_in_update():
@@ -258,6 +260,7 @@ async def test_viewset_pk_not_hidden_in_update():
 
     assert result.id == 10
     assert result.name == "Updated Name"
+
 
 @pytest.mark.asyncio
 async def test_viewset_generic_resolution():
@@ -335,6 +338,7 @@ def test_viewset_route_order():
       12. DELETE /items/bulk
       13. GET    /items/lookup
     """
+
     class OrderItem(BaseModel):
         id: int
         name: str

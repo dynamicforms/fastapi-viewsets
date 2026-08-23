@@ -180,14 +180,14 @@ async def test_headers_stated_on_the_stream_override_the_connection():
             async def perform_list(self, context: Context) -> list[Track]:
                 return await super().perform_list(context)
 
-        stream = FakeStream({
-            ":method": "GET",
-            ":path": "/ctx",
-            "authorization": "Bearer per-call",
-        })
-        await process_command(
-            ABSENT, stream, base_headers={"authorization": "Bearer handshake", "x-trace": "abc"}
+        stream = FakeStream(
+            {
+                ":method": "GET",
+                ":path": "/ctx",
+                "authorization": "Bearer per-call",
+            }
         )
+        await process_command(ABSENT, stream, base_headers={"authorization": "Bearer handshake", "x-trace": "abc"})
         assert stream.status == 200
         assert captured["authorization"] == "Bearer per-call"
         assert captured["x-trace"] == "abc"

@@ -48,6 +48,7 @@ def track(id_: int, year: int | None = 2000, title: str = "x") -> Track:
 # Keys
 # ---------------------------------------------------------------------------
 
+
 def test_the_primary_key_is_appended_to_the_ordering():
     """Without it two rows can share a position, and then a page boundary has no defined place."""
     keys = cursor_keys([SortStateColumn(column_name="year")], "id")
@@ -66,6 +67,7 @@ def test_the_real_primary_key_name_is_used():
 # ---------------------------------------------------------------------------
 # Encoding
 # ---------------------------------------------------------------------------
+
 
 def test_a_cursor_round_trips():
     state = CursorState({"year": 2003, "id": 42}, backwards=True, inclusive=True, query="abc")
@@ -119,6 +121,7 @@ def test_the_fingerprint_follows_the_filter():
 # ---------------------------------------------------------------------------
 # The predicate
 # ---------------------------------------------------------------------------
+
 
 def predicate(position, *, keys=KEYS, backwards=False, inclusive=False) -> CursorPredicate:
     return CursorPredicate(
@@ -176,6 +179,7 @@ def test_null_sorts_below_every_value_in_both_directions():
 # ---------------------------------------------------------------------------
 # End to end, over HTTP
 # ---------------------------------------------------------------------------
+
 
 def client_for(database: dict[int, Track]) -> TestClient:
     app = FastAPI()
@@ -242,9 +246,7 @@ def test_paging_backwards_returns_the_previous_page():
     first_page = client.get("/tracks", params={"sort": "id:asc"}).json()
     second = client.get("/tracks", params={"sort": "id:asc", "cursor": first_page["next"]}).json()
     back = client.get("/tracks", params={"sort": "id:asc", "cursor": second["previous"]}).json()
-    assert [record["id"] for record in back["results"]] == [
-        record["id"] for record in first_page["results"]
-    ]
+    assert [record["id"] for record in back["results"]] == [record["id"] for record in first_page["results"]]
 
 
 def test_inserting_a_record_does_not_shift_the_next_page():
@@ -333,23 +335,28 @@ def test_position_of_reads_the_key_tuple_off_a_record():
 # NULL ordering
 # ---------------------------------------------------------------------------
 
+
 def nullable_client(**attributes) -> TestClient:
     """A library where every third record has no year."""
     app = FastAPI()
     router = APIRouter()
-    database = {n: Track(id=n, title=f"T{n:03d}", year=(None if n % 3 == 0 else 2000 + n))
-                for n in range(1, 13)}
+    database = {n: Track(id=n, title=f"T{n:03d}", year=(None if n % 3 == 0 else 2000 + n)) for n in range(1, 13)}
 
     def body(namespace):
         namespace.update(attributes)
         namespace["schema"] = Track
         namespace["default_page_size"] = 4
         namespace["__init__"] = lambda self: CollectionViewSet.__init__(
-            self, container=database, pk_field="id",
+            self,
+            container=database,
+            pk_field="id",
         )
 
     viewset = types.new_class(
-        "NullableViewSet", (CollectionViewSet[int, Track], CursorListMixin[Track, TrackFilter]), {}, body,
+        "NullableViewSet",
+        (CollectionViewSet[int, Track], CursorListMixin[Track, TrackFilter]),
+        {},
+        body,
     )
     route_viewset(router, base_path="/tracks", pk_field_name="id")(viewset)
     app.include_router(router)

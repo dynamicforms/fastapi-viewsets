@@ -4,6 +4,7 @@ from pydantic import BaseModel, create_model
 
 T = TypeVar("T", bound=BaseModel)
 
+
 def create_model_without_pk(model: type[T], pk_field_name: str) -> type[BaseModel]:
     """
     Creates a new Pydantic model based on the given model but without the specified primary key field.
@@ -14,6 +15,7 @@ def create_model_without_pk(model: type[T], pk_field_name: str) -> type[BaseMode
         if name != pk_field_name
     }
     return create_model(f"{model.__name__}NoPK", **fields)
+
 
 def typecast_to_original_model(value: Any, original_annotation: type[T]) -> T:
     """

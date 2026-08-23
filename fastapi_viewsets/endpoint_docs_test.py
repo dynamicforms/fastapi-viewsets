@@ -121,6 +121,7 @@ def test_documentation_is_inherited_and_overridable():
 # Viewset-level description
 # ---------------------------------------------------------------------------
 
+
 def test_a_viewsets_docstring_describes_its_group():
     """
     However well each endpoint is documented, the section they sit in was blank - and that intro is
@@ -164,7 +165,8 @@ def test_the_application_can_override_a_viewsets_description():
             super().__init__(container=DATABASE, pk_field="id")
 
     app = apply_viewset_tags(
-        FastAPI(), extra=[{"name": "Overridden", "description": "What the application says."}],
+        FastAPI(),
+        extra=[{"name": "Overridden", "description": "What the application says."}],
     )
     described = {tag["name"]: tag["description"] for tag in app.openapi_tags}
     assert described["Overridden"] == "What the application says."

@@ -95,6 +95,7 @@ async def test_callable_config_receives_request_cls_context():
 # End-to-end: middleware-level rejection (callable config) via a real route
 # ---------------------------------------------------------------------------
 
+
 class Item(BaseModel):
     id: int
     name: str
@@ -127,6 +128,7 @@ def test_callable_config_rejects_a_real_route_with_403():
 # ---------------------------------------------------------------------------
 # End-to-end: object-level rejection - perform_* reads context.authorization itself
 # ---------------------------------------------------------------------------
+
 
 async def _current_user_processor(request, _viewset) -> dict:
     return {"user": request.headers.get("x-user")}

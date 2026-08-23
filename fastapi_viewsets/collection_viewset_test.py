@@ -15,27 +15,24 @@ class MockItem:
     def __eq__(self, other):
         return self.id == other.id and self.name == other.name
 
+
 @pytest.mark.asyncio
 async def test_collection_viewset_list_sequence():
-    container = [
-        {"id": 1, "name": "item1"},
-        {"id": 2, "name": "item2"}
-    ]
+    container = [{"id": 1, "name": "item1"}, {"id": 2, "name": "item2"}]
     viewset = CollectionViewSet(container)
 
     items = await viewset.perform_list(CTX)
     assert items == container
-    assert items is not container # Should be a copy (list conversion)
+    assert items is not container  # Should be a copy (list conversion)
+
 
 @pytest.mark.asyncio
 async def test_collection_viewset_retrieve_sequence():
-    container = [
-        {"id": 1, "name": "item1"},
-        {"id": 2, "name": "item2"}
-    ]
+    container = [{"id": 1, "name": "item1"}, {"id": 2, "name": "item2"}]
     viewset = CollectionViewSet(container)
 
     from fastapi import HTTPException
+
     item = await viewset.perform_retrieve(CTX, 1)
     assert item == {"id": 1, "name": "item1"}
 
@@ -43,9 +40,11 @@ async def test_collection_viewset_retrieve_sequence():
         await viewset.perform_retrieve(CTX, 3)
     assert excinfo.value.status_code == 404
 
+
 @pytest.mark.asyncio
 async def test_collection_viewset_not_found_raises_http_exception():
     from fastapi import HTTPException
+
     container = [{"id": 1, "name": "item1"}]
     viewset = CollectionViewSet(container)
 
@@ -80,6 +79,7 @@ async def test_collection_viewset_not_found_raises_http_exception():
         await mapping_viewset.perform_destroy(CTX, 2)
     assert excinfo.value.status_code == 404
 
+
 @pytest.mark.asyncio
 async def test_collection_viewset_create_sequence():
     container = []
@@ -89,6 +89,7 @@ async def test_collection_viewset_create_sequence():
     await viewset.perform_create(CTX, new_item)
 
     assert container == [new_item]
+
 
 @pytest.mark.asyncio
 async def test_collection_viewset_update_sequence():
@@ -103,6 +104,7 @@ async def test_collection_viewset_update_sequence():
     await viewset.perform_update(CTX, 1, {"id": 1, "name": "full"}, partial=False)
     assert container[0] == {"id": 1, "name": "full"}
 
+
 @pytest.mark.asyncio
 async def test_collection_viewset_destroy_sequence():
     container = [{"id": 1, "name": "item1"}]
@@ -111,12 +113,10 @@ async def test_collection_viewset_destroy_sequence():
     await viewset.perform_destroy(CTX, 1)
     assert len(container) == 0
 
+
 @pytest.mark.asyncio
 async def test_collection_viewset_mapping():
-    container = {
-        1: {"id": 1, "name": "item1"},
-        2: {"id": 2, "name": "item2"}
-    }
+    container = {1: {"id": 1, "name": "item1"}, 2: {"id": 2, "name": "item2"}}
     viewset = CollectionViewSet(container)
 
     items = await viewset.perform_list(CTX)
@@ -135,6 +135,7 @@ async def test_collection_viewset_mapping():
     await viewset.perform_destroy(CTX, 2)
     assert 2 not in container
 
+
 @pytest.mark.asyncio
 async def test_collection_viewset_immutable():
     container = ({"id": 1, "name": "item1"},)
@@ -146,6 +147,7 @@ async def test_collection_viewset_immutable():
     with pytest.raises(Exception, match="Provided container is not mutable"):
         await viewset.perform_create(CTX, {"id": 2})
 
+
 @pytest.mark.asyncio
 async def test_collection_viewset_objects():
     item1 = MockItem(1, "item1")
@@ -156,6 +158,7 @@ async def test_collection_viewset_objects():
 
     await viewset.perform_update(CTX, 1, {"name": "updated"}, partial=True)
     assert item1.name == "updated"
+
 
 @pytest.mark.asyncio
 async def test_collection_viewset_bulk():

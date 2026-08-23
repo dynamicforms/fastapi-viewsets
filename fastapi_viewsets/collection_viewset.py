@@ -58,9 +58,7 @@ class AsyncCollectionViewSet(
     async def perform_update(self, _context: Context, pk: K, data: T, partial: bool = True) -> T:
         return await self.container_update(pk, data, partial)
 
-    async def perform_bulk_update(
-        self, _context: Context, records: dict[K, T], partial: bool = True
-    ) -> list[T]:
+    async def perform_bulk_update(self, _context: Context, records: dict[K, T], partial: bool = True) -> list[T]:
         results = []
         for pk, data in records.items():
             results.append(await self.container_update(pk, data, partial))

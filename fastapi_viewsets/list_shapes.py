@@ -56,8 +56,7 @@ def _placeholder(schema: dict, definitions: dict, depth: int = 0) -> Any:
     kind = schema.get("type")
     if kind == "object":
         return {
-            name: _placeholder(field, definitions, depth + 1)
-            for name, field in schema.get("properties", {}).items()
+            name: _placeholder(field, definitions, depth + 1) for name, field in schema.get("properties", {}).items()
         }
     if kind == "array":
         return [_placeholder(schema.get("items", {}), definitions, depth + 1)]

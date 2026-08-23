@@ -22,11 +22,13 @@ def test_is_command_requires_both_pseudo_headers():
 
 
 def test_parse_request_splits_pseudo_headers_from_http_headers():
-    method, path, query, headers = parse_request({
-        ":method": "get",
-        ":path": "/items/1",
-        "Authorization": "Bearer tok",
-    })
+    method, path, query, headers = parse_request(
+        {
+            ":method": "get",
+            ":path": "/items/1",
+            "Authorization": "Bearer tok",
+        }
+    )
     assert method == "GET"
     assert path == "/items/1"
     assert query == b""
@@ -39,21 +41,25 @@ def test_parse_request_accepts_a_query_string():
 
 
 def test_parse_request_encodes_a_query_mapping():
-    _, _, query, _ = parse_request({
-        ":method": "GET",
-        ":path": "/items",
-        ":query": {"sort": "-year", "page": 2},
-    })
+    _, _, query, _ = parse_request(
+        {
+            ":method": "GET",
+            ":path": "/items",
+            ":query": {"sort": "-year", "page": 2},
+        }
+    )
     assert query == b"sort=-year&page=2"
 
 
 def test_parse_request_expands_list_values_into_repeated_keys():
     """A comma-joined value would bind as one string; FastAPI wants list[str] as repeats."""
-    _, _, query, _ = parse_request({
-        ":method": "GET",
-        ":path": "/items",
-        ":query": {"genre": ["jazz", "blues"]},
-    })
+    _, _, query, _ = parse_request(
+        {
+            ":method": "GET",
+            ":path": "/items",
+            ":query": {"genre": ["jazz", "blues"]},
+        }
+    )
     assert query == b"genre=jazz&genre=blues"
 
 

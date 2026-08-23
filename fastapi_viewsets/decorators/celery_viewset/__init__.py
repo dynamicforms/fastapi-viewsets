@@ -68,7 +68,8 @@ def check_result_readers() -> frozenset[str]:
             "No result reader is running for queue_key=%s - requests dispatched to this "
             "celery_viewset will hang waiting for a result that never arrives. Call "
             "start_result_reader(redis_client, %r) in your FastAPI lifespan.",
-            queue_key, queue_key,
+            queue_key,
+            queue_key,
         )
     return frozenset(missing)
 

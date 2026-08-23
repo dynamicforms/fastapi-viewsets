@@ -75,6 +75,7 @@ async def test_serialize_recipe_is_already_json_safe_and_round_trips():
 # StaticUserCookieAuthBackend
 # ---------------------------------------------------------------------------
 
+
 def test_cookie_backend_returns_lazy_for_known_token():
     backend = StaticUserCookieAuthBackend({"tok-jure": {"id": 1, "username": "jure"}})
     lazy = backend.try_handle(_make_cookie_request({"sessionid": "tok-jure"}))

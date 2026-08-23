@@ -111,6 +111,7 @@ class CreateMixin(Generic[K, T], ABC):
     """
     Create a model instance.
     """
+
     __router = APIRouter()
 
     @final
@@ -123,6 +124,7 @@ class BulkOnlyCreateMixin(Generic[K, T], ABC):
     """
     Create model instances in bulk.
     """
+
     __router = APIRouter()
 
     @final
@@ -188,6 +190,7 @@ class SortStateColumn(BaseModel):
     Mirrors the FE SortStateColumn interface: one column in the current sort order.
     Python attribute names use snake_case; JSON serialization uses camelCase (columnName).
     """
+
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
     column_name: str
@@ -239,6 +242,7 @@ class ListMixin(Generic[T, TFilter], ABC):
     the response into a union of exactly those models; `route_viewset` computes both from these two
     attributes, so nothing here is written twice.
     """
+
     __router = APIRouter()
 
     list_shape: str | None = None
@@ -333,9 +337,7 @@ class ListMixin(Generic[T, TFilter], ABC):
     list_items.__list_shape_aware__ = True
     """Tells route_viewset to prune this signature and compute its response model per viewset."""
 
-    async def get_list(
-        self: "ImplMixin[Any, T] | ListMixin[T]", context: Context, query: ListQuery
-    ) -> Any:
+    async def get_list(self: "ImplMixin[Any, T] | ListMixin[T]", context: Context, query: ListQuery) -> Any:
         """
         The list pipeline, in one place and overridable as a whole.
 
@@ -405,9 +407,7 @@ class ListMixin(Generic[T, TFilter], ABC):
             return records
         return await self.sort_list(query.sort, await self.land(query, records))
 
-    async def land(
-        self: "ImplMixin[Any, T] | ListMixin[T]", query: ListQuery, records: ListRecords
-    ) -> list:
+    async def land(self: "ImplMixin[Any, T] | ListMixin[T]", query: ListQuery, records: ListRecords) -> list:
         """
         Ends the lazy part: materialises the source and converts it to the response model.
 
@@ -667,6 +667,7 @@ class RetrieveMixin(Generic[K, T], ABC):
     """
     Retrieve a model instance.
     """
+
     __router = APIRouter()
 
     @final
@@ -682,6 +683,7 @@ class UpdateMixin(Generic[K, T], ABC):
     """
     Update a model instance.
     """
+
     __router = APIRouter()
 
     @final
@@ -691,9 +693,7 @@ class UpdateMixin(Generic[K, T], ABC):
 
     @final
     @__router.patch("/{pk}", name="partial_update", responses=NOT_FOUND_RESPONSE)
-    async def partial_update(
-        self: "ImplMixin[K, T] | UpdateMixin[K, T]", context: Context, pk: K, data: T
-    ) -> T:
+    async def partial_update(self: "ImplMixin[K, T] | UpdateMixin[K, T]", context: Context, pk: K, data: T) -> T:
         return await self.perform_update(context, pk, data, partial=True)
 
 
@@ -701,6 +701,7 @@ class BulkOnlyUpdateMixin(Generic[K, T], ABC):
     """
     Update model instances in bulk.
     """
+
     __router = APIRouter()
 
     @final
@@ -731,6 +732,7 @@ class DestroyMixin(Generic[K, T], ABC):
     """
     Destroy a model instance. Return the destroyed key and any additional data about its destruction
     """
+
     __router = APIRouter()
 
     @final
@@ -743,6 +745,7 @@ class BulkOnlyDestroyMixin(Generic[K, T], ABC):
     """
     Destroy model instances in bulk.
     """
+
     __router = APIRouter()
 
     @final
@@ -758,6 +761,7 @@ class BulkDestroyMixin(DestroyMixin[K, T], BulkOnlyDestroyMixin[K, T]):
     Destroy model instances (single or bulk).
     """
 
+
 ###################################################################################################
 # LOOKUP
 ###################################################################################################
@@ -770,6 +774,7 @@ class LookupItem(BaseModel):
 
 class LookupFilter(BaseModel):
     """Default filter model for LookupMixin. Provides case-insensitive title search via q."""
+
     q: str | None = None
 
 
@@ -796,6 +801,7 @@ class LookupMixin(Generic[TLookupFilter], ABC):
        The default implementation filters by fltr.q (case-insensitive title match).
        Override to customise in-memory filtering.
     """
+
     __router = APIRouter()
 
     @abstractmethod
@@ -832,9 +838,7 @@ class LookupMixin(Generic[TLookupFilter], ABC):
         fltr: Annotated[TLookupFilter, Query()] = None,
     ) -> list[LookupItem]:
         has_filter = (
-            fltr is not None
-            and hasattr(fltr, "model_dump")
-            and any(v is not None for v in fltr.model_dump().values())
+            fltr is not None and hasattr(fltr, "model_dump") and any(v is not None for v in fltr.model_dump().values())
         )
         if has_filter:
             await self.setup_lookup_filter(fltr)

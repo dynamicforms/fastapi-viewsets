@@ -48,9 +48,14 @@ def custom_openapi():
     if not app.openapi_schema:
         # tags= is not optional here: replacing app.openapi bypasses FastAPI's own use of
         # app.openapi_tags, so the viewsets' group descriptions would silently vanish.
-        app.openapi_schema = add_try_links(get_openapi(
-            title=app.title, version=app.version, routes=app.routes, tags=app.openapi_tags,
-        ))
+        app.openapi_schema = add_try_links(
+            get_openapi(
+                title=app.title,
+                version=app.version,
+                routes=app.routes,
+                tags=app.openapi_tags,
+            )
+        )
     return app.openapi_schema
 
 
@@ -67,6 +72,8 @@ async def swagger_ui_page() -> HTMLResponse:
 async def redoc_page() -> HTMLResponse:
     html = get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - ReDoc")
     return HTMLResponse(html.body.decode().replace("</head>", REDOC_HEAD + "</head>"))
+
+
 router = APIRouter()
 
 route_viewset(router, base_path="/music", pk_field_name="id")(MusicTrackViewSet)
@@ -105,6 +112,7 @@ async def muxws_endpoint(websocket: WebSocket) -> None:
 
 def main():
     import uvicorn
+
     print("Starting demo application at http://127.0.0.1:8000")
     print("Documentation is available at http://127.0.0.1:8000/docs")
     print(f"muxws endpoint at ws://127.0.0.1:8000/ws (Celery {'on' if USE_CELERY else 'off'})")

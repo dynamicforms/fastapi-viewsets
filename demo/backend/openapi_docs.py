@@ -73,7 +73,7 @@ def add_try_links(schema: dict[str, Any]) -> dict[str, Any]:
                 continue
             href = _anchor(tags[0], operation_id)
             operation["description"] = (
-                f'{operation.get("description") or ""}\n\n'
+                f"{operation.get('description') or ''}\n\n"
                 f'<div class="{TRY_BUTTON_CLASS}">'
                 f'<a href="{href}" target="_blank" rel="noopener">Try it in Swagger UI ↗</a></div>'
             ).strip()

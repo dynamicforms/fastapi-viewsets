@@ -105,6 +105,7 @@ def _make_middleware_depends(cls: type, action_name: str):
     registration time; actual @action_configuration resolution stays fully dynamic; settings can
     still change at runtime between requests.
     """
+
     async def _run(request: Request) -> None:
         action_configuration = resolve_action_configuration(cls, action_name)
         effective_middlewares = settings.viewsets_command_middleware + extra_middlewares_for(
@@ -119,22 +120,25 @@ def _make_middleware_depends(cls: type, action_name: str):
 
     scheme = settings.viewsets_security_scheme
     if scheme is None:
+
         async def middleware_depends(request: Request) -> None:
             await _run(request)
+
         return middleware_depends
 
     async def middleware_depends(request: Request, _credential=Depends(scheme)) -> None:  # noqa: B008
         await _run(request)
+
     return middleware_depends
 
 
 def route_viewset(
-        router: APIRouter,
-        base_path: str,
-        lifecycle: LifecycleType = "singleton",
-        pk_field_name: str = None,
-        register_muxws: bool = None,
-        register_rest: bool = None,
+    router: APIRouter,
+    base_path: str,
+    lifecycle: LifecycleType = "singleton",
+    pk_field_name: str = None,
+    register_muxws: bool = None,
+    register_rest: bool = None,
 ):
     """
     `register_rest` and `register_muxws` decide which transports this viewset is published on.
@@ -146,6 +150,7 @@ def route_viewset(
     replacement is a single mapping - `transports={"rest": False}`, absent key meaning defer -
     rather than a third `register_*`; see GAPS.md for why a set of flags is the worse shape.
     """
+
     def decorator(cls: type[T]):
         instance = cls() if lifecycle == "singleton" else None
 
@@ -154,7 +159,7 @@ def route_viewset(
         # Derive tag from class name: strip "ViewSet" suffix if present
         cls_name = cls.__name__
         if cls_name.endswith("ViewSet"):
-            cls_name = cls_name[:-len("ViewSet")]
+            cls_name = cls_name[: -len("ViewSet")]
         default_tags = [cls_name] if cls_name else None
         # The viewset's own docstring becomes the description of the group its endpoints appear
         # under - the section intro that was otherwise blank however well each endpoint was
@@ -164,9 +169,8 @@ def route_viewset(
 
         def _is_filter_param(annotation) -> bool:
             """Return True when annotation is Annotated[T, FilterParam()]."""
-            return (
-                hasattr(annotation, "__metadata__")
-                and any(isinstance(m, FilterParam) for m in annotation.__metadata__)
+            return hasattr(annotation, "__metadata__") and any(
+                isinstance(m, FilterParam) for m in annotation.__metadata__
             )
 
         def _is_model_query_param(annotation) -> bool:
@@ -208,13 +212,15 @@ def route_viewset(
                 if uses.get(name) is False:
                     continue
                 if name == "x_list_shape":
-                    parameter = parameter.replace(annotation=Annotated[
-                        Literal[(*allowed, None)],
-                        Header(
-                            alias=SHAPE_HEADER,
-                            description=f"Response shape. Omit for this endpoint's default ({default}).",
-                        ),
-                    ])
+                    parameter = parameter.replace(
+                        annotation=Annotated[
+                            Literal[(*allowed, None)],
+                            Header(
+                                alias=SHAPE_HEADER,
+                                description=f"Response shape. Omit for this endpoint's default ({default}).",
+                            ),
+                        ]
+                    )
                 params.append(parameter)
 
             item_type = type_map.get(ItemVar, ItemVar)
@@ -267,10 +273,7 @@ def route_viewset(
                     continue
 
                 # If we have a PK field and this parameter is a model from which we want to exclude PK
-                if (pk_field_name and
-                    inspect.isclass(annotation) and
-                    issubclass(annotation, BaseModel)
-                ):
+                if pk_field_name and inspect.isclass(annotation) and issubclass(annotation, BaseModel):
                     # Check if {pk} is in the path and if the method is one that normally accepts a model in the body
                     # (POST without {pk} or PUT/PATCH with {pk})
                     is_create = "POST" in route_methods and "{pk}" not in route_path
@@ -286,18 +289,14 @@ def route_viewset(
             # (never forwarded to the underlying method itself, see wrapper below). Keyword-only
             # so it can be appended regardless of what defaults precede it. Used by lifecycle_runner
             # to run the command middleware chain and apply headers/cookies onto the real response.
-            new_params.append(
-                inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response)
-            )
+            new_params.append(inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response))
 
             if needs_context:
                 # Reserved param name, only added for endpoints that declare a `context` param.
                 # FastAPI injects the REAL Request here; lifecycle_runner uses it to build the
                 # context (see fastapi_viewsets/context.py) and injects the result as `context`
                 # right before the endpoint runs - never forwarded to the endpoint itself.
-                new_params.append(
-                    inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request)
-                )
+                new_params.append(inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
 
             new_return_annotation = resolve_typevars(type_map, sig.return_annotation)
             new_sig = sig.replace(parameters=new_params, return_annotation=new_return_annotation)
@@ -325,8 +324,15 @@ def route_viewset(
                         new_kwargs[param_name] = value
 
                 return await lifecycle_runner(
-                    original_endpoint, instance, cls, lifecycle, *args, response=response_obj,
-                    needs_context=needs_context, request=request_obj, **new_kwargs
+                    original_endpoint,
+                    instance,
+                    cls,
+                    lifecycle,
+                    *args,
+                    response=response_obj,
+                    needs_context=needs_context,
+                    request=request_obj,
+                    **new_kwargs,
                 )
 
             wrapper.__signature__ = new_sig
@@ -339,7 +345,10 @@ def route_viewset(
         # ViewSetResult - if any is configured, the endpoint's declared return type can no longer
         # be trusted as the actual response_model, same reasoning as the old finalize_response hook.
         build_schema(
-            cls, base_path, default_tags, get_wrapper,
+            cls,
+            base_path,
+            default_tags,
+            get_wrapper,
             disable_response_model=bool(settings.viewsets_command_middleware),
         )
 
@@ -348,9 +357,7 @@ def route_viewset(
         for route in cls.__router.routes:
             action_name = route.endpoint.__name__  # survives @wraps(original_endpoint) in get_wrapper
             documented.add(action_name)
-            dependencies = list(route.dependencies or []) + [
-                Depends(_make_middleware_depends(cls, action_name))
-            ]
+            dependencies = list(route.dependencies or []) + [Depends(_make_middleware_depends(cls, action_name))]
             route_kwargs = route_to_add_api_route_kwargs(route, dependencies=dependencies)
             # Per-viewset wording for an endpoint the mixin provided - the mixin's own docstring is
             # the same sentence on every viewset in the application. See endpoint_docs.py.
@@ -379,11 +386,7 @@ def route_viewset(
         if muxws_routes:
             register_viewset(cls, base_path, muxws_routes, default_tags)
 
-        cls.__viewset_metadata__ = {
-            "base_path": base_path,
-            "lifecycle": lifecycle,
-            "router": router
-        }
+        cls.__viewset_metadata__ = {"base_path": base_path, "lifecycle": lifecycle, "router": router}
 
         return cls
 
