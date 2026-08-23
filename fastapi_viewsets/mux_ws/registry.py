@@ -155,6 +155,7 @@ def _add_schema_route(app: FastAPI, registration: _Registration) -> None:
     built here rather than copied from there, because the REST one closes over the REST app and
     would report the wrong transport's endpoint set.
     """
+
     def schema() -> dict[str, Any]:
         return registration.schema()
 

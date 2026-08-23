@@ -106,6 +106,7 @@ def test_resolve_perform_method_wins_over_action_method_if_both_decorated():
 # ByAction integration with resolve_action_configuration (resolution stays deferred)
 # ---------------------------------------------------------------------------
 
+
 def test_resolved_dict_keeps_byaction_values_unresolved():
     """resolve_action_configuration returns the raw dict - ByAction resolution happens later, at
     read-time (Context.configuration_for), not here - see the staleness bug this avoids."""
@@ -121,6 +122,7 @@ def test_resolved_dict_keeps_byaction_values_unresolved():
 # ---------------------------------------------------------------------------
 # extra_middlewares_for
 # ---------------------------------------------------------------------------
+
 
 class _DummyMiddleware(Middleware):
     async def __call__(self, _request, _viewset, _context, call_next):
@@ -174,6 +176,7 @@ def test_non_middleware_identifiers_are_ignored():
 # context processor, and an ad-hoc injected middleware - all at once.
 # ---------------------------------------------------------------------------
 
+
 class Item(BaseModel):
     id: int
     name: str
@@ -199,9 +202,12 @@ def test_full_pipeline_merges_class_and_method_config_and_injects_extra_middlewa
     router = APIRouter()
 
     @route_viewset(router, base_path="/items")
-    @action_configuration({
-        authz_context_processor: ByAction(list_items="read", update="write"), tracking: None,
-    })
+    @action_configuration(
+        {
+            authz_context_processor: ByAction(list_items="read", update="write"),
+            tracking: None,
+        }
+    )
     class ItemViewSet(ListMixin[Item]):
         async def perform_list(self, context: Context) -> list[Item]:
             return [Item(id=1, name=await context.authz)]

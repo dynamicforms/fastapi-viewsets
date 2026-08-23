@@ -34,6 +34,7 @@ def set_celery_dispatch_hook(hook: Callable[[], Awaitable[dict]] | None) -> None
     global _celery_dispatch_hook
     _celery_dispatch_hook = hook
 
+
 # queue_keys registered by celery_viewset_client so far - populated at decoration (import) time,
 # used by check_result_readers() to spot a queue_key with no running result reader.
 _registered_queue_keys: set[str] = set()
@@ -113,14 +114,14 @@ def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, queu
             logger.info("Celery task scheduling: %s (correlation_id=%s)", task_name, correlation_id)
             extra_kwargs = await _celery_dispatch_hook() if _celery_dispatch_hook is not None else {}
             celery_app.send_task(
-                    task_name,
-                    args=serializable_args,
-                    kwargs={
-                        **serializable_kwargs,
-                        "_correlation_id": correlation_id,
-                        "_result_queue_key": queue_key,
-                        **extra_kwargs,
-                    },
+                task_name,
+                args=serializable_args,
+                kwargs={
+                    **serializable_kwargs,
+                    "_correlation_id": correlation_id,
+                    "_result_queue_key": queue_key,
+                    **extra_kwargs,
+                },
             )
             return await future
         except Exception:

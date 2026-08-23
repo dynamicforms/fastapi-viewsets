@@ -16,8 +16,8 @@ class SerializeState(ABC):
     async def deserialize_state(self, state: str):
         pass
 
-class SerializeStateSlots(SerializeState):
 
+class SerializeStateSlots(SerializeState):
     async def serialize_state(self) -> str:  # noqa: B027
         return json.dumps(
             {slot: getattr(self, slot) for slot in self.__slots__},

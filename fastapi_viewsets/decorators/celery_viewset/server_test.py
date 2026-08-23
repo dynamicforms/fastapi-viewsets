@@ -26,6 +26,7 @@ class ItemWithDate(BaseModel):
 # celery_viewset_server tests
 # ---------------------------------------------------------------------------
 
+
 def test_celery_viewset_server_decorator_registration():
     celery_app = MagicMock()
     task_decorator = MagicMock()
@@ -54,6 +55,7 @@ def test_celery_viewset_server_execution():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
@@ -77,6 +79,7 @@ def test_celery_viewset_server_lifecycle_per_request():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
@@ -111,6 +114,7 @@ def test_celery_viewset_server_pushes_result_to_redis():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
@@ -144,6 +148,7 @@ def test_celery_viewset_server_pushes_result_with_date_field_to_redis():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
@@ -173,6 +178,7 @@ def test_celery_viewset_server_pushes_error_to_redis_on_exception():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
@@ -208,6 +214,7 @@ def test_celery_viewset_server_pushes_http_exception_to_redis():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
@@ -238,6 +245,7 @@ def test_celery_viewset_server_no_redis_no_push():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
@@ -269,6 +277,7 @@ def test_celery_viewset_server_metadata():
 # ---------------------------------------------------------------------------
 # server _to_jsonable tests
 # ---------------------------------------------------------------------------
+
 
 def test_to_jsonable_with_pydantic_model():
     """_to_jsonable converts Pydantic model to dict."""
@@ -316,6 +325,7 @@ def test_to_jsonable_with_plain_value():
 # FastAPI integration - server
 # ---------------------------------------------------------------------------
 
+
 def test_fastapi_server_endpoint_executes_directly():
     """FastAPI app with celery_viewset_server can still be called directly (sync task)."""
     celery_app = MagicMock()
@@ -325,6 +335,7 @@ def test_fastapi_server_endpoint_executes_directly():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
@@ -342,6 +353,7 @@ def test_fastapi_server_endpoint_executes_directly():
 # ---------------------------------------------------------------------------
 # _reconstruct_kwargs tests
 # ---------------------------------------------------------------------------
+
 
 def test_reconstruct_kwargs_with_missing_required_field():
     """_reconstruct_kwargs should use model_construct fallback when required field (e.g. id) is missing."""
@@ -396,6 +408,7 @@ def test_reconstruct_kwargs_with_typevar_missing_field():
 # celery kwargs hook
 # ---------------------------------------------------------------------------
 
+
 def test_celery_kwargs_hook_none_preserves_existing_behavior():
     """With no hook registered, the sync wrapper behaves exactly as before."""
     from fastapi_viewsets.decorators.celery_viewset import server
@@ -407,6 +420,7 @@ def test_celery_kwargs_hook_none_preserves_existing_behavior():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
@@ -435,6 +449,7 @@ def test_celery_kwargs_hook_called_before_reconstruct_kwargs():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
@@ -447,6 +462,7 @@ def test_celery_kwargs_hook_called_before_reconstruct_kwargs():
 
     set_celery_kwargs_hook(hook)
     try:
+
         @celery_viewset_server(celery_app=celery_app, task_prefix="items")
         class ItemViewSet(CreateMixin[int, Item]):
             async def perform_create(self, _context, data: Item) -> Item:
@@ -473,6 +489,7 @@ def test_celery_kwargs_hook_can_replace_runner_and_consume_kwargs():
         def deck(func):
             registered_tasks[name] = func
             return func
+
         return deck
 
     celery_app.task.side_effect = mock_task
@@ -491,6 +508,7 @@ def test_celery_kwargs_hook_can_replace_runner_and_consume_kwargs():
 
     set_celery_kwargs_hook(hook)
     try:
+
         @celery_viewset_server(celery_app=celery_app, task_prefix="items")
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self, _context) -> list[Item]:
@@ -510,6 +528,26 @@ def test_reconstruct_kwargs_with_full_model():
     from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
 
     async def endpoint(data: Item) -> Item:
+        return data
+
+    kwargs = {"data": {"id": 5, "name": "full item"}}
+    result = _reconstruct_kwargs(endpoint, kwargs)
+
+    assert isinstance(result["data"], Item)
+    assert result["data"].id == 5
+    assert result["data"].name == "full item"
+
+
+def test_reconstruct_kwargs_with_none_defaulted_optional_model():
+    """A None-defaulted parameter reconstructs from a dict just like a required one.
+
+    Before Python 3.11, `get_type_hints()` implicitly wraps a None-defaulted parameter's annotation
+    in `Optional[...]`, so `data: Item = None` arrives here as `Union[Item, None]` rather than
+    `Item` - which must still be recognised as a BaseModel hint.
+    """
+    from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
+
+    async def endpoint(data: Item = None) -> Item:
         return data
 
     kwargs = {"data": {"id": 5, "name": "full item"}}

@@ -42,18 +42,21 @@ class MusicTrack(BaseModel):
     language: str
 
 
-MusicTrackFilter = make_filter_model(MusicTrack, {
-    "id": ["exact"],
-    "title": ["icontains"],
-    "artist": ["icontains", "exact"],
-    "year": ["exact", "gte", "lte", "in"],
-    "rating": ["exact", "gte"],
-    "favorite": ["exact"],
-    "play_count": ["exact", "gte", "lte"],
-    "language": ["iexact"],
-    "genres": ["overlaps"],
-    "moods": ["overlaps"],
-})
+MusicTrackFilter = make_filter_model(
+    MusicTrack,
+    {
+        "id": ["exact"],
+        "title": ["icontains"],
+        "artist": ["icontains", "exact"],
+        "year": ["exact", "gte", "lte", "in"],
+        "rating": ["exact", "gte"],
+        "favorite": ["exact"],
+        "play_count": ["exact", "gte", "lte"],
+        "language": ["iexact"],
+        "genres": ["overlaps"],
+        "moods": ["overlaps"],
+    },
+)
 """
 Declared rather than hand-written: this replaces the boolean expression that used to live in
 `filter_list` below, and the SQLite viewset gets the same filters translated into SQL for free.
@@ -72,21 +75,23 @@ refuses a synchronous query outright. It is seeded from the lifespan instead, in
 """
 
 
-@endpoint_docs({
-    "list_items": {
-        "summary": "Browse the library",
-        "description": (
-            "Cursor-paged by default - follow `next` to walk forward. Send `X-List-Shape: plain` "
-            "for a bare array or `paginated` for offset paging; the response examples below are "
-            "named after the value that produces them."
-        ),
-    },
-    "retrieve": {"summary": "One track by id"},
-    "create": {"summary": "Add a track"},
-    "bulk_create": {"summary": "Add several tracks at once"},
-    "lookup": {"summary": "Titles and ids, for a select box"},
-    "count": {"summary": "How many tracks there are"},
-})
+@endpoint_docs(
+    {
+        "list_items": {
+            "summary": "Browse the library",
+            "description": (
+                "Cursor-paged by default - follow `next` to walk forward. Send `X-List-Shape: plain` "
+                "for a bare array or `paginated` for offset paging; the response examples below are "
+                "named after the value that produces them."
+            ),
+        },
+        "retrieve": {"summary": "One track by id"},
+        "create": {"summary": "Add a track"},
+        "bulk_create": {"summary": "Add several tracks at once"},
+        "lookup": {"summary": "Titles and ids, for a select box"},
+        "count": {"summary": "How many tracks there are"},
+    }
+)
 class MusicTrackViewSet(
     CollectionViewSet[int, MusicTrack],
     BulkViewSetMixin[int, MusicTrack, MusicTrackFilter],

@@ -16,6 +16,7 @@ from fastapi_viewsets.mixins import BulkViewSetMixin, LookupItem, LookupMixin
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
+
 class Item(BaseModel):
     id: int = Field(default=0, json_schema_extra={"autoinc_int": True})
     name: str
@@ -38,6 +39,7 @@ def make_database() -> dict[int, Item]:
 # 1. Custom GET endpoint (search)
 # ---------------------------------------------------------------------------
 
+
 def make_search_app():
     database = make_database()
     app = FastAPI()
@@ -51,8 +53,10 @@ def make_search_app():
             super().__init__(container=database, pk_field="id")
 
         async def perform_lookup(self, context: Context) -> list[LookupItem]:
-            return [LookupItem(group=None, pk=item.id, title=item.name, icon=None)
-                    for item in await self.perform_list(context)]
+            return [
+                LookupItem(group=None, pk=item.id, title=item.name, icon=None)
+                for item in await self.perform_list(context)
+            ]
 
         @__router.get("search")
         async def search(self, context: Context, q: str) -> list[Item]:
@@ -110,6 +114,7 @@ def test_standard_routes_still_present_with_custom_router():
 # 2. Custom POST endpoint with request body (clone)
 # ---------------------------------------------------------------------------
 
+
 def make_clone_app():
     database = make_database()
     app = FastAPI()
@@ -125,9 +130,7 @@ def make_clone_app():
         @__router.post("clone")
         async def clone(self, context: Context, body: CloneRequest) -> Item:
             source = await self.perform_retrieve(context, body.source_id)
-            return await self.perform_create(
-                context, Item(id=0, name=body.new_name, description=source.description)
-            )
+            return await self.perform_create(context, Item(id=0, name=body.new_name, description=source.description))
 
     app.include_router(router)
     return app
@@ -162,6 +165,7 @@ def test_custom_clone_endpoint_404_for_missing_source():
 # 3. Both custom endpoints on the same ViewSet
 # ---------------------------------------------------------------------------
 
+
 def make_combined_app():
     database = make_database()
     app = FastAPI()
@@ -182,9 +186,7 @@ def make_combined_app():
         @__router.post("clone")
         async def clone(self, context: Context, body: CloneRequest) -> Item:
             source = await self.perform_retrieve(context, body.source_id)
-            return await self.perform_create(
-                context, Item(id=0, name=body.new_name, description=source.description)
-            )
+            return await self.perform_create(context, Item(id=0, name=body.new_name, description=source.description))
 
     app.include_router(router)
     return app

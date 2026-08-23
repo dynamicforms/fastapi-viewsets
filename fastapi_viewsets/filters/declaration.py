@@ -91,11 +91,7 @@ def make_filter_model(model: type[BaseModel], declaration: FilterDeclaration) ->
                 )
             parameter = field_name if lookup == "exact" else f"{field_name}__{lookup}"
             annotation = _parameter_annotation(field_annotation, lookup)
-            default = (
-                Field(None, description="Comma-separated list of values")
-                if lookup in _LIST_LOOKUPS
-                else None
-            )
+            default = Field(None, description="Comma-separated list of values") if lookup in _LIST_LOOKUPS else None
             fields[parameter] = (annotation, default)
             spec[parameter] = (field_name, lookup, _item_annotation(field_annotation, lookup))
 

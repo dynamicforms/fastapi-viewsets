@@ -7,7 +7,9 @@ from pydantic import BaseModel
 class NotFoundResponse(BaseModel):
     detail: str = "Item with pk {pk} not found"
 
-NOT_FOUND_RESPONSE= { "404": { "model": NotFoundResponse, "message": NotFoundResponse().detail } }
+
+NOT_FOUND_RESPONSE = {"404": {"model": NotFoundResponse, "message": NotFoundResponse().detail}}
+
 
 class NotFoundError(HTTPException):
     def __init__(self, pk: Any):

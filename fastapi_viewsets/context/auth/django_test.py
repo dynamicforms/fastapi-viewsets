@@ -5,6 +5,7 @@ invalidation-on-password-change behaviour (a real Django security feature) is ge
 
 Requires the `django` extra (`pip install "dynamicforms-fastapi-viewsets[django]"`).
 """
+
 import os
 import tempfile
 
@@ -57,17 +58,25 @@ _configure_django()
 
 
 def _make_request(session_key: str) -> Request:
-    return Request({
-        "type": "http", "method": "GET", "path": "/",
-        "headers": [(b"x-session-token", session_key.encode())],
-    })
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [(b"x-session-token", session_key.encode())],
+        }
+    )
 
 
 def _make_cookie_request(session_key: str, cookie_name: str = "sessionid") -> Request:
-    return Request({
-        "type": "http", "method": "GET", "path": "/",
-        "headers": [(b"cookie", f"{cookie_name}={session_key}".encode())] if session_key else [],
-    })
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [(b"cookie", f"{cookie_name}={session_key}".encode())] if session_key else [],
+        }
+    )
 
 
 @pytest.fixture
@@ -162,10 +171,14 @@ async def test_serialize_ships_only_the_recipe_never_the_live_user(session_key):
 
 def test_custom_header_name():
     backend = DjangoSessionAuthBackend(header_name="x-auth-token")
-    request = Request({
-        "type": "http", "method": "GET", "path": "/",
-        "headers": [(b"x-auth-token", b"some-key")],
-    })
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [(b"x-auth-token", b"some-key")],
+        }
+    )
     assert isinstance(backend.try_handle(request), _DjangoSessionUserLazy)
     assert backend.try_handle(_make_request("some-key")) is None
 
@@ -173,6 +186,7 @@ def test_custom_header_name():
 # ---------------------------------------------------------------------------
 # DjangoSessionCookieAuthBackend
 # ---------------------------------------------------------------------------
+
 
 def test_cookie_backend_returns_none_when_cookie_missing():
     backend = DjangoSessionCookieAuthBackend()

@@ -27,7 +27,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "fastapi>=0.100",
+    # <0.137: 0.137.0 replaced FastAPI's flattened route list with a lazy `_IncludedRouter` view,
+    # which route_viewset/build_schema/celery_viewset do not yet target. See GAPS.md.
+    "fastapi>=0.100,<0.137",
     "pydantic>=2.1",
     "typing_extensions>=4.10",
 ]

@@ -23,7 +23,7 @@ async def lifecycle_runner(
     response: Any = None,
     needs_context: bool = False,
     request: "Request | None" = None,
-    **kwargs
+    **kwargs,
 ):
     """
     `response` is reserved for the command middleware chain (see below) - callers that have no

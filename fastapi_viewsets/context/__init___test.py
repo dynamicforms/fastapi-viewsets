@@ -46,6 +46,7 @@ def reset_settings():
 # "<locals>") would not be importable this way.
 # ---------------------------------------------------------------------------
 
+
 class _Tagged(SerializableObject):
     """Trivial concrete SerializableObject: __serialize__/__deserialize__ round-trip `value` as-is."""
 
@@ -108,6 +109,7 @@ class _SyncCounter(LazyObject):
 # SerializableObject
 # ---------------------------------------------------------------------------
 
+
 def test_serializable_object_is_abstract():
     with pytest.raises(TypeError):
         SerializableObject(value=1)
@@ -129,6 +131,7 @@ async def test_serializable_object_is_awaitable_even_though_eager():
 # ---------------------------------------------------------------------------
 # LazyObject
 # ---------------------------------------------------------------------------
+
 
 def test_lazy_object_is_abstract():
     with pytest.raises(TypeError):
@@ -221,6 +224,7 @@ async def test_lazy_object_unresolved_value_never_computed_if_unused():
 # serialize_context / deserialize_context
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_serialize_context_passes_plain_values_through():
     ctx = {"a": 1, "b": "text", "c": None}
@@ -231,6 +235,7 @@ async def test_serialize_context_passes_plain_values_through():
 async def test_serialize_context_awaits_bare_awaitables_not_wrapped_in_serializableobject():
     """A processor that puts a raw coroutine/Future directly into context (not wrapped in
     SerializableObject) still gets a plain, JSON-safe value out of serialize_context."""
+
     async def _compute():
         return 99
 
@@ -297,8 +302,12 @@ def test_deserialize_context_unknown_type_tag_raises():
 def test_deserialize_context_is_loop_independent():
     """Reconstruction must never require a running event loop - it happens synchronously in
     celery_viewset_server's _reconstruct_kwargs, before the worker's event loop starts."""
-    data = {"user": {"__fpv_type__": f"{_SessionUser.__module__}.{_SessionUser.__qualname__}",
-                     "__fpv_value__": {"recipe": {"session_id": "sess-1"}}}}
+    data = {
+        "user": {
+            "__fpv_type__": f"{_SessionUser.__module__}.{_SessionUser.__qualname__}",
+            "__fpv_value__": {"recipe": {"session_id": "sess-1"}},
+        }
+    }
     restored = deserialize_context(data)  # no asyncio.run() anywhere around this call
     assert isinstance(restored["user"], _SessionUser)
     assert restored["user"].is_resolved is False
@@ -341,6 +350,7 @@ async def test_serialize_context_uses_custom_json_encoder_for_plain_values():
 # Context controller
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_context_uniform_await_attribute_and_item_access():
     ctx = Context({"tz": "UTC", "user": _SessionUser("sess-1")})
@@ -375,6 +385,7 @@ async def test_context_clone_for_command_is_isolated_and_keeps_resolved_shortcut
 # ---------------------------------------------------------------------------
 # ByAction / Context.configuration_for
 # ---------------------------------------------------------------------------
+
 
 def test_by_action_resolves_per_action_with_default_fallback():
     value = ByAction(list_items="read", update="write", default="none")
@@ -425,6 +436,7 @@ async def test_clone_for_command_defaults_to_the_same_action_name():
 # ---------------------------------------------------------------------------
 # build_context
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_build_context_merges_multiple_processors():
@@ -516,6 +528,7 @@ async def test_build_context_config_defaults_to_none_when_not_configured():
 # route_viewset integration - context reaches perform_* via a live Request
 # ---------------------------------------------------------------------------
 
+
 class Item(BaseModel):
     id: int
     name: str
@@ -547,6 +560,7 @@ def test_route_viewset_builds_context_from_auth_header():
 
 def test_route_viewset_resolves_lazy_object_from_context():
     """A LazyObject placed in context by a processor is only resolved when perform_* awaits it."""
+
     async def session_processor(request: Request, _viewset) -> dict:
         return {"user": _SessionUser(request.headers.get("x-session", ""))}
 
@@ -587,6 +601,7 @@ def test_custom_endpoint_without_context_param_is_unaffected():
 
     ping_route = next(r for r in router.routes if r.path == "/items/ping" and "GET" in r.methods)
     import inspect
+
     sig_params = inspect.signature(ping_route.endpoint).parameters
     assert "context" not in sig_params
     assert "request" not in sig_params  # ...no Request is injected for this route
@@ -595,6 +610,7 @@ def test_custom_endpoint_without_context_param_is_unaffected():
 # ---------------------------------------------------------------------------
 # celery client/server - context (incl. a LazyObject value) survives the boundary
 # ---------------------------------------------------------------------------
+
 
 def test_celery_context_round_trip_with_lazy_object():
     """Context built with a live Request (client side, via settings.viewsets_context_processors)

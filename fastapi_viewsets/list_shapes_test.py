@@ -36,11 +36,16 @@ def client_for(base=ListMixin, **attributes) -> TestClient:
         namespace.update(attributes)
         namespace["schema"] = Track
         namespace["__init__"] = lambda self: CollectionViewSet.__init__(
-            self, container=DATABASE, pk_field="id",
+            self,
+            container=DATABASE,
+            pk_field="id",
         )
 
     viewset = types.new_class(
-        "V", (CollectionViewSet[int, Track], base[Track, None]), {}, body,
+        "V",
+        (CollectionViewSet[int, Track], base[Track, None]),
+        {},
+        body,
     )
     route_viewset(router, base_path="/t", pk_field_name="id")(viewset)
     app.include_router(router)
@@ -62,6 +67,7 @@ def response_schema(client: TestClient) -> dict:
 # ---------------------------------------------------------------------------
 # resolve_shapes
 # ---------------------------------------------------------------------------
+
 
 def test_no_declaration_falls_through_to_the_setting():
     assert resolve_shapes(None, None, "cursor") == ("cursor", ("cursor",))
@@ -89,6 +95,7 @@ def test_an_unknown_shape_is_refused_at_import_time():
 # ---------------------------------------------------------------------------
 # What reaches the schema
 # ---------------------------------------------------------------------------
+
 
 def test_a_plain_viewset_advertises_no_paging_parameters():
     client = client_for()
@@ -140,9 +147,9 @@ def test_the_header_names_the_default_in_its_description():
 # What a request gets
 # ---------------------------------------------------------------------------
 
+
 def test_the_default_shape_is_what_arrives_without_a_header():
-    assert isinstance(client_for(list_shape="cursor", list_shapes=("cursor", "plain"))
-                      .get("/t").json(), dict)
+    assert isinstance(client_for(list_shape="cursor", list_shapes=("cursor", "plain")).get("/t").json(), dict)
 
 
 def test_the_header_switches_the_envelope():
@@ -168,6 +175,7 @@ def test_the_global_setting_decides_when_a_viewset_does_not():
 # ---------------------------------------------------------------------------
 # The shorthand mixins
 # ---------------------------------------------------------------------------
+
 
 def test_the_named_mixins_are_shorthand_for_a_shape():
     assert PaginatedListMixin.list_shape == "paginated"

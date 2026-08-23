@@ -32,6 +32,7 @@ LIBRARY = [
 # Operators
 # ---------------------------------------------------------------------------
 
+
 def test_exact_and_icontains():
     assert Exact("year", 1959).matches(LIBRARY[0])
     assert not Exact("year", 1960).matches(LIBRARY[0])
@@ -65,6 +66,7 @@ def test_filters_read_from_mappings_as_well_as_objects():
 # FilterSet
 # ---------------------------------------------------------------------------
 
+
 def test_a_filter_set_requires_every_filter_to_match():
     matching = FilterSet([IContains("title", "blue"), Exact("year", 1957)])
     assert matching.apply(LIBRARY) == [LIBRARY[1]]
@@ -78,6 +80,7 @@ def test_an_empty_filter_set_is_falsy():
 # ---------------------------------------------------------------------------
 # Declaration
 # ---------------------------------------------------------------------------
+
 
 def test_the_declaration_decides_the_query_parameters():
     model = make_filter_model(Track, {"year": ["exact", "gte"], "title": ["icontains"]})
@@ -147,6 +150,7 @@ def test_filters_from_builds_only_the_parameters_that_were_sent():
 
 def test_filters_from_returns_none_for_a_hand_made_model():
     """That is what keeps the older filter_list path working untouched."""
+
     class HandMade(BaseModel):
         year: int | None = None
 
@@ -163,6 +167,7 @@ def test_operator_lookup_reports_what_it_knows():
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
+
 
 class FakeBackend:
     pass
@@ -198,6 +203,7 @@ def test_compile_all_threads_the_query_through_every_filter():
 # ---------------------------------------------------------------------------
 # End to end through the pipeline
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_a_declared_filter_needs_no_filter_list_at_all():

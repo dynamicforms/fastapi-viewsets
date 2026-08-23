@@ -29,6 +29,7 @@ class ItemWithDate(BaseModel):
 # celery_viewset_client tests
 # ---------------------------------------------------------------------------
 
+
 def test_celery_viewset_client_patches_methods():
     """Client decorator replaces viewset methods with async wrappers."""
     celery_app = MagicMock()
@@ -58,6 +59,7 @@ def test_celery_viewset_client_sends_task():
 
     result_reader.register_future = mock_register
     try:
+
         @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self) -> list[Item]:
@@ -65,7 +67,7 @@ def test_celery_viewset_client_sends_task():
 
         instance = ItemViewSet()
         # Client patches the mixin endpoint method name ("list"), not "perform_list"
-        result = asyncio.get_event_loop().run_until_complete(instance.list_items())
+        result = asyncio.run(instance.list_items())
         assert result == ["mocked"]
         celery_app.send_task.assert_called_once()
         call_kwargs = celery_app.send_task.call_args
@@ -91,6 +93,7 @@ def test_celery_viewset_client_sends_date_fields_as_json_safe_strings():
 
     result_reader.register_future = mock_register
     try:
+
         @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
         class ItemViewSet(CreateMixin[int, ItemWithDate]):
             async def perform_create(self, data: ItemWithDate) -> ItemWithDate:
@@ -98,7 +101,7 @@ def test_celery_viewset_client_sends_date_fields_as_json_safe_strings():
 
         instance = ItemViewSet()
         payload = ItemWithDate(id=1, created=date(2026, 8, 1), updated=datetime(2026, 8, 1, 12, 30))
-        asyncio.get_event_loop().run_until_complete(instance.create(data=payload))
+        asyncio.run(instance.create(data=payload))
 
         sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
         assert sent_kwargs["data"] == {"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}
@@ -125,6 +128,7 @@ def test_celery_viewset_client_serializes_positional_basemodel_args():
 
     result_reader.register_future = mock_register
     try:
+
         @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
         class ItemViewSet(CreateMixin[int, ItemWithDate]):
             async def perform_create(self, data: ItemWithDate) -> ItemWithDate:
@@ -133,7 +137,7 @@ def test_celery_viewset_client_serializes_positional_basemodel_args():
         instance = ItemViewSet()
         payload = ItemWithDate(id=1, created=date(2026, 8, 1), updated=datetime(2026, 8, 1, 12, 30))
         # Call with a positional arg rather than a keyword arg.
-        asyncio.get_event_loop().run_until_complete(instance.create(payload))
+        asyncio.run(instance.create(payload))
 
         sent_args = celery_app.send_task.call_args.kwargs["args"]
         assert sent_args == [{"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}]
@@ -164,7 +168,7 @@ def test_celery_viewset_client_unregisters_future_on_send_task_error():
         # Future should be unregistered after error
         assert len(result_reader._pending_futures) == 0
 
-    asyncio.get_event_loop().run_until_complete(run())
+    asyncio.run(run())
 
 
 def test_celery_viewset_client_metadata():
@@ -188,6 +192,7 @@ def test_celery_viewset_client_metadata():
 # celery dispatch hook
 # ---------------------------------------------------------------------------
 
+
 def test_celery_dispatch_hook_none_preserves_existing_behavior():
     """With no hook registered, send_task kwargs are unchanged."""
     from fastapi_viewsets.decorators.celery_viewset import client, result_reader
@@ -204,13 +209,14 @@ def test_celery_dispatch_hook_none_preserves_existing_behavior():
 
     result_reader.register_future = mock_register
     try:
+
         @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self) -> list[Item]:
                 return [Item(id=1, name="test")]
 
         instance = ItemViewSet()
-        asyncio.get_event_loop().run_until_complete(instance.list_items())
+        asyncio.run(instance.list_items())
 
         sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
         assert set(sent_kwargs) == {"_correlation_id", "_result_queue_key"}
@@ -241,13 +247,14 @@ def test_celery_dispatch_hook_awaited_before_send_task():
     result_reader.register_future = mock_register
     set_celery_dispatch_hook(hook)
     try:
+
         @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self) -> list[Item]:
                 return []
 
         instance = ItemViewSet()
-        asyncio.get_event_loop().run_until_complete(instance.list_items())
+        asyncio.run(instance.list_items())
 
         assert call_order == ["hook", "send_task"]
         sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
@@ -276,13 +283,14 @@ def test_celery_dispatch_hook_empty_dict_adds_nothing():
     result_reader.register_future = mock_register
     set_celery_dispatch_hook(hook)
     try:
+
         @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self) -> list[Item]:
                 return []
 
         instance = ItemViewSet()
-        asyncio.get_event_loop().run_until_complete(instance.list_items())
+        asyncio.run(instance.list_items())
 
         sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
         assert set(sent_kwargs) == {"_correlation_id", "_result_queue_key"}
@@ -294,6 +302,7 @@ def test_celery_dispatch_hook_empty_dict_adds_nothing():
 # ---------------------------------------------------------------------------
 # FastAPI integration - client
 # ---------------------------------------------------------------------------
+
 
 def test_fastapi_client_endpoint_returns_200():
     """FastAPI app with celery_viewset_client: calling the patched 'list' method sends a Celery task."""
@@ -313,6 +322,7 @@ def test_fastapi_client_endpoint_returns_200():
 
     result_reader.register_future = mock_register
     try:
+
         @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self) -> list[Item]:

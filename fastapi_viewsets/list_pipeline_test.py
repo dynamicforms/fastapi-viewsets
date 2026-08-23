@@ -41,11 +41,13 @@ def client_for(viewset_cls, base_path: str = "/tracks") -> TestClient:
 # perform_list may now be lazy
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_perform_list_may_return_a_generator():
     """
     The point of the rework: a viewset that cannot cheaply materialise its rows no longer has to.
     """
+
     class GeneratorViewSet(ListMixin[Track, None]):
         async def perform_list(self, _context: Context):
             return (Track(id=n, title=f"Track {n}", year=2000) for n in range(5))
@@ -61,6 +63,7 @@ async def test_perform_list_may_return_an_async_generator():
             async def rows():
                 for n in range(3):
                     yield Track(id=n, title=f"Track {n}", year=2000)
+
             return rows()
 
     result = await AsyncViewSet().get_list(None, ListQuery())
@@ -78,6 +81,7 @@ async def test_a_generator_is_only_walked_as_far_as_the_page_needs():
                 for n in range(10_000):
                     consumed += 1
                     yield Track(id=n, title=f"Track {n}", year=2000)
+
             return rows()
 
     page = await LazyViewSet().get_list(None, ListQuery(offset=0, limit=10))
@@ -88,6 +92,7 @@ async def test_a_generator_is_only_walked_as_far_as_the_page_needs():
 # ---------------------------------------------------------------------------
 # apply_* stages and push-down
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_apply_sort_can_be_overridden_and_chained_with_super():
@@ -112,6 +117,7 @@ async def test_mark_applied_stops_the_default_stage_redoing_the_work():
     A backend that sorted in its own query says so, and the in-memory sort leaves the rows alone
     instead of re-sorting them.
     """
+
     class PushdownViewSet(ListMixin[Track, None]):
         async def perform_list(self, _context: Context):
             # Deliberately in an order the in-memory sort would change.
@@ -132,6 +138,7 @@ async def test_a_filter_type_with_no_filter_list_returns_records_not_none():
     filter_list has no default body, so it returns None. Passing that on answered the request with
     a null body - visible only to whoever sent a filter to a viewset that never implemented one.
     """
+
     class UnfilteredViewSet(ListMixin[Track, TrackFilter]):
         async def perform_list(self, _context: Context):
             return [Track(id=1, title="a", year=2000)]
@@ -144,6 +151,7 @@ async def test_a_filter_type_with_no_filter_list_returns_records_not_none():
 # ---------------------------------------------------------------------------
 # Over HTTP
 # ---------------------------------------------------------------------------
+
 
 def test_plain_list_mixin_is_unchanged_and_takes_no_paging_parameters():
     class PlainViewSet(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter]):
@@ -231,6 +239,7 @@ def test_the_paginated_response_model_resolves_the_item_type_in_the_schema():
     PaginatedList[T] is a pydantic generic, not a typing alias, so TypeVar resolution has to reach
     into it explicitly - otherwise the schema describes results as a list of anything.
     """
+
     class PagedViewSet(CollectionViewSet[int, Track], PaginatedListMixin[Track, TrackFilter]):
         def __init__(self):
             super().__init__(container=library(3), pk_field="id")

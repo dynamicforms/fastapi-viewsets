@@ -64,7 +64,7 @@ class JWTAuthBackend(AuthBackend):
         header = request.headers.get(self.header_name, "")
         if not header.lower().startswith("bearer "):
             return None  # not a bearer token - let the next backend try it
-        return _JWTUserLazy(header[len("bearer "):].strip(), self.secret, self.algorithm)
+        return _JWTUserLazy(header[len("bearer ") :].strip(), self.secret, self.algorithm)
 
 
 def encode_jwt(

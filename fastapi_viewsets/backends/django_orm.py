@@ -180,9 +180,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
             return await super().apply_filter(context, query, records)
 
         concrete = self._concrete_fields()
-        translatable = all(
-            all(name in concrete for name in fltr.fields()) for fltr in filter_set
-        )
+        translatable = all(all(name in concrete for name in fltr.fields()) for fltr in filter_set)
         if not translatable or not can_compile_all(type(self), filter_set):
             return await super().apply_filter(context, query, records)
 
@@ -372,6 +370,7 @@ for _filter_type in _LOOKUPS:
 # Cursor predicate
 # ---------------------------------------------------------------------------
 
+
 class RowValues(Func):
     """`(a, b, c)` - a SQL row constructor."""
 
@@ -414,14 +413,16 @@ def _cursor_condition(viewset: "DjangoORMViewSet", fltr: CursorPredicate) -> Q:
     directly as a condition.
     """
     keys = fltr.keys
-    nullable = {
-        field.name for field in viewset.model._meta.get_fields() if getattr(field, "null", False)
-    }
+    nullable = {field.name for field in viewset.model._meta.get_fields() if getattr(field, "null", False)}
     uniform = len({descending for _, descending in keys}) == 1
     if uniform and not fltr.inclusive and not any(name in nullable for name, _ in keys):
         return _row_value_condition(keys, fltr.position, fltr.backwards)
     return _segment_condition(
-        keys, fltr.position, fltr.backwards, fltr.inclusive, fltr.nulls_first,
+        keys,
+        fltr.position,
+        fltr.backwards,
+        fltr.inclusive,
+        fltr.nulls_first,
     )
 
 

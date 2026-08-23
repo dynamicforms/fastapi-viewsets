@@ -27,6 +27,7 @@ def test_session_is_a_middleware():
 @pytest.mark.asyncio
 async def test_call_is_a_trivial_passthrough():
     """All of Session's real logic lives in depends() now - __call__ just calls call_next()."""
+
     async def final_handler():
         return ViewSetResult(body="ok")
 
@@ -73,6 +74,7 @@ async def test_default_is_required_when_not_configured():
 # ---------------------------------------------------------------------------
 # End-to-end: auth_context_processor + Session middleware wired into a real route
 # ---------------------------------------------------------------------------
+
 
 class Item(BaseModel):
     id: int

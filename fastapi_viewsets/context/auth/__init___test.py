@@ -70,9 +70,13 @@ async def test_static_backend_wired_in_via_auth_context_processor():
     backend = StaticUserAuthBackend({"tok-jure": {"id": 1, "username": "jure"}})
     settings.viewsets_auth_processors = [backend]
 
-    request = Request({
-        "type": "http", "method": "GET", "path": "/",
-        "headers": [(b"x-session-token", b"tok-jure")],
-    })
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [(b"x-session-token", b"tok-jure")],
+        }
+    )
     result = await auth_context_processor(request, None)
     assert await result["user"] == {"id": 1, "username": "jure"}

@@ -6,6 +6,7 @@ from .serialize_state import SerializeState
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
+
 class SaveState(SerializeState, ABC):
     def __init__(self, instance_id: str):
         super().__init__()

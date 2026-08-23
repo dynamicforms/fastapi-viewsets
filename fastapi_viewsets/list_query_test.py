@@ -27,6 +27,7 @@ async def async_generator(count: int):
 # ListQuery
 # ---------------------------------------------------------------------------
 
+
 def test_a_filter_model_of_all_nones_does_not_count_as_a_filter():
     """FastAPI builds the filter model whether or not the client sent anything in it."""
 
@@ -59,6 +60,7 @@ def test_pagination_is_off_without_a_limit():
 # materialize
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_materialize_passes_a_list_straight_through():
     source = items(3)
@@ -74,6 +76,7 @@ async def test_materialize_drains_both_kinds_of_generator():
 # ---------------------------------------------------------------------------
 # take_page
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_take_page_slices_a_list():
@@ -133,6 +136,7 @@ async def test_take_page_stops_reading_once_the_page_is_full():
 # ---------------------------------------------------------------------------
 # PaginatedList
 # ---------------------------------------------------------------------------
+
 
 def test_paginated_list_states_its_edges_rather_than_implying_them():
     page = PaginatedList[Item](results=items(3), offset=0, limit=3, count=10, has_more=True)

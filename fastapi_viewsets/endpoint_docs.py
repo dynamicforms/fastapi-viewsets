@@ -63,6 +63,7 @@ def endpoint_docs(docs: dict[str, EndpointDoc]):
     the other way round it would run too late; rather than silently document nothing, that is
     refused with a message saying which way round to put it.
     """
+
     def decorator(cls):
         if getattr(cls, "__viewset_metadata__", None) is not None:
             raise ValueError(

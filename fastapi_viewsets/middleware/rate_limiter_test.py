@@ -125,6 +125,7 @@ def test_default_key_falls_back_to_unknown_without_a_request():
 # Redis-backed storage
 # ---------------------------------------------------------------------------
 
+
 class _FakeRedis:
     def __init__(self):
         self.counts = {}
@@ -156,6 +157,7 @@ async def test_redis_backend_increments_and_sets_expiry_on_first_hit():
 # ---------------------------------------------------------------------------
 # End-to-end
 # ---------------------------------------------------------------------------
+
 
 class Item(BaseModel):
     id: int

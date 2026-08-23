@@ -1,8 +1,9 @@
-from typing import Any, get_origin, TypeVar
+from typing import Annotated, Any, get_args, get_origin, TypeVar
 
 from pydantic import BaseModel, create_model
 
 T = TypeVar("T", bound=BaseModel)
+
 
 def create_model_without_pk(model: type[T], pk_field_name: str) -> type[BaseModel]:
     """
@@ -15,12 +16,16 @@ def create_model_without_pk(model: type[T], pk_field_name: str) -> type[BaseMode
     }
     return create_model(f"{model.__name__}NoPK", **fields)
 
+
 def typecast_to_original_model(value: Any, original_annotation: type[T]) -> T:
     """
     Typecasts a value (usually a Pydantic model without PK) back to the original Pydantic model.
     If validation fails (e.g., due to missing PK that will be auto-incremented), it uses model_construct.
     """
-    origin = get_origin(original_annotation) or original_annotation
+    annotation = original_annotation
+    if get_origin(annotation) is Annotated:
+        annotation = get_args(annotation)[0]
+    origin = get_origin(annotation) or annotation
     if not isinstance(value, BaseModel) or isinstance(value, origin):
         return value
 
