@@ -21,6 +21,7 @@ import {
   ViewSetMixin,
 } from './mixins';
 import { RestProxyImpl, route_rest } from './rest-proxy';
+import { restViewSet } from './viewset';
 
 // ---------------------------------------------------------------------------
 // Helper types and fixture data
@@ -205,6 +206,22 @@ describe('route_rest — factory with separate arguments', () => {
     http.delete.mockResolvedValue({ data: {} });
     await proxy.destroy(1);
     expect(http.delete).toHaveBeenCalledWith('/items/1');
+  });
+
+  it('rejects a factory-built ViewSet class', () => {
+    // A factory-built class's own methods (added past what route_rest can type through M) would be
+    // undefined at runtime if this compiled: route_rest builds a bare RestProxyImpl and discards
+    // the class itself. See viewset.spec.ts for the equivalent muxwsViewSet-side coverage note.
+    //
+    // The reject overload's return type - a string literal, not RestProxy<M> - is what makes the
+    // call itself an error; a call whose result is never used produces no diagnostic either way, so
+    // the @ts-expect-error has to sit on the line that tries to use it, not on the call.
+    class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin]) {}
+    const proxy = route_rest<ReadOnlyViewSetMixin<number, Item>>(ItemApi, '/items', 'id');
+    // @ts-expect-error route_rest cannot take a factory-built ViewSet class - property access
+    // rather than a call, so a real HTTP request is never attempted even though this is type-only
+    const list = proxy.list;
+    expect(typeof list).toBe('function');
   });
 });
 

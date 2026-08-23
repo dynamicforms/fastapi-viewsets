@@ -20,7 +20,7 @@
 
 import type { ActionName, ActionSurface, KeyType } from './mixins';
 import { MuxwsProxyImpl, type MuxwsProxyOptions } from './muxws-proxy';
-import { type ProxyBaseOptions, ViewSetInternals, type ViewSetMixinDeclaration } from './proxy-base';
+import { FACTORY_BUILT, type ProxyBaseOptions, ViewSetInternals, type ViewSetMixinDeclaration } from './proxy-base';
 import { RestProxyImpl, type RestProxyOptions } from './rest-proxy';
 
 /** A mixin class: the runtime `actions` the schema check reads, and the type naming those actions. */
@@ -44,6 +44,22 @@ export type PkFieldName<T> = Extract<
 type PkType<T, PK extends keyof T> = NonNullable<T[PK]> & KeyType;
 
 /**
+ * Brands a factory-built class's `declares` so a subclass restating it fails on one flat "missing
+ * property" line naming `declares` itself, rather than TypeScript recursing into which method each
+ * mixin in the plain, unbranded replacement array is missing relative to the original. A record
+ * type wrapping `D` behind the phantom key, not `D & {brand}`: an intersection would still expose
+ * `D`'s own array shape to the comparison and recurse into it exactly as before; a plain array
+ * literal has no property at all under this key, so the mismatch stops at the top. Erased at
+ * runtime - `bindViewSet` casts through `unknown`, so the actual `static declares` stays a plain
+ * array, and every internal reader (rest-proxy.ts, muxws-proxy.ts, proxy-base.ts's
+ * `declaredActions`) already reads it through its own cast rather than this type.
+ *
+ * `FACTORY_BUILT` lives in proxy-base.ts, not here, so `route_rest`/`route_muxws` can check for the
+ * same brand without importing from this module - see proxy-base.ts's doc comment on the symbol.
+ */
+type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTORY_BUILT]: D };
+
+/**
  * What the factory hands back: a class to extend.
  *
  * A `declares` list naming no action — `[]`, or one annotated `ViewSetMixinClass[]`, which erases
@@ -58,7 +74,7 @@ export type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinC
       new (
         options: Omit<O, 'pkFieldName' | 'declares'>,
       ): ViewSetInternals & ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>>;
-      readonly declares: D;
+      readonly declares: FactoryDeclares<D>;
     };
 
 /**

@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BulkViewSetMixin, LookupMixin } from './mixins';
 import { type MuxwsPeerLike, MuxwsProxyImpl, route_muxws } from './muxws-proxy';
 import { ViewSetRequestError } from './proxy-base';
+import { muxwsViewSet } from './viewset';
 
 interface Item {
   id: number;
@@ -280,5 +281,21 @@ describe('route_muxws', () => {
     });
     await vi.waitFor(() => expect(mock.opened.length).toBeGreaterThan(0));
     expect(mock.last.headers[':path']).toBe('/items/schema');
+  });
+
+  it('rejects a factory-built ViewSet class', () => {
+    // See rest-proxy.spec.ts's equivalent route_rest test for why this must be a compile error, and
+    // for why the @ts-expect-error sits on the property access below rather than on this call.
+    class ItemApi extends muxwsViewSet<Item>()('id', [BulkViewSetMixin]) {}
+    const mock = makeMockPeer();
+    const proxy = route_muxws<BulkViewSetMixin<number, Item, 'id'>>(ItemApi, {
+      basePath: '/items',
+      pkFieldName: 'id',
+      peer: mock.peer,
+      validateSchema: false,
+    });
+    // @ts-expect-error route_muxws cannot take a factory-built ViewSet class
+    const list = proxy.list;
+    expect(typeof list).toBe('function');
   });
 });

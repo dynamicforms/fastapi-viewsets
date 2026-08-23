@@ -6,6 +6,24 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-08-23
+
+### Changed
+- `route_rest` and `route_muxws` now fail to compile when passed a factory-built ViewSet class,
+  instead of silently handing back an object missing that class's own methods. The error surfaces
+  as `TS2339` on the first property or method accessed on the result, not on the `route_rest` /
+  `route_muxws` call itself.
+- Restating `static declares` on a subclass of a factory-built class (already a compile error)
+  reports a shorter, clearer `TS2417` that stops at `declares` itself instead of drilling into
+  which mixin method is missing.
+- `STANDARD_FE_METHODS` in `proxy-base.ts` is now derived from a `Record<ActionName, true>`
+  object literal, so an action added to (or removed from) `ActionName` without a matching update
+  fails to compile instead of silently narrowing what the FE/BE schema mismatch check can report.
+
+### Fixed
+- `vite.config.ts` no longer uses `__dirname`, which `vite`'s native config loader warns is
+  unsupported and slated to become the default loader in a future major version.
+
 ## [0.5.2] - 2026-08-23
 
 ### Added

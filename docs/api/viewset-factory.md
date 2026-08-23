@@ -181,3 +181,5 @@ On construction, unless `validateSchema: false`, the ViewSet fetches `GET {baseP
 ## Relation to route_rest / route_muxws
 
 [`route_rest`](/api/route-rest) and `route_muxws` are unchanged and still supported; they are the older form. They return a bare `RestProxyImpl` / `MuxwsProxyImpl` cast to the mixin interface `M`, so the object is not the consumer's own class: a custom endpoint named in `M` type-checks and is `undefined` when called. A factory-built ViewSet is the consumer's class, so its own methods exist.
+
+Passing a factory-built class to either fails to compile rather than silently building an object missing that class's own methods: the overload that matches a factory-built class returns a self-describing string type instead of a usable proxy, so the error surfaces as `TS2339` on the first property or method accessed on the result (`Property 'list' does not exist on type '"route_rest cannot take a factory-built ViewSet class - extend it directly ..."'`), not on the `route_rest`/`route_muxws` call itself.

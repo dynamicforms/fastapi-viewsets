@@ -15,6 +15,7 @@
 
 import type { KeyType } from './mixins';
 import {
+  FACTORY_BUILT,
   type HttpMethod,
   type ProxyBaseOptions,
   type QueryParams,
@@ -50,6 +51,19 @@ export type MuxwsPeerSource = MuxwsPeerLike | (() => MuxwsPeerLike | Promise<Mux
 export type MuxwsProxy<M> = M;
 
 type ViewSetClass = abstract new (...args: any[]) => any;
+
+/**
+ * The shape a factory-built class's constructor has, purely to give `route_muxws` an overload that
+ * rejects it - see rest-proxy.ts's `FactoryBuiltClass` for why this has to be a plain overload
+ * parameter rather than a type parameter conditioned on the argument.
+ */
+type FactoryBuiltClass = (abstract new (...args: any[]) => any) & {
+  declares: { readonly [FACTORY_BUILT]: any };
+};
+
+/** Never assigned; its only use is `typeof FACTORY_BUILT_REJECTION` as a self-describing return type. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- type-only, read via `typeof` below
+declare const FACTORY_BUILT_REJECTION: 'route_muxws cannot take a factory-built class - extend it directly instead';
 
 export interface MuxwsProxyOptions extends ProxyBaseOptions {
   peer: MuxwsPeerSource;
@@ -147,10 +161,18 @@ function readHeaders(replyHeaders: Record<string, unknown> | null | undefined): 
   return out;
 }
 
+// Exists only to reject a factory-built class with a message at the call site; nothing implements
+// or calls it - see rest-proxy.ts's route_rest for why.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- M keeps the call syntax identical to the real overload
+function route_muxws<M = never>(
+  viewSetClass: FactoryBuiltClass,
+  options: MuxwsProxyOptions,
+): typeof FACTORY_BUILT_REJECTION;
 /**
  * Registers a muxws proxy for the given ViewSet class. The mirror of route_rest, and it takes the
  * same generic parameter for the same reason: TypeScript cannot inspect the Python class.
  */
+function route_muxws<M>(viewSetClass: ViewSetClass, options: MuxwsProxyOptions): MuxwsProxy<M>;
 function route_muxws<M>(viewSetClass: ViewSetClass, options: MuxwsProxyOptions): MuxwsProxy<M> {
   // The class is otherwise used only for its type. Its `declares` is the one thing on it the proxy
   // needs at runtime, so it is carried across rather than lost.
