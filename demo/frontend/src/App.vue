@@ -71,7 +71,7 @@
           :columns="columnsResponsive"
           :records="records"
           :loading="loading"
-          key-field="id"
+          :key-field="pkField"
           :show-filter-row="true"
           style="height: 70vh"
           @sort="onSort"
@@ -117,6 +117,10 @@ const filterValues = ref<Record<string, unknown>>({});
 const benchmarking = ref(false);
 const results = ref<BenchmarkResult[]>([]);
 
+// All four MusicTrack ViewSets share one pk field; read off an instance rather than repeated as a
+// literal, so a model with a differently-named pk would not need this file edited to match.
+const pkField = viewSetFor(transport.value, backend.value).pkFieldName;
+
 /**
  * Which declared filter parameter each column maps to.
  *
@@ -125,7 +129,7 @@ const results = ref<BenchmarkResult[]>([]);
  * listed here has no filter parameter on the backend and is dropped rather than guessed at.
  */
 const FILTER_PARAM: Record<string, string> = {
-  id: 'id',
+  [pkField]: pkField,
   title: 'title__icontains',
   artist: 'artist__icontains',
   year: 'year',
@@ -142,7 +146,7 @@ const FILTER_PARAM: Record<string, string> = {
 const external = { sortable: { key: sortExternal }, filterable: { key: filterExternal } } as const;
 
 const columns = [
-  createColumn('id', 'Id', 'int', { cssClass: 'text-right', ...external }),
+  createColumn(pkField, 'Id', 'int', { cssClass: 'text-right', ...external }),
   createColumn('title', 'Title', 'plain', external),
   createColumn('artist', 'Artist', 'plain', external),
   createColumn('year', 'Year', 'int', { cssClass: 'text-right', ...external }),

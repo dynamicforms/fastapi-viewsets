@@ -223,7 +223,12 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    */
   static declares?: readonly ViewSetMixinDeclaration[];
 
-  protected readonly pkFieldName: string;
+  /**
+   * Which field of `T` is the primary key, e.g. `'id'`. `public`, not `protected`: nothing in this
+   * library reads it back, but a generic caller holding a ViewSet instance - a grid or table
+   * component needing to know which column identifies a row - has no other way to ask.
+   */
+  readonly pkFieldName: string;
 
   private readonly schemaValidationEnabled: boolean;
 

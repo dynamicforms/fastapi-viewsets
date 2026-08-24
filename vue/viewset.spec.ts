@@ -93,7 +93,10 @@ describe('restViewSet', () => {
     const api = build();
     await api.retrieve(2);
     expect(http.get).toHaveBeenCalledWith('/items/2');
-    expect((api as unknown as { pkFieldName: string }).pkFieldName).toBe('id');
+    // No cast: pkFieldName is part of a factory-built class's own type surface (typed as the
+    // literal 'id', not widened to string), not just present at runtime - a generic caller (a grid
+    // or table component) holding the instance can read which field is the pk without one.
+    expect(api.pkFieldName).toBe('id');
   });
 
   it('carries the declaration to the schema check, which then finds nothing to report', async () => {

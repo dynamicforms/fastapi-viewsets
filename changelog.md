@@ -6,6 +6,15 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] - 2026-08-24
+
+### Changed
+- `ViewSetProxyBase.pkFieldName` is now public instead of protected, so a caller holding a
+  ViewSet instance without knowing its concrete class — a grid or table component asking which
+  field identifies a row — can read it. A factory-built class's constructed instance type now
+  includes `pkFieldName`, typed as the literal field name (e.g. `'id'`) rather than widened to
+  `string`.
+
 ## [0.5.4] - 2026-08-23
 
 ### Changed

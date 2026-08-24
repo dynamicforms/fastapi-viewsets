@@ -65,6 +65,12 @@ type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTO
  * A `declares` list naming no action — `[]`, or one annotated `ViewSetMixinClass[]`, which erases
  * which mixins are in it — would otherwise produce a ViewSet with no actions and no complaint.
  * TS2507 prints the type it was given, so the type is the sentence.
+ *
+ * `pkFieldName: PK` is added on top of `ViewSetInternals` explicitly: the constructed instance's
+ * real runtime type is `ProxyBaseOptions`'s `ViewSetProxyBase`, which already carries the public
+ * `pkFieldName`, but `ViewSetInternals` is deliberately narrow (see its own doc comment), so this
+ * type would otherwise hide a field that is genuinely there. Typed as the literal `PK` rather than
+ * `string`, since the factory already knows exactly which field it is.
  */
 export type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> = [
   ActionsOf<D[number]>,
@@ -73,7 +79,7 @@ export type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinC
   : {
       new (
         options: Omit<O, 'pkFieldName' | 'declares'>,
-      ): ViewSetInternals & ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>>;
+      ): ViewSetInternals & ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>> & { readonly pkFieldName: PK };
       readonly declares: FactoryDeclares<D>;
     };
 

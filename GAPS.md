@@ -198,14 +198,6 @@ on both transports. Or accept that the shape is a property of the endpoint, and 
 enumerate leaves - `[CursorListMixin, CreateMixin, RetrieveMixin, …]` - which is truthful and
 verbose, and makes the composites useless for any viewset with `list_shapes`.
 
-### `pkFieldName` is still stored and still read by nobody
-
-`ViewSetProxyBase.pkFieldName` is assigned at construction and never read anywhere in the library, the demo or the tests. The factory binds it at factory time and removes it from the constructor's options, so on the new form it is one fewer thing to state — but the field, the `ProxyBaseOptions` member and the `route_rest` positional argument all remain.
-
-I left it alone on purpose: removing a public option is a separate decision from adding a factory, and it would touch route_rest's signature, both its overloads and three doc pages.
-
-What would change it: deciding it is genuinely dead. Then it goes in one commit that also simplifies route_rest's positional form, and `ProxyBaseOptions` loses a required member — which is a breaking change for anyone constructing a proxy directly.
-
 ## Settled, kept for the reasoning
 
 ### An unhandled exception answers 500 rather than resetting the stream
@@ -341,3 +333,21 @@ matched (an unused expression is not itself an error), so the visible `TS2339` l
 property or method the caller accesses on the result, not on the `route_rest`/`route_muxws` call -
 both test files' `@ts-expect-error` sit there for exactly that reason, and so does the sentence
 saying so in the two API doc pages.
+
+### `pkFieldName` is public now, not dead
+
+`ViewSetProxyBase.pkFieldName` was assigned at construction and never read anywhere in the library,
+the demo or the tests - but it was also `protected`, so nothing outside a subclass could have read
+it even if it wanted to. A generic caller holding a ViewSet instance without knowing its concrete
+class - a grid or table component asking "which field identifies a row" - had no way to ask, which
+is a real, near-term use case (`demo/frontend/src/App.vue`'s grid column and filter-param setup, and
+its `key-field` binding, all hardcoded `'id'` for exactly this reason) rather than a hypothetical
+one. Made `readonly` and public instead of removed.
+
+A factory-built class needed its own fix on top: the constructor `ViewSetClass<D>` returns is
+`ViewSetInternals & ActionSurface<...>`, and `ViewSetInternals` is deliberately narrow (protected
+`basePath`/`request` only - see its own doc comment), so it did not expose `pkFieldName` even though
+the real runtime object (a `RestProxyImpl`/`MuxwsProxyImpl` under the hood) always carried it. The
+factory's return type now intersects one more member, `{ readonly pkFieldName: PK }` - typed as the
+literal `PK`, e.g. `'id'`, not widened to `string`, since the factory already knows exactly which
+field it is.
