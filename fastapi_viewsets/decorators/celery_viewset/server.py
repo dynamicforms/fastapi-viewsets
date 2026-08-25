@@ -175,7 +175,12 @@ def celery_viewset_server(
                 continue
             seen_tasks.add(task_name)
 
-            celery_app.task(name=task_name)(get_sync_wrapper(route.endpoint, task_name))
+            # ignore_result=True - celery_viewset_client never reads Celery's own result backend,
+            # it awaits the redis_client.rpush() queue above instead (see client.py). Without this,
+            # Celery still calls task.backend.mark_as_done(retval=result) on every task, and a raw
+            # Pydantic model (or list of them) returned by the endpoint isn't JSON-serializable by
+            # Celery's own encoder, crashing that unused store.
+            celery_app.task(name=task_name, ignore_result=True)(get_sync_wrapper(route.endpoint, task_name))
 
         cls.__celery_viewset_metadata__ = {"task_prefix": task_prefix, "lifecycle": lifecycle, "celery_app": celery_app}
 

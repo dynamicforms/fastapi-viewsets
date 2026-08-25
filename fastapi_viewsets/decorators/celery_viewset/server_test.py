@@ -47,11 +47,29 @@ def test_celery_viewset_server_decorator_registration():
     assert len(task_names) >= 2
 
 
+def test_celery_viewset_server_registers_tasks_with_ignore_result():
+    """celery_viewset_client never reads Celery's own result backend (it awaits the redis_client
+    queue in client.py instead) - ignore_result=True must be set so Celery does not also try to
+    JSON-serialize/store the raw return value (which may be a Pydantic model)."""
+    celery_app = MagicMock()
+    task_decorator = MagicMock()
+    celery_app.task.return_value = task_decorator
+
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items")
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self, _context) -> list[Item]:
+            return [Item(id=1, name="test")]
+
+    calls = celery_app.task.call_args_list
+    assert calls
+    assert all(call.kwargs.get("ignore_result") is True for call in calls)
+
+
 def test_celery_viewset_server_execution():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name):
+    def mock_task(name, **kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -75,7 +93,7 @@ def test_celery_viewset_server_lifecycle_per_request():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name):
+    def mock_task(name, **kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -110,7 +128,7 @@ def test_celery_viewset_server_pushes_result_to_redis():
     redis_mock = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name):
+    def mock_task(name, **kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -144,7 +162,7 @@ def test_celery_viewset_server_pushes_result_with_date_field_to_redis():
     redis_mock = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name):
+    def mock_task(name, **kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -174,7 +192,7 @@ def test_celery_viewset_server_pushes_error_to_redis_on_exception():
     redis_mock = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name):
+    def mock_task(name, **kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -210,7 +228,7 @@ def test_celery_viewset_server_pushes_http_exception_to_redis():
     redis_mock = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name):
+    def mock_task(name, **kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -241,7 +259,7 @@ def test_celery_viewset_server_no_redis_no_push():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name):
+    def mock_task(name, **kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -331,7 +349,7 @@ def test_fastapi_server_endpoint_executes_directly():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name):
+    def mock_task(name, **kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -416,7 +434,7 @@ def test_celery_kwargs_hook_none_preserves_existing_behavior():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name):
+    def mock_task(name, **kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -445,7 +463,7 @@ def test_celery_kwargs_hook_called_before_reconstruct_kwargs():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name):
+    def mock_task(name, **kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -485,7 +503,7 @@ def test_celery_kwargs_hook_can_replace_runner_and_consume_kwargs():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name):
+    def mock_task(name, **kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
