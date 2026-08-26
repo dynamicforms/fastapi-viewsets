@@ -114,8 +114,8 @@ sometimes not).
 decision (e.g. enriching `context` with no reject path) has no early-timing benefit and should stay
 in `__call__`, exactly as it would without `depends()` at all - see
 [Authorization](./authorization), which splits across both methods for precisely this reason: the
-callable-config check (might reject) lives in `depends()`, while unconditionally exposing
-`context.authorization` for `perform_*` to read stays in `__call__`.
+callable-config check (might reject) lives in `depends()`, while exposing `context.authorization`
+for `perform_*` to read (only when the config isn't itself the check) stays in `__call__`.
 
 ### OpenAPI/Swagger discoverability: `viewsets_security_scheme`
 

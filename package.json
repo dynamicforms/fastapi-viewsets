@@ -1,7 +1,7 @@
 {
   "name": "@dynamicforms/fastapi-viewsets",
   "private": false,
-  "version": "0.5.6",
+  "version": "0.5.7",
   "type": "module",
   "description": "RESTful viewsets for Vue",
   "author": "Jure Erznožnik",

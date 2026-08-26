@@ -37,8 +37,6 @@ consume the whole body before learning whether it was an error at all.
 from typing import Any
 from urllib.parse import urlencode
 
-from muxws.frames import ABSENT
-
 METHOD_KEY = ":method"
 PATH_KEY = ":path"
 QUERY_KEY = ":query"
@@ -120,4 +118,6 @@ def build_response_meta(status: int, headers: dict[str, str]) -> dict[str, Any]:
 
 def body_to_payload(body: Any) -> Any:
     """`ABSENT` is muxws' "no payload at all", which is a different frame from a null payload."""
+    from muxws.frames import ABSENT
+
     return ABSENT if body is None else body

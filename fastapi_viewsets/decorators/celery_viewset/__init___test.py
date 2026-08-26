@@ -35,7 +35,7 @@ def test_celery_viewset_auto_detect_server():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func

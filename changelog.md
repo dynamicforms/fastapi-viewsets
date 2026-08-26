@@ -6,6 +6,19 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-08-26
+
+### Fixed
+- `muxws` is no longer imported at module load time. `fastapi_viewsets.decorators` (and therefore
+  the whole package) now imports cleanly without the `muxws` extra installed; code that actually
+  builds a muxws response payload still requires the package and raises `ModuleNotFoundError` if
+  it's missing.
+- `Authorization` no longer puts a callable `@action_configuration` value into
+  `context.authorization`. A callable config is a `depends()`-only gate and was never meant to
+  reach `perform_*` or cross into a `celery_viewset` worker; doing so unconditionally made every
+  request to a callable-gated, celery-served viewset fail with `TypeError: Object of type function
+  is not JSON serializable` once `context` was serialized for the worker.
+
 ## [0.5.5] - 2026-08-24
 
 ### Changed
