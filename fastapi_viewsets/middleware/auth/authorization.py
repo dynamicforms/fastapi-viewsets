@@ -23,14 +23,18 @@ class Authorization(Middleware):
     - If it's callable, it's evaluated as `check(request, cls, context)` (sync or async) in
       `depends()` - bridged onto FastAPI's own `Depends()` by route_viewset - a falsy result
       rejects the request with 403 before `perform_*` (or even FastAPI's own body parsing) ever
-      runs. Use this for checks that don't need a specific record (e.g. a role check).
-    - Either way (callable or not, or even unconfigured), the resolved value is made available as
-      `context.authorization` (set in `__call__`, unconditionally, in the onion chain - there's no
-      reject decision here, so there's no benefit to doing this any earlier) - `perform_*` can
-      inspect it once it has whatever record-specific info a check needs (e.g. the object a `pk`
-      resolved to) and reject itself (`raise HTTPException(403, ...)`) if it decides to. This is
-      the "no hook in the middleware layer needed" case - just raise, same as anywhere else in the
-      pipeline (see docs/guide/action-configuration.md's "Rejecting a request: just raise").
+      runs. Use this for checks that don't need a specific record (e.g. a role check). A callable
+      config is consumed entirely by `depends()` and never reaches `context.authorization` - there
+      is nothing left for `perform_*` to do with the check function itself, and a bare function
+      isn't something a `celery_viewset` worker could receive anyway.
+    - Otherwise (non-callable, or unconfigured/`None`), nothing is enforced by the middleware
+      itself; the value is made available as `context.authorization` (set in `__call__`, in the
+      onion chain - there's no reject decision here, so there's no benefit to doing this any
+      earlier) - `perform_*` can inspect it once it has whatever record-specific info a check
+      needs (e.g. the object a `pk` resolved to) and reject itself (`raise HTTPException(403,
+      ...)`) if it decides to. This is the "no hook in the middleware layer needed" case - just
+      raise, same as anywhere else in the pipeline (see docs/guide/action-configuration.md's
+      "Rejecting a request: just raise").
 
     Unconfigured (no `@action_configuration` entry for `Authorization` at all): nothing is
     enforced, `context.authorization` resolves to `None`.
@@ -63,5 +67,7 @@ class Authorization(Middleware):
         context: "Context",
         call_next: Callable[[], Awaitable[ViewSetResult]],
     ) -> ViewSetResult:
-        context.set("authorization", self.config_from(context))
+        config = self.config_from(context)
+        if not callable(config):
+            context.set("authorization", config)
         return await call_next()

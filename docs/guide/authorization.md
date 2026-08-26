@@ -65,7 +65,9 @@ class Authorization(Middleware):
                 raise HTTPException(status_code=403, detail="Not authorized to perform this action")
 
     async def __call__(self, request, viewset, context, call_next):
-        context.set("authorization", self.config_from(context))
+        config = self.config_from(context)
+        if not callable(config):
+            context.set("authorization", config)
         return await call_next()
 ```
 
@@ -124,3 +126,6 @@ settings.viewsets_command_middleware = [Session(), Authorization()]  # Session f
   callable - a non-callable value is purely informational (`context.authorization`), and nothing
   forces `perform_*` to actually check it. There's no generic way to guarantee every action
   configured with a non-callable value gets checked somewhere.
+- A non-callable value must itself be JSON-safe (or a `SerializableObject` - see
+  [Context Processors](./context-processors)) if the viewset also uses `celery_viewset`, since
+  `context.authorization` then crosses into the worker process along with the rest of `context`.

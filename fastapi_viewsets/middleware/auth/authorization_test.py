@@ -45,6 +45,16 @@ async def test_non_callable_config_is_exposed_but_not_enforced():
 
 
 @pytest.mark.asyncio
+async def test_callable_config_is_not_exposed_via_context_authorization():
+    context = Context({}, action_configuration={Authorization: lambda _r, _c, _ctx: True})
+
+    result = await Authorization()(None, object(), context, _final_ok)
+
+    assert result.body == "ok"
+    assert "authorization" not in context
+
+
+@pytest.mark.asyncio
 async def test_callable_config_returning_true_passes_through():
     context = Context({}, action_configuration={Authorization: lambda _r, _c, _ctx: True})
     assert await Authorization().depends(None, object, context) is None
