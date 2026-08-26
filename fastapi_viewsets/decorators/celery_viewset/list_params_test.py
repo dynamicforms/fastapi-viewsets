@@ -33,7 +33,7 @@ def worker_tasks_for(viewset_factory) -> dict:
     celery_app = MagicMock()
     registered: dict = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def decorator(func):
             registered[name] = func
             return func

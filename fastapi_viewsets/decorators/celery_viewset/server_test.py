@@ -69,7 +69,7 @@ def test_celery_viewset_server_execution():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -93,7 +93,7 @@ def test_celery_viewset_server_lifecycle_per_request():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -128,7 +128,7 @@ def test_celery_viewset_server_pushes_result_to_redis():
     redis_mock = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -162,7 +162,7 @@ def test_celery_viewset_server_pushes_result_with_date_field_to_redis():
     redis_mock = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -192,7 +192,7 @@ def test_celery_viewset_server_pushes_error_to_redis_on_exception():
     redis_mock = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -228,7 +228,7 @@ def test_celery_viewset_server_pushes_http_exception_to_redis():
     redis_mock = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -259,7 +259,7 @@ def test_celery_viewset_server_no_redis_no_push():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -349,7 +349,7 @@ def test_fastapi_server_endpoint_executes_directly():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -434,7 +434,7 @@ def test_celery_kwargs_hook_none_preserves_existing_behavior():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -463,7 +463,7 @@ def test_celery_kwargs_hook_called_before_reconstruct_kwargs():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
@@ -503,7 +503,7 @@ def test_celery_kwargs_hook_can_replace_runner_and_consume_kwargs():
     celery_app = MagicMock()
     registered_tasks = {}
 
-    def mock_task(name, **kwargs):
+    def mock_task(name, **_kwargs):
         def deck(func):
             registered_tasks[name] = func
             return func
