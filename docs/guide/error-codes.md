@@ -13,10 +13,9 @@ recover what went wrong - both wrong. A `code` names the failure independently o
 `params` are the values that wording was interpolated with, so a client can rebuild the message in
 any language without ever reading `detail`.
 
-Nesting this under `detail` (`{"detail": {"code": ..., "params": ...}}`) would have replaced a
-plain string with an object for every existing consumer, breaking every integration that reads
-`detail` as text. Instead `code` and `params` are additive, top-level siblings - `detail_code` and
-`detail_params` - and appear only once the application opts in:
+`code` and `params` are additive, top-level siblings - `detail_code` and `detail_params` - never
+nested inside `detail` itself: `detail` keeps its plain-string type for every consumer that already
+reads it as text, and the two new fields appear only once the application opts in:
 
 ```python
 from fastapi_viewsets.exceptions import DfViewSetError, df_viewset_exception_handler
@@ -29,10 +28,9 @@ from FastAPI's own default `HTTPException` handling. A view's own `raise HTTPExc
 detail="...")` is unaffected either way - only exceptions descending from `DfViewSetError` carry a
 `code`.
 
-Translation itself stays out of the server for the same reason a request is stateless: there is no
-per-request locale to hold, and a mutable global translation table would make one request's
-language bleed into another's. The server always answers in English; only the client, which knows
-which user it is answering, decides what language to show.
+The server never picks a locale for a response: each request is handled independently, with no
+per-request state that could hold one, so it always answers in English. Only the client, which
+knows which user it is answering, decides what language to show.
 
 ## Backend
 
