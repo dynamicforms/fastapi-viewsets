@@ -31,7 +31,7 @@ from fastapi_viewsets.list_query import (
     take_page,
 )
 from fastapi_viewsets.list_shapes import ListOf, resolve_shapes
-from fastapi_viewsets.response_classes import NOT_FOUND_RESPONSE
+from fastapi_viewsets.response_classes import ErrorDetail, NOT_FOUND_RESPONSE
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -315,10 +315,12 @@ class ListMixin(Generic[T, TFilter], ABC):
         default, allowed = self.resolve_shapes()
         shape = x_list_shape or default
         if shape not in allowed:
-            raise HTTPException(
-                status_code=422,
-                detail=f"unsupported list shape {shape!r}; this endpoint offers {', '.join(allowed)}",
+            detail = ErrorDetail(
+                message=f"unsupported list shape {shape!r}; this endpoint offers {', '.join(allowed)}",
+                code="unsupported_list_shape",
+                params={"shape": shape, "allowed": list(allowed)},
             )
+            raise HTTPException(status_code=422, detail=detail.model_dump())
 
         query = build_list_query(
             fltr,
@@ -446,7 +448,8 @@ class ListMixin(Generic[T, TFilter], ABC):
             except CursorError as error:
                 # The client sent something wrong, not the server - a stale cursor after a sort
                 # change is the ordinary case, and it deserves a message rather than a traceback.
-                raise HTTPException(status_code=400, detail=str(error)) from None
+                detail = ErrorDetail(message=str(error), code=error.code, params=error.params)
+                raise HTTPException(status_code=400, detail=detail.model_dump()) from None
             query.extra_filters.append(make_predicate(state, keys, self.nulls_first))
 
         backwards = bool(state and state.backwards)

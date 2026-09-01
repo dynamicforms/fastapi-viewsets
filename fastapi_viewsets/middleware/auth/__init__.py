@@ -3,6 +3,7 @@ from typing import Any, TYPE_CHECKING
 
 from fastapi import HTTPException
 
+from ...response_classes import ErrorDetail
 from .. import Middleware, ViewSetResult
 
 if TYPE_CHECKING:
@@ -41,7 +42,8 @@ class Session(Middleware):
             return
         user = await context.user
         if user is None:
-            raise HTTPException(status_code=401, detail="Session expired or invalid")
+            detail = ErrorDetail(message="Session expired or invalid", code="session_expired")
+            raise HTTPException(status_code=401, detail=detail.model_dump())
 
     async def __call__(
         self,

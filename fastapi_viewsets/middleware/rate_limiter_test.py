@@ -53,7 +53,8 @@ async def test_depends_rejects_with_429_once_the_limit_is_exceeded():
         await limiter.depends(None, _FakeViewset, context)
 
     assert exc_info.value.status_code == 429
-    assert exc_info.value.detail == "Rate limit exceeded"
+    assert exc_info.value.detail["code"] == "rate_limited"
+    assert exc_info.value.detail["message"] == "Rate limit exceeded"
 
 
 @pytest.mark.asyncio
@@ -182,7 +183,9 @@ def test_end_to_end_rate_limiting_via_route_viewset():
     assert client.get("/items").status_code == 200
     third = client.get("/items")
     assert third.status_code == 429
-    assert third.json() == {"detail": "Rate limit exceeded"}
+    assert third.json() == {
+        "detail": {"message": "Rate limit exceeded", "code": "rate_limited", "params": {}}
+    }
 
 
 def test_end_to_end_action_configuration_overrides_limit_per_viewset():

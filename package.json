@@ -1,7 +1,7 @@
 {
   "name": "@dynamicforms/fastapi-viewsets",
   "private": false,
-  "version": "0.5.7",
+  "version": "0.6.0",
   "type": "module",
   "description": "RESTful viewsets for Vue",
   "author": "Jure Erznožnik",
@@ -46,7 +46,8 @@
   },
   "issues": "https://github.com/dynamicforms/fastapi-viewsets/issues",
   "peerDependencies": {
-    "@dynamicforms/vue-forms": "^0.17.1",
+    "@dynamicforms/translatable": "^0.1.0",
+    "@dynamicforms/vue-forms": "^1.0.0",
     "axios": "^1.13.6",
     "lodash-es": "^4.17.12",
     "vue": "^3.4",

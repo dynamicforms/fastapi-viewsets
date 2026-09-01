@@ -68,7 +68,8 @@ async def test_callable_config_returning_false_rejects_with_403():
         await Authorization().depends(None, object, context)
 
     assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "Not authorized to perform this action"
+    assert exc_info.value.detail["code"] == "not_authorized"
+    assert exc_info.value.detail["message"] == "Not authorized to perform this action"
 
 
 @pytest.mark.asyncio
@@ -132,7 +133,9 @@ def test_callable_config_rejects_a_real_route_with_403():
 
     response = client.get("/admin-items")
     assert response.status_code == 403
-    assert response.json() == {"detail": "Not authorized to perform this action"}
+    assert response.json() == {
+        "detail": {"message": "Not authorized to perform this action", "code": "not_authorized", "params": {}}
+    }
 
 
 # ---------------------------------------------------------------------------

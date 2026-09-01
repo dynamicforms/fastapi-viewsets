@@ -27,7 +27,6 @@ from typing import Any, ClassVar, Generic, TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
 from django.db.models import BooleanField, F, Func, Q, Value
-from fastapi import HTTPException
 from pydantic import BaseModel
 from typing_extensions import TypeVar
 
@@ -52,6 +51,7 @@ from ..filters import (
 )
 from ..list_query import ListQuery, ListRecords
 from ..mixins import filter_set_for, ImplMixin, SortDirection
+from ..response_classes import NotFoundError
 
 try:
     from django.db.models import CompositePrimaryKey
@@ -299,7 +299,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         try:
             return await self.get_queryset(context).aget(**{self.pk_field: pk})
         except ObjectDoesNotExist:
-            raise HTTPException(status_code=404, detail=f"Item with pk {pk} not found") from None
+            raise NotFoundError(pk) from None
 
     def _writable_fields(self, data: T, exclude_unset: bool = False) -> dict[str, Any]:
         """

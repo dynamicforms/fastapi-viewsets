@@ -5,6 +5,7 @@ from typing import Any, TYPE_CHECKING
 
 from fastapi import HTTPException
 
+from ...response_classes import ErrorDetail
 from .. import Middleware, ViewSetResult
 
 if TYPE_CHECKING:
@@ -58,7 +59,8 @@ class Authorization(Middleware):
             if inspect.isawaitable(allowed):
                 allowed = await allowed
             if not allowed:
-                raise HTTPException(status_code=403, detail="Not authorized to perform this action")
+                detail = ErrorDetail(message="Not authorized to perform this action", code="not_authorized")
+                raise HTTPException(status_code=403, detail=detail.model_dump())
 
     async def __call__(
         self,

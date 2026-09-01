@@ -46,7 +46,8 @@ async def test_depends_raises_401_when_user_is_none():
         await Session().depends(None, object, context)
 
     assert exc_info.value.status_code == 401
-    assert exc_info.value.detail == "Session expired or invalid"
+    assert exc_info.value.detail["code"] == "session_expired"
+    assert exc_info.value.detail["message"] == "Session expired or invalid"
 
 
 @pytest.mark.asyncio
@@ -114,14 +115,18 @@ def test_missing_session_token_gets_401():
     client = TestClient(_make_app())
     response = client.get("/items")
     assert response.status_code == 401
-    assert response.json() == {"detail": "Session expired or invalid"}
+    assert response.json() == {
+        "detail": {"message": "Session expired or invalid", "code": "session_expired", "params": {}}
+    }
 
 
 def test_invalid_session_token_gets_401():
     client = TestClient(_make_app())
     response = client.get("/items", headers={"x-session-token": "tok-unknown"})
     assert response.status_code == 401
-    assert response.json() == {"detail": "Session expired or invalid"}
+    assert response.json() == {
+        "detail": {"message": "Session expired or invalid", "code": "session_expired", "params": {}}
+    }
 
 
 def test_action_configuration_opts_out_a_real_route_without_a_session():

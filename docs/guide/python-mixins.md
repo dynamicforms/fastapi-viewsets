@@ -195,5 +195,5 @@ Raise `NotFoundError` when a record does not exist. It produces a proper `404` r
 from fastapi_viewsets.response_classes import NotFoundError
 
 raise NotFoundError(pk)
-# → HTTP 404: {"detail": "Item with pk 42 not found"}
+# → HTTP 404: {"detail": {"message": "Item with pk 42 not found", "code": "not_found", "params": {"pk": 42}}}
 ```

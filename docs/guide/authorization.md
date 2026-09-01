@@ -62,7 +62,8 @@ class Authorization(Middleware):
             if inspect.isawaitable(allowed):
                 allowed = await allowed
             if not allowed:
-                raise HTTPException(status_code=403, detail="Not authorized to perform this action")
+                detail = ErrorDetail(message="Not authorized to perform this action", code="not_authorized")
+                raise HTTPException(status_code=403, detail=detail.model_dump())
 
     async def __call__(self, request, viewset, context, call_next):
         config = self.config_from(context)

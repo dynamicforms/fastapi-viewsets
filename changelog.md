@@ -6,6 +6,33 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-01
+
+### Added
+
+- Every `HTTPException` this package raises on its own - not-found, session-expired,
+  not-authorized, rate-limited, an unsupported list shape, and every cursor-pagination error -
+  puts a structured `{message, code, params}` object under `detail` instead of a plain string.
+  `message` is the English default, fully interpolated; `code` is a stable identifier independent
+  of `message`'s wording; `params` are the raw values `message` was interpolated with. A host
+  application's own `raise HTTPException(status_code, detail="...")` is unaffected and still puts
+  a plain string there.
+- The Vue client gains `ApiErrorDetail`, `isApiErrorDetail()` to narrow an error's `detail` before
+  reading `code`/`params` off it, and `translateApiError()`, which looks up `code` in a
+  `@dynamicforms/translatable` table of English defaults and interpolates `params` into it -
+  falling back to the server's own `message` for a code the table does not cover. Call
+  `translateStrings()` (also exported) to supply translations for as many codes as the
+  application has.
+
+### Changed
+
+- **Breaking:** Every error response's `detail` is now the object described above rather than a
+  plain string, for the built-in errors listed there. A consumer reading `error.response.data.detail`
+  as a string needs to read `.message` (or `.code`) off it instead - see the
+  [migration guide](https://docs.velis.si/dynamicforms/fastapi-viewsets/guide/migration).
+- Bumps the `@dynamicforms/vue-forms` peer range to `^1.0.0` and adds `@dynamicforms/translatable`
+  (`^0.1.0`) as a peer dependency.
+
 ## [0.5.7] - 2026-08-26
 
 ### Fixed

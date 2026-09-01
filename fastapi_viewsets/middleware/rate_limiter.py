@@ -6,6 +6,7 @@ from typing import Any, TYPE_CHECKING
 
 from fastapi import HTTPException
 
+from ..response_classes import ErrorDetail
 from . import Middleware, ViewSetResult
 
 if TYPE_CHECKING:
@@ -72,7 +73,8 @@ class RateLimiter(Middleware):
             key = await key
         allowed = await self._increment(key, limit)
         if not allowed:
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            detail = ErrorDetail(message="Rate limit exceeded", code="rate_limited")
+            raise HTTPException(status_code=429, detail=detail.model_dump())
 
     async def __call__(
         self,
