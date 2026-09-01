@@ -45,3 +45,6 @@ export { route_rest, RestProxyImpl } from './rest-proxy';
 
 export type { MuxwsPeerLike, MuxwsPeerSource, MuxwsProxy, MuxwsProxyOptions, MuxwsStreamLike } from './muxws-proxy';
 export { route_muxws, MuxwsProxyImpl } from './muxws-proxy';
+
+export type { ApiErrorBody } from './errors';
+export { translatableStrings, translateApiError, translateStrings } from './errors';

@@ -45,6 +45,11 @@ TItem = TypeVar("TItem")
 class CursorError(ValueError):
     """The cursor is unreadable, or does not belong to the query it was sent with."""
 
+    def __init__(self, message: str, code: str, params: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.code = code
+        self.params = params or {}
+
 
 CursorKeys = tuple[tuple[str, bool], ...]
 """Ordering keys as (field name, descending), primary key last. The shape a position is read against."""
@@ -129,18 +134,27 @@ def decode_cursor(raw: str, keys: CursorKeys, expected_query: str, annotations: 
         padded = raw + "=" * (-len(raw) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded))
     except (ValueError, binascii.Error) as error:
-        raise CursorError(f"cursor is not readable: {error}") from None
+        raise CursorError(
+            f"cursor is not readable: {error}", code="cursor_unreadable", params={"error": str(error)}
+        ) from None
 
     if not isinstance(payload, dict) or not isinstance(payload.get("p"), dict):
-        raise CursorError("cursor is not readable: no position in it")
+        raise CursorError("cursor is not readable: no position in it", code="cursor_missing_position")
 
     if payload.get("q") != expected_query:
-        raise CursorError("this cursor was issued for a different ordering or filter - start from the first page")
+        raise CursorError(
+            "this cursor was issued for a different ordering or filter - start from the first page",
+            code="cursor_stale",
+        )
 
     position = payload["p"]
     missing = [name for name, _ in keys if name not in position]
     if missing:
-        raise CursorError(f"cursor has no value for ordering key(s): {', '.join(missing)}")
+        raise CursorError(
+            f"cursor has no value for ordering key(s): {', '.join(missing)}",
+            code="cursor_missing_keys",
+            params={"missing": missing},
+        )
 
     coerced: dict[str, Any] = {}
     for name, _ in keys:
@@ -152,7 +166,11 @@ def decode_cursor(raw: str, keys: CursorKeys, expected_query: str, annotations: 
         try:
             coerced[name] = TypeAdapter(annotation).validate_python(value)
         except Exception as error:
-            raise CursorError(f"cursor value for {name!r} does not fit the field: {error}") from None
+            raise CursorError(
+                f"cursor value for {name!r} does not fit the field: {error}",
+                code="cursor_value_mismatch",
+                params={"name": name, "error": str(error)},
+            ) from None
 
     return CursorState(
         position=coerced,

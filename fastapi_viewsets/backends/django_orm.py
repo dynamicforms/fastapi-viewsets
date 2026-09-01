@@ -27,12 +27,12 @@ from typing import Any, ClassVar, Generic, TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
 from django.db.models import BooleanField, F, Func, Q, Value
-from fastapi import HTTPException
 from pydantic import BaseModel
 from typing_extensions import TypeVar
 
 from ..context import Context
 from ..cursor import CursorPredicate, wants_greater
+from ..exceptions import NotFoundError
 from ..filters import (
     can_compile_all,
     compile_all,
@@ -299,7 +299,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         try:
             return await self.get_queryset(context).aget(**{self.pk_field: pk})
         except ObjectDoesNotExist:
-            raise HTTPException(status_code=404, detail=f"Item with pk {pk} not found") from None
+            raise NotFoundError(pk) from None
 
     def _writable_fields(self, data: T, exclude_unset: bool = False) -> dict[str, Any]:
         """

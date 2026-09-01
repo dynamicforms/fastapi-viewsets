@@ -42,6 +42,7 @@ export default defineConfig({
     },
     rollupOptions: {
       external: [
+        '@dynamicforms/translatable',
         '@dynamicforms/vue-forms',
         'axios',
         'lodash-es',

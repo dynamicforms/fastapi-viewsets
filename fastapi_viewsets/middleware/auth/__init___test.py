@@ -47,6 +47,7 @@ async def test_depends_raises_401_when_user_is_none():
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "Session expired or invalid"
+    assert exc_info.value.code == "session_expired"
 
 
 @pytest.mark.asyncio

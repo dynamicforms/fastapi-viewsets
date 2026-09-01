@@ -6,6 +6,38 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-01
+
+### Added
+
+- `fastapi_viewsets.exceptions`: every `HTTPException` this package raises on its own behalf -
+  `NotFoundError`, `SessionExpiredError`, `NotAuthorizedError`, `RateLimitedError`,
+  `UnsupportedListShapeError`, `CursorRequestError` - now carries a stable `code` and the `params`
+  its English `detail` was interpolated with, as attributes on the exception itself. `detail`
+  stays a plain string, exactly as it always was - nothing changes in the response body by
+  default.
+- `df_viewset_exception_handler`, an opt-in exception handler for `DfViewSetError` (the common
+  base every class above descends from). Registered once -
+  `app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)` - it adds
+  `detail_code` and `detail_params` alongside `detail` in the response body, so a frontend can
+  translate or switch on `detail_code` without parsing English prose out of `detail`. An
+  application that does not register it sees exactly what it always has.
+- The Vue client gains `translateApiError()`, which looks up `detail_code` in a
+  `@dynamicforms/translatable` table of English defaults and interpolates `detail_params` into
+  it - returning `detail` unchanged when `detail_code` is absent (the handler above was not
+  registered, or the error is a view's own plain-string `HTTPException`) or names a code the
+  table does not cover. Call `translateStrings()` (also exported) to supply translations for as
+  many codes as the application has.
+- A new docs page, [Error codes](https://docs.velis.si/dynamicforms/fastapi-viewsets/guide/error-codes),
+  covers the design and the frontend translation recipe in full.
+
+### Changed
+
+- Bumps the `@dynamicforms/vue-forms` peer range to `^1.0.0` and adds `@dynamicforms/translatable`
+  (`^0.1.0`) as a peer dependency.
+- `NotFoundError` moves from `fastapi_viewsets.response_classes` to `fastapi_viewsets.exceptions`,
+  alongside the other exception classes above.
+
 ## [0.5.7] - 2026-08-26
 
 ### Fixed

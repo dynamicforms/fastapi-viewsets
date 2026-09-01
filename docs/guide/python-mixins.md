@@ -57,7 +57,7 @@ To do either in the backend instead, override `apply_filter` or `apply_sort` —
 ```python
 from fastapi_viewsets.context import Context
 from fastapi_viewsets.mixins import ListMixin, RetrieveMixin, make_all_optional, SortState
-from fastapi_viewsets.response_classes import NotFoundError
+from fastapi_viewsets.exceptions import NotFoundError
 
 ItemFilter = make_all_optional(Item)
 
@@ -192,7 +192,7 @@ class ItemViewSet(BulkViewSetMixin[int, Item, ItemFilter]):
 Raise `NotFoundError` when a record does not exist. It produces a proper `404` response with a JSON body.
 
 ```python
-from fastapi_viewsets.response_classes import NotFoundError
+from fastapi_viewsets.exceptions import NotFoundError
 
 raise NotFoundError(pk)
 # → HTTP 404: {"detail": "Item with pk 42 not found"}
