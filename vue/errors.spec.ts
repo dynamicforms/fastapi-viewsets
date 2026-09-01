@@ -36,7 +36,7 @@ describe('translateApiError', () => {
 
   it('should join an array param for cursor_missing_keys', () => {
     const result = translateApiError({
-      message: "cursor has no value for ordering key(s): id, year",
+      message: 'cursor has no value for ordering key(s): id, year',
       code: 'cursor_missing_keys',
       params: { missing: ['id', 'year'] },
     });
