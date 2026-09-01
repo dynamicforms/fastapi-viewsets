@@ -4,9 +4,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any, TYPE_CHECKING
 
-from fastapi import HTTPException
-
-from ..response_classes import ErrorDetail
+from ..exceptions import RateLimitedError
 from . import Middleware, ViewSetResult
 
 if TYPE_CHECKING:
@@ -73,8 +71,7 @@ class RateLimiter(Middleware):
             key = await key
         allowed = await self._increment(key, limit)
         if not allowed:
-            detail = ErrorDetail(message="Rate limit exceeded", code="rate_limited")
-            raise HTTPException(status_code=429, detail=detail.model_dump())
+            raise RateLimitedError()
 
     async def __call__(
         self,

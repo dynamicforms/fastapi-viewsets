@@ -201,8 +201,8 @@ Inherits: `BulkCreateMixin`, `ListMixin`, `RetrieveMixin`, `BulkUpdateMixin`, `B
 ## NotFoundError
 
 ```python
-from fastapi_viewsets.response_classes import NotFoundError
+from fastapi_viewsets.exceptions import NotFoundError
 
 raise NotFoundError(pk)
-# HTTP 404: {"detail": {"message": "Item with pk <pk> not found", "code": "not_found", "params": {"pk": "<pk>"}}}
+# HTTP 404: {"detail": "Item with pk <pk> not found"}
 ```

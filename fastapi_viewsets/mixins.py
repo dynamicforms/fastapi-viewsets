@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Annotated, Any, final, Generic, get_args, get_origin, Union
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, Query
 from pydantic import BaseModel, ConfigDict, create_model
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
@@ -21,6 +21,7 @@ from fastapi_viewsets.cursor import (
     make_predicate,
     position_of,
 )
+from fastapi_viewsets.exceptions import CursorRequestError, UnsupportedListShapeError
 from fastapi_viewsets.filters import filters_from, FilterSet
 from fastapi_viewsets.list_query import (
     build_list_query,
@@ -31,7 +32,7 @@ from fastapi_viewsets.list_query import (
     take_page,
 )
 from fastapi_viewsets.list_shapes import ListOf, resolve_shapes
-from fastapi_viewsets.response_classes import ErrorDetail, NOT_FOUND_RESPONSE
+from fastapi_viewsets.response_classes import NOT_FOUND_RESPONSE
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -315,12 +316,7 @@ class ListMixin(Generic[T, TFilter], ABC):
         default, allowed = self.resolve_shapes()
         shape = x_list_shape or default
         if shape not in allowed:
-            detail = ErrorDetail(
-                message=f"unsupported list shape {shape!r}; this endpoint offers {', '.join(allowed)}",
-                code="unsupported_list_shape",
-                params={"shape": shape, "allowed": list(allowed)},
-            )
-            raise HTTPException(status_code=422, detail=detail.model_dump())
+            raise UnsupportedListShapeError(shape, list(allowed))
 
         query = build_list_query(
             fltr,
@@ -448,8 +444,7 @@ class ListMixin(Generic[T, TFilter], ABC):
             except CursorError as error:
                 # The client sent something wrong, not the server - a stale cursor after a sort
                 # change is the ordinary case, and it deserves a message rather than a traceback.
-                detail = ErrorDetail(message=str(error), code=error.code, params=error.params)
-                raise HTTPException(status_code=400, detail=detail.model_dump()) from None
+                raise CursorRequestError(error) from None
             query.extra_filters.append(make_predicate(state, keys, self.nulls_first))
 
         backwards = bool(state and state.backwards)

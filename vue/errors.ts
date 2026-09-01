@@ -1,35 +1,21 @@
 import { createTranslatable, interpolate } from '@dynamicforms/translatable';
 
 /**
- * The `detail` shape every error this package's server side raises puts in the HTTP response body.
- *
- * A host application's own `raise HTTPException(status_code, detail="...")` still puts a plain
- * string there — only the library's own built-in errors (not-found, session-expired,
- * not-authorized, rate-limited, an unsupported list shape, a rejected cursor) carry this shape.
- * Narrow with `isApiErrorDetail` before reading `code`/`params` off an error you did not raise
- * yourself.
+ * A failed request's response body. `detail` is always a plain string - unchanged from what it has
+ * always been. `detail_code` and `detail_params` are additive, and appear only when the server has
+ * registered `df_viewset_exception_handler` (see the Python side's `fastapi_viewsets.exceptions`)
+ * for one of this package's own built-in errors; a view's own `raise HTTPException(status_code,
+ * detail="...")` never carries them.
  */
-export interface ApiErrorDetail {
-  /** The English default, fully interpolated - safe to show as-is with no translation layer. */
-  message: string;
-  /** A stable identifier, independent of `message`, to switch on or look up a translation for. */
-  code: string;
-  /** The raw values `message` was interpolated with, for translating and re-interpolating a template. */
-  params: Record<string, unknown>;
-}
-
-export function isApiErrorDetail(detail: unknown): detail is ApiErrorDetail {
-  return (
-    typeof detail === 'object' &&
-    detail !== null &&
-    typeof (detail as ApiErrorDetail).message === 'string' &&
-    typeof (detail as ApiErrorDetail).code === 'string'
-  );
+export interface ApiErrorBody {
+  detail: string;
+  detail_code?: string;
+  detail_params?: Record<string, unknown>;
 }
 
 /**
- * English defaults for every `code` the server side raises on its own, keyed by that code rather
- * than by its English text. `{name}`-style placeholders match the keys `ApiErrorDetail.params`
+ * English defaults for every `detail_code` the server side raises on its own, keyed by that code
+ * rather than by its English text. `{name}`-style placeholders match the keys `detail_params`
  * carries for that code.
  */
 export const { strings: translatableStrings, translateStrings } = createTranslatable({
@@ -46,15 +32,17 @@ export const { strings: translatableStrings, translateStrings } = createTranslat
 });
 
 /**
- * A translated, interpolated message for a structured API error - the English default from the
- * server itself for a `code` this table does not (yet) cover, so a new server-side error code
- * degrades to its own English text rather than to nothing.
+ * A translated, interpolated message for a failed request - `body.detail` unchanged when
+ * `detail_code` is absent (the server has not registered the handler, or this is a view's own
+ * plain-string error) or names a code this table does not (yet) cover.
  */
-export function translateApiError(detail: ApiErrorDetail): string {
-  const template = (translatableStrings as Record<string, string>)[detail.code];
-  if (template == null) return detail.message;
+export function translateApiError(body: ApiErrorBody): string {
+  if (!body.detail_code) return body.detail;
 
-  const params = { ...detail.params };
+  const template = (translatableStrings as Record<string, string>)[body.detail_code];
+  if (template == null) return body.detail;
+
+  const params = { ...body.detail_params };
   if (Array.isArray(params.allowed)) params.allowed = params.allowed.join(', ');
   if (Array.isArray(params.missing)) params.missing = params.missing.join(', ');
 

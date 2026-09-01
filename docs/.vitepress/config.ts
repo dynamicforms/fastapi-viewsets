@@ -51,6 +51,7 @@ export default defineConfig({
             { text: 'Authentication', link: '/guide/authentication' },
             { text: 'Authorization', link: '/guide/authorization' },
             { text: 'Rate Limiter', link: '/guide/rate-limiter' },
+            { text: 'Error Codes', link: '/guide/error-codes' },
           ],
         },
         {

@@ -10,28 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Every `HTTPException` this package raises on its own - not-found, session-expired,
-  not-authorized, rate-limited, an unsupported list shape, and every cursor-pagination error -
-  puts a structured `{message, code, params}` object under `detail` instead of a plain string.
-  `message` is the English default, fully interpolated; `code` is a stable identifier independent
-  of `message`'s wording; `params` are the raw values `message` was interpolated with. A host
-  application's own `raise HTTPException(status_code, detail="...")` is unaffected and still puts
-  a plain string there.
-- The Vue client gains `ApiErrorDetail`, `isApiErrorDetail()` to narrow an error's `detail` before
-  reading `code`/`params` off it, and `translateApiError()`, which looks up `code` in a
-  `@dynamicforms/translatable` table of English defaults and interpolates `params` into it -
-  falling back to the server's own `message` for a code the table does not cover. Call
-  `translateStrings()` (also exported) to supply translations for as many codes as the
-  application has.
+- `fastapi_viewsets.exceptions`: every `HTTPException` this package raises on its own behalf -
+  `NotFoundError`, `SessionExpiredError`, `NotAuthorizedError`, `RateLimitedError`,
+  `UnsupportedListShapeError`, `CursorRequestError` - now carries a stable `code` and the `params`
+  its English `detail` was interpolated with, as attributes on the exception itself. `detail`
+  stays a plain string, exactly as it always was - nothing changes in the response body by
+  default.
+- `df_viewset_exception_handler`, an opt-in exception handler for `DfViewSetError` (the common
+  base every class above descends from). Registered once -
+  `app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)` - it adds
+  `detail_code` and `detail_params` alongside `detail` in the response body, so a frontend can
+  translate or switch on `detail_code` without parsing English prose out of `detail`. An
+  application that does not register it sees exactly what it always has.
+- The Vue client gains `translateApiError()`, which looks up `detail_code` in a
+  `@dynamicforms/translatable` table of English defaults and interpolates `detail_params` into
+  it - returning `detail` unchanged when `detail_code` is absent (the handler above was not
+  registered, or the error is a view's own plain-string `HTTPException`) or names a code the
+  table does not cover. Call `translateStrings()` (also exported) to supply translations for as
+  many codes as the application has.
+- A new docs page, [Error codes](https://docs.velis.si/dynamicforms/fastapi-viewsets/guide/error-codes),
+  covers the design and the frontend translation recipe in full.
 
 ### Changed
 
-- **Breaking:** Every error response's `detail` is now the object described above rather than a
-  plain string, for the built-in errors listed there. A consumer reading `error.response.data.detail`
-  as a string needs to read `.message` (or `.code`) off it instead - see the
-  [migration guide](https://docs.velis.si/dynamicforms/fastapi-viewsets/guide/migration).
 - Bumps the `@dynamicforms/vue-forms` peer range to `^1.0.0` and adds `@dynamicforms/translatable`
   (`^0.1.0`) as a peer dependency.
+- `NotFoundError` moves from `fastapi_viewsets.response_classes` to `fastapi_viewsets.exceptions`,
+  alongside the other exception classes above.
 
 ## [0.5.7] - 2026-08-26
 

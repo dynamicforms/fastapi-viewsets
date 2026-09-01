@@ -1,9 +1,7 @@
 from collections.abc import Awaitable, Callable
 from typing import Any, TYPE_CHECKING
 
-from fastapi import HTTPException
-
-from ...response_classes import ErrorDetail
+from ...exceptions import SessionExpiredError
 from .. import Middleware, ViewSetResult
 
 if TYPE_CHECKING:
@@ -42,8 +40,7 @@ class Session(Middleware):
             return
         user = await context.user
         if user is None:
-            detail = ErrorDetail(message="Session expired or invalid", code="session_expired")
-            raise HTTPException(status_code=401, detail=detail.model_dump())
+            raise SessionExpiredError()
 
     async def __call__(
         self,

@@ -32,6 +32,7 @@ from typing_extensions import TypeVar
 
 from ..context import Context
 from ..cursor import CursorPredicate, wants_greater
+from ..exceptions import NotFoundError
 from ..filters import (
     can_compile_all,
     compile_all,
@@ -51,7 +52,6 @@ from ..filters import (
 )
 from ..list_query import ListQuery, ListRecords
 from ..mixins import filter_set_for, ImplMixin, SortDirection
-from ..response_classes import NotFoundError
 
 try:
     from django.db.models import CompositePrimaryKey

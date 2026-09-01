@@ -134,8 +134,7 @@ class Session(Middleware):
             return
         user = await context.user
         if user is None:
-            detail = ErrorDetail(message="Session expired or invalid", code="session_expired")
-            raise HTTPException(status_code=401, detail=detail.model_dump())
+            raise SessionExpiredError()
 
     async def __call__(self, request, viewset, context, call_next):
         return await call_next()   # depends() already decided everything - nothing left to do here

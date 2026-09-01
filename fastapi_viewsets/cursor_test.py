@@ -305,9 +305,7 @@ def test_a_cursor_from_a_different_sort_is_rejected_at_the_endpoint():
     page = client.get("/tracks", params={"sort": "id:asc"}).json()
     response = client.get("/tracks", params={"sort": "year:asc", "cursor": page["next"]})
     assert response.status_code == 400
-    detail = response.json()["detail"]
-    assert detail["code"] == "cursor_stale"
-    assert "different ordering" in detail["message"]
+    assert "different ordering" in response.json()["detail"]
 
 
 def test_paging_composes_with_a_filter():

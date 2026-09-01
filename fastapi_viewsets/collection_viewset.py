@@ -5,8 +5,8 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel
 
 from .context import Context
+from .exceptions import NotFoundError
 from .mixins import ImplMixin
-from .response_classes import NotFoundError
 
 T = TypeVar("T")
 K = TypeVar("K")

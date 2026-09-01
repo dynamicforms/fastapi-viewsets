@@ -34,8 +34,7 @@ value of `None` (unconfigured) falls back to `default_limit`:
 class ExpensiveViewSet(...): ...
 ```
 
-Exceeding the limit returns `429`
-(`{"detail": {"message": "Rate limit exceeded", "code": "rate_limited", "params": {}}}`) - raised from `depends()`
+Exceeding the limit returns `429` (`{"detail": "Rate limit exceeded"}`) - raised from `depends()`
 (bridged onto FastAPI's own native `Depends()` by `route_viewset`, see
 [Command Middleware](./command-middleware#early-rejection-middleware-depends)), so a request over
 the limit is rejected before FastAPI even parses the body, without ever calling `perform_*`.
