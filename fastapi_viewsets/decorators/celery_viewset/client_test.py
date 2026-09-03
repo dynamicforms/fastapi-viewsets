@@ -147,6 +147,23 @@ def test_celery_viewset_client_serializes_positional_basemodel_args():
         result_reader.register_future = original_register
 
 
+def test_serialize_value_recurses_into_list_and_dict_of_basemodel():
+    """list/dict values containing BaseModel instances must be serialized element-wise, not passed through raw."""
+    import json
+
+    from fastapi_viewsets.decorators.celery_viewset.client import _serialize_value
+
+    items = [Item(id=1, name="a"), Item(id=2, name="b")]
+    serialized_list = asyncio.run(_serialize_value(items))
+    assert serialized_list == [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+    json.dumps(serialized_list)
+
+    mapping = {"first": Item(id=1, name="a"), "second": Item(id=2, name="b")}
+    serialized_dict = asyncio.run(_serialize_value(mapping))
+    assert serialized_dict == {"first": {"id": 1, "name": "a"}, "second": {"id": 2, "name": "b"}}
+    json.dumps(serialized_dict)
+
+
 def test_celery_viewset_client_unregisters_future_on_send_task_error():
     """Client unregisters future when send_task raises an exception."""
     from fastapi_viewsets.decorators.celery_viewset import result_reader
