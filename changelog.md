@@ -6,6 +6,15 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-09-03
+
+### Fixed
+
+- `typecast_to_original_model` no longer raises a 500 for a body parameter annotated as
+  `Model | None` (or `Optional[Model]`): the union was previously passed straight into
+  `isinstance()` and `model_validate()`/`model_construct()`, none of which a union object
+  supports. It is now unwrapped to its `BaseModel` member first.
+
 ## [0.6.0] - 2026-09-01
 
 ### Added
