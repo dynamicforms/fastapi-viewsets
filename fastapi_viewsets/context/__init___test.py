@@ -628,7 +628,7 @@ def test_celery_context_round_trip_with_lazy_object():
 
     captured_kwargs = {}
 
-    def fake_send_task(_name, args=None, kwargs=None):  # noqa: ARG001 - `args` must match send_task's kwarg name
+    def fake_send_task(_name, args=None, kwargs=None, **_options):  # noqa: ARG001
         captured_kwargs.update(kwargs)
 
     celery_app.send_task.side_effect = fake_send_task

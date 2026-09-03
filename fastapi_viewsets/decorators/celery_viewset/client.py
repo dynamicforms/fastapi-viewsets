@@ -126,6 +126,11 @@ def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, queu
                     "_result_queue_key": queue_key,
                     **extra_kwargs,
                 },
+                # send_task() defaults ignore_result to False regardless of what the task was
+                # registered with (celery_viewset_server sets ignore_result=True) - Celery's
+                # per-request value overrides the task's own, so it must be repeated here or the
+                # worker still tries to JSON-encode the raw return value into its result backend.
+                ignore_result=True,
             )
             return await future
         except Exception:

@@ -59,6 +59,26 @@ def _to_jsonable(value):
     return value
 
 
+def _reconstruct_value(hint, value):
+    """Rebuild a dict (or list/tuple of dicts) back into BaseModel instance(s) per `hint`.
+
+    `_reconstruct_kwargs` only unwraps `Optional[...]` at the top level, so a hint arriving here
+    may still be `list[Model]` or `Optional[list[Model]]` - handled by recursing into the origin's
+    type args rather than requiring `hint` itself to be a bare BaseModel subclass.
+    """
+    hint = _unwrap_optional(hint)
+    if hint is not None and isinstance(value, dict) and inspect.isclass(hint) and issubclass(hint, BaseModel):
+        try:
+            return hint.model_validate(value)
+        except Exception:
+            return hint.model_construct(**value)
+    if get_origin(hint) in (list, tuple) and isinstance(value, (list, tuple)):
+        args = get_args(hint)
+        if args:
+            return [_reconstruct_value(args[0], item) for item in value]
+    return value
+
+
 def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> dict:
     """Reconstruct dict values back into Pydantic BaseModel instances based on endpoint type hints.
 
@@ -85,14 +105,8 @@ def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> di
     for key, value in remaining.items():
         hint = hints.get(key)
         if hint is not None:
-            hint = _unwrap_optional(resolve_typevars(type_map, hint))
-        if hint is not None and isinstance(value, dict) and inspect.isclass(hint) and issubclass(hint, BaseModel):
-            try:
-                result[key] = hint.model_validate(value)
-            except Exception:
-                result[key] = hint.model_construct(**value)
-        else:
-            result[key] = value
+            hint = resolve_typevars(type_map, hint)
+        result[key] = _reconstruct_value(hint, value)
     return result
 
 
@@ -144,6 +158,14 @@ def celery_viewset_server(
                                 }
                             ),
                         )
+                        # celery_viewset_client never reads this task's own retval (only the queue
+                        # entry just pushed above), so returning `result` a second time here would
+                        # hand Celery a raw endpoint return value - e.g. a Pydantic model - to
+                        # encode on its own (result backend, task-succeeded event, ...), which
+                        # isn't JSON-safe. ignore_result=True (set on both task registration and
+                        # send_task) tells Celery to skip that, but a JSON-trivial retval here means
+                        # nothing breaks even where that setting doesn't reach.
+                        return True
                     return result
                 except Exception as e:
                     if isinstance(e, HTTPException):
