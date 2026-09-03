@@ -28,9 +28,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
-      # `npm install`, not `npm ci`: package-lock.json is deliberately not committed, so CI
-      # resolves dependencies afresh and tests against current upstream rather than a frozen tree.
-      - run: npm install
+      - run: npm ci
       # `lint:ci`, not `lint`: the developer script carries `--fix`, which rewrites the violation
       # and exits 0. In CI that rewrite is discarded with the runner, so an auto-fixable violation
       # would be reported by nothing and reach main unnoticed.
@@ -62,7 +60,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
-      - run: npm install
+      - run: npm ci
       - name: Vue tests with coverage
         run: npm test
 

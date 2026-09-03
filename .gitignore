@@ -9,7 +9,6 @@ dist
 /demo/backend/demo.sqlite3
 
 /docs/.vitepress/cache
-/package-lock.json
 
 __pycache__/
 *.py[cod]
