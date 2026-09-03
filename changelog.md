@@ -6,6 +6,19 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-09-03
+
+### Fixed
+
+- `celery_viewset_client` now sends its Celery task with `ignore_result=True` explicitly.
+  `celery_viewset_server` already registers every task with `ignore_result=True`, but Celery's
+  `send_task()` defaults that setting to `False` per call, and a request-level value overrides the
+  task's own - so every task's return value was still handed to Celery's own result backend, which
+  raises a Kombu `EncodeError` for any non-JSON-safe value such as a raw Pydantic model.
+- `celery_viewset_server`'s kwarg reconstruction now recurses into `list[Model]` and
+  `tuple[Model, ...]` (including their `Optional` form), not just a bare `Model` hint. A parameter
+  typed as a list of Pydantic models previously arrived at the endpoint as a list of plain `dict`s.
+
 ## [0.6.2] - 2026-09-03
 
 ### Fixed

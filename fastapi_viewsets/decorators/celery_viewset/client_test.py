@@ -164,6 +164,40 @@ def test_serialize_value_recurses_into_list_and_dict_of_basemodel():
     json.dumps(serialized_dict)
 
 
+def test_celery_viewset_client_sends_task_with_ignore_result():
+    """send_task must be called with ignore_result=True explicitly.
+
+    Celery's own send_task() defaults ignore_result to False regardless of how the target task
+    was registered (celery_viewset_server sets ignore_result=True) - a request-level value always
+    overrides the task's own, so the client must repeat it here or the worker still tries to
+    JSON-encode the raw return value into its result backend.
+    """
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+
+    original_register = result_reader.register_future
+
+    def mock_register(_correlation_id, future):
+        asyncio.get_event_loop().call_soon(lambda: future.set_result(["mocked"]))
+
+    result_reader.register_future = mock_register
+    try:
+
+        @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+        class ItemViewSet(ListMixin[Item]):
+            async def perform_list(self) -> list[Item]:
+                return [Item(id=1, name="test")]
+
+        instance = ItemViewSet()
+        asyncio.run(instance.list_items())
+
+        assert celery_app.send_task.call_args.kwargs["ignore_result"] is True
+    finally:
+        result_reader.register_future = original_register
+
+
 def test_celery_viewset_client_unregisters_future_on_send_task_error():
     """Client unregisters future when send_task raises an exception."""
     from fastapi_viewsets.decorators.celery_viewset import result_reader

@@ -556,6 +556,34 @@ def test_reconstruct_kwargs_with_full_model():
     assert result["data"].name == "full item"
 
 
+def test_reconstruct_kwargs_with_list_of_models():
+    """A `list[Model]` kwarg reconstructs each element, not just a bare `Model` kwarg."""
+    from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
+
+    async def endpoint(data: list[Item]) -> list[Item]:
+        return data
+
+    kwargs = {"data": [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]}
+    result = _reconstruct_kwargs(endpoint, kwargs)
+
+    assert all(isinstance(item, Item) for item in result["data"])
+    assert [item.name for item in result["data"]] == ["a", "b"]
+
+
+def test_reconstruct_kwargs_with_optional_list_of_models():
+    """An `Optional[list[Model]]` kwarg reconstructs each element too."""
+    from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
+
+    async def endpoint(data: list[Item] | None = None) -> list[Item] | None:
+        return data
+
+    kwargs = {"data": [{"id": 1, "name": "a"}]}
+    result = _reconstruct_kwargs(endpoint, kwargs)
+
+    assert isinstance(result["data"][0], Item)
+    assert result["data"][0].name == "a"
+
+
 def test_reconstruct_kwargs_with_none_defaulted_optional_model():
     """A None-defaulted parameter reconstructs from a dict just like a required one.
 
