@@ -6,6 +6,15 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-09-03
+
+### Fixed
+
+- `celery_viewset_client` no longer raises a Kombu `EncodeError` when an action argument is a
+  `list[BaseModel]` or `dict[str, BaseModel]`. Serialization now recurses into `list`, `tuple`,
+  and `dict` values so nested `BaseModel` instances are converted at any depth before being
+  handed to `send_task()`.
+
 ## [0.6.1] - 2026-09-03
 
 ### Fixed
