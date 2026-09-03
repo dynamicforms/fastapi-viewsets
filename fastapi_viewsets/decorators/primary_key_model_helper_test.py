@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Optional, Union
 
 from pydantic import BaseModel
 
@@ -38,3 +38,27 @@ def test_typecast_unwraps_an_annotated_original_annotation():
     typing.Annotated cannot be used with isinstance()` on Python 3.13+."""
     item = Item(id=1, name="test")
     assert typecast_to_original_model(item, Annotated[Item, "some fastapi metadata"]) is item
+
+
+def test_typecast_unwraps_a_pep604_union_original_annotation():
+    """`get_origin(Item | None)` returns `types.UnionType`, which no value is ever an instance of -
+    passing it straight to `isinstance` always misses, sending an already-correct value into the
+    `model_validate`/`model_construct` fallback below where `original_annotation` (the union object
+    itself) has neither method."""
+    item = Item(id=1, name="test")
+    assert typecast_to_original_model(item, Item | None) is item
+    assert typecast_to_original_model(None, Item | None) is None
+
+
+def test_typecast_unwraps_a_typing_union_original_annotation():
+    item = Item(id=1, name="test")
+    assert typecast_to_original_model(item, Optional[Item]) is item
+    assert typecast_to_original_model(item, Union[Item, None]) is item
+
+
+def test_typecast_falls_back_to_model_construct_for_a_union_annotation():
+    without_pk = create_model_without_pk(Item, "id")
+    value = without_pk(name="test")
+    result = typecast_to_original_model(value, Item | None)
+    assert isinstance(result, Item)
+    assert result.name == "test"
