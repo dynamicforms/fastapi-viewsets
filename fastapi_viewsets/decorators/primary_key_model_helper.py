@@ -1,4 +1,5 @@
 import types
+
 from typing import Annotated, Any, get_args, get_origin, TypeVar, Union
 
 from pydantic import BaseModel, create_model

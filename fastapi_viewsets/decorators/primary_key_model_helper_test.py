@@ -51,9 +51,11 @@ def test_typecast_unwraps_a_pep604_union_original_annotation():
 
 
 def test_typecast_unwraps_a_typing_union_original_annotation():
+    """`typing.Union`/`Optional` (as opposed to PEP 604's `Item | None`) is its own `get_origin()`
+    result and needs the same unwrapping."""
     item = Item(id=1, name="test")
-    assert typecast_to_original_model(item, Optional[Item]) is item
-    assert typecast_to_original_model(item, Union[Item, None]) is item
+    assert typecast_to_original_model(item, Optional[Item]) is item  # noqa: UP045
+    assert typecast_to_original_model(item, Union[Item, None]) is item  # noqa: UP007
 
 
 def test_typecast_falls_back_to_model_construct_for_a_union_annotation():
