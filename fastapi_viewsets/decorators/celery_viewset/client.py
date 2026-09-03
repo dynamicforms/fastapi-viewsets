@@ -84,11 +84,15 @@ def celery_viewset_client(
 
 
 async def _serialize_value(value):
-    """Convert a Context or BaseModel value into a JSON-safe structure for Celery/Kombu transport."""
+    """Convert a Context, BaseModel, list, or dict value into a JSON-safe structure for Celery/Kombu transport."""
     if isinstance(value, Context):
         return await serialize_context(value.raw())
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {k: await _serialize_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [await _serialize_value(v) for v in value]
     return value
 
 
