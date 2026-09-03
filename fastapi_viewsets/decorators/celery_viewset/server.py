@@ -158,6 +158,14 @@ def celery_viewset_server(
                                 }
                             ),
                         )
+                        # celery_viewset_client never reads this task's own retval (only the queue
+                        # entry just pushed above), so returning `result` a second time here would
+                        # hand Celery a raw endpoint return value - e.g. a Pydantic model - to
+                        # encode on its own (result backend, task-succeeded event, ...), which
+                        # isn't JSON-safe. ignore_result=True (set on both task registration and
+                        # send_task) tells Celery to skip that, but a JSON-trivial retval here means
+                        # nothing breaks even where that setting doesn't reach.
+                        return True
                     return result
                 except Exception as e:
                     if isinstance(e, HTTPException):

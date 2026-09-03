@@ -184,6 +184,35 @@ def test_celery_viewset_server_pushes_result_with_date_field_to_redis():
     assert payload["result"] == [{"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}]
 
 
+def test_celery_viewset_server_returns_json_trivial_value_once_pushed_to_redis():
+    """Once the real result is on the Redis queue, the task's own retval must not be the raw
+    endpoint result - celery_viewset_client never reads it, and Celery itself would otherwise try
+    to encode it (result backend, task-succeeded event, ...) even with ignore_result=True set."""
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+    registered_tasks = {}
+
+    def mock_task(name, **_kwargs):
+        def deck(func):
+            registered_tasks[name] = func
+            return func
+
+        return deck
+
+    celery_app.task.side_effect = mock_task
+
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self, _context) -> list[Item]:
+            return [Item(id=1, name="test")]
+
+    sync_func = registered_tasks["items.list_items"]
+    result = sync_func(context={}, _correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
+
+    assert result is True
+    redis_mock.rpush.assert_called_once()
+
+
 def test_celery_viewset_server_pushes_error_to_redis_on_exception():
     """When task raises, server pushes error payload to Redis."""
     import json
