@@ -57,6 +57,20 @@ class Middleware(ABC):
     concrete example) - a bare function would need extra indirection (closures, partials) for that.
     """
 
+    modifies_response_shape: bool = False
+    """
+    Whether this middleware can change the shape of ViewSetResult.body (strip/rename/restructure
+    fields, not just add side-channel headers/cookies or a status code) - see
+    `any_modifies_response_shape()` below. False by default: typical middleware (auth, rate
+    limiting, sessions) only inspects the result or attaches headers/cookies, so the endpoint's
+    declared return type stays a trustworthy response_model. Override to True on a middleware whose
+    __call__ actually reassigns `result.body` to something that no longer matches the original
+    return annotation - otherwise FastAPI's response_model validation will coerce the reshaped body
+    back towards the original model (e.g. reintroducing a stripped field with its default value).
+    A plain function middleware declares this the same way, by setting the attribute on the
+    function object: `my_middleware.modifies_response_shape = True`.
+    """
+
     def config_from(self, context: Context) -> Any:
         """
         This middleware's own @action_configuration value for the current call (see
@@ -102,6 +116,18 @@ class Middleware(ABC):
         call_next: Callable[[], Awaitable[ViewSetResult]],
     ) -> ViewSetResult:
         raise NotImplementedError
+
+
+def any_modifies_response_shape(middlewares: list) -> bool:
+    """
+    Whether any entry in `middlewares` (a mix of Middleware instances and/or plain functions, as
+    settings.viewsets_command_middleware holds) declares modifies_response_shape=True. A bare
+    function that never set the attribute is treated as False, same default as the Middleware
+    class - see Middleware.modifies_response_shape above. Used by route_viewset/build_schema to
+    decide whether an endpoint's declared response_model can still be trusted for OpenAPI docs and
+    FastAPI's own response validation.
+    """
+    return any(getattr(middleware, "modifies_response_shape", False) for middleware in middlewares)
 
 
 async def run_command_chain(
