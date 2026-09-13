@@ -37,6 +37,8 @@ async def session_cookie_middleware(request, viewset, context, call_next):
         result.body = data           # becomes the actual JSON body
     return result
 
+session_cookie_middleware.modifies_response_shape = True  # strips a field - see below
+
 settings.viewsets_command_middleware = [session_cookie_middleware]
 ```
 
@@ -58,6 +60,8 @@ ABC for exactly that - implement `__call__` with the same signature a function w
 from fastapi_viewsets.middleware import Middleware, ViewSetResult
 
 class SessionCookieMiddleware(Middleware):
+    modifies_response_shape = True   # strips a field - see below
+
     async def __call__(self, request, viewset, context, call_next):
         result = await call_next()
         ...
@@ -133,8 +137,8 @@ settings.viewsets_security_scheme = APIKeyHeader(name="X-Session-Token", auto_er
 ```
 
 Must be set **before** any viewset class is decorated with `route_viewset` (the same existing
-constraint `disable_response_model=bool(settings.viewsets_command_middleware)` already has in this
-codebase) - typically at app startup, before importing viewset modules.
+constraint `any_modifies_response_shape(settings.viewsets_command_middleware)` already has in this
+codebase - see below) - typically at app startup, before importing viewset modules.
 
 ## Per-viewset/per-action configuration
 
@@ -185,6 +189,35 @@ no "after" phase (e.g. `Session`'s `401`), prefer raising `HTTPException` from `
 
 With no middleware configured (the default), behaviour is unchanged: the endpoint's return value
 becomes the response body as-is, no headers/cookies are touched.
+
+## OpenAPI response schema: `modifies_response_shape`
+
+Most middleware only attaches `headers`/`cookies` or a `status_code` - it never touches `result.body`
+at all, so the endpoint's declared return type is still exactly what gets served. For that common
+case, `route_viewset` keeps using it as the route's `response_model`: the OpenAPI docs stay typed,
+and FastAPI still validates/serializes the response against it, same as with no middleware
+configured at all.
+
+A middleware whose `__call__` reassigns `result.body` to something that no longer matches the
+original return annotation (like `session_cookie_middleware`/`SessionCookieMiddleware` above,
+stripping `session_key`) must declare `modifies_response_shape = True` - as a class attribute on a
+`Middleware` subclass, or set on the function object for a plain-function middleware
+(`my_middleware.modifies_response_shape = True`). This tells `route_viewset` the declared return
+type can no longer be trusted, so it registers the route with `response_model=None` instead: FastAPI
+serves whatever `result.body` actually is, without re-validating/coercing it back towards the
+original model (which would silently undo the reshaping - e.g. reintroducing a stripped field with
+its default value) - at the cost of an untyped response schema in the OpenAPI docs for that route.
+
+Default is `False` on both `Middleware` and plain functions - a middleware that doesn't set it is
+assumed to leave `result.body` matching the endpoint's declared model exactly. This includes adding
+fields the model doesn't declare: with `modifies_response_shape` left `False`, FastAPI's response
+validation silently drops any such field from what's actually served, since it still validates
+against the original model. A middleware that adds fields, not just one that strips/renames them,
+needs `modifies_response_shape = True` too - and so does one that short-circuits the chain (returns
+without calling `call_next()`, see `status_code` above) with a `body` of its own that doesn't match
+the declared model, e.g. an error payload. Prefer raising `HTTPException` from `depends()` instead
+for that case (see [Early rejection](#early-rejection-middleware-depends) above) - it never goes
+through response_model validation at all, so this doesn't come up.
 
 ## Only runs in the FastAPI process
 

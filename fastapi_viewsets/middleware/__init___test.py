@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from fastapi_viewsets.conf import settings
 from fastapi_viewsets.decorators import route_viewset
-from fastapi_viewsets.middleware import Middleware, run_command_chain, ViewSetResult
+from fastapi_viewsets.middleware import any_modifies_response_shape, Middleware, run_command_chain, ViewSetResult
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +35,29 @@ async def test_run_command_chain_with_no_middleware_just_calls_final_handler():
 
     result = await run_command_chain([], None, None, None, final_handler)
     assert result.body == "direct"
+
+
+def test_any_modifies_response_shape_defaults_false_for_plain_functions_and_middleware():
+    async def plain_fn(_r, _v, _c, call_next):
+        return await call_next()
+
+    class PlainMiddleware(Middleware):
+        async def __call__(self, _request, _viewset, _context, call_next):
+            return await call_next()
+
+    assert any_modifies_response_shape([plain_fn, PlainMiddleware()]) is False
+
+
+def test_any_modifies_response_shape_true_if_any_entry_declares_it():
+    async def plain_fn(_r, _v, _c, call_next):
+        return await call_next()
+
+    async def reshaping_fn(_r, _v, _c, call_next):
+        return await call_next()
+
+    reshaping_fn.modifies_response_shape = True
+
+    assert any_modifies_response_shape([plain_fn, reshaping_fn]) is True
 
 
 def test_middleware_is_abstract():
@@ -145,6 +168,9 @@ async def _session_cookie_middleware(_request, _viewset, _context, call_next):
     return result
 
 
+_session_cookie_middleware.modifies_response_shape = True  # strips session_key - see test below
+
+
 def _make_login_app():
     app = FastAPI()
     router = APIRouter()
@@ -181,10 +207,50 @@ def test_no_command_middleware_configured_is_unaffected():
     assert response.json() == {"is_authenticated": True, "session_key": "s3cr3t"}
 
 
+def _login_response_schema(app: FastAPI) -> dict:
+    return app.openapi()["paths"]["/session/login"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]
+
+
+def test_no_command_middleware_configured_keeps_typed_response_schema():
+    app = _make_login_app()
+    assert _login_response_schema(app) == {"$ref": "#/components/schemas/LoginResult"}
+
+
+def test_command_middleware_not_declaring_modifies_response_shape_keeps_typed_response_schema():
+    """A middleware that only attaches a cookie (the common case) doesn't opt into
+    modifies_response_shape - the endpoint's declared return type stays trusted, both for the
+    OpenAPI docs and for FastAPI's own response validation."""
+
+    async def cookie_only_middleware(_request, _viewset, _context, call_next):
+        result = await call_next()
+        result.cookies["sessionid"] = "s3cr3t"
+        return result
+
+    settings.viewsets_command_middleware = [cookie_only_middleware]
+    app = _make_login_app()
+
+    assert _login_response_schema(app) == {"$ref": "#/components/schemas/LoginResult"}
+    response = TestClient(app).post("/session/login")
+    assert response.cookies.get("sessionid") == "s3cr3t"
+    assert response.json() == {"is_authenticated": True, "session_key": "s3cr3t"}
+
+
+def test_command_middleware_declaring_modifies_response_shape_untypes_response_schema():
+    """A middleware that opts into modifies_response_shape=True loses the typed OpenAPI schema for
+    every route - the tradeoff documented for modifies_response_shape."""
+    settings.viewsets_command_middleware = [_session_cookie_middleware]
+    app = _make_login_app()
+
+    assert _login_response_schema(app) == {}
+
+
 async def _unauthorized_middleware(_request, _viewset, _context, _call_next):
     """A middleware that short-circuits without calling call_next() - the same shape a real
     session-expiry check uses (see middleware/auth/__init__.py's Session)."""
     return ViewSetResult(body={"detail": "nope"}, status_code=401)
+
+
+_unauthorized_middleware.modifies_response_shape = True  # short-circuit body doesn't match LoginResult
 
 
 def test_command_middleware_status_code_is_applied_to_the_real_response():

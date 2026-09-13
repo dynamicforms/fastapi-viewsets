@@ -21,7 +21,7 @@ from fastapi_viewsets.endpoint_docs import (
     register_tag,
     viewset_description,
 )
-from fastapi_viewsets.middleware import Middleware
+from fastapi_viewsets.middleware import any_modifies_response_shape, Middleware
 from fastapi_viewsets.mixins import FilterParam
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
 
@@ -342,14 +342,16 @@ def route_viewset(
             return wrapper, new_return_annotation
 
         # Command middleware (see fastapi_viewsets/middleware.py) can reshape the response body via
-        # ViewSetResult - if any is configured, the endpoint's declared return type can no longer
-        # be trusted as the actual response_model, same reasoning as the old finalize_response hook.
+        # ViewSetResult - only middleware that actually declares modifies_response_shape=True
+        # untrusts the endpoint's declared return type as the response_model (same reasoning as the
+        # old finalize_response hook); typical middleware (auth, rate limiting, sessions) only adds
+        # headers/cookies and leaves the declared model - and therefore the OpenAPI docs - in place.
         build_schema(
             cls,
             base_path,
             default_tags,
             get_wrapper,
-            disable_response_model=bool(settings.viewsets_command_middleware),
+            disable_response_model=any_modifies_response_shape(settings.viewsets_command_middleware),
         )
 
         muxws_routes = []
