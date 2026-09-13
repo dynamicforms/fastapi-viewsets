@@ -6,6 +6,23 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-13
+
+### Added
+
+- `Middleware.modifies_response_shape` (also settable as a plain attribute on a function-based
+  middleware) lets a command middleware declare whether it changes the shape of
+  `ViewSetResult.body` - defaults to `False`.
+
+### Fixed
+
+- Command middleware no longer disables a route's `response_model` for the whole application just
+  because *any* middleware is configured in `settings.viewsets_command_middleware`. Previously, even
+  a middleware that only attaches a cookie or header (never touching `ViewSetResult.body`) caused
+  every route's OpenAPI response schema to go untyped and FastAPI's own response validation to be
+  skipped. `response_model` is now only disabled when a configured middleware declares
+  `modifies_response_shape=True`.
+
 ## [0.6.3] - 2026-09-03
 
 ### Fixed
