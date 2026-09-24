@@ -209,14 +209,11 @@ class InviteViewSet:
         return ViewSetResult(body=None, status_code=302, headers={"Location": "/welcome"})
 ```
 
-The transport adapter doesn't care where a `ViewSetResult` came from: `lifecycle_runner` recognizes
-one returned directly and passes it through unchanged (instead of wrapping it in another
-`ViewSetResult`, which would bury `status_code`/`headers`/`cookies` one level too deep to ever be
-applied), and any globally-configured command middleware still runs around it exactly as it would
-around a plain-body endpoint. The example above is a redirect: a browser or `restViewSet` client
-follows a `3xx` status with a `Location` header regardless of what the body is (see
-[Handling a failed call](./vue-mixins#handling-a-failed-call)), so `body=None` is enough - there is
-no JSON payload for a client to read here.
+Any globally-configured command middleware still runs around a `ViewSetResult` returned this way,
+exactly as it would around a plain-body endpoint. The example above is a redirect: a browser or
+`restViewSet` client follows a `3xx` status with a `Location` header regardless of what the body is
+(see [Handling a failed call](./vue-mixins#handling-a-failed-call)), so `body=None` is enough - there
+is no JSON payload for a client to read here.
 
 Declare the return type as `ViewSetResult[X]` rather than bare `X` - `route_viewset`/`build_schema`
 unwrap it to `X` for the OpenAPI `response_model` and FastAPI's own response validation, so
