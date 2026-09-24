@@ -11,7 +11,7 @@ from typing import get_args, get_origin, get_type_hints, TYPE_CHECKING, TypeVar,
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from ...context import Context, deserialize_context, SerializableObject, serialize_value
+from ...context import Context, deserialize_context, to_jsonable
 from ..build_schema import build_schema
 from ..lifecycle_runner import lifecycle_runner, LifecycleType
 from ..route_viewset import build_type_map, resolve_typevars
@@ -50,17 +50,12 @@ def _unwrap_optional(hint):
     return hint
 
 
-def _to_jsonable(value):
-    """Recursively convert Pydantic models, lists, and SerializableObject values (e.g. a
-    ViewSetResult a worker-side action returned directly - see fastapi_viewsets.middleware) to
-    JSON-serializable structures."""
-    if isinstance(value, SerializableObject):
-        return serialize_value(value)
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
-    if isinstance(value, list):
-        return [_to_jsonable(v) for v in value]
-    return value
+# Alias, not a re-implementation: the actual conversion (Pydantic models, lists/tuples,
+# SerializableObject values - e.g. a ViewSetResult a worker-side action returned directly, see
+# fastapi_viewsets.middleware) lives in fastapi_viewsets.context.to_jsonable, shared with
+# ViewSetResult's own (de)serialization. Kept under this name since call sites/tests here already
+# import it as `_to_jsonable`.
+_to_jsonable = to_jsonable
 
 
 def _reconstruct_value(hint, value):

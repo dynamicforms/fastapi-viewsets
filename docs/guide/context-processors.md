@@ -153,6 +153,10 @@ The same tagging is also available for a single `SerializableObject` value outsi
 via `serialize_value()`/`deserialize_value()` (same module) - used internally so a `celery_viewset`-
 dispatched action's [`ViewSetResult`](./command-middleware#returning-viewsetresult-directly-from-an-endpoint)
 return value survives the worker boundary the same way any other `SerializableObject` does.
+`to_jsonable()` (same module) builds on `serialize_value()` for the general case: a Pydantic model
+is dumped, a list/tuple is recursed into element-wise, a `SerializableObject` is tagged, anything
+else passes through unchanged - the one shared conversion `ViewSetResult`'s own serialization and
+`celery_viewset`'s worker/client both build their JSON-safe payload from.
 
 ### `LazyObject`
 

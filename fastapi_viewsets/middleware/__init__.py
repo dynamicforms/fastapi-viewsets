@@ -3,29 +3,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Generic, get_args, get_origin, TYPE_CHECKING, TypeVar
 
-from pydantic import BaseModel
-
-from ..context import Context, SerializableObject, serialize_value
+from ..context import Context, SerializableObject, to_jsonable
 
 if TYPE_CHECKING:
     from fastapi import Request
 
 T = TypeVar("T")
-
-
-def _body_to_jsonable(value: Any) -> Any:
-    """Recursively convert Pydantic models, lists, and SerializableObject values into
-    JSON-serializable structures - same shape as celery_viewset.server._to_jsonable, needed here
-    too since ViewSetResult.__serialize__ has to produce a JSON-safe payload on its own, without
-    depending on the celery_viewset package (which imports lifecycle_runner, which imports this
-    module - the reverse import would cycle)."""
-    if isinstance(value, SerializableObject):
-        return serialize_value(value)
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
-    if isinstance(value, (list, tuple)):
-        return [_body_to_jsonable(v) for v in value]
-    return value
 
 
 @dataclass
@@ -69,7 +52,7 @@ class ViewSetResult(SerializableObject, Generic[T]):
 
     def __serialize__(self) -> Any:
         return {
-            "body": _body_to_jsonable(self.body),
+            "body": to_jsonable(self.body),
             "headers": self.headers,
             "cookies": self.cookies,
             "status_code": self.status_code,

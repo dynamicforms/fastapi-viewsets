@@ -10,9 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- An endpoint (`perform_*`/custom `__router` method) can return a `ViewSetResult` directly instead
-  of a plain body, to reach `status_code`/`headers`/`cookies` itself without writing a command
-  middleware.
+- A registered route endpoint can return a `ViewSetResult` directly instead of a plain body, to
+  reach `status_code`/`headers`/`cookies` itself without writing a command middleware - a
+  `perform_*` hook cannot, since it isn't itself a registered route.
 - `ViewSetResult` is now generic (`ViewSetResult[T]`) - an endpoint declared `-> ViewSetResult[X]`
   documents/validates exactly like a plain `-> X`; `route_viewset`/`build_schema` unwrap it to `X`
   for the OpenAPI `response_model`.
@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fastapi_viewsets.context.serialize_value`/`deserialize_value` - the tagged-payload convention
   `serialize_context`/`deserialize_context` already use per context key, now available for a single
   `SerializableObject` value outside a context dict.
+- `fastapi_viewsets.context.to_jsonable` - the shared JSON-safe conversion (Pydantic model dumped,
+  list/tuple recursed into, `SerializableObject` tagged) `ViewSetResult`'s own serialization and
+  `celery_viewset`'s worker/client both use, replacing three near-duplicate copies of the same
+  logic. `celery_viewset_client`'s call-argument serialization now also tags a bare
+  `SerializableObject` argument (not just one wrapped in a `Context`), which it previously did not.
 
 ## [0.7.0] - 2026-09-13
 

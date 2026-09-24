@@ -6,9 +6,7 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 
-from pydantic import BaseModel
-
-from ...context import Context, serialize_context
+from ...context import Context, serialize_context, to_jsonable
 from ..build_schema import build_schema
 from . import result_reader
 from .result_reader import get_result_queue_key
@@ -84,16 +82,17 @@ def celery_viewset_client(
 
 
 async def _serialize_value(value):
-    """Convert a Context, BaseModel, list, or dict value into a JSON-safe structure for Celery/Kombu transport."""
+    """Convert a Context, dict, or list/tuple value into a JSON-safe structure for Celery/Kombu
+    transport, recursing async since Context serialization needs to await context values. Anything
+    else - a Pydantic model, a SerializableObject, or an already JSON-native value - is handled by
+    the shared, synchronous fastapi_viewsets.context.to_jsonable()."""
     if isinstance(value, Context):
         return await serialize_context(value.raw())
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
     if isinstance(value, dict):
         return {k: await _serialize_value(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [await _serialize_value(v) for v in value]
-    return value
+    return to_jsonable(value)
 
 
 def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, queue_key: str):

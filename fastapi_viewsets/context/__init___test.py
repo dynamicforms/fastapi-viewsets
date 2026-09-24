@@ -22,6 +22,7 @@ from fastapi_viewsets.context import (
     SerializableObject,
     serialize_context,
     serialize_value,
+    to_jsonable,
 )
 from fastapi_viewsets.decorators import route_viewset
 from fastapi_viewsets.decorators.celery_viewset import celery_viewset_client
@@ -330,6 +331,39 @@ def test_deserialize_value_passes_through_untagged_values():
     assert deserialize_value(7) == 7
     assert deserialize_value({"a": 1}) == {"a": 1}
     assert deserialize_value(None) is None
+
+
+# ---------------------------------------------------------------------------
+# to_jsonable - the shared conversion ViewSetResult's own (de)serialization and
+# celery_viewset.server/client each build their JSON-safe payload from.
+# ---------------------------------------------------------------------------
+
+
+def test_to_jsonable_converts_pydantic_model():
+    class Item(BaseModel):
+        id: int
+        name: str
+
+    assert to_jsonable(Item(id=1, name="widget")) == {"id": 1, "name": "widget"}
+
+
+def test_to_jsonable_recurses_into_list_and_tuple():
+    class Item(BaseModel):
+        id: int
+
+    assert to_jsonable([Item(id=1), Item(id=2)]) == [{"id": 1}, {"id": 2}]
+    assert to_jsonable((Item(id=1), Item(id=2))) == [{"id": 1}, {"id": 2}]
+
+
+def test_to_jsonable_tags_a_serializable_object():
+    tagged = to_jsonable(_Tagged(7))
+    assert tagged == {"__fpv_type__": f"{_Tagged.__module__}.{_Tagged.__qualname__}", "__fpv_value__": 7}
+
+
+def test_to_jsonable_passes_through_plain_values():
+    assert to_jsonable(42) == 42
+    assert to_jsonable(None) is None
+    assert to_jsonable({"a": 1}) == {"a": 1}  # dict is not recursed into - see to_jsonable's own callers for that
 
 
 def test_deserialize_context_is_loop_independent():
