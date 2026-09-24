@@ -368,6 +368,70 @@ def test_to_jsonable_with_plain_value():
     assert _to_jsonable([1, 2, 3]) == [1, 2, 3]
 
 
+def test_to_jsonable_with_viewset_result():
+    """A worker-side action may return a ViewSetResult directly (see
+    fastapi_viewsets.middleware.ViewSetResult) - _to_jsonable must tag it (it's a
+    SerializableObject) rather than crash on a plain dataclass json.dumps can't handle."""
+    import json
+
+    from fastapi_viewsets.decorators.celery_viewset.server import _to_jsonable
+    from fastapi_viewsets.middleware import ViewSetResult
+
+    result = ViewSetResult(body=Item(id=1, name="test"), status_code=302, headers={"Location": "/x"})
+    tagged = _to_jsonable(result)
+
+    assert tagged["__fpv_type__"] == "fastapi_viewsets.middleware.ViewSetResult"
+    assert tagged["__fpv_value__"] == {
+        "body": {"id": 1, "name": "test"},
+        "headers": {"Location": "/x"},
+        "cookies": {},
+        "status_code": 302,
+    }
+    json.dumps(tagged)  # must not raise - this is the actual celery round-trip failure mode
+
+
+def test_celery_viewset_server_pushes_viewset_result_to_redis():
+    """A worker-side custom endpoint returning ViewSetResult directly (see ViewSetResult in
+    fastapi_viewsets.middleware) survives the push to Redis - see test_to_jsonable_with_viewset_result
+    for the tagging itself. Uses a custom __router endpoint, not a mixin hook like perform_list:
+    ListMixin.list_items itself expects perform_list to return plain records (it still does its own
+    pagination/shaping around them), so ViewSetResult is only meaningful as the actual route
+    endpoint's own return value."""
+    import json
+
+    from fastapi import APIRouter
+
+    from fastapi_viewsets.middleware import ViewSetResult
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+    registered_tasks = {}
+
+    def mock_task(name, **_kwargs):
+        def deck(func):
+            registered_tasks[name] = func
+            return func
+
+        return deck
+
+    celery_app.task.side_effect = mock_task
+
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+    class ItemViewSet:
+        __router = APIRouter()
+
+        @__router.post("go")
+        async def go(self, context) -> ViewSetResult[Item]:  # noqa: ARG002 - name matters, see _reconstruct_kwargs
+            return ViewSetResult(body=Item(id=1, name="test"), status_code=200)
+
+    sync_func = registered_tasks["items.go"]
+    sync_func(context={}, _correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
+
+    payload = json.loads(redis_mock.rpush.call_args[0][1])
+    assert payload["result"]["__fpv_type__"] == "fastapi_viewsets.middleware.ViewSetResult"
+    assert payload["result"]["__fpv_value__"]["body"] == {"id": 1, "name": "test"}
+
+
 # ---------------------------------------------------------------------------
 # FastAPI integration - server
 # ---------------------------------------------------------------------------

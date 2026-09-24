@@ -6,6 +6,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
 
 from ..endpoint_docs import docs_for, viewset_tags
+from ..middleware import unwrap_viewset_result_type
 
 
 def _generic_args(annotation) -> tuple:
@@ -166,6 +167,11 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
                 # answer: only route_viewset knows what this viewset bound it to.
                 use_resolved = route.response_model is None or has_typevars(route.response_model)
                 response_model = resolved_response_model if use_resolved else route.response_model
+                # route.response_model is FastAPI's own inference from the ORIGINAL declared return
+                # type (e.g. -> ViewSetResult[Item]), untouched by get_wrapper's own unwrap - must be
+                # unwrapped here too, or an endpoint declared this way would document/validate as the
+                # wrapper instead of the wire body whenever use_resolved is False.
+                response_model = unwrap_viewset_result_type(response_model)
 
             # Per-viewset wording, applied here because this is where the schema-serving app is
             # built; patching the caller's router afterwards would leave /schema showing the

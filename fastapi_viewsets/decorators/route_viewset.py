@@ -21,7 +21,7 @@ from fastapi_viewsets.endpoint_docs import (
     register_tag,
     viewset_description,
 )
-from fastapi_viewsets.middleware import any_modifies_response_shape, Middleware
+from fastapi_viewsets.middleware import any_modifies_response_shape, Middleware, unwrap_viewset_result_type
 from fastapi_viewsets.mixins import FilterParam
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
 
@@ -298,7 +298,8 @@ def route_viewset(
                 # right before the endpoint runs - never forwarded to the endpoint itself.
                 new_params.append(inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
 
-            new_return_annotation = resolve_typevars(type_map, sig.return_annotation)
+            # -> ViewSetResult[X] documents/validates as X - see unwrap_viewset_result_type.
+            new_return_annotation = unwrap_viewset_result_type(resolve_typevars(type_map, sig.return_annotation))
             new_sig = sig.replace(parameters=new_params, return_annotation=new_return_annotation)
 
             @wraps(original_endpoint)

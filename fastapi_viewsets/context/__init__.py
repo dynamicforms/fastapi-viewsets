@@ -6,6 +6,8 @@ import json
 from abc import ABC, abstractmethod
 from typing import Any, TYPE_CHECKING
 
+from pydantic import BaseModel
+
 from ..conf import settings
 
 if TYPE_CHECKING:
@@ -298,6 +300,44 @@ def _resolve_class(dotted_path: str) -> type[SerializableObject]:
     if not (isinstance(cls, type) and issubclass(cls, SerializableObject)):
         raise TypeError(f"{dotted_path!r} does not resolve to a SerializableObject subclass")
     return cls
+
+
+def serialize_value(value: Any) -> Any:
+    """
+    Tag a single SerializableObject for JSON transport, the same convention serialize_context()
+    applies per context key (see _TYPE_KEY/_VALUE_KEY above); anything else passes through
+    unchanged. For a value crossing the Celery/Redis boundary outside a Context dict - e.g. a
+    command-middleware ViewSetResult returned by a celery_viewset-dispatched action (see
+    fastapi_viewsets.middleware.ViewSetResult).
+    """
+    if isinstance(value, SerializableObject):
+        return {_TYPE_KEY: _class_tag(type(value)), _VALUE_KEY: value.__serialize__()}
+    return value
+
+
+def to_jsonable(value: Any) -> Any:
+    """
+    Recursively convert a value into a JSON-safe structure: a SerializableObject is tagged (see
+    serialize_value()), a Pydantic model is dumped, a list/tuple is recursed into element-wise -
+    anything else passes through unchanged. The one shared implementation of a conversion several
+    call sites need on their own single (non-Context, non-dict) return/body value - ViewSetResult's
+    own (de)serialization, and a celery_viewset worker's task result - rather than each keeping a
+    slightly different copy that drifts out of sync with what the others handle.
+    """
+    if isinstance(value, SerializableObject):
+        return serialize_value(value)
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, (list, tuple)):
+        return [to_jsonable(v) for v in value]
+    return value
+
+
+def deserialize_value(value: Any) -> Any:
+    """Inverse of serialize_value() - passes through anything that isn't a tagged payload."""
+    if isinstance(value, dict) and _TYPE_KEY in value and _VALUE_KEY in value:
+        return _resolve_class(value[_TYPE_KEY]).__deserialize__(value[_VALUE_KEY])
+    return value
 
 
 async def serialize_context(data: dict[str, Any]) -> dict[str, Any]:

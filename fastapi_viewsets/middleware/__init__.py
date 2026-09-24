@@ -1,16 +1,18 @@
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import Any, Generic, get_args, get_origin, TYPE_CHECKING, TypeVar
 
-from ..context import Context
+from ..context import Context, SerializableObject, to_jsonable
 
 if TYPE_CHECKING:
     from fastapi import Request
 
+T = TypeVar("T")
+
 
 @dataclass
-class ViewSetResult:
+class ViewSetResult(SerializableObject, Generic[T]):
     """
     Transport-agnostic result of running the command middleware chain (see run_command_chain()
     below). `body` is the actual domain value (whatever perform_* returned); `headers`/`cookies`
@@ -22,12 +24,43 @@ class ViewSetResult:
     onto real Set-Cookie, and `status_code` onto the real Response's status code; a future WS
     adapter would fold all three into the outgoing message payload as plain JSON keys instead (no
     real headers/cookies/status line exist over WS).
+
+    A registered route endpoint (a mixin-provided one, or a custom `__router` method - never a
+    `perform_*` hook, which is called by the actual route method and never registered as a route
+    itself) may also return a `ViewSetResult` directly instead of a plain body, getting the same
+    `status_code`/`headers`/`cookies` access normally reserved for command middleware (e.g. a
+    redirect: `ViewSetResult(body=None, status_code=302, headers={"Location": url})`) -
+    `lifecycle_runner.final_handler` passes it through unchanged. Declare the return type as
+    `ViewSetResult[X]` (X being whatever the wire body actually is) rather than bare `X` -
+    `route_viewset`/`build_schema` unwrap this to `X` for the OpenAPI response_model and FastAPI's
+    own response validation (see unwrap_viewset_result_type below), so the two forms
+    document/validate identically.
+
+    Inherits `SerializableObject` so it survives the Celery/Redis boundary: a
+    `celery_viewset`-dispatched action's worker-side return value is passed through
+    `serialize_value()`/`deserialize_value()` (see fastapi_viewsets.context) exactly like any other
+    `SerializableObject`, the same mechanism `LazyObject`/`Context` values already rely on. Only
+    `__serialize__`/`__deserialize__` are overridden here - a `ViewSetResult` is never itself placed
+    in a `Context` and never awaited, so `SerializableObject`'s `value`/`__await__`/`__init__` go
+    unused, the same way `LazyObject` replaces those with its own.
     """
 
-    body: Any
+    body: T
     headers: dict[str, Any] = field(default_factory=dict)
     cookies: dict[str, Any] = field(default_factory=dict)
     status_code: int | None = None
+
+    def __serialize__(self) -> Any:
+        return {
+            "body": to_jsonable(self.body),
+            "headers": self.headers,
+            "cookies": self.cookies,
+            "status_code": self.status_code,
+        }
+
+    @classmethod
+    def __deserialize__(cls, data: Any) -> "ViewSetResult":
+        return cls(body=data["body"], headers=data["headers"], cookies=data["cookies"], status_code=data["status_code"])
 
 
 CommandMiddleware = Callable[
@@ -128,6 +161,21 @@ def any_modifies_response_shape(middlewares: list) -> bool:
     FastAPI's own response validation.
     """
     return any(getattr(middleware, "modifies_response_shape", False) for middleware in middlewares)
+
+
+def unwrap_viewset_result_type(annotation: Any) -> Any:
+    """
+    An endpoint declared `-> ViewSetResult[X]` (see ViewSetResult above) documents/validates as
+    `X` - the wire body a client actually receives, not the side-channel wrapper the endpoint
+    returns internally to reach `status_code`/`headers`/`cookies`. `route_viewset`/`build_schema`
+    call this wherever a return annotation becomes an OpenAPI response_model, so `-> ViewSetResult[X]`
+    and plain `-> X` document/validate identically. Anything that isn't `ViewSetResult[...]` passes
+    through unchanged.
+    """
+    if get_origin(annotation) is ViewSetResult:
+        args = get_args(annotation)
+        return args[0] if args else None
+    return annotation
 
 
 async def run_command_chain(

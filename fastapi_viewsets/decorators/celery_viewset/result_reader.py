@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 
+from ...context import deserialize_value
+
 if TYPE_CHECKING:
     import redis
 
@@ -59,7 +61,9 @@ async def result_reader_loop(redis_client: "redis.Redis", queue_key: str, poll_i
                     else:
                         future.set_exception(Exception(error))
                 else:
-                    future.set_result(result)
+                    # Undoes _to_jsonable's SerializableObject tagging (see server.py) - a plain
+                    # domain result has no _TYPE_KEY/_VALUE_KEY pair and passes through unchanged.
+                    future.set_result(deserialize_value(result))
 
         except asyncio.CancelledError:
             break

@@ -8,6 +8,7 @@ import pytest
 
 from pydantic import BaseModel
 
+from fastapi_viewsets.context import SerializableObject
 from fastapi_viewsets.decorators import (
     celery_viewset_client,
 )
@@ -162,6 +163,28 @@ def test_serialize_value_recurses_into_list_and_dict_of_basemodel():
     serialized_dict = asyncio.run(_serialize_value(mapping))
     assert serialized_dict == {"first": {"id": 1, "name": "a"}, "second": {"id": 2, "name": "b"}}
     json.dumps(serialized_dict)
+
+
+class _TaggedArg(SerializableObject):
+    """Module-level (importable) SerializableObject fixture - see SerializableObject's own
+    docstring on why a locally-defined subclass can't round-trip through the type tag."""
+
+    def __serialize__(self):
+        return self.value
+
+    @classmethod
+    def __deserialize__(cls, data):
+        return cls(data)
+
+
+def test_serialize_value_tags_a_serializable_object_argument():
+    """A call argument that is itself a SerializableObject (not wrapped in Context) must be
+    tagged too, via the same fastapi_viewsets.context.to_jsonable() server.py's _to_jsonable and
+    ViewSetResult's own (de)serialization already use."""
+    from fastapi_viewsets.decorators.celery_viewset.client import _serialize_value
+
+    serialized = asyncio.run(_serialize_value(_TaggedArg(7)))
+    assert serialized == {"__fpv_type__": f"{_TaggedArg.__module__}.{_TaggedArg.__qualname__}", "__fpv_value__": 7}
 
 
 def test_celery_viewset_client_sends_task_with_ignore_result():
