@@ -39,24 +39,24 @@ class ViewSetResult(SerializableObject, Generic[T]):
     adapter would fold all three into the outgoing message payload as plain JSON keys instead (no
     real headers/cookies/status line exist over WS).
 
-    An endpoint (`perform_*`/custom `__router` method) may also return a `ViewSetResult` directly
-    instead of a plain body - `lifecycle_runner.final_handler` recognizes this and passes it
-    through unchanged rather than wrapping it again, so the endpoint itself gets the same
+    A registered route endpoint (a mixin-provided one, or a custom `__router` method - never a
+    `perform_*` hook, which is called by the actual route method and never registered as a route
+    itself) may also return a `ViewSetResult` directly instead of a plain body, getting the same
     `status_code`/`headers`/`cookies` access normally reserved for command middleware (e.g. a
-    redirect: `ViewSetResult(body=None, status_code=302, headers={"Location": url})`). Declare the
-    return type as `ViewSetResult[X]` (X being whatever the wire body actually is) rather than bare
-    `X` - `route_viewset`/`build_schema` unwrap this to `X` for the OpenAPI response_model and
-    FastAPI's own response validation (see unwrap_viewset_result_type below), so the two forms
+    redirect: `ViewSetResult(body=None, status_code=302, headers={"Location": url})`) -
+    `lifecycle_runner.final_handler` passes it through unchanged. Declare the return type as
+    `ViewSetResult[X]` (X being whatever the wire body actually is) rather than bare `X` -
+    `route_viewset`/`build_schema` unwrap this to `X` for the OpenAPI response_model and FastAPI's
+    own response validation (see unwrap_viewset_result_type below), so the two forms
     document/validate identically.
 
     Inherits `SerializableObject` so it survives the Celery/Redis boundary: a
     `celery_viewset`-dispatched action's worker-side return value is passed through
     `serialize_value()`/`deserialize_value()` (see fastapi_viewsets.context) exactly like any other
-    `SerializableObject`, the same mechanism `LazyObject`/`Context` values already rely on. This
-    only overrides `__serialize__`/`__deserialize__` from `SerializableObject` - `body` doesn't need
-    that base class's `value`/`__await__`/`__init__` (a `ViewSetResult` is never itself placed in a
-    `Context` and never awaited), so those go unused here, the same way `LazyObject` already
-    replaces `SerializableObject.__init__`/`__await__` with its own.
+    `SerializableObject`, the same mechanism `LazyObject`/`Context` values already rely on. Only
+    `__serialize__`/`__deserialize__` are overridden here - a `ViewSetResult` is never itself placed
+    in a `Context` and never awaited, so `SerializableObject`'s `value`/`__await__`/`__init__` go
+    unused, the same way `LazyObject` replaces those with its own.
     """
 
     body: T

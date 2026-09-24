@@ -70,8 +70,8 @@ async def lifecycle_runner(
         async def final_handler() -> ViewSetResult:
             raw = await call_bound(req_instance)
             # An endpoint may return a ViewSetResult directly (see ViewSetResult in
-            # fastapi_viewsets/middleware) to reach status_code/headers/cookies itself, instead of
-            # leaving those to command middleware - passed through as-is rather than wrapped again.
+            # fastapi_viewsets/middleware) to reach status_code/headers/cookies itself - passed
+            # through as-is.
             return raw if isinstance(raw, ViewSetResult) else ViewSetResult(body=raw)
 
         effective_middlewares = settings.viewsets_command_middleware + extra_middlewares_for(
