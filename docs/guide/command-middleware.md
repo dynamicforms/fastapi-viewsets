@@ -192,9 +192,10 @@ becomes the response body as-is, no headers/cookies are touched.
 
 ### Returning `ViewSetResult` directly from an endpoint
 
-`status_code`/`headers`/`cookies` aren't reserved for middleware - a `perform_*`/custom `__router`
-method can return a `ViewSetResult` itself instead of a plain body, to reach the exact same fields
-without writing a middleware at all:
+A registered route endpoint returns either its declared model directly - the simple, REST-like
+case, where FastAPI's own response handling is all there is to it - or a `ViewSetResult`, for full
+control over the result: `status_code`/`headers`/`cookies` alongside (or instead of) the body,
+without writing a command middleware for it:
 
 ```python
 from fastapi_viewsets.middleware import ViewSetResult
@@ -223,12 +224,12 @@ unwrap it to `X` for the OpenAPI `response_model` and FastAPI's own response val
 because this particular endpoint never sends a body; an endpoint whose `ViewSetResult` sometimes
 carries real data declares whatever that data's type actually is (`ViewSetResult[Item]`, say).
 
-**Only at the actual route endpoint, not inside a mixin hook.** `perform_list`/`perform_create`/etc.
-are internal hooks a mixin's own route method (`list_items`, `create`, ...) calls and then does
-further work with (pagination, filtering, shaping) - they expect the return value to still be plain
-records, not a `ViewSetResult`. Returning one from `perform_list` breaks the mixin's own pipeline
-before a `ViewSetResult` ever reaches `route_viewset`. A custom `__router` method has no such
-pipeline around it, since it *is* the route endpoint - that's the only place this applies.
+**Only the registered route endpoint can do this - a `perform_*` hook cannot.**
+`perform_list`/`perform_create`/etc. are never registered as routes themselves; the mixin's own
+route method (`list_items`, `create`, ...) calls them and does further work with the result
+(pagination, filtering, shaping) that expects plain records, not a `ViewSetResult`. A custom
+`__router` method has no such pipeline around it - it *is* the registered endpoint - which is why
+`ViewSetResult` only ever applies there.
 
 `ViewSetResult` is itself a `SerializableObject` (see [Context Processors](./context-processors)),
 the same mechanism `LazyObject`/`Context` values already use to survive the Celery/Redis boundary -
