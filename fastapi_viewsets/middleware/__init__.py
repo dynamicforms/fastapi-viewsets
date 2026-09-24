@@ -5,7 +5,7 @@ from typing import Any, Generic, get_args, get_origin, TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel
 
-from ..context import Context, SerializableObject
+from ..context import Context, SerializableObject, serialize_value
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -14,10 +14,13 @@ T = TypeVar("T")
 
 
 def _body_to_jsonable(value: Any) -> Any:
-    """Recursively convert Pydantic models and lists into JSON-serializable structures - same
-    shape as celery_viewset.server._to_jsonable, needed here too since ViewSetResult.__serialize__
-    has to produce a JSON-safe payload on its own, without depending on the celery_viewset package
-    (which imports lifecycle_runner, which imports this module - the reverse import would cycle)."""
+    """Recursively convert Pydantic models, lists, and SerializableObject values into
+    JSON-serializable structures - same shape as celery_viewset.server._to_jsonable, needed here
+    too since ViewSetResult.__serialize__ has to produce a JSON-safe payload on its own, without
+    depending on the celery_viewset package (which imports lifecycle_runner, which imports this
+    module - the reverse import would cycle)."""
+    if isinstance(value, SerializableObject):
+        return serialize_value(value)
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if isinstance(value, (list, tuple)):

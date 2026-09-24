@@ -343,6 +343,36 @@ def test_viewset_result_serialize_converts_pydantic_body():
     assert data["body"] == {"id": 1, "name": "widget"}
 
 
+class _TaggedBody(SerializableObject):
+    """Module-level (importable) SerializableObject fixture - see SerializableObject's own
+    docstring on why a locally-defined subclass can't round-trip through the type tag."""
+
+    def __serialize__(self):
+        return self.value
+
+    @classmethod
+    def __deserialize__(cls, data):
+        return cls(data)
+
+
+def test_viewset_result_serialize_tags_a_serializable_object_body():
+    """A body that is itself a SerializableObject (e.g. a LazyObject) must be tagged, not passed
+    through untagged - an untagged one crashes json.dumps on the celery/Redis boundary."""
+    data = ViewSetResult(body=_TaggedBody(7)).__serialize__()
+    assert data["body"] == {
+        "__fpv_type__": f"{_TaggedBody.__module__}.{_TaggedBody.__qualname__}",
+        "__fpv_value__": 7,
+    }
+
+
+def test_viewset_result_serialize_tags_serializable_objects_inside_a_list_body():
+    data = ViewSetResult(body=[_TaggedBody(1), _TaggedBody(2)]).__serialize__()
+    assert data["body"] == [
+        {"__fpv_type__": f"{_TaggedBody.__module__}.{_TaggedBody.__qualname__}", "__fpv_value__": 1},
+        {"__fpv_type__": f"{_TaggedBody.__module__}.{_TaggedBody.__qualname__}", "__fpv_value__": 2},
+    ]
+
+
 def test_unwrap_viewset_result_type_unwraps_generic():
     class Item(BaseModel):
         id: int
