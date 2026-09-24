@@ -149,6 +149,11 @@ reached `deserialize_context()`.
 function (its `__qualname__` would contain `<locals>`) can't be re-imported this way.
 :::
 
+The same tagging is also available for a single `SerializableObject` value outside a context dict,
+via `serialize_value()`/`deserialize_value()` (same module) - used internally so a `celery_viewset`-
+dispatched action's [`ViewSetResult`](./command-middleware#returning-viewsetresult-directly-from-an-endpoint)
+return value survives the worker boundary the same way any other `SerializableObject` does.
+
 ### `LazyObject`
 
 A `SerializableObject` whose value is computed lazily via `resolve()` - only if and when something

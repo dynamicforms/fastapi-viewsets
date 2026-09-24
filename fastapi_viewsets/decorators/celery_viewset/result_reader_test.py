@@ -114,6 +114,45 @@ async def test_result_reader_loop_resolves_future():
 
 
 @pytest.mark.asyncio
+async def test_result_reader_loop_reconstructs_tagged_serializable_object():
+    """A worker-side ViewSetResult (see fastapi_viewsets.middleware) crosses the Redis boundary
+    tagged by _to_jsonable (server.py) - the loop must undo that tagging (deserialize_value) so the
+    FastAPI-process caller receives a real ViewSetResult, not the raw tagged dict."""
+    import json
+
+    from fastapi_viewsets.middleware import ViewSetResult
+
+    redis_mock = AsyncMock()
+    queue_key = "celery_viewset_results:test"
+    correlation_id = "loop-test-viewset-result"
+
+    tagged = ViewSetResult(body={"id": 1}, status_code=302, headers={"Location": "/x"}).__serialize__()
+    payload = json.dumps(
+        {
+            "correlation_id": correlation_id,
+            "result": {"__fpv_type__": "fastapi_viewsets.middleware.ViewSetResult", "__fpv_value__": tagged},
+        }
+    )
+    redis_mock.lpop.side_effect = [payload.encode(), None, None]
+
+    future = asyncio.get_event_loop().create_future()
+    result_reader.register_future(correlation_id, future)
+
+    task = asyncio.create_task(result_reader.result_reader_loop(redis_mock, queue_key, poll_interval=0.01))
+    result = await asyncio.wait_for(future, timeout=2.0)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert isinstance(result, ViewSetResult)
+    assert result.body == {"id": 1}
+    assert result.status_code == 302
+    assert result.headers == {"Location": "/x"}
+
+
+@pytest.mark.asyncio
 async def test_result_reader_loop_sets_exception_on_error():
     """result_reader_loop sets exception on future when error is in payload."""
     import json

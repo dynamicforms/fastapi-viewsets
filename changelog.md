@@ -6,6 +6,23 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-24
+
+### Added
+
+- An endpoint (`perform_*`/custom `__router` method) can return a `ViewSetResult` directly instead
+  of a plain body, to reach `status_code`/`headers`/`cookies` itself without writing a command
+  middleware.
+- `ViewSetResult` is now generic (`ViewSetResult[T]`) - an endpoint declared `-> ViewSetResult[X]`
+  documents/validates exactly like a plain `-> X`; `route_viewset`/`build_schema` unwrap it to `X`
+  for the OpenAPI `response_model`.
+- `ViewSetResult` is now a `SerializableObject`, so a `celery_viewset`-dispatched action that
+  returns one directly survives the worker boundary the same way any other `SerializableObject`
+  does.
+- `fastapi_viewsets.context.serialize_value`/`deserialize_value` - the tagged-payload convention
+  `serialize_context`/`deserialize_context` already use per context key, now available for a single
+  `SerializableObject` value outside a context dict.
+
 ## [0.7.0] - 2026-09-13
 
 ### Added

@@ -5,8 +5,15 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from fastapi_viewsets.conf import settings
+from fastapi_viewsets.context import SerializableObject
 from fastapi_viewsets.decorators import route_viewset
-from fastapi_viewsets.middleware import any_modifies_response_shape, Middleware, run_command_chain, ViewSetResult
+from fastapi_viewsets.middleware import (
+    any_modifies_response_shape,
+    Middleware,
+    run_command_chain,
+    unwrap_viewset_result_type,
+    ViewSetResult,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -310,3 +317,114 @@ def test_command_middleware_does_not_run_in_celery_worker_path():
     result = registered_tasks["items.list_items"](context={})
     assert result == [1]
     assert calls == []  # middleware never ran - no live Response in the worker path
+
+
+# ---------------------------------------------------------------------------
+# ViewSetResult returned directly by an endpoint - see docs/guide/command-middleware.md
+# ---------------------------------------------------------------------------
+
+
+def test_viewset_result_is_a_serializable_object():
+    assert isinstance(ViewSetResult(body=None), SerializableObject)
+
+
+def test_viewset_result_serialize_deserialize_roundtrip_with_plain_body():
+    original = ViewSetResult(body={"ok": True}, headers={"Location": "/x"}, cookies={"a": "b"}, status_code=302)
+    restored = ViewSetResult.__deserialize__(original.__serialize__())
+    assert restored == original
+
+
+def test_viewset_result_serialize_converts_pydantic_body():
+    class Item(BaseModel):
+        id: int
+        name: str
+
+    data = ViewSetResult(body=Item(id=1, name="widget")).__serialize__()
+    assert data["body"] == {"id": 1, "name": "widget"}
+
+
+def test_unwrap_viewset_result_type_unwraps_generic():
+    class Item(BaseModel):
+        id: int
+
+    assert unwrap_viewset_result_type(ViewSetResult[Item]) is Item
+
+
+def test_unwrap_viewset_result_type_passes_through_non_viewset_result():
+    class Item(BaseModel):
+        id: int
+
+    assert unwrap_viewset_result_type(Item) is Item
+    assert unwrap_viewset_result_type(None) is None
+
+
+def _make_redirect_app():
+    app = FastAPI()
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/redirect")
+    class RedirectViewSet:
+        __router = APIRouter()
+
+        @__router.post("go")
+        async def go(self) -> ViewSetResult[None]:
+            return ViewSetResult(body=None, status_code=302, headers={"Location": "/target"})
+
+    app.include_router(router)
+    return app
+
+
+def test_endpoint_returning_viewset_result_directly_sets_status_and_headers():
+    """An endpoint (not a command middleware) can reach status_code/headers itself by returning a
+    ViewSetResult - final_handler passes it through instead of wrapping it a second time."""
+    client = TestClient(_make_redirect_app(), follow_redirects=False)
+    response = client.post("/redirect/go")
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/target"
+
+
+def test_endpoint_returning_viewset_result_directly_still_runs_command_middleware():
+    """Global command middleware still gets a chance at the ViewSetResult an endpoint returned
+    itself - nothing about final_handler's pass-through bypasses the chain."""
+
+    async def cookie_middleware(_request, _viewset, _context, call_next):
+        result = await call_next()
+        result.cookies["tracking"] = "1"
+        return result
+
+    settings.viewsets_command_middleware = [cookie_middleware]
+    client = TestClient(_make_redirect_app(), follow_redirects=False)
+    response = client.post("/redirect/go")
+
+    assert response.status_code == 302
+    assert response.cookies.get("tracking") == "1"
+
+
+def test_declared_return_type_viewset_result_of_x_documents_as_x():
+    """-> ViewSetResult[X] documents/validates identically to a plain -> X - see
+    unwrap_viewset_result_type."""
+    app = FastAPI()
+    router = APIRouter()
+
+    class Item(BaseModel):
+        id: int
+        name: str
+
+    @route_viewset(router, base_path="/items")
+    class ItemViewSet:
+        __router = APIRouter()
+
+        @__router.post("")
+        async def make_item(self) -> ViewSetResult[Item]:
+            return ViewSetResult(body=Item(id=1, name="widget"), status_code=201)
+
+    app.include_router(router)
+
+    client = TestClient(app)
+    response = client.post("/items")
+    assert response.status_code == 201
+    assert response.json() == {"id": 1, "name": "widget"}
+
+    schema = app.openapi()["paths"]["/items"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert schema == {"$ref": "#/components/schemas/Item"}

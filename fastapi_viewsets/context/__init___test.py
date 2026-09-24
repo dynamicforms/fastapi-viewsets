@@ -17,9 +17,11 @@ from fastapi_viewsets.context import (
     ByAction,
     Context,
     deserialize_context,
+    deserialize_value,
     LazyObject,
     SerializableObject,
     serialize_context,
+    serialize_value,
 )
 from fastapi_viewsets.decorators import route_viewset
 from fastapi_viewsets.decorators.celery_viewset import celery_viewset_client
@@ -297,6 +299,37 @@ async def test_lazy_object_already_resolved_survives_with_shortcut_no_reresoluti
 def test_deserialize_context_unknown_type_tag_raises():
     with pytest.raises(TypeError):
         deserialize_context({"n": {"__fpv_type__": "os.path.NotASerializableObject", "__fpv_value__": 1}})
+
+
+# ---------------------------------------------------------------------------
+# serialize_value/deserialize_value - same tagging convention as serialize_context/
+# deserialize_context, for a single SerializableObject value outside a Context dict (e.g. a
+# command-middleware ViewSetResult crossing the Celery/Redis boundary on its own - see
+# fastapi_viewsets.decorators.celery_viewset.server._to_jsonable).
+# ---------------------------------------------------------------------------
+
+
+def test_serialize_value_tags_a_serializable_object():
+    tagged = serialize_value(_Tagged(7))
+    assert tagged == {"__fpv_type__": f"{_Tagged.__module__}.{_Tagged.__qualname__}", "__fpv_value__": 7}
+
+
+def test_serialize_value_passes_through_plain_values():
+    assert serialize_value(7) == 7
+    assert serialize_value({"a": 1}) == {"a": 1}
+    assert serialize_value(None) is None
+
+
+def test_deserialize_value_reconstructs_a_serializable_object():
+    restored = deserialize_value(serialize_value(_Tagged(7)))
+    assert isinstance(restored, _Tagged)
+    assert restored.value == 7
+
+
+def test_deserialize_value_passes_through_untagged_values():
+    assert deserialize_value(7) == 7
+    assert deserialize_value({"a": 1}) == {"a": 1}
+    assert deserialize_value(None) is None
 
 
 def test_deserialize_context_is_loop_independent():

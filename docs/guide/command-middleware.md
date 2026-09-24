@@ -165,8 +165,8 @@ this middleware, for real - one of a few
 
 ```python
 @dataclass
-class ViewSetResult:
-    body: Any
+class ViewSetResult(SerializableObject, Generic[T]):
+    body: T
     headers: dict[str, Any] = field(default_factory=dict)
     cookies: dict[str, Any] = field(default_factory=dict)
     status_code: int | None = None
@@ -189,6 +189,52 @@ no "after" phase (e.g. `Session`'s `401`), prefer raising `HTTPException` from `
 
 With no middleware configured (the default), behaviour is unchanged: the endpoint's return value
 becomes the response body as-is, no headers/cookies are touched.
+
+### Returning `ViewSetResult` directly from an endpoint
+
+`status_code`/`headers`/`cookies` aren't reserved for middleware - a `perform_*`/custom `__router`
+method can return a `ViewSetResult` itself instead of a plain body, to reach the exact same fields
+without writing a middleware at all:
+
+```python
+from fastapi_viewsets.middleware import ViewSetResult
+
+class InviteViewSet:
+    __router = APIRouter()
+
+    @__router.post("accept")
+    async def accept(self, context: Context) -> ViewSetResult[None]:
+        await self.mark_accepted(context)
+        return ViewSetResult(body=None, status_code=302, headers={"Location": "/welcome"})
+```
+
+The transport adapter doesn't care where a `ViewSetResult` came from: `lifecycle_runner` recognizes
+one returned directly and passes it through unchanged (instead of wrapping it in another
+`ViewSetResult`, which would bury `status_code`/`headers`/`cookies` one level too deep to ever be
+applied), and any globally-configured command middleware still runs around it exactly as it would
+around a plain-body endpoint. The example above is a redirect: a browser or `restViewSet` client
+follows a `3xx` status with a `Location` header regardless of what the body is (see
+[Handling a failed call](./vue-mixins#handling-a-failed-call)), so `body=None` is enough - there is
+no JSON payload for a client to read here.
+
+Declare the return type as `ViewSetResult[X]` rather than bare `X` - `route_viewset`/`build_schema`
+unwrap it to `X` for the OpenAPI `response_model` and FastAPI's own response validation, so
+`-> ViewSetResult[X]` documents/validates exactly like a plain `-> X` would. `X` is `None` above
+because this particular endpoint never sends a body; an endpoint whose `ViewSetResult` sometimes
+carries real data declares whatever that data's type actually is (`ViewSetResult[Item]`, say).
+
+**Only at the actual route endpoint, not inside a mixin hook.** `perform_list`/`perform_create`/etc.
+are internal hooks a mixin's own route method (`list_items`, `create`, ...) calls and then does
+further work with (pagination, filtering, shaping) - they expect the return value to still be plain
+records, not a `ViewSetResult`. Returning one from `perform_list` breaks the mixin's own pipeline
+before a `ViewSetResult` ever reaches `route_viewset`. A custom `__router` method has no such
+pipeline around it, since it *is* the route endpoint - that's the only place this applies.
+
+`ViewSetResult` is itself a `SerializableObject` (see [Context Processors](./context-processors)),
+the same mechanism `LazyObject`/`Context` values already use to survive the Celery/Redis boundary -
+a `celery_viewset`-dispatched action's worker-side return value is tagged and reconstructed exactly
+like any other `SerializableObject`, so this works whether the action runs in-process or in a
+worker.
 
 ## OpenAPI response schema: `modifies_response_shape`
 

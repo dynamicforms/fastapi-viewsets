@@ -300,6 +300,26 @@ def _resolve_class(dotted_path: str) -> type[SerializableObject]:
     return cls
 
 
+def serialize_value(value: Any) -> Any:
+    """
+    Tag a single SerializableObject for JSON transport, the same convention serialize_context()
+    applies per context key (see _TYPE_KEY/_VALUE_KEY above); anything else passes through
+    unchanged. For a value crossing the Celery/Redis boundary outside a Context dict - e.g. a
+    command-middleware ViewSetResult returned by a celery_viewset-dispatched action (see
+    fastapi_viewsets.middleware.ViewSetResult).
+    """
+    if isinstance(value, SerializableObject):
+        return {_TYPE_KEY: _class_tag(type(value)), _VALUE_KEY: value.__serialize__()}
+    return value
+
+
+def deserialize_value(value: Any) -> Any:
+    """Inverse of serialize_value() - passes through anything that isn't a tagged payload."""
+    if isinstance(value, dict) and _TYPE_KEY in value and _VALUE_KEY in value:
+        return _resolve_class(value[_TYPE_KEY]).__deserialize__(value[_VALUE_KEY])
+    return value
+
+
 async def serialize_context(data: dict[str, Any]) -> dict[str, Any]:
     """
     Returns a JSON-safe dict: SerializableObject values are swapped for a tagged payload (see
