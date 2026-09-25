@@ -36,9 +36,8 @@ export default defineConfig({
     sourcemap: true,
     lib: {
       entry: resolve(import.meta.dirname, 'vue/index.ts'),
-      formats: ['umd', 'es'],
+      formats: ['es'],
       fileName: 'fastapi-viewsets',
-      name: 'fastapi-viewsets.[name]',
     },
     rollupOptions: {
       external: [
@@ -48,9 +47,6 @@ export default defineConfig({
         'lodash-es',
         'vue',
       ],
-      output: {
-        globals: (id: string) => id, // all external modules are currently not aliased to anything but their own names
-      }
     }
   },
   test: {
