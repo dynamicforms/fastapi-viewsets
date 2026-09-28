@@ -18,22 +18,21 @@ cookbook section below, not in the library.
 
 | Term | Meaning |
 |---|---|
-| **event class** | A declared message type with a payload schema. Pydantic model on the backend, a mirror class on the frontend. |
+| **event class** | A declared message type, parametrized by its payload model. The same name and payload on both sides: on the backend the class pushes and is never instantiated, on the frontend an instance is one subscription. |
 | **tag** | A string `kind:value` (`club:bled-ski-club`, `activity:7`) or a bare `kind` (`system`). |
-| **tag set** | The non-empty set of tags an event is sent with, or a subscription is made with. |
+| **tag set** | The non-empty set of tags an event is pushed with, or a subscription is made with. |
 | **queue** | One event class together with one tag set. The unit of storage, subscription and cursor. |
 | **sequence id** | The id of one event within its queue, assigned by Redis (`<ms since epoch>-<seq>`). Strictly increasing within a queue. |
 | **tag authorizer** | An application function that decides whether the current caller may receive events addressed with a given tag. |
 
 ## Rules
 
-1. **An event is sent with at least one tag.** `send()` with an empty tag set raises.
-2. **Every tag kind has a registered tag authorizer.** `send()` with an unregistered kind raises, and
+1. **An event is pushed with at least one tag.** `push()` with an empty tag set raises.
+2. **Every tag kind has a registered tag authorizer.** `push()` with an unregistered kind raises, and
    a subscription containing one is refused. A tag nobody may be refused (`system`) is registered
    with an explicit allow-all authorizer, so "public" is always a declaration and never a default.
 3. **Matching is exact.** A subscription receives an event when the event class is the same and the
-   tag sets are equal. Several granularities of the same event are several `send()` calls, or one
-   call with several tag sets.
+   tag sets are equal.
 4. **Authorization runs on every delivery.** Each tag of the subscription goes through its authorizer
    for every event pushed and every poll answered. A caller who loses access to a club stops
    receiving that club's events on the next delivery, with no revocation step anywhere.
@@ -50,27 +49,31 @@ cookbook section below, not in the library.
 
 ## Backend
 
-### Declaring and sending an event
+### Declaring and pushing an event
 
 ```python
+from pydantic import BaseModel
+
 from fastapi_viewsets.events import Event
 
 
-class ActivityRemoved(Event):
-    activity_id: int
+class RecordDeletedPayload(BaseModel):
+    pk: int
 
 
-await ActivityRemoved(activity_id=7).send({"club:bled-ski-club", "activities"})
+class RecordDeleted(Event[RecordDeletedPayload]):
+    pass
 
-# the same event for two differently-grained subscribers
-await ActivityRemoved(activity_id=7).send(
-    {"club:bled-ski-club", "activities"},
-    {"club:bled-ski-club", "activity:7"},
-)
+
+await RecordDeleted.push({"club:bled-ski-club", "activity"}, {"pk": 7})
 ```
 
-`send()` is transaction-agnostic: it publishes immediately. An event that describes a database
-change is sent after the transaction commits, otherwise a frontend reacting to it can read the state
+An event class is never instantiated. `push(tags, content)` is a classmethod: it validates `content`
+(a payload model instance or a dict) against the payload model and publishes it to the queue named
+by the class and `tags`.
+
+`push()` is transaction-agnostic: it publishes immediately. An event that describes a database
+change is pushed after the transaction commits, otherwise a frontend reacting to it can read the state
 from before the change (see the cookbook).
 
 ### Tag authorizers
@@ -109,14 +112,14 @@ The order is exact within a queue; across queues it follows the millisecond part
 An event on the wire, on both transports:
 
 ```json
-{"event": "ActivityRemoved", "tags": ["activities", "club:bled-ski-club"], "id": "1727500000417-0", "payload": {"activity_id": 7}}
+{"event": "RecordDeleted", "tags": ["activity", "club:bled-ski-club"], "id": "1727500000417-0", "payload": {"pk": 7}}
 ```
 
 ### Storage
 
 - One Redis stream per queue. The key is derived from the event name and the sorted tag set.
 - `XADD` assigns the sequence id. Entries older than the retention time are trimmed (`MINID`), and the
-  key expires one retention period after its last `send()`, so queues for one-off tags such as
+  key expires one retention period after its last `push()`, so queues for one-off tags such as
   `activity:7` do not accumulate.
 - The latest sequence id for `subscribe` is the stream's `last-generated-id`; a queue with no stream
   yet answers `0-0`.
@@ -135,57 +138,116 @@ after running rule 4 for each. A process reads only the queues it currently has 
 ## Frontend
 
 ```ts
-import { Event, createEventClient } from '@dynamicforms/fastapi-viewsets/events';
+import { Event, configureEvents } from '@dynamicforms/fastapi-viewsets/events';
 
-class ActivityRemoved extends Event {
-  static readonly eventName = 'ActivityRemoved';
+configureEvents({ axiosInstance, peer, pollInterval: 5000 });
 
-  declare activityId: number;
+interface RecordDeletedPayload {
+  pk: number;
 }
 
-const events = createEventClient({ axiosInstance, peer, pollInterval: 5000 });
+abstract class RecordDeleted extends Event<RecordDeletedPayload> {
+  static readonly eventName = 'RecordDeleted';
+}
 
-const subscription = await events.subscribe(
-  ActivityRemoved,
-  ['club:bled-ski-club', 'activities'],
-  (event) => removeActivity(event.activityId),
-  { onGap: () => reloadActivities() },
-);
+class ActivityDeleted extends RecordDeleted {
+  constructor(club: string, private readonly rows: Ref<Activity[]>) {
+    super([`club:${club}`, 'activity']);
+  }
 
-subscription.cancel();
+  onEvent(payload: RecordDeletedPayload) {
+    this.rows.value = this.rows.value.filter((row) => row.id !== payload.pk);
+  }
+
+  onGap() {
+    reloadActivities();
+  }
+}
+
+// in a component
+const subscription = new ActivityDeleted('bled-ski-club', rows);
+onMounted(() => subscription.subscribe());
+onUnmounted(() => subscription.unsubscribe());
 ```
 
-- An arriving event is deserialized into an instance of its registered class before the callback
-  runs.
-- `onGap` is a required option. What "start over" means depends on the screen, and a gap handled by
-  nothing is a screen that silently stops matching the server.
+- The event class carries the wire name and the payload type, the same as on the backend. An
+  instance is one subscription: one tag set, given to the constructor, and the reaction to events
+  arriving in it.
+- The payload arrives as the argument of `onEvent`, never as fields of the instance: one instance
+  receives many events.
+- `onEvent` and `onGap` are abstract. A subscription class states what it does with an event and
+  what it does when the backend reports a gap, even where the answer is an empty body. What "start
+  over" means depends on the screen, and a gap handled by nothing is a screen that silently stops
+  matching the server.
+- Where the reaction gets its state from (constructor arguments, a class declared inside the
+  component) is the application's.
+- `configureEvents()` is called once. All subscriptions of the application share one client: one
+  poll answers every queue, and one muxws stream carries every pushed event.
 - With a healthy `peer`, events arrive over muxws and polling is suspended. Without one, or while it
-  is disconnected, the client polls. On every switch the client polls once from the last sequence id
-  it holds for each subscription, and discards any event whose id is not newer than that.
-- `peer` is optional. A deployment with no muxws is a complete deployment, with poll latency.
+  is disconnected, the client polls every `pollInterval` milliseconds. On every switch the client
+  polls once from the last sequence id it holds for each subscription, and discards any event whose
+  id is not newer than that.
+- `peer` is optional and accepts the same values as `muxwsViewSet`'s. A deployment with no muxws is
+  a complete deployment, with poll latency.
 
 ## Cookbook: "data behind a viewset changed"
 
-The library ships no such event; this is the recipe for one.
+The library ships no such event; this is the recipe for one. One generic event covers every table;
+the table is a tag, so a subscription follows exactly one table.
 
 ```python
-class MemberChanged(Event):
+class RecordChangedPayload(BaseModel):
     op: Literal["created", "updated", "deleted"]
     pk: int
-    record: MemberSchema | None      # whatever the application wants the frontend to have
+    record: dict | None      # whatever the application wants the frontend to have
+
+
+class RecordChanged(Event[RecordChangedPayload]):
+    pass
+
+
+tag_authorizer("member")(allow_authenticated)   # the club tag decides who receives it
 
 
 class MemberViewSet(DjangoORMViewSet[int, MemberSchema]):
     async def perform_create(self, context: Context, data: MemberSchema) -> MemberSchema:
         member = await create_member(club_id, data)
         record = MemberSchema.model_validate(member)
-        await send_on_commit(MemberChanged(op="created", pk=member.pk, record=record), {f"club:{club_slug}", "members"})
+        push_on_commit(
+            RecordChanged,
+            {f"club:{club_slug}", "member"},
+            {"op": "created", "pk": member.pk, "record": record.model_dump()},
+        )
         return record
 ```
 
-On the frontend the callback applies the change to the records the grid already holds: insert,
-replace or remove by `pk`. Where the grid holds the whole data set and sorts and filters locally,
-placing an inserted or updated record is a grid operation that needs nothing from the server.
+`push_on_commit` is the application's: it defers `push()` until the surrounding transaction
+commits.
+
+```ts
+abstract class RecordChanged<T> extends Event<RecordChangedPayload<T>> {
+  static readonly eventName = 'RecordChanged';
+}
+
+class MemberChanged extends RecordChanged<Member> {
+  constructor(club: string, private readonly rows: Ref<Member[]>) {
+    super([`club:${club}`, 'member']);
+  }
+
+  onEvent({ op, pk, record }: RecordChangedPayload<Member>) {
+    const others = this.rows.value.filter((row) => row.id !== pk);
+    this.rows.value = op === 'deleted' ? others : [...others, record!];
+  }
+
+  onGap() {
+    reloadMembers();
+  }
+}
+```
+
+`rows` is the array the grid receives as its data prop. Where the grid holds the whole data set and
+sorts and filters locally, placing an inserted or updated record is a grid operation that needs
+nothing from the server.
 
 A payload carries the same data to every subscriber of its queue. An event that includes the record
 therefore suits data that every authorized subscriber may see in full; an event carrying only `op`
