@@ -6,6 +6,14 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-10-01
+
+### Changed
+
+- **Breaking (npm):** the `@dynamicforms/vue-forms` peer range moves to `^2.0.2`. The package imports nothing from
+  vue-forms; the range keeps an application from installing it next to a vue-forms the rest of the
+  `@dynamicforms` packages no longer support.
+
 ## [0.7.1] - 2026-09-24
 
 ### Added
