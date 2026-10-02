@@ -1,7 +1,7 @@
 <template>
   <v-app>
     <v-main>
-      <v-container fluid class="pa-4">
+      <v-container fluid class="pa-4 page">
         <div class="d-flex align-center flex-wrap ga-4 mb-4">
           <h1 class="text-h5 mb-0">Music Library</h1>
           <v-btn-toggle v-model="transport" mandatory density="comfortable" color="primary">
@@ -73,7 +73,7 @@
           :loading="loading"
           :key-field="pkField"
           :show-filter-row="true"
-          style="height: 70vh"
+          class="grid"
           @sort="onSort"
           @filter="onFilter"
           @load="loadMore"
@@ -159,10 +159,11 @@ const columns = [
   createColumn('language', 'Language', 'plain', external),
 ];
 
+// `rows` is how many grid rows one record takes in that layout; the cells are placed within them in the styles below
 const columnsResponsive: ResponsiveColumnDefinitions = [
   { cssClass: 'single-line', columns: filterColumns(columns, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) },
-  { cssClass: 'three-row', columns: filterColumns(columns, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) },
-  { cssClass: 'single-column', columns: columns },
+  { cssClass: 'three-row', rows: 3, columns: filterColumns(columns, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) },
+  { cssClass: 'single-column', rows: columns.length, columns },
 ];
 
 /** Sort and filters as the backend's query parameters. Same on every page of a walk. */
@@ -263,6 +264,16 @@ void reload();
 </script>
 
 <style scoped>
+/* the grid takes whatever height the toolbar and the benchmark results leave in the window */
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+.grid {
+  flex: 1 1 0;
+  min-height: 0;
+}
 .benchmark {
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
@@ -285,60 +296,81 @@ void reload();
 :deep(.df-grid.card.odd) {
   background-color: #60606040;
 }
-:deep(.df-grid.card) {
+/*
+ * Every record's cells are items of one grid shared by the body, the header and the filter row, so the grid itself is
+ * declared on .df-record-grid. .df-grid.card is the row-anchor: a box spanning the record's band that carries its
+ * background and border, beside the cells rather than around them.
+ */
+:deep(.df-record-grid) {
   display: grid;
-  grid-template-columns: minmax(2em, 4em) repeat(3, auto) minmax(2em, 4em) minmax(2em, 8em);
   gap: .25em;
-
-  padding: 0.5em;
+  font-size: 0.85rem;
+}
+:deep(.df-grid.card) {
   border: 1px solid #808080ff;
   border-radius: 6px;
-  font-size: 0.85rem;
-  margin-bottom: .5em;
-}
-:deep(.df-grid.dynamic-scroller-item) {
-  padding-bottom: .1px;
-}
-:deep(.df-grid.card.single-column) {
-  grid-template-columns: auto;
-}
-:deep(.df-grid.card.single-column > *) {
-  grid-column: 1 / 2 !important;
-  grid-row: auto !important;
-  grid-area: auto !important;
-}
-:deep(.df-grid.card.single-line) {
-  grid-template-columns: repeat(9, minmax(min-content, max-content)) 1fr minmax(min-content, max-content);
-}
-:deep(.df-grid.card.single-line > *) {
-  grid-column: auto !important;
-  grid-row: auto !important;
-  grid-area: auto !important;
 }
 :deep(.df-grid.cell) {
   border: 1px solid darkgray;
   border-radius: 4px;
   padding: 0 .25em;
 }
-:deep(.df-grid.cell.title), :deep(.df-grid.cell.artist), :deep(.df-grid.cell.genres) {
-  grid-column: span 2;
-}
-:deep(.df-grid.cell.moods) {
-  grid-column: 1 / 4;
-  grid-row: 3;
-}
-:deep(.df-grid.cell.duration) {
-  grid-column: 6;
-}
-:deep(.df-grid.cell.genres) {
-  grid-column: 1 / 5;
-  grid-row: 2;
-}
-:deep(.df-grid.cell.rating) {
-  grid-column: 5;
-  grid-row: 2;
-}
 :deep(.df-grid.cell.favorite) {
   text-align: center;
 }
+
+/*
+ * Cells are placed within their own record's band: --row-base is the first grid row of the record, published by the
+ * grid, so every placement is relative to it rather than an absolute row.
+ */
+
+/* single-line: one row, the eleven fields in declaration order */
+:deep(.df-record-grid.single-line) {
+  grid-template-columns: repeat(9, minmax(min-content, max-content)) 1fr minmax(min-content, max-content);
+}
+:deep(.df-record-grid.single-line .df-grid.cell) { grid-row: calc(var(--row-base) + 1); }
+:deep(.df-record-grid.single-line .df-grid.cell.id) { grid-column: 1; }
+:deep(.df-record-grid.single-line .df-grid.cell.title) { grid-column: 2; }
+:deep(.df-record-grid.single-line .df-grid.cell.artist) { grid-column: 3; }
+:deep(.df-record-grid.single-line .df-grid.cell.year) { grid-column: 4; }
+:deep(.df-record-grid.single-line .df-grid.cell.duration) { grid-column: 5; }
+:deep(.df-record-grid.single-line .df-grid.cell.genres) { grid-column: 6; }
+:deep(.df-record-grid.single-line .df-grid.cell.rating) { grid-column: 7; }
+:deep(.df-record-grid.single-line .df-grid.cell.favorite) { grid-column: 8; }
+:deep(.df-record-grid.single-line .df-grid.cell.play_count) { grid-column: 9; }
+:deep(.df-record-grid.single-line .df-grid.cell.moods) { grid-column: 10; }
+:deep(.df-record-grid.single-line .df-grid.cell.language) { grid-column: 11; }
+
+/* three-row: id, title, artist, year / genres, rating, duration / moods, favorite, play count, language */
+:deep(.df-record-grid.three-row) {
+  grid-template-columns: minmax(2em, 4em) repeat(3, auto) minmax(2em, 4em) minmax(2em, 8em);
+}
+:deep(.df-record-grid.three-row .df-grid.cell.id) { grid-column: 1; grid-row: calc(var(--row-base) + 1); }
+:deep(.df-record-grid.three-row .df-grid.cell.title) { grid-column: 2 / 4; grid-row: calc(var(--row-base) + 1); }
+:deep(.df-record-grid.three-row .df-grid.cell.artist) { grid-column: 4 / 6; grid-row: calc(var(--row-base) + 1); }
+:deep(.df-record-grid.three-row .df-grid.cell.year) { grid-column: 6; grid-row: calc(var(--row-base) + 1); }
+:deep(.df-record-grid.three-row .df-grid.cell.genres) { grid-column: 1 / 5; grid-row: calc(var(--row-base) + 2); }
+:deep(.df-record-grid.three-row .df-grid.cell.rating) { grid-column: 5; grid-row: calc(var(--row-base) + 2); }
+:deep(.df-record-grid.three-row .df-grid.cell.duration) { grid-column: 6; grid-row: calc(var(--row-base) + 2); }
+:deep(.df-record-grid.three-row .df-grid.cell.moods) { grid-column: 1 / 4; grid-row: calc(var(--row-base) + 3); }
+:deep(.df-record-grid.three-row .df-grid.cell.favorite) { grid-column: 4; grid-row: calc(var(--row-base) + 3); }
+:deep(.df-record-grid.three-row .df-grid.cell.play_count) { grid-column: 5; grid-row: calc(var(--row-base) + 3); }
+:deep(.df-record-grid.three-row .df-grid.cell.language) { grid-column: 6; grid-row: calc(var(--row-base) + 3); }
+
+/* single-column: one field per row, in declaration order */
+:deep(.df-record-grid.single-column) {
+  grid-template-columns: auto;
+}
+:deep(.df-record-grid.single-column .df-grid.cell) { grid-column: 1; }
+:deep(.df-record-grid.single-column .df-grid.cell.id) { grid-row: calc(var(--row-base) + 1); }
+:deep(.df-record-grid.single-column .df-grid.cell.title) { grid-row: calc(var(--row-base) + 2); }
+:deep(.df-record-grid.single-column .df-grid.cell.artist) { grid-row: calc(var(--row-base) + 3); }
+:deep(.df-record-grid.single-column .df-grid.cell.year) { grid-row: calc(var(--row-base) + 4); }
+:deep(.df-record-grid.single-column .df-grid.cell.duration) { grid-row: calc(var(--row-base) + 5); }
+:deep(.df-record-grid.single-column .df-grid.cell.genres) { grid-row: calc(var(--row-base) + 6); }
+:deep(.df-record-grid.single-column .df-grid.cell.rating) { grid-row: calc(var(--row-base) + 7); }
+:deep(.df-record-grid.single-column .df-grid.cell.favorite) { grid-row: calc(var(--row-base) + 8); }
+:deep(.df-record-grid.single-column .df-grid.cell.play_count) { grid-row: calc(var(--row-base) + 9); }
+:deep(.df-record-grid.single-column .df-grid.cell.moods) { grid-row: calc(var(--row-base) + 10); }
+:deep(.df-record-grid.single-column .df-grid.cell.language) { grid-row: calc(var(--row-base) + 11); }
 </style>
