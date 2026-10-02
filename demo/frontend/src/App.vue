@@ -1,7 +1,7 @@
 <template>
   <v-app>
     <v-main>
-      <v-container fluid class="pa-4">
+      <v-container fluid class="pa-4 page">
         <div class="d-flex align-center flex-wrap ga-4 mb-4">
           <h1 class="text-h5 mb-0">Music Library</h1>
           <v-btn-toggle v-model="transport" mandatory density="comfortable" color="primary">
@@ -73,7 +73,7 @@
           :loading="loading"
           :key-field="pkField"
           :show-filter-row="true"
-          style="height: 70vh"
+          class="grid"
           @sort="onSort"
           @filter="onFilter"
           @load="loadMore"
@@ -264,6 +264,16 @@ void reload();
 </script>
 
 <style scoped>
+/* the grid takes whatever height the toolbar and the benchmark results leave in the window */
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+.grid {
+  flex: 1 1 0;
+  min-height: 0;
+}
 .benchmark {
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
