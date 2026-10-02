@@ -9,10 +9,10 @@ backend announces that something happened, and every frontend subscribed to it l
 transports fastapi-viewsets already has carry it — over REST the frontend polls, over muxws the
 backend pushes — behind one API on each side.
 
-The library supplies base classes and primitives only, for the backend and the frontend. Which
-events exist, what they carry, which tags address them and what a frontend does on arrival are the
-application's. A recipe for the most common family, "data behind a viewset changed", lives in the
-cookbook section below, not in the library.
+The library supplies base classes and primitives for the backend and the frontend, and one event
+of its own: `RecordChanged`, "data behind a viewset changed", which viewsets push through the
+hooks described in "Viewset integration". Every other event, what it carries, which tags address
+it and what a frontend does on arrival are the application's.
 
 ## Vocabulary
 
@@ -74,7 +74,7 @@ by the class and `tags`.
 
 `push()` is transaction-agnostic: it publishes immediately. An event that describes a database
 change is pushed after the transaction commits, otherwise a frontend reacting to it can read the state
-from before the change (see the cookbook).
+from before the change (see "Viewset integration").
 
 ### Tag authorizers
 
@@ -190,44 +190,76 @@ onUnmounted(() => subscription.unsubscribe());
 - `peer` is optional and accepts the same values as `muxwsViewSet`'s. A deployment with no muxws is
   a complete deployment, with poll latency.
 
-## Cookbook: "data behind a viewset changed"
+## Viewset integration
 
-The library ships no such event; this is the recipe for one. One generic event covers every table;
-the table is a tag, so a subscription follows exactly one table.
+### Hooks
+
+`ImplMixin` declares three hooks, which do nothing by default:
+
+```python
+async def notify_create(self, context: Context, record: T) -> None: ...
+async def notify_update(self, context: Context, record: T) -> None: ...
+async def notify_delete(self, context: Context, pk: K) -> None: ...
+```
+
+Every backend in the library calls them from its `perform_*` methods, once per affected record,
+after the change is made:
+
+| Backend | Single operations | Bulk operations |
+|---|---|---|
+| `DjangoORMViewSet` | `perform_create`, `perform_update` and `perform_destroy` call their hook | `perform_bulk_update` and `perform_bulk_destroy` reach the hook through the single operation they delegate to; `perform_bulk_create` calls `notify_create` for each created record |
+| `AsyncCollectionViewSet` | `perform_create`, `perform_update` and `perform_destroy` call their hook | each bulk method calls the hook for each record |
+
+An application that overrides a `perform_*` method calls the hooks itself, wherever the change it
+makes is complete.
+
+### `ChangeNotifyingMixin`
+
+The mixin implements the hooks by pushing `RecordChanged`:
 
 ```python
 class RecordChangedPayload(BaseModel):
     op: Literal["created", "updated", "deleted"]
-    pk: int
-    record: dict | None      # whatever the application wants the frontend to have
+    pk: Any
+    record: dict | None = None
 
 
 class RecordChanged(Event[RecordChangedPayload]):
     pass
+```
 
+```python
+from fastapi_viewsets.events import ChangeNotifyingMixin, allow_authenticated, tag_authorizer
 
 tag_authorizer("member")(allow_authenticated)   # the club tag decides who receives it
 
 
-class MemberViewSet(DjangoORMViewSet[int, MemberSchema]):
-    async def perform_create(self, context: Context, data: MemberSchema) -> MemberSchema:
-        member = await create_member(club_id, data)
-        record = MemberSchema.model_validate(member)
-        push_on_commit(
-            RecordChanged,
-            {f"club:{club_slug}", "member"},
-            {"op": "created", "pk": member.pk, "record": record.model_dump()},
-        )
-        return record
+class MemberViewSet(ChangeNotifyingMixin[int, Member], DjangoORMViewSet[int, Member]):
+    change_tags = frozenset({"member"})
+    change_payload = "record"
+
+    def notify_tags(self, context: Context) -> set[str]:
+        return {*self.change_tags, f"club:{context['club_slug']}"}
 ```
 
-`push_on_commit` is the application's: it defers `push()` until the surrounding transaction
-commits.
+- `change_tags` is the static part of the tag set, typically the table. `notify_tags(context)`
+  returns the whole tag set of a push and defaults to `change_tags`; an override adds the tags that
+  depend on the request. The tag set never depends on the record, since `notify_delete` has none.
+- Every tag kind in the set needs a tag authorizer (rule 2), the table tag included.
+- The payload is `op` and `pk`. With `change_payload = "record"` on the viewset, `created` and
+  `updated` also carry the record. A payload carries the same data to every subscriber of its queue,
+  so the record suits data that every authorized subscriber may see in full; `op` and `pk`, followed
+  by a `retrieve` on the frontend, serializes per caller.
+- A hook pushes immediately. `DjangoORMViewSet` runs in autocommit, so the change is committed by
+  then. An application that runs a viewset operation inside a transaction defers the push until
+  the commit itself.
+
+### Frontend
+
+The library ships the frontend counterpart as an abstract class:
 
 ```ts
-abstract class RecordChanged<T> extends Event<RecordChangedPayload<T>> {
-  static readonly eventName = 'RecordChanged';
-}
+import { RecordChanged, type RecordChangedPayload } from '@dynamicforms/fastapi-viewsets/events';
 
 class MemberChanged extends RecordChanged<Member> {
   constructor(club: string, private readonly rows: Ref<Member[]>) {
@@ -247,11 +279,8 @@ class MemberChanged extends RecordChanged<Member> {
 
 `rows` is the array the grid receives as its data prop. Where the grid holds the whole data set and
 sorts and filters locally, placing an inserted or updated record is a grid operation that needs
-nothing from the server.
-
-A payload carries the same data to every subscriber of its queue. An event that includes the record
-therefore suits data that every authorized subscriber may see in full; an event carrying only `op`
-and `pk`, followed by a `retrieve` on the frontend, serializes per caller.
+nothing from the server. Without `change_payload = "record"`, `onEvent` retrieves the record by
+`pk` before placing it.
 
 ## Prerequisites in fastapi-viewsets
 
