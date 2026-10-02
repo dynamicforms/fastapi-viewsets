@@ -27,6 +27,8 @@ async function waitForFirstPage(page: Page) {
     .poll(async () => loadedCount(page), { timeout: 30_000, message: 'no rows ever arrived' })
     .toBeGreaterThanOrEqual(PAGE_SIZE);
   await expect(page.getByTestId('error')).toHaveCount(0);
+  // the grid draws the rows once it has settled on a layout, a moment after they arrived
+  await expect(page.locator('.df-grid.body-grid .df-anchored .df-grid.cell.id').first()).toBeVisible();
 }
 
 /**
@@ -37,7 +39,9 @@ async function waitForFirstPage(page: Page) {
  * The order of the first handful is.
  */
 async function renderedIds(page: Page, count = 20): Promise<number[]> {
-  const cells = await page.locator('.df-grid.card:not(.header) .df-grid.cell.id').allInnerTexts();
+  // a record's cells sit in the `.df-anchored` wrapper next to its row-anchor; the header and the filter row lay their
+  // cells out in wrappers of their own, so they are not among these
+  const cells = await page.locator('.df-grid.body-grid .df-anchored .df-grid.cell.id').allInnerTexts();
   return cells
     .map((text) => text.trim())
     // Empty first: Number('') is 0, so the filter row's blank id cell was arriving as record 0 and
@@ -63,7 +67,7 @@ test('loading more appends rather than replacing', async ({ page }) => {
   const firstRows = await renderedIds(page);
   const before = await loadedCount(page);
 
-  await page.locator('.cards-grid').first().hover();
+  await page.locator('.df-grid.body-grid').first().hover();
   await expect
     .poll(async () => {
       await page.mouse.wheel(0, 4000);
@@ -79,7 +83,7 @@ test('scrolling to the end loads the next page', async ({ page }) => {
   // The grid emits @load when the viewport nears the end; nothing else asks for more rows, so this
   // is the only check that the wiring between the grid and the cursor is live.
   const before = await loadedCount(page);
-  await page.locator('.df-grid.cards-grid, .cards-grid').first().hover();
+  await page.locator('.df-grid.body-grid').first().hover();
   await expect
     .poll(async () => {
       await page.mouse.wheel(0, 4000);
