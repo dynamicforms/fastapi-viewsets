@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@dynamicforms/vue-forms": "^2.0.2",
-    "@dynamicforms/vue-grid": "^0.6.0",
+    "@dynamicforms/vue-grid": "^0.6.1",
     "@dynamicforms/vuetify-inputs": "^0.12.1",
     "@mdi/font": "^7.4.47",
     "axios": "^1.16.1",
