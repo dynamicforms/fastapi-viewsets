@@ -132,8 +132,9 @@ test('sorting happens on the server and restarts the paging', async ({ page }) =
   const loaded = await loadedCount(page);
 
   // `year`, not `id`: the default order already is by id ascending, so sorting by it changes
-  // nothing and the assertion below could never have been satisfied.
-  await page.locator('.df-grid.header .df-grid.cell.year').click();
+  // nothing and the assertion below could never have been satisfied. `.card` picks the visible header: the hidden
+  // copy the grid measures column widths with carries `df-grid header` too.
+  await page.locator('.df-grid.card.header .df-grid.cell.year').click();
   await expect.poll(async () => renderedIds(page), { timeout: 30_000 }).not.toEqual(ascending);
   await expect(page.getByTestId('error')).toHaveCount(0);
 
