@@ -9,9 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@dynamicforms/vue-forms": "^2.0.2",
-    "@dynamicforms/vue-grid": "^0.6.2",
-    "@dynamicforms/vuetify-inputs": "^0.12.1",
+    "@dynamicforms/vue-forms": "^3.0.0",
+    "@dynamicforms/vue-grid": "^0.7.0",
+    "@dynamicforms/vuetify-inputs": "^0.13.0",
     "@mdi/font": "^7.4.47",
     "axios": "^1.16.1",
     "muxws": "^0.3.1",
