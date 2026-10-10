@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dynamicforms/translatable": "^0.3.0",
     "@dynamicforms/vue-forms": "^3.0.0",
     "@dynamicforms/vue-grid": "^0.7.0",
     "@dynamicforms/vuetify-inputs": "^0.13.0",
