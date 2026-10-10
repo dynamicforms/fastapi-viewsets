@@ -6,6 +6,23 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking (npm):** the `@dynamicforms/translatable` peer dependency moves to `^0.3.0`.
+  `translateStrings(t, namespace?)` takes the application's translation function, shaped like
+  vue-i18n's `t`, in place of a callback returning raw templates; each code is looked up as
+  `${namespace}.${code}`. A code the built-in table does not declare, such as an application's own,
+  is now translated through the same function, with `detail` as its fallback.
+- `translateApiError` substitutes every array param as its items joined with `, `, not only
+  `allowed` and `missing`.
+
+### Removed
+
+- **Breaking (npm):** the `translatableStrings` export. The English defaults are listed in the
+  Error codes guide.
+
 ## [0.7.1] - 2026-09-24
 
 ### Added

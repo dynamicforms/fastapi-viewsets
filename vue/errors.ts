@@ -1,4 +1,4 @@
-import { createTranslatable, interpolate } from '@dynamicforms/translatable';
+import { createTranslatable } from '@dynamicforms/translatable';
 
 /**
  * A failed request's response body. `detail` is always a plain string - unchanged from what it has
@@ -16,9 +16,13 @@ export interface ApiErrorBody {
 /**
  * English defaults for every `detail_code` the server side raises on its own, keyed by that code
  * rather than by its English text. `{name}`-style placeholders match the keys `detail_params`
- * carries for that code.
+ * carries for that code. Typed as `Record<string, string>` so a code the table does not declare,
+ * such as an application's own, is translated as a run-time key.
+ *
+ * `translateStrings(t, namespace?)` sets the application's translation function; each code is
+ * looked up as `${namespace}.${code}`.
  */
-export const { strings: translatableStrings, translateStrings } = createTranslatable({
+export const { translate, translateStrings } = createTranslatable<Record<string, string>>({
   not_found: 'Item with pk {pk} not found',
   session_expired: 'Session expired or invalid',
   not_authorized: 'Not authorized to perform this action',
@@ -32,19 +36,20 @@ export const { strings: translatableStrings, translateStrings } = createTranslat
 });
 
 /**
- * A translated, interpolated message for a failed request - `body.detail` unchanged when
- * `detail_code` is absent (the server has not registered the handler, or this is a view's own
- * plain-string error) or names a code this table does not (yet) cover.
+ * The message for a failed request, in the locale current at the call: the translation of
+ * `detail_code` with `detail_params` substituted, else the English default declared for that code,
+ * else `body.detail`. `body.detail` is returned unchanged when `detail_code` is absent (the server
+ * has not registered the handler, or this is a view's own plain-string error). An array param is
+ * substituted as its items joined with `, `.
+ *
+ * It reads the translation function, so a render or computed that calls it follows a locale switch.
  */
 export function translateApiError(body: ApiErrorBody): string {
   if (!body.detail_code) return body.detail;
 
-  const template = (translatableStrings as Record<string, string>)[body.detail_code];
-  if (template == null) return body.detail;
+  const params: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(body.detail_params ?? {}))
+    params[name] = Array.isArray(value) ? value.join(', ') : value;
 
-  const params = { ...body.detail_params };
-  if (Array.isArray(params.allowed)) params.allowed = params.allowed.join(', ');
-  if (Array.isArray(params.missing)) params.missing = params.missing.join(', ');
-
-  return interpolate(template, params);
+  return translate(body.detail_code, params, body.detail);
 }

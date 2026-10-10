@@ -47,4 +47,4 @@ export type { MuxwsPeerLike, MuxwsPeerSource, MuxwsProxy, MuxwsProxyOptions, Mux
 export { route_muxws, MuxwsProxyImpl } from './muxws-proxy';
 
 export type { ApiErrorBody } from './errors';
-export { translatableStrings, translateApiError, translateStrings } from './errors';
+export { translateApiError, translateStrings } from './errors';

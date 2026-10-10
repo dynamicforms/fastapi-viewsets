@@ -1,8 +1,12 @@
-import { translatableStrings, translateApiError, translateStrings } from './errors';
+import { interpolate } from '@dynamicforms/translatable';
+
+import { translateApiError, translateStrings } from './errors';
+
+const untranslated = (key: string) => key;
 
 describe('translateApiError', () => {
   afterEach(() => {
-    translateStrings(() => undefined);
+    translateStrings(untranslated);
   });
 
   it('should return detail unchanged when detail_code is absent', () => {
@@ -43,10 +47,8 @@ describe('translateApiError', () => {
   });
 
   it('should reflect a later translateStrings call', () => {
-    const translations: Partial<Record<keyof typeof translatableStrings, string>> = {
-      not_found: 'Vnos s ključem {pk} ne obstaja',
-    };
-    translateStrings((key) => translations[key]);
+    const translations: Record<string, string> = { 'errors.not_found': 'Vnos s ključem {pk} ne obstaja' };
+    translateStrings((key, named) => (key in translations ? interpolate(translations[key], named) : key), 'errors');
 
     const result = translateApiError({
       detail: 'Item with pk 5 not found',
@@ -54,5 +56,27 @@ describe('translateApiError', () => {
       detail_params: { pk: 5 },
     });
     expect(result).toBe('Vnos s ključem 5 ne obstaja');
+  });
+
+  it('should translate a code the table does not declare', () => {
+    translateStrings((key) => (key === 'insufficient_balance' ? 'Stanje ne zadošča' : key));
+
+    const result = translateApiError({ detail: 'balance is short', detail_code: 'insufficient_balance' });
+    expect(result).toBe('Stanje ne zadošča');
+  });
+
+  it('should pass a joined array param to the translation function', () => {
+    const seen: Record<string, unknown>[] = [];
+    translateStrings((key, named) => {
+      seen.push(named);
+      return key;
+    });
+
+    translateApiError({
+      detail: 'cursor has no value for ordering key(s): id, year',
+      detail_code: 'cursor_missing_keys',
+      detail_params: { missing: ['id', 'year'] },
+    });
+    expect(seen).toEqual([{ missing: 'id, year' }]);
   });
 });

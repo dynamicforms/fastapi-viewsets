@@ -82,8 +82,8 @@ package's own errors and an application's own alike.
 
 ## Frontend
 
-`@dynamicforms/fastapi-viewsets/vue` exports a matching table of English defaults, keyed by
-`code`, and a function that rebuilds the message from `detail_code`/`detail_params`:
+`@dynamicforms/fastapi-viewsets/vue` declares an English default for each built-in `code` and
+exports a function that builds the message from `detail_code`/`detail_params`:
 
 ```ts
 import { translateApiError } from '@dynamicforms/fastapi-viewsets/vue';
@@ -92,21 +92,41 @@ const body = await response.json(); // { detail, detail_code?, detail_params? }
 const message = translateApiError(body);
 ```
 
-`translateApiError` returns `body.detail` unchanged whenever `detail_code` is absent - the handler
-was never registered, or this is a view's own plain-string error - or names a code the table below
-does not cover.
+`translateApiError` returns, in this order:
 
-To translate into another language, supply the application's own strings the same way every other
-`@dynamicforms` package does, through `translateStrings`:
+1. `body.detail` unchanged, when `detail_code` is absent - the handler was never registered, or this
+   is a view's own plain-string error.
+2. The application's translation of `detail_code`, with `detail_params` substituted.
+3. The English default declared for `detail_code` in the table below, with `detail_params`
+   substituted.
+4. `body.detail`, for a code the table does not declare.
+
+An array param, such as `allowed` or `missing`, is substituted as its items joined with `, `.
+
+The translations come from the application's translation function, shaped like vue-i18n's `t`
+(`(key, named) => string`, returning `key` unchanged when there is no translation). It is
+connected through `translateStrings(t, namespace?)`; each code is looked up as
+`${namespace}.${code}`. `@dynamicforms/translatable`'s readme describes the contract, including
+formatting numbers and dates with `formatParams`. With vue-i18n and the namespace `errors`:
 
 ```ts
 import { translateStrings } from '@dynamicforms/fastapi-viewsets/vue';
 
-translateStrings({
-  not_found: 'Element s ključem {pk} ne obstaja',
-  session_expired: 'Seja je potekla ali ni veljavna',
-});
+translateStrings(i18n.global.t, 'errors');
 ```
+
+```json
+{
+  "errors": {
+    "not_found": "Element s ključem {pk} ne obstaja",
+    "session_expired": "Seja je potekla ali ni veljavna"
+  }
+}
+```
+
+`translateApiError` calls the translation function each time it runs, so the returned string is in
+the locale current at the call. Call it where the message is rendered, in a template or a
+computed, so the message follows a locale switch.
 
 The full table of codes and their English defaults:
 
@@ -123,5 +143,5 @@ The full table of codes and their English defaults:
 | `cursor_missing_keys` | `cursor has no value for ordering key(s): {missing}` | `missing` |
 | `cursor_value_mismatch` | `cursor value for "{name}" does not fit the field: {error}` | `name`, `error` |
 
-A custom error's own `code` reaches the same table - pass it to `translateStrings` alongside the
-built-in ones, keyed the same way.
+A custom error's own `code` is translated the same way: add it to the application's translations
+under the same namespace. Without a translation, its `detail` is shown.
