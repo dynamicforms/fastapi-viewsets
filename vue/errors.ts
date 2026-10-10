@@ -1,11 +1,9 @@
-import { createTranslatable } from '@dynamicforms/translatable';
-
 /**
- * A failed request's response body. `detail` is always a plain string - unchanged from what it has
- * always been. `detail_code` and `detail_params` are additive, and appear only when the server has
- * registered `df_viewset_exception_handler` (see the Python side's `fastapi_viewsets.exceptions`)
- * for one of this package's own built-in errors; a view's own `raise HTTPException(status_code,
- * detail="...")` never carries them.
+ * The body of a failed request that names one failure. `detail` is plain English text.
+ * `detail_code` and `detail_params` appear when the server has registered
+ * `df_viewset_exception_handler` (see the Python side's `fastapi_viewsets.exceptions`) and the
+ * error is a `DfViewSetError`; a view's own `raise HTTPException(status_code, detail="...")` carries
+ * `detail` alone.
  */
 export interface ApiErrorBody {
   detail: string;
@@ -14,42 +12,61 @@ export interface ApiErrorBody {
 }
 
 /**
- * English defaults for every `detail_code` the server side raises on its own, keyed by that code
- * rather than by its English text. `{name}`-style placeholders match the keys `detail_params`
- * carries for that code. Typed as `Record<string, string>` so a code the table does not declare,
- * such as an application's own, is translated as a run-time key.
- *
- * `translateStrings(t, namespace?)` sets the application's translation function; each code is
- * looked up as `${namespace}.${code}`.
+ * One failure of a request body's validation, as FastAPI reports it with status 422. `loc` is the
+ * path to the failing value, starting with where it was read from (`body`, `query`, `path`,
+ * `header`, `cookie`); `type` is pydantic's code for the failure and `ctx` the values its `msg` was
+ * built from.
  */
-export const { translate, translateStrings } = createTranslatable<Record<string, string>>({
-  not_found: 'Item with pk {pk} not found',
-  session_expired: 'Session expired or invalid',
-  not_authorized: 'Not authorized to perform this action',
-  rate_limited: 'Rate limit exceeded',
-  unsupported_list_shape: 'unsupported list shape "{shape}"; this endpoint offers {allowed}',
-  cursor_unreadable: 'cursor is not readable: {error}',
-  cursor_missing_position: 'cursor is not readable: no position in it',
-  cursor_stale: 'this cursor was issued for a different ordering or filter - start from the first page',
-  cursor_missing_keys: 'cursor has no value for ordering key(s): {missing}',
-  cursor_value_mismatch: 'cursor value for "{name}" does not fit the field: {error}',
-});
+export interface FieldErrorEntry {
+  type: string;
+  loc: (string | number)[];
+  msg: string;
+  input?: unknown;
+  ctx?: Record<string, unknown>;
+}
+
+/** The body of a 422 response to a request whose parameters or body failed validation. */
+export interface FieldErrorsBody {
+  detail: FieldErrorEntry[];
+}
 
 /**
- * The message for a failed request, in the locale current at the call: the translation of
- * `detail_code` with `detail_params` substituted, else the English default declared for that code,
- * else `body.detail`. `body.detail` is returned unchanged when `detail_code` is absent (the server
- * has not registered the handler, or this is a view's own plain-string error). An array param is
- * substituted as its items joined with `, `.
- *
- * It reads the translation function, so a render or computed that calls it follows a locale switch.
+ * An error a server returned: what failed, the values it failed with, its English text and its
+ * origin, which is always `'server'`. It is assignable to `ErrorDescription` of
+ * `@dynamicforms/vue-forms`, so an application renders and translates it with the same function as
+ * its validators' errors.
  */
-export function translateApiError(body: ApiErrorBody): string {
-  if (!body.detail_code) return body.detail;
+export interface ErrorDescription {
+  readonly code: string;
+  readonly params: Readonly<Record<string, unknown>>;
+  readonly detail: string;
+  readonly origin: 'server';
+}
 
-  const params: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(body.detail_params ?? {}))
-    params[name] = Array.isArray(value) ? value.join(', ') : value;
+/**
+ * The error a failed request's body describes: `detail_code` as `code` (an empty string where the
+ * body has none), `detail_params` as `params` and `detail` unchanged.
+ */
+export function toErrorDescription(body: ApiErrorBody): ErrorDescription {
+  return {
+    code: body.detail_code ?? '',
+    params: body.detail_params ?? {},
+    detail: body.detail,
+    origin: 'server',
+  };
+}
 
-  return translate(body.detail_code, params, body.detail);
+/**
+ * The errors of a 422 body, keyed by the name of the failing field: `loc` without its first
+ * element, joined with `.` (`['body', 'address', 'city']` is `address.city`). A failure of the body
+ * as a whole is keyed `''`. Each error has pydantic's `type` as `code`, `ctx` as `params` and `msg`
+ * as `detail`.
+ */
+export function toFieldErrors(body: FieldErrorsBody): Record<string, ErrorDescription[]> {
+  const errors: Record<string, ErrorDescription[]> = {};
+  for (const entry of body.detail) {
+    const field = entry.loc.slice(1).join('.');
+    (errors[field] ??= []).push({ code: entry.type, params: entry.ctx ?? {}, detail: entry.msg, origin: 'server' });
+  }
+  return errors;
 }

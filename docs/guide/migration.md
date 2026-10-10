@@ -7,35 +7,34 @@ releases at once, work from the bottom of the page upwards.
 
 ## Upgrading to v0.8.0 (from v0.7.x)
 
-The npm package moves to `@dynamicforms/translatable` `^0.3.0`. The Python package and the response
+The npm package no longer translates errors and no longer depends on `@dynamicforms/translatable`.
+It converts an error body into an `ErrorDescription`, and the application translates it by its
+`code` with the function it uses for its vue-forms errors. The Python package and the response
 bodies are unchanged.
 
-- [ ] Install `@dynamicforms/translatable@^0.3.0`.
-- [ ] Pass the application's translation function to `translateStrings`, with the namespace that
-      holds the error codes in the application's translations:
+- [ ] Remove `@dynamicforms/translatable` from the application's dependencies if nothing else uses
+      it.
+- [ ] Remove the `translateStrings` call.
+- [ ] Replace `translateApiError(body)` with the application's error text function over
+      `toErrorDescription(body)`:
 
   ```ts
   // before
-  translateStrings((key, defaultValue) => myTranslations[key]);
+  translateStrings((key) => myTranslations[key]);
+  const message = translateApiError(body);
 
-  // after (vue-i18n)
-  translateStrings(i18n.global.t, 'errors');
+  // after
+  const message = errorText(toErrorDescription(body));
   ```
 
-  ```json
-  { "errors": { "not_found": "Element s ključem {pk} ne obstaja" } }
-  ```
-
-  The translation keeps the `{name}` placeholders; the translation function substitutes
-  `detail_params` into them.
-- [ ] Remove reads of `translatableStrings`. The English defaults are listed in
-      [Error codes](./error-codes#frontend).
-- [ ] Call `translateApiError` where the message is rendered (a template or a computed) if the
-      message must follow a locale switch; the returned string is in the locale current at the
-      call.
-
-Codes an application raises through its own `DfViewSetError` subclasses are translated through the
-same function. Without a translation, their `detail` is shown, as before.
+  `errorText` is the application's function described in
+  [vue-forms: Error messages and translation](:vue-forms:/guide/getting-started.html#error-messages-and-translation).
+  It looks the code up in the application's translations, substitutes `params` and falls back to
+  `detail`. Add the codes listed in [Error codes](./error-codes#codes) to the translations; the
+  placeholder names are the same.
+- [ ] Remove reads of `translatableStrings`. The English text of each code is the body's `detail`.
+- [ ] `params` holds the values as the server sent them. `allowed` and `missing` are arrays; format
+      them in `errorText` where the translation shows them.
 
 ## Upgrading to v0.6.0 (from v0.5.7)
 

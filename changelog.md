@@ -8,20 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Added
 
-- **Breaking (npm):** the `@dynamicforms/translatable` peer dependency moves to `^0.3.0`.
-  `translateStrings(t, namespace?)` takes the application's translation function, shaped like
-  vue-i18n's `t`, in place of a callback returning raw templates; each code is looked up as
-  `${namespace}.${code}`. A code the built-in table does not declare, such as an application's own,
-  is now translated through the same function, with `detail` as its fallback.
-- `translateApiError` substitutes every array param as its items joined with `, `, not only
-  `allowed` and `missing`.
+- `toErrorDescription(body)` converts a failed request's body into an `ErrorDescription`
+  (`code`, `params`, `detail`, `origin: 'server'`), the shape of `ErrorDescription` in
+  `@dynamicforms/vue-forms`: `detail_code` becomes `code` (`''` where the body has none),
+  `detail_params` becomes `params`, and `detail` is kept.
+- `toFieldErrors(body)` converts FastAPI's 422 validation body into `ErrorDescription`s keyed by
+  field name (`loc` without its source element, joined with `.`), with pydantic's `type` as `code`,
+  `ctx` as `params` and `msg` as `detail`.
+- The `ErrorDescription`, `FieldErrorEntry` and `FieldErrorsBody` types.
 
 ### Removed
 
-- **Breaking (npm):** the `translatableStrings` export. The English defaults are listed in the
-  Error codes guide.
+- **Breaking (npm):** `translateApiError`, `translateStrings` and `translatableStrings`, and the
+  `@dynamicforms/translatable` peer dependency. The package holds no translations; the application
+  translates an error by its `code`.
 
 ## [0.7.1] - 2026-09-24
 
