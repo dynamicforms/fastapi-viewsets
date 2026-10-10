@@ -2,7 +2,7 @@
 
 Every `HTTPException` this package raises on its own behalf carries a stable `code` and the
 `params` its English `detail` was built from, alongside `detail` itself. This page covers why that
-exists, how to opt into it on the backend, and how to translate it on the frontend.
+exists, how to opt into it on the backend, and how the frontend reads it.
 
 ## Design
 
@@ -82,36 +82,89 @@ package's own errors and an application's own alike.
 
 ## Frontend
 
-`@dynamicforms/fastapi-viewsets/vue` exports a matching table of English defaults, keyed by
-`code`, and a function that rebuilds the message from `detail_code`/`detail_params`:
+`@dynamicforms/fastapi-viewsets/vue` converts an error body into an `ErrorDescription`: `code`,
+`params`, the English `detail` and `origin: 'server'`. The interface has the shape of
+`ErrorDescription` in `@dynamicforms/vue-forms`, so the application renders and translates a
+server's errors with the same function as its validators' errors. The package holds no
+translations. How an application converts an error into text in its own language is described in
+[vue-forms: Error messages and translation](:vue-forms:/guide/getting-started.html#error-messages-and-translation);
+the codes of this page are added to the application's translations next to the validators' codes.
+
+### One error
+
+`toErrorDescription(body)` converts the body of a failed request:
 
 ```ts
-import { translateApiError } from '@dynamicforms/fastapi-viewsets/vue';
+import { toErrorDescription } from '@dynamicforms/fastapi-viewsets/vue';
 
-const body = await response.json(); // { detail, detail_code?, detail_params? }
-const message = translateApiError(body);
+const error = toErrorDescription(body); // body: { detail, detail_code?, detail_params? }
+// { code: 'not_found', params: { pk: 42 }, detail: 'Item with pk 42 not found', origin: 'server' }
 ```
 
-`translateApiError` returns `body.detail` unchanged whenever `detail_code` is absent - the handler
-was never registered, or this is a view's own plain-string error - or names a code the table below
-does not cover.
+| Field | Value |
+|-------|-------|
+| `code` | `detail_code`; an empty string where the body has none (the handler is not registered, or the error is a view's own `HTTPException`) |
+| `params` | `detail_params` as the server sent them; `{}` where the body has none |
+| `detail` | `detail`, unchanged |
+| `origin` | `'server'` |
 
-To translate into another language, supply the application's own strings the same way every other
-`@dynamicforms` package does, through `translateStrings`:
+### Field errors
+
+A request whose body or parameters fail validation is answered by FastAPI with status 422 and a
+list of failures, one per failing value; over muxws the body is the same:
+
+```json
+{
+  "detail": [
+    { "type": "string_too_short", "loc": ["body", "name"], "msg": "String should have at least 3 characters", "input": "a", "ctx": { "min_length": 3 } },
+    { "type": "int_parsing", "loc": ["body", "address", "zip"], "msg": "Input should be a valid integer", "input": "x" }
+  ]
+}
+```
+
+`toFieldErrors(body)` converts it into errors keyed by field name. The name is `loc` without its
+first element (`body`, `query`, `path`, `header` or `cookie`), joined with `.`; a failure of the
+body as a whole is keyed `''`. Each error has pydantic's `type` as `code`, `ctx` as `params` and
+`msg` as `detail`:
 
 ```ts
-import { translateStrings } from '@dynamicforms/fastapi-viewsets/vue';
+import { toFieldErrors } from '@dynamicforms/fastapi-viewsets/vue';
 
-translateStrings({
-  not_found: 'Element s ključem {pk} ne obstaja',
-  session_expired: 'Seja je potekla ali ni veljavna',
-});
+toFieldErrors(body);
+// {
+//   name: [{ code: 'string_too_short', params: { min_length: 3 }, detail: 'String should have at least 3 characters', origin: 'server' }],
+//   'address.zip': [{ code: 'int_parsing', params: {}, detail: 'Input should be a valid integer', origin: 'server' }],
+// }
 ```
 
-The full table of codes and their English defaults:
+A field of a vue-forms `Group` bound under the same name as the model's field receives its errors:
 
-| `code` | Default text | Params |
-|--------|--------------|--------|
+```ts
+import { toFieldErrors, type FieldErrorsBody } from '@dynamicforms/fastapi-viewsets/vue';
+import { ValidationError, type Group } from '@dynamicforms/vue-forms';
+
+function showServerErrors(form: Group, body: FieldErrorsBody) {
+  for (const [name, errors] of Object.entries(toFieldErrors(body))) {
+    const field = form.field(name);
+    if (field) {
+      field.errors = [
+        ...field.errors,
+        ...errors.map((e) => new ValidationError(e.code, e.params, e.detail, e.origin)),
+      ];
+    }
+  }
+}
+```
+
+The codes are pydantic's error types (`missing`, `string_too_short`, `int_parsing`, ...), and
+`params` holds the values pydantic built `msg` from.
+
+### Codes
+
+The codes this package raises, with their English `detail`:
+
+| `code` | `detail` | Params |
+|--------|----------|--------|
 | `not_found` | `Item with pk {pk} not found` | `pk` |
 | `session_expired` | `Session expired or invalid` | — |
 | `not_authorized` | `Not authorized to perform this action` | — |
@@ -123,5 +176,5 @@ The full table of codes and their English defaults:
 | `cursor_missing_keys` | `cursor has no value for ordering key(s): {missing}` | `missing` |
 | `cursor_value_mismatch` | `cursor value for "{name}" does not fit the field: {error}` | `name`, `error` |
 
-A custom error's own `code` reaches the same table - pass it to `translateStrings` alongside the
-built-in ones, keyed the same way.
+`allowed` and `missing` are arrays. An application's own `DfViewSetError` subclasses add their codes
+to the same translations.

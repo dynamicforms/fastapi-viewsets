@@ -3,7 +3,6 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import { DynamicFormsVueGrid } from '@dynamicforms/vue-grid';
-import VueMarkdown from 'vue-markdown-render';
 
 import 'vuetify/dist/vuetify.css';
 import '@dynamicforms/vuetify-inputs/styles.css';
@@ -20,5 +19,4 @@ const vuetify = createVuetify({
 const app = createApp(App);
 app.use(vuetify);
 app.use(DynamicFormsVueGrid, { registerComponents: true });
-app.component('VueMarkdown', VueMarkdown);
 app.mount('#app');

@@ -16,6 +16,7 @@
   "devDependencies": {
     "sass": "^1.85.1",
     "vite-plugin-vuetify": "^2.1.1",
+    "vitepress-plugin-crosslinks": "^1.0.0",
     "vitepress": "2.0.0-alpha.19"
   }
 }
