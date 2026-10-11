@@ -28,7 +28,7 @@ bodies are unchanged.
   ```
 
   `errorText` is the application's function described in
-  [vue-forms: Error messages and translation](:vue-forms:/guide/getting-started.html#error-messages-and-translation).
+  [vue-forms: Error messages and translation](:vue-forms:/api/validators.html#error-messages-and-translation).
   It looks the code up in the application's translations, substitutes `params` and falls back to
   `detail`. Add the codes listed in [Error codes](./error-codes#codes) to the translations; the
   placeholder names are the same.

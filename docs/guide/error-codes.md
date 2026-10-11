@@ -87,7 +87,7 @@ package's own errors and an application's own alike.
 `ErrorDescription` in `@dynamicforms/vue-forms`, so the application renders and translates a
 server's errors with the same function as its validators' errors. The package holds no
 translations. How an application converts an error into text in its own language is described in
-[vue-forms: Error messages and translation](:vue-forms:/guide/getting-started.html#error-messages-and-translation);
+[vue-forms: Error messages and translation](:vue-forms:/api/validators.html#error-messages-and-translation);
 the codes of this page are added to the application's translations next to the validators' codes.
 
 ### One error
@@ -137,24 +137,39 @@ toFieldErrors(body);
 // }
 ```
 
-A field of a vue-forms `Group` bound under the same name as the model's field receives its errors:
+A name is a path through the members of a vue-forms form: a `Group` member by its name, a `List`
+row by its index. The errors keyed `''` belong to the form itself:
 
 ```ts
 import { toFieldErrors, type FieldErrorsBody } from '@dynamicforms/fastapi-viewsets/vue';
-import { ValidationError, type Group } from '@dynamicforms/vue-forms';
+import { type FieldBase, Group, List, ValidationError } from '@dynamicforms/vue-forms';
+
+function elementAt(form: Group, name: string): FieldBase | null {
+  let element: FieldBase | null = form;
+  for (const key of name ? name.split('.') : []) {
+    if (element instanceof Group) element = element.field(key);
+    else if (element instanceof List) element = element.get(Number(key)) ?? null;
+    else return null;
+  }
+  return element;
+}
 
 function showServerErrors(form: Group, body: FieldErrorsBody) {
   for (const [name, errors] of Object.entries(toFieldErrors(body))) {
-    const field = form.field(name);
-    if (field) {
-      field.errors = [
-        ...field.errors,
+    const element = elementAt(form, name);
+    if (element) {
+      element.errors = [
+        ...element.errors,
         ...errors.map((e) => new ValidationError(e.code, e.params, e.detail, e.origin)),
       ];
     }
   }
 }
 ```
+
+vue-forms removes an error of origin `'server'` from an element when the element's value changes,
+and from a `Group` or `List` when a member below it changes
+([vue-forms: origin](:vue-forms:/api/validators.html#origin)).
 
 The codes are pydantic's error types (`missing`, `string_too_short`, `int_parsing`, ...), and
 `params` holds the values pydantic built `msg` from.
