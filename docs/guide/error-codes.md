@@ -167,9 +167,10 @@ function showServerErrors(form: Group, body: FieldErrorsBody) {
 }
 ```
 
-vue-forms removes an error of origin `'server'` from an element when the element's value changes,
-and from a `Group` or `List` when a member below it changes
-([vue-forms: origin](:vue-forms:/api/validators.html#origin)).
+Whether an error of origin `'server'` counts toward `valid` and when it is removed is set by
+vue-forms' [`ErrorPolicy`](:vue-forms:/api/validators.html#errorpolicy). By default it counts, and
+an element drops it when the element, or a member below it, is marked touched while the element
+holds a value other than the one it held when the error was written.
 
 The codes are pydantic's error types (`missing`, `string_too_short`, `int_parsing`, ...), and
 `params` holds the values pydantic built `msg` from.
