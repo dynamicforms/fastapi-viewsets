@@ -3,6 +3,7 @@ from typing import ClassVar
 
 import pytest
 
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 
 from ..list_query import ListQuery
@@ -110,8 +111,12 @@ def test_in_takes_a_comma_separated_string_and_coerces_it():
 
 def test_a_list_value_that_will_not_convert_is_refused_not_dropped():
     model = make_filter_model(Track, {"year": ["in"]})
-    with pytest.raises(FilterError, match="cannot read"):
+    with pytest.raises(RequestValidationError) as exc_info:
         filters_from(model(year__in="1957,not-a-year"))
+    [error] = exc_info.value.errors()
+    assert error["loc"] == ("query", "year__in", 1)
+    assert error["type"] == "int_parsing"
+    assert error["input"] == "not-a-year"
 
 
 def test_overlaps_takes_the_list_fields_item_type():

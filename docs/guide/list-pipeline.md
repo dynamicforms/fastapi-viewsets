@@ -246,7 +246,8 @@ Built in: `exact`, `iexact`, `contains`, `icontains`, `startswith`, `gt`, `gte`,
 
 `in` and `overlaps` take a comma-separated string (`?year__in=1999,2000`); FastAPI cannot expose a
 list-typed field of a `Depends()`-expanded model as a query parameter. Values are coerced to the
-field's own type, and one that will not convert is a 422.
+field's own type, and one that will not convert is a 422 in FastAPI's validation shape, with `loc`
+`["query", parameter, index]` (`["query", "year__in", 1]` for `?year__in=1999,abc`).
 
 Hand-written `filter_list` keeps working: a filter model built by hand carries no declaration, and
 the pipeline falls through to it.

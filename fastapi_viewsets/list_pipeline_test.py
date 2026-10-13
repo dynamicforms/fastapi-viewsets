@@ -249,3 +249,20 @@ def test_the_paginated_response_model_resolves_the_item_type_in_the_schema():
     ref = schema["paths"]["/tracks"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
     model = schema["components"]["schemas"][ref.rsplit("/", 1)[-1]]
     assert model["properties"]["results"]["items"]["$ref"].endswith("/Track")
+
+
+def test_a_filter_value_that_will_not_convert_is_a_422_on_the_query_parameter():
+    from .filters import make_filter_model
+
+    class FilteredViewSet(CollectionViewSet[int, Track], ListMixin[Track, make_filter_model(Track, {"year": ["in"]})]):
+        def __init__(self):
+            super().__init__(container=library(3), pk_field="id")
+
+    client = client_for(FilteredViewSet)
+    assert client.get("/tracks", params={"year__in": "2001,2002"}).status_code == 200
+
+    response = client.get("/tracks", params={"year__in": "2001,abc"})
+    assert response.status_code == 422
+    [error] = response.json()["detail"]
+    assert error["loc"] == ["query", "year__in", 1]
+    assert error["type"] == "int_parsing"

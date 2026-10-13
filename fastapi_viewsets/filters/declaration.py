@@ -17,7 +17,8 @@ field, exact only".
 
 from typing import Any, get_args, get_origin, Union
 
-from pydantic import BaseModel, create_model, Field, TypeAdapter
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, create_model, Field, TypeAdapter, ValidationError
 
 from .base import Filter, FilterError, FilterSet
 from .operators import known_operators, operator_for
@@ -116,21 +117,21 @@ def filters_from(fltr: Any) -> FilterSet | None:
         if value is None:
             continue
         if lookup in _LIST_LOOKUPS:
-            value = _split_values(value, item_annotation)
+            value = _split_values(value, item_annotation, parameter)
             if not value:
                 continue
         filters.append(operator_for(lookup)(field=field_name, value=value))
     return FilterSet(filters)
 
 
-def _split_values(raw: Any, item_annotation: Any) -> list:
+def _split_values(raw: Any, item_annotation: Any, parameter: str) -> list:
     """
     Comma-separated string to a validated list of the field's own type.
 
     Coercion matters: `?year__in=1957,1959` arrives as strings, and comparing those to an integer
-    column would quietly match nothing. An entry that will not convert is refused rather than
-    dropped - a filter that silently ignores half of what it was given is worse than one that says
-    it could not.
+    column would match nothing. An entry that will not convert is refused rather than dropped: a
+    `RequestValidationError`, which FastAPI answers with a 422 whose `loc` is
+    `["query", parameter, index]`, the shape of any other query parameter that fails validation.
     """
     if isinstance(raw, (list, tuple)):
         items = list(raw)
@@ -140,5 +141,7 @@ def _split_values(raw: Any, item_annotation: Any) -> list:
         return []
     try:
         return TypeAdapter(list[item_annotation]).validate_python(items)
-    except Exception as error:
-        raise FilterError(f"cannot read {raw!r} as a list of {item_annotation}: {error}") from None
+    except ValidationError as error:
+        raise RequestValidationError(
+            [{**entry, "loc": ("query", parameter, *entry["loc"])} for entry in error.errors(include_url=False)]
+        ) from None
