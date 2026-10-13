@@ -4,6 +4,8 @@ import { crosslinksConfig } from 'vitepress-plugin-crosslinks';
 
 export default defineConfig({
   title: 'DynamicForms Viewsets',
+  // the directory's own README, for contributors
+  srcExclude: ['readme.md'],
   description: 'Full-stack ViewSet library for FastAPI (Python) and Vue/TypeScript',
   markdown: {
     config: crosslinksConfig({
