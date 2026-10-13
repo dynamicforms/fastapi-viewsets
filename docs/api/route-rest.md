@@ -72,6 +72,8 @@ class AuthenticatedProxy<K extends KeyType, T, PK extends keyof T> extends RestP
 | Method | HTTP verb | URL |
 |--------|-----------|-----|
 | `list()` | `GET` | `{basePath}` |
+| `listPage(params)` | `GET` | `{basePath}` (query: `offset`, `limit`) |
+| `listCursor(params)` | `GET` | `{basePath}` (query: `cursor`, `limit`) |
 | `retrieve(pk)` | `GET` | `{basePath}/{pk}` |
 | `create(data)` | `POST` | `{basePath}` |
 | `update(pk, data)` | `PUT` | `{basePath}/{pk}` |

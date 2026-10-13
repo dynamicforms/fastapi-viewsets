@@ -211,6 +211,22 @@ The global setting is read at decoration time, so set it before any viewset clas
 over the transport it was asked on. When an endpoint is published on only one of them, the two
 schemas differ.
 
+## Python reference
+
+`fastapi_viewsets.mux_ws` exports, besides `process_command` and `transports`:
+
+| Name | Description |
+|------|-------------|
+| `get_dispatch_app()` | The FastAPI app every muxws command is dispatched into, built from the current registrations; `process_command` uses it unless given `app` |
+| `schema_for(base_path)` | The OpenAPI document of the viewset registered at `base_path` as reachable over muxws, or `None` |
+| `registered_viewsets()` | The registered viewset classes mapped to their base paths |
+| `is_registered(cls)` | Whether `cls` is registered on muxws |
+| `register_viewset(cls, base_path, route_kwargs, tags=None)` | Records a viewset's muxws-reachable endpoints; `route_viewset` calls it. Re-registering a class replaces its registration |
+| `reset_registry()` | Drops every registration; for tests |
+| `resolve_register_muxws(endpoint, viewset_level)` | Whether an endpoint is on muxws: the endpoint's `@transports`, else `viewset_level`, else `settings.viewsets_register_muxws` |
+| `resolve_register_rest(endpoint, viewset_level=None)` | Whether an endpoint is on REST: the endpoint's `@transports`, else `viewset_level`, else `True` |
+| `METHOD_KEY`, `PATH_KEY`, `QUERY_KEY`, `STATUS_KEY` | `":method"`, `":path"`, `":query"`, `":status"` |
+
 ## The wire format
 
 muxws does no routing of its own — its specification forbids looking at the opening payload to pick

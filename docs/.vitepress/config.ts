@@ -91,6 +91,8 @@ export default defineConfig({
             { text: 'Vue mixins', link: '/api/vue-mixins' },
             { text: 'restViewSet / muxwsViewSet', link: '/api/viewset-factory' },
             { text: 'route_rest', link: '/api/route-rest' },
+            { text: 'route_muxws', link: '/api/route-muxws' },
+            { text: 'settings', link: '/api/settings' },
           ],
         },
       ],

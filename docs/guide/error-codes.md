@@ -46,8 +46,8 @@ knows which user it is answering, decides what language to show.
 | `UnsupportedListShapeError(shape, allowed)` | 422 | `unsupported_list_shape` | `{shape, allowed}` |
 | `CursorRequestError(error)` | 400 | one of the cursor codes below | varies |
 
-The cursor codes, raised internally when cursor pagination rejects a request and surfaced through
-`CursorRequestError`:
+The cursor codes, raised as `fastapi_viewsets.cursor.CursorError` (a `ValueError` carrying `code`
+and `params`) when cursor pagination rejects a request, and surfaced through `CursorRequestError`:
 
 | `code` | `params` | When |
 |--------|----------|------|

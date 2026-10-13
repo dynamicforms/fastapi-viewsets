@@ -244,6 +244,15 @@ For explicit control over which mode is applied, use the low-level decorators di
 from fastapi_viewsets.decorators.celery_viewset import celery_viewset_client, celery_viewset_server
 ```
 
+### Result queue helpers
+
+| Function | Description |
+|----------|-------------|
+| `get_result_queue_key(task_prefix)` | The Redis list a prefix's results are pushed to |
+| `get_registered_queue_keys()` | Every queue key a `celery_viewset_client` registered |
+| `get_running_queue_keys()` | The queue keys that have a running reader task |
+| `push_result(redis_client, queue_key, correlation_id, result=None, error=None)` | Pushes a result or an error for one call; the worker calls it |
+
 ### Extension hooks
 
 `celery_viewset_client` and `celery_viewset_server` each expose one module-level hook slot so an

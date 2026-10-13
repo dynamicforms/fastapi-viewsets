@@ -109,7 +109,8 @@ class TrackViewSet(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter])
 The endpoint gains the header and every parameter those shapes use, and its response becomes a
 union of exactly those models. Each is documented with an example named after the header value that
 produces it, so the dropdown reads `plain` rather than `ListOf_Track_`. A value not in
-`list_shapes` is a 422.
+`list_shapes` is a 422. A viewset whose `list_shape` or `list_shapes` names a shape other than
+`plain`, `paginated` and `cursor` raises `fastapi_viewsets.list_shapes.ShapeError` (a `ValueError`).
 
 Declare one shape unless clients genuinely differ. A union has to be narrowed by every generated
 client, and OpenAPI cannot express that a request header selects between its members — that part is
@@ -288,6 +289,27 @@ A new operator needs no change to any backend, and a new backend needs no change
 
 Push-down is all or nothing: if any filter in a request has no compiler, the backend leaves the
 whole stage to the in-memory pass.
+
+### Reference
+
+`fastapi_viewsets.filters` exports:
+
+| Name | Description |
+|------|-------------|
+| `make_filter_model(model, declaration)` | The query-parameter model for a declaration; raises `FilterError` for an unknown field or operator |
+| `FilterDeclaration` | The declaration's type: field name → list of operator names |
+| `filters_from(fltr)` | The `FilterSet` a populated filter model asks for, or `None` for a model not built from a declaration |
+| `Filter` | Base class of an operator: `field`, `value`, the class variable `lookup`, `read(record)` and `matches(record)` |
+| `FilterSet` | The filters of one request, and the in-memory fallback for all of them |
+| `FilterError` | A declaration names a field the model does not have, or an unknown operator |
+| `Exact`, `IExact`, `Contains`, `IContains`, `StartsWith`, `Gt`, `Gte`, `Lt`, `Lte`, `In`, `IsNull`, `Overlaps` | The built-in operators |
+| `register_operator(cls)` | Registers an operator under its `lookup` |
+| `operator_for(lookup)`, `known_operators()` | The operator class for a name; the set of registered names |
+| `compiles(backend, filter_type)` | Registers a compiler for a (backend, filter) pair |
+| `compiler_for(backend, filter_type)` | The most specific registered compiler, or `None` |
+| `can_compile_all(backend, filters)`, `compile_all(backend, viewset, filters, query)` | Whether every filter has a compiler for `backend`; applies them all in turn |
+| `registered_pairs()` | Every registered (backend, filter) pair, by name |
+| `SPEC_ATTRIBUTE` | The attribute (`"__filter_spec__"`) on a filter model that holds its declaration |
 
 ## Backends
 
