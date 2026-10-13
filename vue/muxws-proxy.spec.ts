@@ -224,6 +224,36 @@ describe('MuxwsProxyImpl — responses', () => {
   });
 });
 
+describe('MuxwsProxyImpl — timeout', () => {
+  it('bounds the wait for the reply headers by timeoutMs', async () => {
+    const timedOut = new Error('stream timed out');
+    const requested: unknown[] = [];
+    const peer: MuxwsPeerLike = {
+      open() {
+        return {
+          // a server that never answers: no headers, and result() rejects once timeoutMs expires
+          replyHeadersArrived: new Promise<void>(() => {}),
+          replyHeaders: {},
+          result: (options) => {
+            requested.push(options);
+            return Promise.reject(timedOut);
+          },
+        };
+      },
+    };
+    const proxy = new MuxwsProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      peer,
+      timeoutMs: 50,
+      validateSchema: false,
+    });
+
+    await expect(proxy.list()).rejects.toBe(timedOut);
+    expect(requested).toEqual([{ timeoutMs: 50 }]);
+  });
+});
+
 describe('MuxwsProxyImpl — peer resolution', () => {
   it('accepts a factory, for the usual case where connect() has not resolved yet', async () => {
     const mock = makeMockPeer();

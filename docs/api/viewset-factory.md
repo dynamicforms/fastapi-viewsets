@@ -114,7 +114,7 @@ interface Options {
 | `validateSchema` | `boolean` | `true` | Set `false` to skip the startup schema check (it is advisory and costs one request). |
 | `axiosInstance` | `AxiosInstance` | global `axios` | REST only. |
 | `peer` | `MuxwsPeerSource` | — | muxws only. A `Peer`, or a function returning one — called once and cached. |
-| `timeoutMs` | `number` | — | muxws only. Per-request timeout; muxws resets the stream with `TIMEOUT` when it expires. |
+| `timeoutMs` | `number` | — | muxws only. Per-request timeout, covering the wait for the reply headers and for the body; muxws resets the stream with `TIMEOUT` when it expires and the call rejects with its `StreamTimeout`. |
 | `headers` | `Record<string, string>` | `{}` | muxws only. Headers added to every request. |
 
 ## Inside the class body

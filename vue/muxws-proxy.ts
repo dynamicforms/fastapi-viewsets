@@ -67,7 +67,7 @@ declare const FACTORY_BUILT_REJECTION: 'route_muxws cannot take a factory-built 
 
 export interface MuxwsProxyOptions extends ProxyBaseOptions {
   peer: MuxwsPeerSource;
-  /** Per-request timeout in milliseconds. muxws resets the stream with TIMEOUT when it expires. */
+  /** Per-request timeout in milliseconds, the wait for the reply headers included. muxws resets the stream with TIMEOUT when it expires. */
   timeoutMs?: number;
   /**
    * Headers added to every request this proxy makes. The WebSocket handshake already carries
@@ -117,13 +117,14 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
     // end: true — this is a unary call, so the request is complete with its opening frame.
     const stream = peer.open(options.body, { headers, end: true });
 
-    // The status is announced before the body, in the answering side's leading headers (muxws
-    // 0.3.1+). Awaiting the gate first means an error status is known without reading the response
-    // at all — which is what makes this work for a streaming reply and not only a unary one.
-    await stream.replyHeadersArrived;
+    // The status is in the answering side's leading headers. `result()` is started first so that
+    // `timeoutMs` bounds the whole call, the wait for those headers included: a stream that never
+    // answers rejects with muxws' StreamTimeout instead of waiting for headers that do not come.
+    const result = stream.result(this.timeoutMs === undefined ? undefined : { timeoutMs: this.timeoutMs });
+    await Promise.race([stream.replyHeadersArrived, result]);
     const status = readStatus(stream.replyHeaders);
 
-    const body = await stream.result(this.timeoutMs === undefined ? undefined : { timeoutMs: this.timeoutMs });
+    const body = await result;
     if (status >= 400) throw new ViewSetRequestError(status, body, readHeaders(stream.replyHeaders));
     return body as R;
   }

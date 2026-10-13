@@ -108,7 +108,7 @@ the constructor options.
 | `axiosInstance` | `restViewSet` | Custom axios instance; defaults to the global one |
 | `peer` | `muxwsViewSet` | The muxws peer, or a function returning one (required) |
 | `headers` | `muxwsViewSet` | Sent on every command, on top of the handshake's |
-| `timeoutMs` | `muxwsViewSet` | Per-call timeout |
+| `timeoutMs` | `muxwsViewSet` | Per-call timeout, from opening the stream to the last byte of the reply |
 
 `pkFieldName` and `declares` are bound by the factory and are TS2353 if passed.
 
