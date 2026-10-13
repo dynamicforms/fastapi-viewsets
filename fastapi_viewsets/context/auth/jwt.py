@@ -2,6 +2,7 @@ import datetime
 
 from typing import Any, TYPE_CHECKING
 
+from ...conf import settings
 from .. import LazyObject
 from . import AuthBackend
 
@@ -14,30 +15,41 @@ class _JWTUserLazy(LazyObject):
     resolve() is sync and needs no I/O - signature+expiry verification is cheap, local computation
     (unlike DjangoSessionAuthBackend, there's no session store to hit). Uses the default
     recipe+resolved_value shortcut (see LazyObject) since decoded claims are already JSON-safe.
+
+    The recipe carries the token and the position of the verifying backend in
+    `settings.viewsets_auth_processors`, never the secret: a Celery worker, configured with the same
+    settings, verifies the token with its own copy of that backend. Where that position holds no
+    `JWTAuthBackend`, the token resolves to None.
     """
 
-    def __init__(self, token: str, secret: str, algorithm: str):
+    def __init__(self, token: str, backend: "JWTAuthBackend | None"):
         super().__init__()
         self._token = token
-        self._secret = secret
-        self._algorithm = algorithm
+        self._backend = backend
 
     def resolve(self) -> Any:
         import jwt as pyjwt
 
+        if self._backend is None:
+            return None
         try:
-            return pyjwt.decode(self._token, self._secret, algorithms=[self._algorithm])
+            return pyjwt.decode(self._token, self._backend.secret, algorithms=[self._backend.algorithm])
         except pyjwt.PyJWTError:
             # expired/invalid signature - same "recognized shape, invalid credential" case as
             # DjangoSessionAuthBackend
             return None
 
     def serialize_recipe(self) -> Any:
-        return {"token": self._token, "secret": self._secret, "algorithm": self._algorithm}
+        processors = settings.viewsets_auth_processors
+        position = next((i for i, backend in enumerate(processors) if backend is self._backend), None)
+        return {"token": self._token, "backend": position}
 
     @classmethod
     def deserialize_recipe(cls, data: Any) -> "_JWTUserLazy":
-        return cls(data["token"], data["secret"], data["algorithm"])
+        processors = settings.viewsets_auth_processors
+        position = data.get("backend")
+        backend = processors[position] if isinstance(position, int) and 0 <= position < len(processors) else None
+        return cls(data["token"], backend if isinstance(backend, JWTAuthBackend) else None)
 
 
 class JWTAuthBackend(AuthBackend):
@@ -64,7 +76,7 @@ class JWTAuthBackend(AuthBackend):
         header = request.headers.get(self.header_name, "")
         if not header.lower().startswith("bearer "):
             return None  # not a bearer token - let the next backend try it
-        return _JWTUserLazy(header[len("bearer ") :].strip(), self.secret, self.algorithm)
+        return _JWTUserLazy(header[len("bearer ") :].strip(), self)
 
 
 def encode_jwt(

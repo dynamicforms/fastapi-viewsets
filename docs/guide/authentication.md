@@ -134,6 +134,11 @@ from fastapi_viewsets.context.auth.jwt import JWTAuthBackend
 settings.viewsets_auth_processors = [JWTAuthBackend(secret="...", algorithm="HS256")]
 ```
 
+Across the Celery boundary (`celery_viewset`) the user travels as the token and the position of its
+backend in `settings.viewsets_auth_processors`, not the secret: the worker verifies the token with
+its own configured backend, so it needs the same `viewsets_auth_processors`. A position that holds
+no `JWTAuthBackend` there resolves the user to `None`.
+
 **Not a session replacement.** A bare, stateless JWT can't be revoked - there's no server-side
 record to delete, unlike `DjangoSessionAuthBackend`. If "logout"/password-change/force-logout
 matters, don't hand out long-lived JWTs directly; instead mint a *short-lived* one (`encode_jwt`,
