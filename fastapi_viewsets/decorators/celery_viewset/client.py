@@ -9,10 +9,11 @@ from typing import TYPE_CHECKING, TypeVar
 from pydantic import BaseModel
 
 from ...context import Context, SerializableObject, serialize_context, to_jsonable
+from ...exceptions import ResultTimeoutError
 from ..build_schema import build_schema
 from ..primary_key_model_helper import PARTIAL_UPDATE_ACTIONS
 from . import result_reader
-from .result_reader import get_result_queue_key
+from .result_reader import get_process_queue_key, get_result_queue_key
 
 if TYPE_CHECKING:
     import redis
@@ -21,6 +22,8 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
+
+DEFAULT_RESULT_TIMEOUT = 3600.0
 
 _celery_dispatch_hook: Callable[[dict], Awaitable[dict]] | None = None
 
@@ -50,10 +53,14 @@ def celery_viewset_client(
     celery_app: "Celery",
     task_prefix: str,
     redis_client: "redis.Redis",
+    result_timeout: float | None = DEFAULT_RESULT_TIMEOUT,
 ):
     """
     Decorator for FastAPI side. Replaces viewset methods with async wrappers that
     send Celery tasks and await results via a Redis result queue.
+
+    A call whose result does not arrive within result_timeout seconds raises ResultTimeoutError (504).
+    None waits without a limit.
     """
     queue_key = get_result_queue_key(task_prefix)
 
@@ -68,7 +75,7 @@ def celery_viewset_client(
                 continue
             seen_tasks.add(task_name)
 
-            _patch_method(cls, route.endpoint, task_name, celery_app, queue_key)
+            _patch_method(cls, route.endpoint, task_name, celery_app, queue_key, result_timeout)
 
         cls.__celery_viewset_metadata__ = {
             "task_prefix": task_prefix,
@@ -101,7 +108,9 @@ async def _serialize_value(value, partial: bool = False):
     return to_jsonable(value)
 
 
-def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, queue_key: str):
+def _patch_method(
+    cls: type, original_endpoint, task_name: str, celery_app, queue_key: str, result_timeout: float | None
+):
     """Replace the method on cls with an async version that sends a Celery task and awaits the result."""
     method_name = original_endpoint.__name__
 
@@ -128,7 +137,7 @@ def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, queu
                 kwargs={
                     **serializable_kwargs,
                     "_correlation_id": correlation_id,
-                    "_result_queue_key": queue_key,
+                    "_result_queue_key": get_process_queue_key(queue_key),
                     **extra_kwargs,
                 },
                 # send_task() defaults ignore_result to False regardless of what the task was
@@ -137,7 +146,11 @@ def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, queu
                 # worker still tries to JSON-encode the raw return value into its result backend.
                 ignore_result=True,
             )
-            return await future
+            try:
+                return await asyncio.wait_for(future, result_timeout)
+            except asyncio.TimeoutError:
+                logger.error("Celery task timed out: %s (correlation_id=%s)", task_name, correlation_id)
+                raise ResultTimeoutError(task_name, result_timeout) from None
         except Exception:
             result_reader.unregister_future(correlation_id)
             raise

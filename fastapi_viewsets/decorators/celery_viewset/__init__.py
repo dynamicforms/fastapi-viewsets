@@ -2,8 +2,14 @@ import logging
 import sys
 
 from ..lifecycle_runner import LifecycleType
-from .client import celery_viewset_client, get_registered_queue_keys, set_celery_dispatch_hook
+from .client import (
+    celery_viewset_client,
+    DEFAULT_RESULT_TIMEOUT,
+    get_registered_queue_keys,
+    set_celery_dispatch_hook,
+)
 from .result_reader import (
+    get_process_queue_key,
     get_result_queue_key,
     get_running_queue_keys,
     push_result,
@@ -31,7 +37,13 @@ def _detect_is_celery_worker() -> bool:
     return len(sys.argv) > 0 and "celery" in sys.argv[0].lower()
 
 
-def celery_viewset(celery_app, task_prefix: str, lifecycle: LifecycleType = "singleton", redis_client=None):
+def celery_viewset(
+    celery_app,
+    task_prefix: str,
+    lifecycle: LifecycleType = "singleton",
+    redis_client=None,
+    result_timeout: float | None = DEFAULT_RESULT_TIMEOUT,
+):
     """
     Convenience decorator that auto-detects whether to use client or server mode.
 
@@ -45,7 +57,7 @@ def celery_viewset(celery_app, task_prefix: str, lifecycle: LifecycleType = "sin
     else:
         if redis_client is None:
             raise ValueError("redis_client is required for celery_viewset in client (FastAPI) mode")
-        return celery_viewset_client(celery_app, task_prefix, redis_client=redis_client)
+        return celery_viewset_client(celery_app, task_prefix, redis_client=redis_client, result_timeout=result_timeout)
 
 
 def check_result_readers() -> frozenset[str]:
@@ -56,8 +68,8 @@ def check_result_readers() -> frozenset[str]:
     celery_viewset_client decorators register their queue_key at import/decoration time, so by the
     time FastAPI startup code runs, every queue_key in use is already known - call this once, right
     after starting all result readers in the FastAPI lifespan. A queue_key with no running reader
-    means requests dispatched to that celery_viewset hang forever waiting for a result that never
-    arrives (the Celery task itself runs fine - only the FastAPI-side pickup is missing).
+    means requests dispatched to that celery_viewset wait for a result that never arrives until
+    result_timeout passes (the Celery task itself runs fine - only the FastAPI-side pickup is missing).
 
     Returns the set of queue_keys that are missing a reader (empty if everything is running).
     Never raises - this is a diagnostic aid, not a correctness check enforced by the library.
@@ -66,7 +78,7 @@ def check_result_readers() -> frozenset[str]:
     for queue_key in sorted(missing):
         logger.warning(
             "No result reader is running for queue_key=%s - requests dispatched to this "
-            "celery_viewset will hang waiting for a result that never arrives. Call "
+            "celery_viewset wait for a result that never arrives until they time out. Call "
             "start_result_reader(redis_client, %r) in your FastAPI lifespan.",
             queue_key,
             queue_key,
@@ -78,6 +90,7 @@ __all__ = [
     "celery_viewset",
     "celery_viewset_client",
     "celery_viewset_server",
+    "DEFAULT_RESULT_TIMEOUT",
     "set_is_celery_worker",
     "set_celery_kwargs_hook",
     "set_celery_dispatch_hook",
@@ -86,6 +99,7 @@ __all__ = [
     "check_result_readers",
     "push_result",
     "get_result_queue_key",
+    "get_process_queue_key",
     "get_registered_queue_keys",
     "get_running_queue_keys",
 ]

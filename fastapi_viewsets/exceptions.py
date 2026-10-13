@@ -54,6 +54,14 @@ class RateLimitedError(DfViewSetError):
         super().__init__(429, "Rate limit exceeded", "rate_limited")
 
 
+class ResultTimeoutError(DfViewSetError):
+    """A `celery_viewset` call whose result did not arrive from the worker within `timeout` seconds."""
+
+    def __init__(self, task: str, timeout: float):
+        message = f"No result for {task} within {timeout} s"
+        super().__init__(504, message, "result_timeout", {"task": task, "timeout": timeout})
+
+
 class UnsupportedListShapeError(DfViewSetError):
     def __init__(self, shape: str, allowed: list[str]):
         message = f"unsupported list shape {shape!r}; this endpoint offers {', '.join(allowed)}"

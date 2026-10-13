@@ -128,6 +128,7 @@ def celery_viewset(
     task_prefix: str,
     lifecycle: LifecycleType = "singleton",
     redis_client: redis.Redis | None = None,
+    result_timeout: float | None = 3600.0,
 ) -> Callable[[type], type]:
 ```
 
@@ -139,6 +140,7 @@ def celery_viewset(
 | `task_prefix` | `str` | — | Prefix for all registered Celery task names, e.g. `"items"` |
 | `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle on the worker side (same semantics as `route_viewset` — see [ViewSet Lifecycle](./lifecycle)) |
 | `redis_client` | `redis.Redis \| None` | `None` | Redis client used to pass results back to FastAPI. Required in client (FastAPI) mode; optional in worker mode. |
+| `result_timeout` | `float \| None` | `3600.0` | Client mode: seconds a call waits for its result before it raises `ResultTimeoutError` (504, `result_timeout`). `None` waits without a limit. Ignored in worker mode. |
 
 ### Usage
 
@@ -215,6 +217,15 @@ name, which is the method's name unless the route states one:
 
 Results are passed from the worker back to FastAPI via a Redis list (not via the Celery result backend). Each call is correlated with a UUID so that concurrent requests are handled correctly.
 
+Each FastAPI process receives its results on its own list, `{queue_key}:{host name}:{process id}`
+(`get_process_queue_key(queue_key)`): the task carries the list of the process that dispatched it,
+and that process's reader pops it. Any number of FastAPI processes, on any number of hosts, can share
+one Redis. Every push renews the list's expiry to one hour, so the list of a process that has exited
+is removed from Redis.
+
+A call raises `ResultTimeoutError` (504, `result_timeout`) when its result does not arrive within
+`result_timeout` seconds, one hour by default.
+
 A model argument crosses to the worker dumped by field name and is validated as its model there. A
 create body crosses without its primary key, and the action receives the model as it does in the
 FastAPI process. A model argument that fails validation on the worker fails the call.
@@ -242,11 +253,11 @@ replaces or interferes with readers for other keys. But nothing starts a reader 
 never call it for: if your app has more than one `celery_viewset`-decorated class with different
 `task_prefix` values (a very common shape) and you forget to start a reader for one of them,
 results for it are never picked up — the Celery task runs fine, but the client-side `await` on the
-result hangs forever (no exception). `check_result_readers()` is a safety net for exactly this: it
-compares every registered `queue_key` against the ones with an actual running reader and logs
-`"No result reader is running for queue_key=..."` for each mismatch — call it once, right after
-starting your readers in `lifespan`, so a missing reader shows up as a log line at startup instead
-of a silent hang on the first request.
+result waits until `result_timeout` passes and raises `ResultTimeoutError`. `check_result_readers()`
+is a safety net for exactly this: it compares every registered `queue_key` against the ones with an
+actual running reader and logs `"No result reader is running for queue_key=..."` for each mismatch —
+call it once, right after starting your readers in `lifespan`, so a missing reader shows up as a log
+line at startup instead of as timed-out requests.
 :::
 
 ### Low-level decorators
@@ -266,10 +277,11 @@ from fastapi_viewsets.decorators.celery_viewset import celery_viewset_client, ce
 
 | Function | Description |
 |----------|-------------|
-| `get_result_queue_key(task_prefix)` | The Redis list a prefix's results are pushed to |
+| `get_result_queue_key(task_prefix)` | The queue key of a prefix, which `start_result_reader` takes |
+| `get_process_queue_key(queue_key)` | The Redis list this process receives a queue key's results on |
 | `get_registered_queue_keys()` | Every queue key a `celery_viewset_client` registered |
 | `get_running_queue_keys()` | The queue keys that have a running reader task |
-| `push_result(redis_client, queue_key, correlation_id, result=None, error=None)` | Pushes a result or an error for one call; the worker calls it |
+| `push_result(redis_client, queue_key, correlation_id, result=None, error=None)` | Pushes a result or an error for one call to `queue_key`, the `_result_queue_key` the task carries, and renews the list's expiry |
 
 ### Extension hooks
 

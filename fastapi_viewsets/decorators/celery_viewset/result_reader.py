@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import os
+import socket
 
 from typing import TYPE_CHECKING
 
@@ -12,6 +14,10 @@ if TYPE_CHECKING:
     import redis
 
 logger = logging.getLogger(__name__)
+
+# Seconds a result list outlives its last push. A list whose process is gone is never read again;
+# the expiry removes it from Redis.
+RESULT_QUEUE_TTL = 3600
 
 # Global registry: correlation_id -> asyncio.Future
 _pending_futures: dict[str, asyncio.Future] = {}
@@ -32,12 +38,24 @@ def get_result_queue_key(task_prefix: str) -> str:
     return f"celery_viewset_results:{task_prefix}"
 
 
+def get_process_queue_key(queue_key: str) -> str:
+    """
+    The Redis list this process receives queue_key's results on.
+
+    A pending Future exists only in the process that dispatched the call, so each process reads its
+    own list, named by host and process id. The key is computed at call time: a process forked after
+    import gets its own.
+    """
+    return f"{queue_key}:{socket.gethostname()}:{os.getpid()}"
+
+
 async def result_reader_loop(redis_client: "redis.Redis", queue_key: str, poll_interval: float = 0.05) -> None:
-    """Background coroutine that reads results from Redis list and resolves pending Futures."""
+    """Background coroutine that reads this process's results for queue_key and resolves pending Futures."""
+    process_queue_key = get_process_queue_key(queue_key)
     while True:
         try:
             # Non-blocking pop from Redis list
-            item = await redis_client.lpop(queue_key)
+            item = await redis_client.lpop(process_queue_key)
             if item is None:
                 await asyncio.sleep(poll_interval)
                 continue
@@ -72,14 +90,23 @@ async def result_reader_loop(redis_client: "redis.Redis", queue_key: str, poll_i
             await asyncio.sleep(poll_interval)
 
 
+def push_payload(redis_client: "redis.Redis", queue_key: str, data: dict) -> None:
+    """Push one result payload to queue_key and renew the list's expiry to RESULT_QUEUE_TTL."""
+    redis_client.rpush(queue_key, json.dumps(data))
+    redis_client.expire(queue_key, RESULT_QUEUE_TTL)
+
+
 def push_result(redis_client: "redis.Redis", queue_key: str, correlation_id: str, result=None, error=None) -> None:
-    """Called from Celery worker to push result into Redis queue."""
+    """
+    Push a result or an error for one call. queue_key is the `_result_queue_key` the client sent with
+    the task.
+    """
     data = {"correlation_id": correlation_id}
     if error is not None:
         data["error"] = str(error)
     else:
         data["result"] = result
-    redis_client.rpush(queue_key, json.dumps(data))
+    push_payload(redis_client, queue_key, data)
 
 
 def get_running_queue_keys() -> frozenset[str]:

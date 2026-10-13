@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator, ValidationError
 from fastapi_viewsets.decorators import (
     celery_viewset_server,
 )
+from fastapi_viewsets.decorators.celery_viewset.result_reader import RESULT_QUEUE_TTL
 from fastapi_viewsets.mixins import CreateMixin, ListMixin
 
 
@@ -152,6 +153,7 @@ def test_celery_viewset_server_pushes_result_to_redis():
     assert queue_key == "celery_viewset_results:items"
     assert payload["correlation_id"] == "test-corr-id"
     assert payload["result"] is not None
+    redis_mock.expire.assert_called_once_with("celery_viewset_results:items", RESULT_QUEUE_TTL)
 
 
 def test_celery_viewset_server_pushes_result_with_date_field_to_redis():

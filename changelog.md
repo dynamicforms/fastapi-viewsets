@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over an immutable container.
 - The API reference has pages for `route_muxws` and `settings`, and lists the request, error-body,
   muxws, filter and Celery helpers.
+- `celery_viewset` and `celery_viewset_client` take `result_timeout` (seconds, default 3600; `None`
+  waits without a limit). A call whose result does not arrive in time raises `ResultTimeoutError`
+  (504, `result_timeout`, params `task` and `timeout`).
+- `get_process_queue_key(queue_key)`: the Redis list the calling process receives a queue key's
+  results on.
 
 ### Changed
 
@@ -50,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `celery_viewset` with more than one FastAPI process sharing a Redis (several workers or replicas):
+  each process receives its results on its own list, `{queue_key}:{host name}:{process id}`. All
+  processes read one list per prefix, and a process that popped another process's result discarded
+  it, leaving that request waiting indefinitely. The worker renews a result list's expiry to one
+  hour on every push, so the list of an exited process is removed.
 - The body of a create with `pk_field_name` set is validated as the model declares it: `Field`
   constraints, aliases, `model_config` (e.g. `extra="forbid"`) and the model's validators apply, and
   the OpenAPI schema carries them. A body breaking them was accepted and passed to `perform_create`
