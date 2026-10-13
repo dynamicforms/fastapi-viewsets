@@ -128,20 +128,23 @@ def test_default_key_falls_back_to_unknown_without_a_request():
 
 
 class _FakeRedis:
+    """Runs the increment script's steps on a dict; `ttl_ms` holds each key's expiry, if any."""
+
     def __init__(self):
         self.counts = {}
-        self.expired = []
+        self.ttl_ms = {}
+        self.calls = []
 
-    async def incr(self, key):
+    async def eval(self, _script, numkeys, key, window_ms):
+        self.calls.append((numkeys, key, window_ms))
         self.counts[key] = self.counts.get(key, 0) + 1
+        if key not in self.ttl_ms:
+            self.ttl_ms[key] = window_ms
         return self.counts[key]
-
-    async def expire(self, key, seconds):
-        self.expired.append((key, seconds))
 
 
 @pytest.mark.asyncio
-async def test_redis_backend_increments_and_sets_expiry_on_first_hit():
+async def test_redis_backend_increments_and_sets_expiry_in_one_call():
     redis = _FakeRedis()
     limiter = RateLimiter(default_limit=2, window_seconds=30, redis_client=redis)
     context = Context({})
@@ -152,7 +155,32 @@ async def test_redis_backend_increments_and_sets_expiry_on_first_hit():
         await limiter.depends(None, _FakeViewset, context)
 
     assert exc_info.value.status_code == 429
-    assert redis.expired == [("_FakeViewset:unknown", 30)]  # only set once, on the first increment
+    assert redis.calls == [(1, "ratelimit:_FakeViewset:unknown", 30000)] * 3
+    assert redis.ttl_ms == {"ratelimit:_FakeViewset:unknown": 30000}
+
+
+@pytest.mark.asyncio
+async def test_redis_backend_keeps_sub_second_windows():
+    redis = _FakeRedis()
+    limiter = RateLimiter(default_limit=1, window_seconds=0.25, redis_client=redis, key_prefix="rl:")
+
+    await limiter.depends(None, _FakeViewset, Context({}))
+    assert redis.calls == [(1, "rl:_FakeViewset:unknown", 250)]
+
+
+@pytest.mark.asyncio
+async def test_in_memory_counts_drop_keys_whose_window_has_passed(monkeypatch):
+    limiter = RateLimiter(default_limit=5, window_seconds=10, key_func=lambda request, _cls, _context: request)
+    fake_now = [1000.0]
+    monkeypatch.setattr("time.monotonic", lambda: fake_now[0])
+
+    await limiter.depends("key-a", _FakeViewset, Context({}))
+    await limiter.depends("key-b", _FakeViewset, Context({}))
+    assert set(limiter._counts) == {"key-a", "key-b"}
+
+    fake_now[0] += 11
+    await limiter.depends("key-c", _FakeViewset, Context({}))
+    assert set(limiter._counts) == {"key-c"}
 
 
 # ---------------------------------------------------------------------------

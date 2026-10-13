@@ -65,7 +65,9 @@ async def process_command(
 
     `connection` supplies the handshake headers as a baseline; `base_headers` overrides or extends
     them for callers that resolve their session some other way. Headers stated on the stream
-    itself win over both.
+    itself win over both. `connection` also supplies the request's client and server address
+    (`request.client`, which `RateLimiter` keys on by default); without it every call has the
+    client address `("muxws", 0)`.
     """
     headers = getattr(stream, "headers", None) or {}
     if not is_command(headers):
@@ -90,7 +92,14 @@ async def process_command(
     target = app or get_dispatch_app()
     try:
         response = await call_asgi(
-            target, method=method, path=path, query_string=query_string, headers=effective, body=body
+            target,
+            method=method,
+            path=path,
+            query_string=query_string,
+            headers=effective,
+            body=body,
+            client=connection.scope.get("client") if connection is not None else None,
+            server=connection.scope.get("server") if connection is not None else None,
         )
     except Exception:
         # The app has already produced a 500 for this by the time it re-raises, and an HTTP client

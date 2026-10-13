@@ -15,6 +15,16 @@ if TYPE_CHECKING:
 
 KeyFunc = Callable[["Request | None", type, "Context"], "str | Awaitable[str]"]
 
+# INCR and the window's expiry in one atomic step. The expiry is set whenever the key has none
+# (PTTL < 0), so a key always expires, including one that was written without an expiry.
+_INCREMENT_SCRIPT = """
+local count = redis.call('INCR', KEYS[1])
+if redis.call('PTTL', KEYS[1]) < 0 then
+    redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+return count
+"""
+
 
 class RateLimiter(Middleware):
     """
@@ -40,9 +50,11 @@ class RateLimiter(Middleware):
         RateLimiter(default_limit=100, key_func=lambda request, cls, context: context.user)
 
     Storage defaults to an in-memory dict - correct for a single-process deployment (and tests),
-    but each worker process would track its own counts independently. Pass a `redis_client`
-    (`redis.asyncio.Redis`) for a shared, multi-process-correct counter (`INCR` + `EXPIRE` on first
-    increment in a window - the same fixed-window algorithm either way).
+    but each worker process would track its own counts independently. Entries whose window has
+    passed are removed at most once per window. Pass a `redis_client` (`redis.asyncio.Redis`) for a
+    shared, multi-process-correct counter: one Lua script increments `<key_prefix><key>` and sets
+    its expiry to the window (in milliseconds) when the key has none - the same fixed-window
+    algorithm either way.
     """
 
     def __init__(
@@ -51,12 +63,15 @@ class RateLimiter(Middleware):
         window_seconds: float = 60.0,
         redis_client: "Redis | None" = None,
         key_func: "KeyFunc | None" = None,
+        key_prefix: str = "ratelimit:",
     ):
         self.default_limit = default_limit
         self.window_seconds = window_seconds
         self.redis_client = redis_client
         self.key_func = key_func or self._default_key
+        self.key_prefix = key_prefix
         self._counts: dict[str, tuple[int, float]] = {}
+        self._next_prune = 0.0
 
     @staticmethod
     def _default_key(request: "Request | None", cls: type, _context: "Context") -> str:
@@ -84,14 +99,16 @@ class RateLimiter(Middleware):
 
     async def _increment(self, key: str, limit: int) -> bool:
         if self.redis_client is not None:
-            count = await self.redis_client.incr(key)
-            if count == 1:
-                await self.redis_client.expire(key, int(self.window_seconds))
-            return count <= limit
+            window_ms = max(1, int(self.window_seconds * 1000))
+            count = await self.redis_client.eval(_INCREMENT_SCRIPT, 1, self.key_prefix + key, window_ms)
+            return int(count) <= limit
         return self._increment_in_memory(key, limit)
 
     def _increment_in_memory(self, key: str, limit: int) -> bool:
         now = time.monotonic()
+        if now >= self._next_prune:
+            self._counts = {k: entry for k, entry in self._counts.items() if now - entry[1] < self.window_seconds}
+            self._next_prune = now + self.window_seconds
         count, window_start = self._counts.get(key, (0, now))
         if now - window_start >= self.window_seconds:
             count, window_start = 0, now

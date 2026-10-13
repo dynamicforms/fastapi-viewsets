@@ -52,7 +52,13 @@ async def call_asgi(
     query_string: bytes = b"",
     headers: dict[str, str] | None = None,
     body: bytes = b"",
+    client: tuple[str, int] | None = None,
+    server: tuple[str, int] | None = None,
 ) -> AsgiResponse:
+    """
+    `client` and `server` become the request's `scope["client"]` and `scope["server"]`. Without
+    them both are `("muxws", 0)`, and every call carries the same client address.
+    """
     scope = {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.3"},
@@ -64,8 +70,8 @@ async def call_asgi(
         "query_string": query_string,
         "root_path": "",
         "headers": [(key.lower().encode(), str(value).encode()) for key, value in (headers or {}).items()],
-        "client": ("muxws", 0),
-        "server": ("muxws", 0),
+        "client": client or ("muxws", 0),
+        "server": server or ("muxws", 0),
         "state": {},
     }
 
