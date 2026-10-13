@@ -649,12 +649,11 @@ def test_route_viewset_resolves_lazy_object_from_context():
     assert response.json() == [{"id": 1, "name": "jure"}]
 
 
-def test_custom_endpoint_without_context_param_is_unaffected():
-    """A custom __router endpoint that doesn't declare a `context` param is untouched - no Request
-    injected, no processors run - opt-in is per-route, exactly today's behaviour. The built-in
-    mixin routes (list_items, create, ...) always declare context - see mixins.py - so this is
-    only observable on a hand-written custom route."""
-    settings.viewsets_context_processors = []  # even with processors configured...
+def test_custom_endpoint_without_context_param_is_called_without_one():
+    """A custom __router endpoint that declares no `context` param is called without one; the
+    Request stays out of its OpenAPI parameters. The built-in mixin routes (list_items, create, ...)
+    always declare context - see mixins.py - so this is only observable on a hand-written route."""
+    settings.viewsets_context_processors = []
 
     router = APIRouter()
 
@@ -662,16 +661,18 @@ def test_custom_endpoint_without_context_param_is_unaffected():
     class ItemViewSet:
         __router = APIRouter()
 
+        # takes no argument besides self: a `context` passed to it would raise TypeError
         @__router.get("ping")
         async def ping(self) -> str:
             return "pong"
 
-    ping_route = next(r for r in router.routes if r.path == "/items/ping" and "GET" in r.methods)
-    import inspect
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
 
-    sig_params = inspect.signature(ping_route.endpoint).parameters
-    assert "context" not in sig_params
-    assert "request" not in sig_params  # ...no Request is injected for this route
+    assert client.get("/items/ping").json() == "pong"
+    parameters = app.openapi()["paths"]["/items/ping"]["get"].get("parameters", [])
+    assert all(p["name"] not in ("request", "context", "response") for p in parameters)
 
 
 # ---------------------------------------------------------------------------

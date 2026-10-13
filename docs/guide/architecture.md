@@ -277,17 +277,16 @@ HTTP transport adapter: ViewSetResult.body → JSON response body
 HTTP response
 ```
 
-A route that doesn't declare a `context` parameter skips the context-building step entirely inside
-`route_viewset` (no `Request` is even injected there) - a genuinely zero-cost opt-out, not just
-"context ends up empty" - though `depends()` may still build one earlier if any configured
-middleware needs it. Command middleware, by contrast, is not opt-in per route: if
+Every route builds its context once per request, in the dependency that runs `depends()`; a route
+that doesn't declare a `context` parameter is called without it, and the command middleware chain
+still receives it. Command middleware, by contrast, is not opt-in per route: if
 `settings.viewsets_command_middleware` is non-empty, it wraps every request-facing execution (a
 viewset opts *itself* out per-middleware, as `Session` above shows via `@action_configuration`);
 with no middleware configured at all, the wrapping is a no-op. "Lifecycle uses state" means
 `"singleton"` or `"instance-key"` - see [ViewSet Lifecycle](./lifecycle) for what each mode
 actually does and why `"per-request"` skips both hooks, and note `depends()` runs *before*
 `load_state()` for `per-request`/`instance-key` lifecycles (no shipped context processor reads
-viewset instance state, so this doesn't matter in practice).
+viewset instance state).
 
 | Piece | What it does | Guide |
 |---|---|---|

@@ -173,3 +173,52 @@ def test_perform_method_reads_authorization_and_rejects_itself():
     other_response = client.get("/items/1", headers={"x-user": "someone-else"})
     assert other_response.status_code == 403
     assert other_response.json() == {"detail": "Not your item"}
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: an endpoint that declares no `context` parameter
+# ---------------------------------------------------------------------------
+
+
+def _make_contextless_app(check):
+    settings.viewsets_command_middleware = [Authorization()]
+
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/reports")
+    class ReportViewSet:
+        __router = APIRouter()
+
+        @__router.get("ping")
+        @action_configuration({Authorization: check})
+        async def ping(self) -> str:
+            return "pong"
+
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_an_endpoint_without_context_runs_the_chain_and_answers():
+    client = _make_contextless_app(lambda _request, _cls, _context: True)
+    response = client.get("/reports/ping")
+    assert response.status_code == 200
+    assert response.json() == "pong"
+
+
+def test_an_endpoint_without_context_is_rejected_by_its_authorization():
+    client = _make_contextless_app(lambda _request, _cls, _context: False)
+    response = client.get("/reports/ping")
+    assert response.status_code == 403
+
+
+def test_an_endpoint_without_context_hands_the_request_to_the_chain():
+    seen = []
+
+    def check(request, _cls, _context):
+        seen.append(request.url.path if request is not None else None)
+        return True
+
+    client = _make_contextless_app(check)
+    assert client.get("/reports/ping").status_code == 200
+    assert seen and all(path == "/reports/ping" for path in seen)

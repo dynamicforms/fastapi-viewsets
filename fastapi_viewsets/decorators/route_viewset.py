@@ -291,12 +291,11 @@ def route_viewset(
             # to run the command middleware chain and apply headers/cookies onto the real response.
             new_params.append(inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response))
 
-            if needs_context:
-                # Reserved param name, only added for endpoints that declare a `context` param.
-                # FastAPI injects the REAL Request here; lifecycle_runner uses it to build the
-                # context (see fastapi_viewsets/context.py) and injects the result as `context`
-                # right before the endpoint runs - never forwarded to the endpoint itself.
-                new_params.append(inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
+            # Reserved param name - FastAPI injects the REAL Request here. lifecycle_runner builds
+            # the context from it (see fastapi_viewsets/context) for the command middleware chain,
+            # and injects that context as `context` into an endpoint declaring the parameter. Never
+            # forwarded to the endpoint itself.
+            new_params.append(inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
 
             # -> ViewSetResult[X] documents/validates as X - see unwrap_viewset_result_type.
             new_return_annotation = unwrap_viewset_result_type(resolve_typevars(type_map, sig.return_annotation))
@@ -307,7 +306,7 @@ def route_viewset(
                 nonlocal instance
 
                 response_obj = kwargs.pop("response", None)
-                request_obj = kwargs.pop("request", None) if needs_context else None
+                request_obj = kwargs.pop("request", None)
 
                 # Check if any argument needs to be "typecasted" back to the original model
                 # This happens if we replaced the model type with a NoPK version in get_wrapper

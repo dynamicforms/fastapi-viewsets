@@ -89,15 +89,17 @@ class ItemViewSet(CollectionViewSet[int, Item]):
         return [i for i in await self.perform_list(context) if i.owner == user]
 ```
 
-A route that does **not** declare a `context` parameter is entirely unaffected - no `Request` is
-injected, no processors run, exactly as if the feature didn't exist. (Detection is by parameter
-*name* - `context` - not by type.)
+A route that does **not** declare a `context` parameter is called without one. Its context is
+still built, for the command middleware that wraps it. (Detection is by parameter *name* -
+`context` - not by type.)
 
 ## Where context is built
 
-Context is built **once**, centrally, by `route_viewset` right before the endpoint runs - not by
-a decorator on each mixin method. This matters because a viewset's execution can be transparently
-delegated to a Celery worker (see the `celery_viewset` section in
+Context is built **once per request**, centrally, by `route_viewset` - not by a decorator on each
+mixin method. The route's dependency builds it before FastAPI parses the request body, for each
+middleware's `depends()`; the command middleware chain and the endpoint receive the same object.
+
+Building it centrally matters because a viewset's execution can be transparently delegated to a Celery worker (see the `celery_viewset` section in
 [Routers & Decorators](./routers)): the worker process has no live `Request` to build a context
 from, so the context has to be built in the FastAPI process (which has the `Request`) and carried
 across the Celery/Redis boundary to the worker.

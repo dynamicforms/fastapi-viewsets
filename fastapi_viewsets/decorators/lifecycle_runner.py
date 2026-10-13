@@ -41,18 +41,21 @@ async def lifecycle_runner(
     """
 
     action_configuration: dict = {}
+    chain_context = kwargs.get("context")
 
     async def inject_context(req_instance: Any) -> None:
-        nonlocal action_configuration
-        # Resolved unconditionally (not just when needs_context) - execute() needs it to compute
-        # any extra per-call middleware (see extra_middlewares_for) regardless of whether this
-        # route even declares a `context` param. Harmless in the celery-worker path: execute()
-        # returns before touching it there, since command middleware never runs in the worker.
+        nonlocal action_configuration, chain_context
+        # Resolved whether or not the route declares a `context` param: execute() needs it to
+        # compute any extra per-call middleware (see extra_middlewares_for), and the command
+        # middleware chain reads the context it is part of. Neither is built in the celery-worker
+        # path (no `response`), where command middleware never runs.
         action_configuration = resolve_action_configuration(cls, original_endpoint.__name__)
-        if needs_context:
-            kwargs["context"] = await get_shared_context(
+        if needs_context or response is not None:
+            chain_context = await get_shared_context(
                 request, req_instance, action_configuration, original_endpoint.__name__
             )
+        if needs_context:
+            kwargs["context"] = chain_context
 
     async def call_bound(req_instance: Any) -> Any:
         bound_method = getattr(req_instance, original_endpoint.__name__, None)
@@ -77,9 +80,7 @@ async def lifecycle_runner(
         effective_middlewares = settings.viewsets_command_middleware + extra_middlewares_for(
             action_configuration, settings.viewsets_command_middleware
         )
-        result = await run_command_chain(
-            effective_middlewares, request, req_instance, kwargs.get("context"), final_handler
-        )
+        result = await run_command_chain(effective_middlewares, request, req_instance, chain_context, final_handler)
         for key, value in result.headers.items():
             response.headers[key] = str(value)
         for key, value in result.cookies.items():
