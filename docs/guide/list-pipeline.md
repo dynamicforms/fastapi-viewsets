@@ -340,8 +340,8 @@ no single name expresses it, so name a field that is unique per row on the class
 The derivation is a property on `DjangoORMViewSet`, which is why the backend comes first in the base
 list, as above. The other order finds `ListMixin`'s plain `"id"` first and the model is never asked.
 
-The `pk_field_name` argument to `route_viewset` is a different thing — it names the field stripped
-from the `POST` body — and is passed explicitly.
+The `pk_field_name` argument to `route_viewset` is a different thing — it names the primary key a
+`POST` body does not carry — and is passed explicitly.
 
 What it declines and leaves to the in-memory pass: a filter or a sort naming anything but a concrete
 model field, and any operator with no registered compiler — `overlaps`, of the built-in ones, whose

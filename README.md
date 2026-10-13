@@ -48,7 +48,7 @@ pip install "dynamicforms-fastapi-viewsets[muxws]"
 pip install "dynamicforms-fastapi-viewsets[django]"
 ```
 
-Requires Python 3.10+, FastAPI and Pydantic v2.
+Requires Python 3.10+, FastAPI and Pydantic 2.11+.
 
 ## Quick example
 

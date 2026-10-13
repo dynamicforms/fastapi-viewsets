@@ -33,7 +33,7 @@ def route_viewset(
 | `router` | `APIRouter` | — | The FastAPI router to register routes on |
 | `base_path` | `str` | — | URL prefix for all endpoints, e.g. `"/items"` |
 | `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle — see [ViewSet Lifecycle](./lifecycle) |
-| `pk_field_name` | `str \| None` | `None` | Name of the PK field; when set, the field is stripped from the `POST` request body |
+| `pk_field_name` | `str \| None` | `None` | Name of the PK field; when set, a `POST` request body does not carry it — see below |
 | `register_muxws` | `bool \| None` | `None` | Publish on the [muxws transport](./muxws); `None` defers to `settings.viewsets_register_muxws` |
 | `register_rest` | `bool \| None` | `None` | Publish on REST; `None` means yes |
 
@@ -93,7 +93,21 @@ Within one path the order is `DELETE`, `PATCH`, `PUT`, `POST`, `GET`.
 
 ### pk_field_name and request body
 
-When `pk_field_name` is set, the decorator automatically removes that field from the Pydantic model used as the `POST` request body. Clients do not need to send the PK when creating a new record — the server assigns it.
+When `pk_field_name` is set, the body of a `POST` route without `{pk}` in its path is a subclass of
+the model in which the primary key is not in the JSON schema and is None. The body leaves the
+primary key out or gives it as null; any other value answers 422 with `pk_assigned_by_server`. The
+server assigns the primary key.
+
+Every other field is validated as the model declares it: its annotation, `Field` constraints and
+alias, the model's `model_config` and its validators. The endpoint receives the model itself,
+without the primary key unless the model gives it a default; its `model_fields_set` names the fields
+the body stated.
+
+A validator of the primary key runs as follows:
+
+- a `@field_validator` of the primary key in `after` mode does not run;
+- one in `before`, `wrap` or `plain` mode runs on a value other than null, which is then rejected;
+- a `@model_validator` in `after` mode sees the primary key as None.
 
 ---
 
@@ -200,6 +214,10 @@ name, which is the method's name unless the route states one:
 ### Result passing
 
 Results are passed from the worker back to FastAPI via a Redis list (not via the Celery result backend). Each call is correlated with a UUID so that concurrent requests are handled correctly.
+
+A model argument crosses to the worker dumped by field name and is validated as its model there. A
+create body crosses without its primary key, and the action receives the model as it does in the
+FastAPI process. A model argument that fails validation on the worker fails the call.
 
 A result reader background task must be started in the FastAPI lifespan for each `queue_key` (i.e. each distinct `task_prefix` used by a `celery_viewset`-decorated class) — `start_result_reader` keeps one reader task per `queue_key`, so calling it once per prefix is required and sufficient. Every `celery_viewset_client` decorator registers its own `queue_key` at import time (before `lifespan` ever runs), so instead of maintaining your own list of prefixes, iterate `get_registered_queue_keys()` — it can't drift out of sync with your actual viewsets:
 

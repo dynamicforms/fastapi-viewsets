@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, ValidationError
 
 from fastapi_viewsets.decorators import (
     celery_viewset_server,
@@ -467,7 +467,7 @@ def test_fastapi_server_endpoint_executes_directly():
 
 
 def test_reconstruct_kwargs_with_missing_required_field():
-    """_reconstruct_kwargs should use model_construct fallback when required field (e.g. id) is missing."""
+    """A create body arrives without its primary key and is reconstructed as the model without it."""
     from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
 
     async def endpoint(data: Item) -> Item:
@@ -477,8 +477,9 @@ def test_reconstruct_kwargs_with_missing_required_field():
     kwargs = {"data": {"name": "new item"}}
     result = _reconstruct_kwargs(endpoint, kwargs)
 
-    assert isinstance(result["data"], Item)
+    assert type(result["data"]) is Item
     assert result["data"].name == "new item"
+    assert result["data"].model_fields_set == {"name"}
 
 
 def test_reconstruct_kwargs_with_typevar_resolved_via_cls():
@@ -500,7 +501,7 @@ def test_reconstruct_kwargs_with_typevar_resolved_via_cls():
 
 
 def test_reconstruct_kwargs_with_typevar_missing_field():
-    """_reconstruct_kwargs should use model_construct fallback when TypeVar resolves to Item but id is missing."""
+    """A create body without its primary key is reconstructed when the TypeVar resolves to Item."""
     from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
     from fastapi_viewsets.mixins import CreateMixin
 
@@ -725,6 +726,68 @@ def test_reconstruct_kwargs_of_a_bulk_partial_update_holds_the_stated_fields():
         1: {"name": "x"},
         2: {"description": "d"},
     }
+
+
+class Owner(BaseModel):
+    name: str
+
+
+class Pet(BaseModel):
+    id: int
+    name: str = Field(min_length=3, alias="title")
+    owner: Owner
+
+    @field_validator("name")
+    @classmethod
+    def stripped_name(cls, value):
+        return value.strip()
+
+
+async def create_pet(data: Pet) -> Pet:
+    return data
+
+
+def test_reconstruct_kwargs_validates_a_create_body_without_its_pk():
+    from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
+
+    result = _reconstruct_kwargs(create_pet, {"data": {"name": " Rex ", "owner": {"name": "a"}}})
+    assert type(result["data"]) is Pet
+    assert result["data"].name == "Rex"
+    assert result["data"].owner == Owner(name="a")
+    assert "id" not in result["data"].__dict__
+
+
+def test_reconstruct_kwargs_reads_a_model_by_field_name():
+    """The FastAPI side dumps a model by field name, an aliased field included."""
+    from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
+
+    result = _reconstruct_kwargs(create_pet, {"data": {"id": 1, "name": "Rex", "owner": {"name": "a"}}})
+    assert result["data"] == Pet(id=1, title="Rex", owner=Owner(name="a"))
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"name": "R", "owner": {"name": "a"}},
+        {"name": "Rex"},
+        {"owner": {"name": "a"}},
+    ],
+)
+def test_reconstruct_kwargs_raises_for_an_invalid_model(data):
+    from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
+
+    with pytest.raises(ValidationError):
+        _reconstruct_kwargs(create_pet, {"data": data})
+
+
+def test_reconstruct_kwargs_of_a_partial_update_reads_an_aliased_field_by_name():
+    from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
+
+    async def partial_update(pk: int, data: Pet) -> Pet:  # noqa: ARG001 - the mixin signature
+        return data
+
+    result = _reconstruct_kwargs(partial_update, {"pk": 1, "data": {"name": " Rex "}})
+    assert result["data"].model_dump(exclude_unset=True) == {"name": "Rex"}
 
 
 def test_celery_viewset_server_pushes_request_validation_error_as_422():

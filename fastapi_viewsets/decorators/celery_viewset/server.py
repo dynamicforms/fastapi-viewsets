@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import inspect
 import json
 import logging
@@ -11,12 +12,18 @@ from typing import get_args, get_origin, get_type_hints, TYPE_CHECKING, TypeVar,
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from ...context import Context, deserialize_context, to_jsonable
 from ..build_schema import build_schema
 from ..lifecycle_runner import lifecycle_runner, LifecycleType
-from ..primary_key_model_helper import from_partial_body, partial_body_annotation, PARTIAL_UPDATE_ACTIONS
+from ..primary_key_model_helper import (
+    create_model_without_pk,
+    from_partial_body,
+    partial_body_annotation,
+    PARTIAL_UPDATE_ACTIONS,
+    typecast_to_original_model,
+)
 from ..route_viewset import build_type_map, resolve_typevars
 
 if TYPE_CHECKING:
@@ -70,15 +77,43 @@ def _reconstruct_value(hint, value):
     """
     hint = _unwrap_optional(hint)
     if hint is not None and isinstance(value, dict) and inspect.isclass(hint) and issubclass(hint, BaseModel):
-        try:
-            return hint.model_validate(value)
-        except Exception:
-            return hint.model_construct(**value)
+        return _validate_model(hint, value)
     if get_origin(hint) in (list, tuple) and isinstance(value, (list, tuple)):
         args = get_args(hint)
         if args:
             return [_reconstruct_value(args[0], item) for item in value]
     return value
+
+
+def _validate_model(model: type[BaseModel], value: dict) -> BaseModel:
+    """`value`, a `model` the FastAPI side dumped by field name, validated as `model`. A create body
+    arrives without its primary key: a value whose only error is one missing top-level field is
+    validated as `create_model_without_pk(model, field)` and handed on as `model`, as the FastAPI
+    side does. Any other error raises."""
+    try:
+        return model.model_validate(value, by_name=True)
+    except ValidationError as error:
+        missing = _sole_missing_field(model, error)
+        if missing is None:
+            raise
+    without_pk = _model_without_pk(model, missing)
+    return typecast_to_original_model(without_pk.model_validate(value, by_name=True), model)
+
+
+def _sole_missing_field(model: type[BaseModel], error: ValidationError) -> str | None:
+    """The name of the field `error` reports missing, if that is its only error and the field is a
+    top-level field of `model`; None otherwise."""
+    errors = error.errors()
+    if len(errors) != 1 or errors[0]["type"] != "missing" or len(errors[0]["loc"]) != 1:
+        return None
+    key = errors[0]["loc"][0]
+    return next(
+        (name for name, field in model.model_fields.items() if key in (name, field.alias, field.validation_alias)),
+        None,
+    )
+
+
+_model_without_pk = functools.lru_cache(create_model_without_pk)
 
 
 def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> dict:
@@ -113,7 +148,7 @@ def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> di
         if partial_annotation is not None:
             # validated as the partial model the FastAPI side validated it with, so the model holds
             # the fields the request stated and no others
-            result[key] = from_partial_body(TypeAdapter(partial_annotation).validate_python(value), hint)
+            result[key] = from_partial_body(TypeAdapter(partial_annotation).validate_python(value, by_name=True), hint)
         else:
             result[key] = _reconstruct_value(hint, value)
     return result

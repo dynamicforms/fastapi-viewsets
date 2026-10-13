@@ -8,7 +8,7 @@
 pip install dynamicforms-fastapi-viewsets
 ```
 
-Requirements: Python 3.10+, FastAPI, Pydantic v2.
+Requirements: Python 3.10+, FastAPI, Pydantic 2.11+.
 
 ### Vue / TypeScript (frontend)
 

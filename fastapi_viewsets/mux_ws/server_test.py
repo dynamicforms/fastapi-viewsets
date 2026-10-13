@@ -108,7 +108,7 @@ async def test_retrieve_binds_the_path_parameter():
 async def test_create_binds_the_payload_as_the_request_body():
     make_viewset()
     stream = FakeStream({":method": "POST", ":path": "/tracks"})
-    await process_command({"id": 3, "title": "Giant Steps"}, stream)
+    await process_command({"title": "Giant Steps"}, stream)
     assert stream.status == 200
     assert stream.payload["title"] == "Giant Steps"
 

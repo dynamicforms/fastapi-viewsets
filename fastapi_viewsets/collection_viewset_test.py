@@ -336,6 +336,6 @@ def test_a_set_updates_partially_and_deletes():
 
 def test_a_write_to_an_immutable_container_is_405():
     client = _client((Track(id=1, title="One"),), Track)
-    response = client.post("/tracks", json={"id": 2, "title": "Two"})
+    response = client.post("/tracks", json={"title": "Two"})
     assert response.status_code == 405
     assert response.json()["detail_code"] == "read_only"
