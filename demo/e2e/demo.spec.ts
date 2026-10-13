@@ -157,3 +157,34 @@ test('the page loads without console errors', async ({ page }) => {
 
   expect(errors).toEqual([]);
 });
+
+test('every ViewSet agrees with the backend it is pointed at', async ({ page }) => {
+  // the schema check reports a disagreement with one console.warn per ViewSet
+  const mismatches: string[] = [];
+  const schemas = new Set<string>();
+  page.on('console', (message) => {
+    if (message.text().includes('FE/BE definition mismatch')) mismatches.push(message.text());
+  });
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith('/schema')) schemas.add(path);
+  });
+
+  await page.reload();
+  await waitForFirstPage(page);
+  for (const [transport, backend] of [
+    ['muxws', 'memory'],
+    ['muxws', 'db'],
+    ['rest', 'db'],
+  ]) {
+    await page.getByTestId(`transport-${transport}`).click();
+    await page.getByTestId(`backend-${backend}`).click();
+    await waitForFirstPage(page);
+  }
+  // the check runs in the background after construction
+  await page.waitForTimeout(500);
+
+  // the REST ViewSets fetched their schemas, so the check ran rather than failing silently
+  expect([...schemas].sort()).toEqual(['/music-db/schema', '/music/schema']);
+  expect(mismatches).toEqual([]);
+});

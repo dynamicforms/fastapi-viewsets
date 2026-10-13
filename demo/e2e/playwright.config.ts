@@ -32,8 +32,8 @@ export default defineConfig({
   webServer: [
     {
       // Deliberately the string form. Uvicorn imports the app inside its own event loop when given
-      // "module:app", and anything the demo does at import time has to survive that - which is
-      // exactly what once broke, invisibly, because passing the app object imports it earlier.
+      // "module:app", and anything the demo does at import time has to survive that; passing the
+      // app object imports it earlier and would not exercise it.
       command: `python -m uvicorn demo.backend.main:app --host 127.0.0.1 --port ${API_PORT}`,
       url: `http://127.0.0.1:${API_PORT}/music?limit=1`,
       cwd: '../..',
