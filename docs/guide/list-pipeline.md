@@ -329,11 +329,27 @@ the sort into `.order_by()` in either direction with the NULL placement `nulls` 
 into `LIMIT`/`OFFSET`, marking each stage applied. `count` comes from a `COUNT(*)`. Requires the
 `django` extra; every ORM call uses Django's async API or `sync_to_async`.
 
+A relation field (`ForeignKey`, `OneToOneField`) appears in `schema` under its name and carries the
+related row's key: `owner: int`. The backend reads and writes the `owner_id` column for it, filters
+and sorts on that column, and does not load the related row. A `schema` that declares `owner_id`
+raises `TypeError` when the viewset class is defined.
+
+```python
+class Note(BaseModel):
+    id: int
+    owner: int              # NoteModel.owner = models.ForeignKey(OwnerModel, ...)
+    title: str
+```
+
+A create writes every concrete field the body carries except a primary key that the database or
+Django assigns (an auto-incrementing key, the parent link of an inherited model); a natural key or a
+relation primary key is written. An update never writes the primary key.
+
 `pk_field_name` needs no declaration here: the backend takes it from the model's primary key, so a
 model keyed on `uuid` or `code` pages correctly without being told. The cursor orders by that name
 in SQL and reads its position off the converted record, so the name has to be one both the model and
-`schema` carry — `artist_id` rather than `artist` for a one-to-one primary key, and the `id` the
-schema carries rather than the parent link for an inherited model. Where `schema` names the key
+`schema` carry — `artist` for a one-to-one primary key, and the `id` the schema carries rather than
+the parent link for an inherited model. Where `schema` names the key
 something else again, assigning `pk_field_name` on the class wins. A composite primary key raises:
 no single name expresses it, so name a field that is unique per row on the class instead.
 

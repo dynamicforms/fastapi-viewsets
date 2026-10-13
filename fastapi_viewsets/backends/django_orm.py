@@ -27,6 +27,7 @@ from typing import Any, ClassVar, Generic, TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
 from django.db.models import BooleanField, F, Func, Q, Value
+from django.db.models.fields import AutoFieldMixin
 from pydantic import BaseModel
 from typing_extensions import TypeVar
 
@@ -68,11 +69,34 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
+    """
+    A relation field - `ForeignKey`, `OneToOneField` - appears in `schema` under its `name` and
+    carries the related row's key: `owner: int`, not `owner_id: int` and not a nested model. The
+    backend reads and writes the `owner_id` column for it, filters and sorts on that column, and
+    never loads the related row. A `schema` that declares the column name (`owner_id`) raises
+    `TypeError` when the viewset class is defined.
+    """
+
     model: ClassVar[type["Model"]]
     """The Django model this viewset reads and writes."""
 
     schema: ClassVar[type[BaseModel]]
     """The pydantic model rows are converted into on the way out."""
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        model = getattr(cls, "model", None)
+        declared = getattr(getattr(cls, "schema", None), "model_fields", None)
+        if model is None or declared is None:
+            return
+        columns = [field for field in _model_columns(model) if field.attname != field.name]
+        for field in columns:
+            if field.attname in declared:
+                raise TypeError(
+                    f"{cls.__name__}: {cls.schema.__name__} declares `{field.attname}`, the column of "
+                    f"{model.__name__}.{field.name}. Declare the relation as `{field.name}`; it carries "
+                    f"the related row's key."
+                )
 
     pk_field: ClassVar[str] = "pk"
     """
@@ -93,9 +117,8 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         client's own filters with it, to the in-memory pass, and emit a position read off a field
         that is not there.
 
-        `_meta.pk` offers two such names, and the first that `schema` declares wins: `name`, and
-        `attname` for a relation primary key, which is `owner` on the model and `owner_id` on the
-        response model. Neither on the schema means the schema names the key something else - a
+        That name is `_meta.pk.name`, also for a relation primary key (`artist`, carrying the
+        related row's key). A `schema` without it names the key something else - a
         multi-table-inheritance child, whose `_meta.pk` is the parent link - and the default
         declared further along the MRO stands.
 
@@ -117,11 +140,8 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
             )
 
         declared = getattr(getattr(self, "schema", None), "model_fields", None)
-        if declared is None:
+        if declared is None or pk.name in declared:
             return pk.name
-        for name in (pk.name, pk.attname):
-            if name in declared:
-                return name
         return super().pk_field_name
 
     def get_queryset(self, context: Context) -> "QuerySet":  # noqa: ARG002 - for overrides to narrow per user
@@ -144,10 +164,23 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         because the in-memory pass goes through `land()`, which converts what it materialises. Every
         one of those rows and its pydantic model are held at once, before the page is cut, so
         `limit=10` against a table of hundreds of thousands of rows can exhaust memory.
+
+        A relation field is read from its column (`owner_id` for `owner`), so the related row is
+        never fetched.
         """
         if isinstance(raw, self.schema):
             return raw
+        if isinstance(raw, self.model):
+            raw = _ColumnView(raw, self._columns())
         return self.schema.model_validate(raw, from_attributes=True)
+
+    def _columns(self) -> dict[str, str]:
+        """Relation field name to the name of its column: `{"owner": "owner_id"}`."""
+        return {field.name: field.attname for field in _model_columns(self.model) if field.attname != field.name}
+
+    def _column(self, name: str) -> str:
+        """The column a query uses for the schema field `name`."""
+        return self._columns().get(name, name)
 
     # -----------------------------------------------------------------------
     # List pipeline
@@ -189,18 +222,8 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         return await super().apply_filter(context, query, queryset)
 
     def _concrete_fields(self) -> set[str]:
-        """
-        Every name that names a column in a query, both halves of a relation's pair: a foreign key
-        is `author` and `author_id`, and both are lookups Django accepts. The response model
-        carries the second, so leaving it out would decline push-down for a schema field that maps
-        to a column perfectly well.
-        """
-        names = set()
-        for field in self.model._meta.get_fields():
-            if getattr(field, "concrete", False):
-                names.add(field.name)
-                names.add(field.attname)
-        return names
+        """The schema field names that map to a column: every concrete field's `name`."""
+        return {field.name for field in _model_columns(self.model)}
 
     async def apply_sort(self, context: Context, query: ListQuery, records: ListRecords) -> ListRecords:
         """
@@ -226,7 +249,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
             descending = column.direction == SortDirection.desc
             first = self.nulls_first != descending
             placement = {"nulls_first": True} if first else {"nulls_last": True}
-            field = F(column.column_name)
+            field = F(self._column(column.column_name))
             ordering.append(field.desc(**placement) if descending else field.asc(**placement))
         queryset = queryset.order_by(*ordering)
         query.mark_applied("sort")
@@ -264,11 +287,11 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         return self.to_record(await self._get_or_404(context, pk))
 
     async def perform_create(self, context: Context, data: T) -> T:  # noqa: ARG002
-        instance = await self.model.objects.acreate(**self._writable_fields(data))
+        instance = await self.model.objects.acreate(**self._writable_fields(data, creating=True))
         return self.to_record(instance)
 
     async def perform_bulk_create(self, context: Context, data: list[T]) -> list[T]:  # noqa: ARG002
-        instances = [self.model(**self._writable_fields(record)) for record in data]
+        instances = [self.model(**self._writable_fields(record, creating=True)) for record in data]
         created = await sync_to_async(self.model.objects.bulk_create)(instances)
         return [self.to_record(instance) for instance in created]
 
@@ -301,18 +324,51 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         except ObjectDoesNotExist:
             raise NotFoundError(pk) from None
 
-    def _writable_fields(self, data: T, exclude_unset: bool = False) -> dict[str, Any]:
+    def _writable_fields(self, data: T, exclude_unset: bool = False, creating: bool = False) -> dict[str, Any]:
         """
-        The model's own fields, minus the primary key - the database assigns that, and letting a
-        request body set it is how you overwrite somebody else's row.
+        The fields of `data` that are concrete model fields, keyed by column (`owner_id` for
+        `owner`), so a relation is set from the key the body carries.
+
+        The primary key is left out of an update: saving an instance under a different key writes
+        to the row that key names. A create leaves out only a key the database or Django assigns -
+        an auto-incrementing field, or the parent link of a multi-table-inheritance child - and
+        keeps any other: a natural key or a relation primary key has no value unless the body
+        supplies it.
         """
         editable = {
-            field.name
-            for field in self.model._meta.get_fields()
-            if getattr(field, "concrete", False) and not getattr(field, "primary_key", False)
+            field.name: field.attname
+            for field in _model_columns(self.model)
+            if not field.primary_key or (creating and not _assigned_key(field))
         }
         dumped = data.model_dump(exclude_unset=exclude_unset) if hasattr(data, "model_dump") else dict(data)
-        return {name: value for name, value in dumped.items() if name in editable}
+        return {editable[name]: value for name, value in dumped.items() if name in editable}
+
+
+def _model_columns(model: type["Model"]) -> list:
+    """The model's fields that are columns, the composite primary key excluded."""
+    return [field for field in model._meta.concrete_fields if not isinstance(field, _COMPOSITE_PK)]
+
+
+def _assigned_key(field) -> bool:
+    """Whether a primary key `field` gets its value from the database or from Django on save."""
+    remote = getattr(field, "remote_field", None)
+    return isinstance(field, AutoFieldMixin) or bool(remote and getattr(remote, "parent_link", False))
+
+
+class _ColumnView:
+    """
+    A model instance as `to_record` reads it: a relation field's name answers with its column's
+    value, every other attribute with the instance's own.
+    """
+
+    __slots__ = ("_columns", "_row")
+
+    def __init__(self, row: "Model", columns: dict[str, str]):
+        self._row = row
+        self._columns = columns
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._row, self._columns.get(name, name))
 
 
 def _as_queryset(records: ListRecords) -> "QuerySet | None":
@@ -358,8 +414,8 @@ viewset using it falls back to the in-memory pass - which is the contract workin
 """
 
 
-def _compile_lookup(_viewset, fltr, queryset):
-    return queryset.filter(**{f"{fltr.field}__{_LOOKUPS[type(fltr)]}": fltr.value})
+def _compile_lookup(viewset, fltr, queryset):
+    return queryset.filter(**{f"{viewset._column(fltr.field)}__{_LOOKUPS[type(fltr)]}": fltr.value})
 
 
 for _filter_type in _LOOKUPS:
@@ -412,14 +468,15 @@ def _cursor_condition(viewset: "DjangoORMViewSet", fltr: CursorPredicate) -> Q:
     this, is Postgres-only, and a row constructor fails outright if annotated rather than used
     directly as a condition.
     """
-    keys = fltr.keys
-    nullable = {field.name for field in viewset.model._meta.get_fields() if getattr(field, "null", False)}
+    keys = [(viewset._column(name), descending) for name, descending in fltr.keys]
+    position = {viewset._column(name): value for name, value in fltr.position.items()}
+    nullable = {field.attname for field in _model_columns(viewset.model) if field.null}
     uniform = len({descending for _, descending in keys}) == 1
     if uniform and not fltr.inclusive and not any(name in nullable for name, _ in keys):
-        return _row_value_condition(keys, fltr.position, fltr.backwards)
+        return _row_value_condition(keys, position, fltr.backwards)
     return _segment_condition(
         keys,
-        fltr.position,
+        position,
         fltr.backwards,
         fltr.inclusive,
         fltr.nulls_first,
