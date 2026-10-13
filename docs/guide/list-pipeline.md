@@ -137,6 +137,9 @@ let next = await tracks.listCursor({ limit: 50 });
 receives its own envelope. A viewset with one shape ignores the header and answers in that shape;
 the methods for the other two throw `ListShapeMismatchError`.
 
+The envelope's `snake_case` fields are renamed to `hasMore`, `hasPrevious`; the records inside are
+untouched.
+
 ### CORS
 
 `X-List-Shape` is not a CORS-safelisted header. When the page and the API are on different origins,
@@ -162,9 +165,6 @@ receives the `GET`, and the call rejects with an `AxiosError` that has no `respo
 
 A same-origin page — including one served through a dev-server proxy — sends no preflight. muxws
 carries the header inside the WebSocket stream, where CORS does not apply.
-
-The envelope's `snake_case` fields are renamed to `hasMore`, `hasPrevious`; the records inside are
-untouched.
 
 ## Paging behaviour
 
