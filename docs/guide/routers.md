@@ -215,6 +215,10 @@ name, which is the method's name unless the route states one:
 
 Results are passed from the worker back to FastAPI via a Redis list (not via the Celery result backend). Each call is correlated with a UUID so that concurrent requests are handled correctly.
 
+A model argument crosses to the worker dumped by field name and is validated as its model there. A
+create body crosses without its primary key, and the action receives the model as it does in the
+FastAPI process. A model argument that fails validation on the worker fails the call.
+
 A result reader background task must be started in the FastAPI lifespan for each `queue_key` (i.e. each distinct `task_prefix` used by a `celery_viewset`-decorated class) — `start_result_reader` keeps one reader task per `queue_key`, so calling it once per prefix is required and sufficient. Every `celery_viewset_client` decorator registers its own `queue_key` at import time (before `lifespan` ever runs), so instead of maintaining your own list of prefixes, iterate `get_registered_queue_keys()` — it can't drift out of sync with your actual viewsets:
 
 ```python

@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** requires Pydantic 2.11 or later.
 - The body of `PATCH {pk}` and `PATCH bulk` is a partial model: every field optional, the primary
   key left out, a stated field validated by its annotation, its constraints and the model's
   `@field_validator`s. `@model_validator`s are not applied to it. `perform_update` and
@@ -56,6 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pk_assigned_by_server`; it was ignored. `perform_create` receives the model with its fields as
   validated, without the primary key unless the model gives it a default, and `model_fields_set`
   names the fields the body stated.
+- `celery_viewset` worker: a model argument is validated as its model, reading fields by name, where
+  a value failing validation was passed on unvalidated through `model_construct` with nested models
+  as dicts; a model with an aliased field always took that path. A partial update stating an
+  aliased field failed on the worker. A create body without its primary key is validated as on the
+  FastAPI side.
 
 - The schema check matches a custom endpoint to a ViewSet method by the BE method's name
   (`x-viewset-action`), in camelCase or as it is, where it read the first path segment: an endpoint
