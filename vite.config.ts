@@ -40,12 +40,7 @@ export default defineConfig({
       fileName: 'fastapi-viewsets',
     },
     rollupOptions: {
-      external: [
-        '@dynamicforms/translatable',
-        'axios',
-        'lodash-es',
-        'vue',
-      ],
+      external: ['axios'],
     }
   },
   test: {

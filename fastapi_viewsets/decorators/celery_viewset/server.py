@@ -9,11 +9,14 @@ from functools import wraps
 from typing import get_args, get_origin, get_type_hints, TYPE_CHECKING, TypeVar, Union
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, TypeAdapter
 
 from ...context import Context, deserialize_context, to_jsonable
 from ..build_schema import build_schema
 from ..lifecycle_runner import lifecycle_runner, LifecycleType
+from ..primary_key_model_helper import from_partial_body, partial_body_annotation, PARTIAL_UPDATE_ACTIONS
 from ..route_viewset import build_type_map, resolve_typevars
 
 if TYPE_CHECKING:
@@ -82,7 +85,7 @@ def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> di
     """Reconstruct dict values back into Pydantic BaseModel instances based on endpoint type hints.
 
     `context` is handled unconditionally (by name, not by type hint) via deserialize_context - see
-    fastapi_viewsets/context.py - since its declared type is a plain Context and its actual values
+    fastapi_viewsets/context - since its declared type is a plain Context and its actual values
     may need SerializableObject-aware reconstruction.
     """
     result = {}
@@ -101,11 +104,18 @@ def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> di
 
     type_map = build_type_map(cls) if cls is not None else {}
 
+    partial = original_endpoint.__name__ in PARTIAL_UPDATE_ACTIONS
     for key, value in remaining.items():
         hint = hints.get(key)
         if hint is not None:
             hint = resolve_typevars(type_map, hint)
-        result[key] = _reconstruct_value(hint, value)
+        partial_annotation = partial_body_annotation(hint, None) if partial else None
+        if partial_annotation is not None:
+            # validated as the partial model the FastAPI side validated it with, so the model holds
+            # the fields the request stated and no others
+            result[key] = from_partial_body(TypeAdapter(partial_annotation).validate_python(value), hint)
+        else:
+            result[key] = _reconstruct_value(hint, value)
     return result
 
 
@@ -167,6 +177,10 @@ def celery_viewset_server(
                         return True
                     return result
                 except Exception as e:
+                    if isinstance(e, RequestValidationError):
+                        # a request the worker found invalid (a filter value that will not convert)
+                        # answers as FastAPI answers one: 422 with the errors as `detail`
+                        e = HTTPException(status_code=422, detail=jsonable_encoder(e.errors()))
                     if isinstance(e, HTTPException):
                         logger.info(
                             "Celery task returned standard error: %s (correlation_id=%s): %d: %s",

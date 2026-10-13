@@ -81,7 +81,7 @@ Class attributes:
 - `list_shapes: tuple[str, ...] | None = None` — shapes a client may ask for with `X-List-Shape`.
   `None` means the default one only.
 - `default_page_size: int = 100` — `limit` when a paged shape is asked for without one.
-- `max_page_size: int = 1000` — ceiling on `limit`.
+- `max_page_size: int = 1000` — ceiling on `limit`. `limit` is at least 1 and `offset` at least 0; a request outside that is a 422.
 - `pk_field_name: str = "id"` — appended to the cursor's ordering so every key tuple is unique.
   `DjangoORMViewSet` supplies the model's own primary key instead.
 - `nulls: str = "first"` — which end NULLs sit at when sorting ascending, `"first"` or `"last"`.
@@ -131,11 +131,11 @@ In-memory hooks:
 
 ### UpdateMixin `[K, T]`
 - `PUT /{pk}` → calls `perform_update(context, pk, data, partial=False) -> T`
-- `PATCH /{pk}` → calls `perform_update(context, pk, data, partial=True) -> T`
+- `PATCH /{pk}` → calls `perform_update(context, pk, data, partial=True) -> T`. The body has every field of `T` optional and no primary key; `data` is a `T` whose `model_fields_set` names the fields the body stated.
 
 ### BulkOnlyUpdateMixin `[K, T]`
 - `PUT /bulk` → calls `perform_bulk_update(context, records, partial=False) -> list[T]`
-- `PATCH /bulk` → calls `perform_bulk_update(context, records, partial=True) -> list[T]`
+- `PATCH /bulk` → calls `perform_bulk_update(context, records, partial=True) -> list[T]`, each record as `PATCH /{pk}` passes `data`.
 
 ### BulkUpdateMixin `[K, T]`
 Combines `UpdateMixin` + `BulkOnlyUpdateMixin`.

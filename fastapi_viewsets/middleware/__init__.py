@@ -21,9 +21,9 @@ class ViewSetResult(SerializableObject, Generic[T]):
     chain with a non-200 result (e.g. 401 for an expired session) without ever calling `perform_*`.
     What this all actually becomes on the wire is up to the transport adapter: the HTTP adapter
     (route_viewset.py/lifecycle_runner.py) maps `headers` onto real response headers, `cookies`
-    onto real Set-Cookie, and `status_code` onto the real Response's status code; a future WS
-    adapter would fold all three into the outgoing message payload as plain JSON keys instead (no
-    real headers/cookies/status line exist over WS).
+    onto real Set-Cookie, and `status_code` onto the real Response's status code; the muxws
+    transport, which serves each command through the same FastAPI app, carries the resulting status
+    and headers in the reply's leading headers.
 
     A registered route endpoint (a mixin-provided one, or a custom `__router` method - never a
     `perform_*` hook, which is called by the actual route method and never registered as a route
@@ -74,9 +74,9 @@ An onion-style chain around the actual perform_*/endpoint execution, configured 
 settings.viewsets_command_middleware (see fastapi_viewsets/conf.py). `call_next()` (no arguments -
 context and the viewset instance are the only mutable structures in the pipeline, so a middleware
 that wants to influence what happens next mutates `context` in place rather than threading a new
-one through) invokes the next middleware, or the actual execution at the innermost layer. This
-replaces the old `finalize_response` hook: a middleware can inspect/replace the ViewSetResult
-`call_next()` returns and mutate its `headers`/`cookies` before returning it back up the chain.
+one through) invokes the next middleware, or the actual execution at the innermost layer. A
+middleware can inspect/replace the ViewSetResult `call_next()` returns and mutate its
+`headers`/`cookies` before returning it back up the chain.
 """
 
 
@@ -124,8 +124,7 @@ class Middleware(ABC):
         than sometimes a real instance and sometimes not, depending on which one). `context` is
         real and usable here (see `fastapi_viewsets.context.get_shared_context`) - built as early as
         this method can possibly run, which for `per-request`/`instance-key` lifecycles is *before*
-        `load_state()` (a real, accepted change in ordering - no shipped context processor reads
-        viewset instance state, so this doesn't affect anything today).
+        `load_state()`; no shipped context processor reads viewset instance state.
 
         Put here *only* logic that might actually reject - there's no benefit to running
         unconditional work (e.g. enriching context with no reject path - see

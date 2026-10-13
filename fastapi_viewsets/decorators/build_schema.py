@@ -89,6 +89,18 @@ def route_to_add_api_route_kwargs(route: APIRoute, **kwargs) -> dict:
     return result
 
 
+ACTION_EXTENSION = "x-viewset-action"
+"""The OpenAPI extension naming the viewset method that serves an operation, e.g. `top_rated` for
+`GET /tracks/top-rated`. A client matches a custom endpoint to its own method by this name; the path
+does not carry it, since a path segment can be a parameter (`{pk}/approve`) or differ from the
+method name (`top-rated`)."""
+
+
+def action_openapi_extra(action_name: str, openapi_extra: dict | None) -> dict:
+    """`openapi_extra` with the operation's `x-viewset-action` set to `action_name`."""
+    return {**(openapi_extra or {}), ACTION_EXTENSION: action_name}
+
+
 def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, disable_response_model=False):
     """
     Builds __router (APIRouter with all routes from mixins) and __app (FastAPI instance),
@@ -183,7 +195,10 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
                     endpoint=endpoint_wrapper,
                     response_model=response_model,
                     tags=route.tags or default_tags,
-                    openapi_extra=getattr(endpoint_wrapper, "__shape_openapi_extra__", None) or route.openapi_extra,
+                    openapi_extra=action_openapi_extra(
+                        route.endpoint.__name__,
+                        getattr(endpoint_wrapper, "__shape_openapi_extra__", None) or route.openapi_extra,
+                    ),
                     **docs_for(cls, route.endpoint.__name__),
                 )
             )

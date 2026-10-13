@@ -68,7 +68,7 @@ class ListOf(RootModel[list[TItem]], Generic[TItem]):
     A bare JSON array, with a name and a usable example.
 
     Serialises to exactly the array it wraps - nothing changes on the wire. The wrapper exists for
-    the schema, and earns its place twice over.
+    the schema, for two reasons.
 
     A name: an inline `{"type": "array"}` has no component for a `$ref` to point at, so both doc
     renderers fall back to the operation's auto-generated title, and a union member ends up

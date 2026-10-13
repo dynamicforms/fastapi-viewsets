@@ -395,8 +395,7 @@ async def build_context(
     processor that wants its own configuration slice declares a parameter literally named `config`
     (detected by name, same convention as `context` in route_viewset.py); it's then called with
     that keyword set to its own resolved entry from `action_configuration` (or None if nothing was
-    configured for it). A processor that doesn't declare `config` is called exactly as before - no
-    existing processor needs to change.
+    configured for it). A processor that doesn't declare `config` is called without it.
     """
     action_configuration = action_configuration or {}
     merged: dict[str, Any] = {}

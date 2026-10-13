@@ -27,7 +27,13 @@ from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, re
 
 from .build_schema import _pydantic_generic_args, build_schema, route_to_add_api_route_kwargs
 from .lifecycle_runner import lifecycle_runner, LifecycleType
-from .primary_key_model_helper import create_model_without_pk, typecast_to_original_model
+from .primary_key_model_helper import (
+    create_model_without_pk,
+    from_partial_body,
+    partial_body_annotation,
+    PARTIAL_UPDATE_ACTIONS,
+    typecast_to_original_model,
+)
 
 T = TypeVar("T")
 
@@ -89,7 +95,7 @@ def resolve_typevars(type_map, annotation):
         args = get_args(annotation)
         new_args = tuple(resolve_typevars(type_map, arg) for arg in args)
         if new_args != args:
-            # To deluje za List, Dict, Union, itd.
+            # list[...], dict[...], Union[...] and the other subscriptable generics
             try:
                 return origin[new_args]
             except:
@@ -150,6 +156,9 @@ def route_viewset(
     replacement is a single mapping - `transports={"rest": False}`, absent key meaning defer -
     rather than a third `register_*`; see GAPS.md for why a set of flags is the worse shape.
     """
+
+    if lifecycle not in get_args(LifecycleType):
+        raise ValueError(f"unknown lifecycle {lifecycle!r}; one of: {', '.join(get_args(LifecycleType))}")
 
     def decorator(cls: type[T]):
         instance = cls() if lifecycle == "singleton" else None
@@ -238,6 +247,8 @@ def route_viewset(
                 sig = _shape_signature(sig)
             new_params = []
             needs_context = False
+            # the body parameters of a partial update, by name, with the annotation they replace
+            partial_params: dict[str, object] = {}
 
             for name, p in sig.parameters.items():
                 if name == "self":
@@ -246,7 +257,7 @@ def route_viewset(
                 annotation = resolve_typevars(type_map, p.annotation)
                 new_p = p.replace(annotation=annotation)
 
-                # context is built centrally (see fastapi_viewsets/context.py) from a live Request -
+                # context is built centrally (see fastapi_viewsets/context) from a live Request -
                 # it must never reach FastAPI's own signature/validation, so it's dropped here and
                 # rebuilt by lifecycle_runner right before the endpoint runs. Detected by parameter
                 # name (by convention) rather than type, since its type is just a plain dict.
@@ -258,7 +269,6 @@ def route_viewset(
                 if _is_filter_param(annotation):
                     inner_type = annotation.__args__[0]
                     if inspect.isclass(inner_type) and issubclass(inner_type, BaseModel):
-                        # optional_model = make_all_optional(inner_type)
                         new_p = new_p.replace(annotation=Annotated[inner_type, Query()])
                     new_params.append(new_p)
                     continue
@@ -272,16 +282,21 @@ def route_viewset(
                     new_params.append(new_p)
                     continue
 
-                # If we have a PK field and this parameter is a model from which we want to exclude PK
-                if pk_field_name and inspect.isclass(annotation) and issubclass(annotation, BaseModel):
-                    # Check if {pk} is in the path and if the method is one that normally accepts a model in the body
-                    # (POST without {pk} or PUT/PATCH with {pk})
-                    is_create = "POST" in route_methods and "{pk}" not in route_path
-                    is_update = False  # ("PUT" in route_methods or "PATCH" in route_methods) and "{pk}" in route_path
+                # A partial update's body states the fields it changes: validated by a model with
+                # every field optional, then handed to perform_* as the original model holding only
+                # those fields (see partial_to_original_model)
+                if original_endpoint.__name__ in PARTIAL_UPDATE_ACTIONS:
+                    partial_annotation = partial_body_annotation(annotation, pk_field_name)
+                    if partial_annotation is not None:
+                        partial_params[name] = annotation
+                        new_params.append(new_p.replace(annotation=partial_annotation))
+                        continue
 
-                    if (is_create or is_update) and pk_field_name in annotation.model_fields:
-                        new_model = create_model_without_pk(annotation, pk_field_name)
-                        new_p = new_p.replace(annotation=new_model)
+                # A create's body is the model without its primary key, which the backend assigns
+                if pk_field_name and inspect.isclass(annotation) and issubclass(annotation, BaseModel):
+                    is_create = "POST" in route_methods and "{pk}" not in route_path
+                    if is_create and pk_field_name in annotation.model_fields:
+                        new_p = new_p.replace(annotation=create_model_without_pk(annotation, pk_field_name))
 
                 new_params.append(new_p)
 
@@ -291,11 +306,12 @@ def route_viewset(
             # to run the command middleware chain and apply headers/cookies onto the real response.
             new_params.append(inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response))
 
-            if needs_context:
-                # Reserved param name, only added for endpoints that declare a `context` param.
-                # FastAPI injects the REAL Request here; lifecycle_runner uses it to build the
-                # context (see fastapi_viewsets/context.py) and injects the result as `context`
-                # right before the endpoint runs - never forwarded to the endpoint itself.
+            # Reserved param name - FastAPI injects the REAL Request here. lifecycle_runner builds
+            # the context from it (see fastapi_viewsets/context) for the command middleware chain,
+            # and injects that context as `context` into an endpoint declaring the parameter. An
+            # endpoint that declares `request` itself keeps its own parameter and receives it.
+            forwards_request = "request" in sig.parameters
+            if not forwards_request:
                 new_params.append(inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
 
             # -> ViewSetResult[X] documents/validates as X - see unwrap_viewset_result_type.
@@ -307,13 +323,15 @@ def route_viewset(
                 nonlocal instance
 
                 response_obj = kwargs.pop("response", None)
-                request_obj = kwargs.pop("request", None) if needs_context else None
+                request_obj = kwargs.pop("request", None)
 
                 # Check if any argument needs to be "typecasted" back to the original model
                 # This happens if we replaced the model type with a NoPK version in get_wrapper
                 new_kwargs = {}
                 for param_name, value in kwargs.items():
-                    if param_name in sig.parameters:
+                    if param_name in partial_params:
+                        new_kwargs[param_name] = from_partial_body(value, partial_params[param_name])
+                    elif param_name in sig.parameters:
                         orig_param = sig.parameters[param_name]
                         orig_annotation = resolve_typevars(type_map, orig_param.annotation)
                         # Filter params must not be typecast — they arrive as the all-optional model
@@ -333,6 +351,7 @@ def route_viewset(
                     response=response_obj,
                     needs_context=needs_context,
                     request=request_obj,
+                    forwards_request=forwards_request,
                     **new_kwargs,
                 )
 
@@ -342,10 +361,10 @@ def route_viewset(
             wrapper.__shape_openapi_extra__ = shape_openapi_extra
             return wrapper, new_return_annotation
 
-        # Command middleware (see fastapi_viewsets/middleware.py) can reshape the response body via
+        # Command middleware (see fastapi_viewsets/middleware) can reshape the response body via
         # ViewSetResult - only middleware that actually declares modifies_response_shape=True
-        # untrusts the endpoint's declared return type as the response_model (same reasoning as the
-        # old finalize_response hook); typical middleware (auth, rate limiting, sessions) only adds
+        # untrusts the endpoint's declared return type as the response_model; typical middleware
+        # (auth, rate limiting, sessions) only adds
         # headers/cookies and leaves the declared model - and therefore the OpenAPI docs - in place.
         build_schema(
             cls,

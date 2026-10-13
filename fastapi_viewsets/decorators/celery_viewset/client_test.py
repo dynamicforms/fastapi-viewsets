@@ -165,6 +165,20 @@ def test_serialize_value_recurses_into_list_and_dict_of_basemodel():
     json.dumps(serialized_dict)
 
 
+def test_serialize_value_partial_states_only_the_fields_a_model_has_set():
+    from fastapi_viewsets.decorators.celery_viewset.client import _serialize_value
+
+    class Described(BaseModel):
+        id: int = 0
+        name: str
+        description: str | None = None
+
+    stated = Described.model_construct(_fields_set={"name"}, name="x")
+    assert asyncio.run(_serialize_value(stated, partial=True)) == {"name": "x"}
+    assert asyncio.run(_serialize_value({1: stated}, partial=True)) == {1: {"name": "x"}}
+    assert asyncio.run(_serialize_value(stated)) == {"id": 0, "name": "x", "description": None}
+
+
 class _TaggedArg(SerializableObject):
     """Module-level (importable) SerializableObject fixture - see SerializableObject's own
     docstring on why a locally-defined subclass can't round-trip through the type tag."""

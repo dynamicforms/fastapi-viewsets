@@ -108,7 +108,7 @@ the constructor options.
 | `axiosInstance` | `restViewSet` | Custom axios instance; defaults to the global one |
 | `peer` | `muxwsViewSet` | The muxws peer, or a function returning one (required) |
 | `headers` | `muxwsViewSet` | Sent on every command, on top of the handshake's |
-| `timeoutMs` | `muxwsViewSet` | Per-call timeout |
+| `timeoutMs` | `muxwsViewSet` | Per-call timeout, from opening the stream to the last byte of the reply |
 
 `pkFieldName` and `declares` are bound by the factory and are TS2353 if passed.
 
@@ -147,7 +147,7 @@ also the honest type — it has `listCursor` and nothing else.
 
 ### route_rest
 
-[`route_rest`](./route-rest) and `route_muxws` are the older form and still work. They return a bare
+[`route_rest`](./route-rest) and `route_muxws` are the other form. They return a bare
 proxy cast to the mixin interface named in `M`: the standard actions are there, but a custom endpoint
 named in that interface type-checks and is `undefined` when called, because the object is not the
 consumer's own class.

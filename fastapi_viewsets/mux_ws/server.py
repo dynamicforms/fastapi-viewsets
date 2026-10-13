@@ -14,7 +14,7 @@ from typing import Any, TYPE_CHECKING
 from fastapi import FastAPI
 
 from .asgi import call_asgi, payload_to_body
-from .protocol import build_response_meta, is_command, merge_headers, parse_request
+from .protocol import build_response_meta, EnvelopeError, is_command, merge_headers, parse_request
 from .registry import get_dispatch_app
 
 if TYPE_CHECKING:
@@ -71,7 +71,13 @@ async def process_command(
     if not is_command(headers):
         return False
 
-    method, path, query_string, call_headers = parse_request(headers)
+    try:
+        method, path, query_string, call_headers = parse_request(headers)
+    except EnvelopeError as error:
+        # addressed to a viewset, but not in a form any route could be matched against: answered
+        # as HTTP answers a request it cannot parse
+        await stream.reply({"detail": str(error)}, headers=build_response_meta(400, {}))
+        return True
     effective = merge_headers(
         merge_headers(connection_headers(connection), base_headers or {}),
         call_headers,

@@ -14,9 +14,8 @@
  *
  * The members are methods rather than properties, and are reached through an intersection rather
  * than a `Pick<>` of a lookup table: a mapped type re-emits a method as a function-valued property,
- * and a subclass may then not override an action with a method (TS2425). Overriding one to add
- * caching or reshape parameters works on a hand-written proxy subclass today, and must keep
- * working here.
+ * and a subclass may then not override an action with a method (TS2425). A subclass overrides an
+ * action to add caching or reshape parameters, on a hand-written proxy and on a factory-built one.
  *
  * A composite mixin restates nothing: its interface extends the leaves its `actions` spread names,
  * so each action's signature exists in exactly one place.

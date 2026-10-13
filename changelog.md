@@ -6,6 +6,90 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - Unreleased
+
+### Added
+
+- `toErrorDescription(body)` converts a failed request's body into an `ErrorDescription`
+  (`code`, `params`, `detail`, `origin: 'server'`), the shape of `ErrorDescription` in
+  `@dynamicforms/vue-forms`: `detail_code` becomes `code` (`''` where the body has none),
+  `detail_params` becomes `params`, and `detail` is kept.
+- `toFieldErrors(body)` converts FastAPI's 422 validation body into `ErrorDescription`s keyed by
+  field name (`loc` without its source element, joined with `.`), with pydantic's `type` as `code`,
+  `ctx` as `params` and `msg` as `detail`.
+- The `ErrorDescription`, `FieldErrorEntry` and `FieldErrorsBody` types.
+- Every operation in a viewset's `/schema` (REST and muxws) carries `x-viewset-action`, the name of
+  the viewset method that serves it.
+- `restViewSet<T>()(pk, [])` and `muxwsViewSet<T>()(pk, [])` build a ViewSet with no standard
+  action, for a BE viewset with custom endpoints only. An empty `declares` was a compile error
+  (TS2507).
+- `ReadOnlyCollectionError` (405, code `read_only`), raised by a write to a `CollectionViewSet`
+  over an immutable container.
+- The API reference has pages for `route_muxws` and `settings`, and lists the request, error-body,
+  muxws, filter and Celery helpers.
+
+### Changed
+
+- The body of `PATCH {pk}` and `PATCH bulk` is a partial model: every field optional, the primary
+  key left out, a stated field validated by its annotation, its constraints and the model's
+  `@field_validator`s. `@model_validator`s are not applied to it. `perform_update` and
+  `perform_bulk_update` receive the model holding the stated fields only, so
+  `data.model_dump(exclude_unset=True)` is what the request stated; on a `celery_viewset` the worker
+  receives the same.
+- **Breaking (Celery):** the JWT user crosses to a worker as the token and the position of its
+  `JWTAuthBackend` in `settings.viewsets_auth_processors`, not the secret. The worker verifies the
+  token with its own configured backend, so it needs the same `viewsets_auth_processors`.
+- A filter value that will not convert (`?year__in=1999,abc`) is a 422 with `loc`
+  `["query", parameter, index]`, on a `celery_viewset` as well.
+- `limit` below 1 and `offset` below 0 are a 422.
+- A muxws command whose `:method`, `:path` or `:query` is malformed is answered with a 400.
+- `timeoutMs` of a muxws ViewSet bounds the wait for the reply headers as well as the body.
+- `route_viewset` raises `ValueError` for an unknown `lifecycle`.
+- **npm:** `vue` and `lodash-es` are no longer peer dependencies; the package imports neither.
+
+### Fixed
+
+- The schema check matches a custom endpoint to a ViewSet method by the BE method's name
+  (`x-viewset-action`), in camelCase or as it is, where it read the first path segment: an endpoint
+  under a path parameter (`POST /items/{pk}/approve`) asked for a `{pk}()` method and one with a
+  hyphen (`GET /items/top-rated`) for a `top-rated()` method, and both were reported as missing. An
+  operation without `x-viewset-action` is not checked.
+- A route whose endpoint declares no `context` parameter builds its context for the command
+  middleware chain; with `Authorization` (or any middleware reading the context) configured it
+  answered 500.
+- `PATCH` accepts a body that leaves fields out; it answered 422 for any field missing.
+- A custom endpoint that declares `request: Request` receives the request; the call raised
+  `TypeError` (`got multiple values for keyword argument 'request'`).
+- `CollectionViewSet`: a partial update of a pydantic model item answered 500; a delete from a set
+  never found the item; a partial update of a set's item replaced it with the request body.
+- `SerializeStateSlots.deserialize_state` while nothing is stored (None) raised.
+- The demo shows a failed call's server `detail` and `code` through `toErrorDescription`.
+
+### Removed
+
+- **Breaking (npm):** `translateApiError`, `translateStrings` and `translatableStrings`, and the
+  `@dynamicforms/translatable` peer dependency. The package holds no translations; the application
+  translates an error by its `code`.
+
+## [0.7.3] - 2026-10-04
+
+### Removed
+
+- `@dynamicforms/vue-forms` is no longer a peer dependency of the npm package, which imports nothing
+  from it.
+
+## [0.7.2] - 2026-09-25
+
+### Changed
+
+- The npm package is ESM only: the UMD build is dropped. `exports["."]` points at the ES module and
+  states a `types` condition first, so TypeScript with `bundler` or `node16` module resolution finds
+  `dist/index.d.ts`.
+
+### Removed
+
+- The `./styles.css` export, which named a file the package does not ship.
+
 ## [0.7.1] - 2026-09-24
 
 ### Added

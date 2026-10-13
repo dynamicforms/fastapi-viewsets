@@ -391,3 +391,8 @@ def test_viewset_route_order():
     assert our_paths == expected_paths_order, (
         f"OpenAPI path order mismatch:\n  got:      {our_paths}\n  expected: {expected_paths_order}"
     )
+
+
+def test_an_unknown_lifecycle_is_refused_when_the_viewset_is_routed():
+    with pytest.raises(ValueError, match="unknown lifecycle 'per-call'"):
+        route_viewset(APIRouter(), base_path="/x", lifecycle="per-call")

@@ -150,6 +150,8 @@ also accepts a function. It is called once and its result cached: a muxws Peer s
 reconnects, so there is nothing to re-resolve.
 
 ```ts
+import { connect, type Peer } from 'muxws';
+
 let peerPromise: Promise<Peer> | undefined;
 const peer = () => (peerPromise ??= connect('ws://localhost:8000/ws'));
 
@@ -209,6 +211,22 @@ The global setting is read at decoration time, so set it before any viewset clas
 over the transport it was asked on. When an endpoint is published on only one of them, the two
 schemas differ.
 
+## Python reference
+
+`fastapi_viewsets.mux_ws` exports, besides `process_command` and `transports`:
+
+| Name | Description |
+|------|-------------|
+| `get_dispatch_app()` | The FastAPI app every muxws command is dispatched into, built from the current registrations; `process_command` uses it unless given `app` |
+| `schema_for(base_path)` | The OpenAPI document of the viewset registered at `base_path` as reachable over muxws, or `None` |
+| `registered_viewsets()` | The registered viewset classes mapped to their base paths |
+| `is_registered(cls)` | Whether `cls` is registered on muxws |
+| `register_viewset(cls, base_path, route_kwargs, tags=None)` | Records a viewset's muxws-reachable endpoints; `route_viewset` calls it. Re-registering a class replaces its registration |
+| `reset_registry()` | Drops every registration; for tests |
+| `resolve_register_muxws(endpoint, viewset_level)` | Whether an endpoint is on muxws: the endpoint's `@transports`, else `viewset_level`, else `settings.viewsets_register_muxws` |
+| `resolve_register_rest(endpoint, viewset_level=None)` | Whether an endpoint is on REST: the endpoint's `@transports`, else `viewset_level`, else `True` |
+| `METHOD_KEY`, `PATH_KEY`, `QUERY_KEY`, `STATUS_KEY` | `":method"`, `":path"`, `":query"`, `":status"` |
+
 ## The wire format
 
 muxws does no routing of its own — its specification forbids looking at the opening payload to pick
@@ -249,7 +267,9 @@ body, for a streaming reply as much as a unary one.
 ### Errors
 
 A 404 or a 422 comes back as a normal reply carrying that status. Stream resets are reserved for
-transport and protocol failures.
+transport and protocol failures. A command whose `:method`, `:path` or `:query` is malformed — a
+path that is not absolute, a method that is not a string, a `:query` that is neither a string nor a
+mapping — is answered with status 400 and `{"detail": "..."}`.
 
 On the client that status becomes a `ViewSetRequestError`, whose shape is the one axios raises —
 `error.response.status`, `error.response.data` — so error handling written against axios works over
@@ -283,8 +303,7 @@ to refresh state when the socket comes back.
 Dispatch builds a synthetic ASGI request and calls the dispatch app. It costs one JSON
 decode/re-encode per call: about 15% of a read, a third of a large write.
 
-Measured against the demo — 5000 records, localhost, Python client, so no browser connection limit
-in play:
+The demo — 5000 records, localhost, Python client, so no browser connection limit in play:
 
 | | sequential p50 | sequential p95 | 100 requests at once |
 |---|---|---|---|

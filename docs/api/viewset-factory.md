@@ -54,14 +54,22 @@ type PkFieldName<T> = Extract<
 >;
 
 type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> =
-  // A declaration naming no action resolves to its own error message; see TS2507 below.
-  [ActionsOf<D[number]>] extends [never]
-    ? 'declares must name at least one action: pass the mixin classes themselves, unannotated'
-    : {
-        new (options: Omit<O, 'pkFieldName' | 'declares'>): ViewSetInternals &
-          ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>>;
-        readonly declares: D;
-      };
+  // `[]` builds a ViewSet with no standard action; a list whose mixins name no action resolves to
+  // its own error message, see TS2507 below.
+  [D[number]] extends [never]
+    ? ViewSetClassOf<T, PK, D, O>
+    : [ActionsOf<D[number]>] extends [never]
+      ? 'declares must name at least one action: pass the mixin classes themselves, unannotated'
+      : ViewSetClassOf<T, PK, D, O>;
+
+type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> = {
+  new (options: Omit<O, 'pkFieldName' | 'declares'>): ViewSetInternals &
+    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>> & { readonly pkFieldName: PK };
+  readonly declares: FactoryDeclares<D>;
+};
+
+/** The factory's `declares`, branded so a subclass restating it fails on one line (TS2417). */
+type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTORY_BUILT]: D };
 ```
 
 ## Why the call is curried
@@ -106,7 +114,7 @@ interface Options {
 | `validateSchema` | `boolean` | `true` | Set `false` to skip the startup schema check (it is advisory and costs one request). |
 | `axiosInstance` | `AxiosInstance` | global `axios` | REST only. |
 | `peer` | `MuxwsPeerSource` | — | muxws only. A `Peer`, or a function returning one — called once and cached. |
-| `timeoutMs` | `number` | — | muxws only. Per-request timeout; muxws resets the stream with `TIMEOUT` when it expires. |
+| `timeoutMs` | `number` | — | muxws only. Per-request timeout, covering the wait for the reply headers and for the body; muxws resets the stream with `TIMEOUT` when it expires and the call rejects with its `StreamTimeout`. |
 | `headers` | `Record<string, string>` | `{}` | muxws only. Headers added to every request. |
 
 ## Inside the class body
@@ -171,15 +179,15 @@ class ItemDbApi extends restViewSet<Item>()('id', [CursorListMixin, RetrieveMixi
 | `TS2345` | `restViewSet<Item>()('nope', [...])` | *Argument of type '"nope"' is not assignable to parameter of type '"name" \| "id"'.* The pk field must exist on the model and be a `string` or `number` field — a `string[]` field is rejected the same way. |
 | `TS2353` | `new ItemApi({ basePath: '/items', pkFieldName: 'id' })` | *'pkFieldName' does not exist in type `Omit<RestProxyOptions, "pkFieldName" \| "declares">`.* Both are bound by the factory; passing them again is an error. The same applies to `declares`. |
 | `TS2417` | `static declares = [...]` on a subclass of a factory-built class | *Class static side incorrectly extends base class static side.* `declares` is pinned to the tuple the factory was given. Call the factory again with the smaller list instead of restating it. |
-| `TS2507` | `declares` names no action — `[]`, or an array annotated `ViewSetMixinClass[]`, which erases which mixins are in it | *Type `'declares must name at least one action: pass the mixin classes themselves, unannotated'` is not a constructor function type.* The message is the return type: a ViewSet with no actions would otherwise be built without complaint. |
+| `TS2507` | `declares` is an array annotated `ViewSetMixinClass[]`, which erases which mixins are in it | *Type `'declares must name at least one action: pass the mixin classes themselves, unannotated'` is not a constructor function type.* The message is the return type: a ViewSet with no actions would otherwise be built without complaint. An empty literal, `[]`, is accepted: it builds a ViewSet with custom endpoints only. |
 | `TS2558` | `restViewSet<Item, 'id', [...]>(...)` | *Expected 1 type arguments, but got 3.* The call is curried; see [above](#why-the-call-is-curried). |
 
 ## Schema check
 
-On construction, unless `validateSchema: false`, the ViewSet fetches `GET {basePath}/schema` over its own transport and compares the declaration against it, `console.warn`-ing any disagreement: an action declared that the BE does not serve, an endpoint served that the ViewSet declares no action for, and a custom BE endpoint the ViewSet has no method of that name for. It is advisory — failures to fetch or parse are ignored.
+On construction, unless `validateSchema: false`, the ViewSet fetches `GET {basePath}/schema` over its own transport and compares the declaration against it, `console.warn`-ing any disagreement: an action declared that the BE does not serve, an endpoint served that the ViewSet declares no action for, and a custom BE endpoint the ViewSet has no method for — the BE method's name (`x-viewset-action`) in camelCase, or the name itself. It is advisory — failures to fetch or parse are ignored.
 
 ## Relation to route_rest / route_muxws
 
-[`route_rest`](/api/route-rest) and `route_muxws` are unchanged and still supported; they are the older form. They return a bare `RestProxyImpl` / `MuxwsProxyImpl` cast to the mixin interface `M`, so the object is not the consumer's own class: a custom endpoint named in `M` type-checks and is `undefined` when called. A factory-built ViewSet is the consumer's class, so its own methods exist.
+[`route_rest`](/api/route-rest) and `route_muxws` are the other form. They return a bare `RestProxyImpl` / `MuxwsProxyImpl` cast to the mixin interface `M`, so the object is not the consumer's own class: a custom endpoint named in `M` type-checks and is `undefined` when called. A factory-built ViewSet is the consumer's class, so its own methods exist.
 
-Passing a factory-built class to either fails to compile rather than silently building an object missing that class's own methods: the overload that matches a factory-built class returns a self-describing string type instead of a usable proxy, so the error surfaces as `TS2339` on the first property or method accessed on the result (`Property 'list' does not exist on type '"route_rest cannot take a factory-built ViewSet class - extend it directly ..."'`), not on the `route_rest`/`route_muxws` call itself.
+Passing a factory-built class to either fails to compile rather than silently building an object missing that class's own methods: the overload that matches a factory-built class returns a self-describing string type instead of a usable proxy, so the error surfaces as `TS2339` on the first property or method accessed on the result (`Property 'list' does not exist on type '"route_rest cannot take a factory-built class - extend it directly instead"'`), not on the `route_rest`/`route_muxws` call itself.

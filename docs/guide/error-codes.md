@@ -2,7 +2,7 @@
 
 Every `HTTPException` this package raises on its own behalf carries a stable `code` and the
 `params` its English `detail` was built from, alongside `detail` itself. This page covers why that
-exists, how to opt into it on the backend, and how to translate it on the frontend.
+exists, how to opt into it on the backend, and how the frontend reads it.
 
 ## Design
 
@@ -23,8 +23,8 @@ from fastapi_viewsets.exceptions import DfViewSetError, df_viewset_exception_han
 app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
 ```
 
-An application that never registers this sees exactly what it always has, `{"detail": "..."}`,
-from FastAPI's own default `HTTPException` handling. A view's own `raise HTTPException(status_code,
+An application that never registers this receives `{"detail": "..."}`, from FastAPI's own default
+`HTTPException` handling. A view's own `raise HTTPException(status_code,
 detail="...")` is unaffected either way - only exceptions descending from `DfViewSetError` carry a
 `code`.
 
@@ -39,14 +39,15 @@ knows which user it is answering, decides what language to show.
 | Class | Status | `code` | `params` |
 |-------|--------|--------|----------|
 | `NotFoundError(pk)` | 404 | `not_found` | `{pk}` |
+| `ReadOnlyCollectionError()` | 405 | `read_only` | — |
 | `SessionExpiredError()` | 401 | `session_expired` | — |
 | `NotAuthorizedError()` | 403 | `not_authorized` | — |
 | `RateLimitedError()` | 429 | `rate_limited` | — |
 | `UnsupportedListShapeError(shape, allowed)` | 422 | `unsupported_list_shape` | `{shape, allowed}` |
 | `CursorRequestError(error)` | 400 | one of the cursor codes below | varies |
 
-The cursor codes, raised internally when cursor pagination rejects a request and surfaced through
-`CursorRequestError`:
+The cursor codes, raised as `fastapi_viewsets.cursor.CursorError` (a `ValueError` carrying `code`
+and `params`) when cursor pagination rejects a request, and surfaced through `CursorRequestError`:
 
 | `code` | `params` | When |
 |--------|----------|------|
@@ -82,37 +83,142 @@ package's own errors and an application's own alike.
 
 ## Frontend
 
-`@dynamicforms/fastapi-viewsets/vue` exports a matching table of English defaults, keyed by
-`code`, and a function that rebuilds the message from `detail_code`/`detail_params`:
+`@dynamicforms/fastapi-viewsets` converts an error body into an `ErrorDescription`: `code`,
+`params`, the English `detail` and `origin: 'server'`. The interface has the shape of
+`ErrorDescription` in `@dynamicforms/vue-forms`, so the application renders and translates a
+server's errors with the same function as its validators' errors. The package holds no
+translations. How an application converts an error into text in its own language is described in
+[vue-forms: Error messages and translation](:vue-forms:/api/validators.html#error-messages-and-translation);
+the codes of this page are added to the application's translations next to the validators' codes.
+
+### One error
+
+`toErrorDescription(body)` converts the body of a failed request:
 
 ```ts
-import { translateApiError } from '@dynamicforms/fastapi-viewsets/vue';
+import { toErrorDescription } from '@dynamicforms/fastapi-viewsets';
 
-const body = await response.json(); // { detail, detail_code?, detail_params? }
-const message = translateApiError(body);
+const error = toErrorDescription(body); // body: { detail, detail_code?, detail_params? }
+// { code: 'not_found', params: { pk: 42 }, detail: 'Item with pk 42 not found', origin: 'server' }
 ```
 
-`translateApiError` returns `body.detail` unchanged whenever `detail_code` is absent - the handler
-was never registered, or this is a view's own plain-string error - or names a code the table below
-does not cover.
+| Field | Value |
+|-------|-------|
+| `code` | `detail_code`; an empty string where the body has none (the handler is not registered, or the error is a view's own `HTTPException`) |
+| `params` | `detail_params` as the server sent them; `{}` where the body has none |
+| `detail` | `detail`, unchanged |
+| `origin` | `'server'` |
 
-To translate into another language, supply the application's own strings the same way every other
-`@dynamicforms` package does, through `translateStrings`:
+### Field errors
+
+A request whose body or parameters fail validation is answered by FastAPI with status 422 and a
+list of failures, one per failing value; over muxws the body is the same:
+
+```json
+{
+  "detail": [
+    { "type": "string_too_short", "loc": ["body", "name"], "msg": "String should have at least 3 characters", "input": "a", "ctx": { "min_length": 3 } },
+    { "type": "int_parsing", "loc": ["body", "address", "zip"], "msg": "Input should be a valid integer", "input": "x" }
+  ]
+}
+```
+
+`toFieldErrors(body)` converts it into errors keyed by field name. The name is `loc` without its
+first element (`body`, `query`, `path`, `header` or `cookie`), joined with `.`; a failure of the
+body as a whole is keyed `''`. Each error has pydantic's `type` as `code`, `ctx` as `params` and
+`msg` as `detail`:
 
 ```ts
-import { translateStrings } from '@dynamicforms/fastapi-viewsets/vue';
+import { toFieldErrors } from '@dynamicforms/fastapi-viewsets';
 
-translateStrings({
-  not_found: 'Element s ključem {pk} ne obstaja',
-  session_expired: 'Seja je potekla ali ni veljavna',
+toFieldErrors(body);
+// {
+//   name: [{ code: 'string_too_short', params: { min_length: 3 }, detail: 'String should have at least 3 characters', origin: 'server' }],
+//   'address.zip': [{ code: 'int_parsing', params: {}, detail: 'Input should be a valid integer', origin: 'server' }],
+// }
+```
+
+A name is a path through the members of a vue-forms form: a `Group` member by its name, a `List`
+row by its index. The errors keyed `''` belong to the form itself, and so do the errors of a name
+the form does not hold. A `SubmitAction` sends the form through a ViewSet and, where the server
+refuses it, writes the server's errors to the form before it throws:
+
+```ts
+import {
+  type ApiErrorBody,
+  type ErrorDescription,
+  type FieldErrorsBody,
+  toErrorDescription,
+  toFieldErrors,
+} from '@dynamicforms/fastapi-viewsets';
+import { Action, type FieldBase, Group, List, SubmitAction, ValidationError } from '@dynamicforms/vue-forms';
+
+function elementAt(root: FieldBase, name: string): FieldBase | undefined {
+  let element: FieldBase | null | undefined = root;
+  for (const key of name ? name.split('.') : []) {
+    if (element instanceof Group) element = element.field(key);
+    else if (element instanceof List) element = element.get(Number(key));
+    else return undefined;
+  }
+  return element ?? undefined;
+}
+
+function addErrors(element: FieldBase, errors: ErrorDescription[]) {
+  element.errors = [
+    ...element.errors,
+    ...errors.map((e) => new ValidationError(e.code, e.params, e.detail, e.origin)),
+  ];
+}
+
+const save = new Action({
+  value: { label: 'Save', defaultConfirm: true },
+  actions: [
+    new SubmitAction(
+      (action) => action.parent?.parent,
+      async (value, target) => {
+        try {
+          return await itemsApi.update(value.id, value);
+        } catch (error: any) {
+          const status = error.response?.status;
+          const body = error.response?.data;
+          if (status === 422) {
+            for (const [name, errors] of Object.entries(toFieldErrors(body as FieldErrorsBody))) {
+              addErrors(elementAt(target, name) ?? target, errors);
+            }
+          } else if (typeof body?.detail === 'string') {
+            addErrors(target, [toErrorDescription(body as ApiErrorBody)]);
+          }
+          throw error;
+        }
+      },
+    ),
+  ],
 });
+
+const form = new Group({ /* the item's fields */ actions: new Group({ save }) });
 ```
 
-The full table of codes and their English defaults:
+`execute()` of the action, and `form.confirm()`, resolve with a `SubmitFailedException` whose
+`cause` is the error; see vue-forms' [`SubmitAction`](:vue-forms:/api/action.html#submitaction-target-handler-options).
+Its button in `<df-actions>` of `@dynamicforms/vuetify-inputs` is disabled while the form is
+invalid, so the form is not sent again until the user has changed a value the server refused.
 
-| `code` | Default text | Params |
-|--------|--------------|--------|
+Whether an error of origin `'server'` counts toward `valid` and when it is removed is set by
+vue-forms' [`ErrorPolicy`](:vue-forms:/api/validators.html#errorpolicy). By default it counts, and
+an element drops it when the element, or a member below it, is marked touched while the element
+holds a value other than the one it held when the error was written.
+
+The codes are pydantic's error types (`missing`, `string_too_short`, `int_parsing`, ...), and
+`params` holds the values pydantic built `msg` from.
+
+### Codes
+
+The codes this package raises, with their English `detail`:
+
+| `code` | `detail` | Params |
+|--------|----------|--------|
 | `not_found` | `Item with pk {pk} not found` | `pk` |
+| `read_only` | `This collection is read-only` | — |
 | `session_expired` | `Session expired or invalid` | — |
 | `not_authorized` | `Not authorized to perform this action` | — |
 | `rate_limited` | `Rate limit exceeded` | — |
@@ -123,5 +229,5 @@ The full table of codes and their English defaults:
 | `cursor_missing_keys` | `cursor has no value for ordering key(s): {missing}` | `missing` |
 | `cursor_value_mismatch` | `cursor value for "{name}" does not fit the field: {error}` | `name`, `error` |
 
-A custom error's own `code` reaches the same table - pass it to `translateStrings` alongside the
-built-in ones, keyed the same way.
+`allowed` and `missing` are arrays. An application's own `DfViewSetError` subclasses add their codes
+to the same translations.

@@ -12,6 +12,7 @@ from fastapi_viewsets.context import Context
 from fastapi_viewsets.decorators import route_viewset
 from fastapi_viewsets.mixins import BulkViewSetMixin, LookupItem, LookupMixin
 
+from ..mux_ws.registry import reset_registry, schema_for
 from .conftest import iter_routes
 
 # ---------------------------------------------------------------------------
@@ -218,3 +219,96 @@ def test_combined_search_and_clone_work_together():
     names = [item["name"] for item in search_resp.json()]
     assert "Gadget" in names
     assert "Gadget Jr" in names
+
+
+# ---------------------------------------------------------------------------
+# 4. A ViewSet with custom endpoints only
+# ---------------------------------------------------------------------------
+
+
+class Report(BaseModel):
+    name: str
+    approved: bool = False
+
+
+def make_custom_only_app():
+    app = FastAPI()
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/reports", pk_field_name="id")
+    class ReportViewSet:
+        __router = APIRouter()
+
+        @__router.get("summary")
+        async def summary(self) -> Report:
+            return Report(name="summary")
+
+        @__router.get("top-rated")
+        async def top_rated(self) -> list[Report]:
+            return [Report(name="top")]
+
+        @__router.post("{pk}/approve")
+        async def approve(self, pk: int) -> Report:
+            return Report(name=f"report {pk}", approved=True)
+
+    app.include_router(router)
+    return app
+
+
+def test_custom_only_viewset_registers_its_endpoints_and_no_standard_ones():
+    paths = {route.path for route in iter_routes(make_custom_only_app().routes)}
+    assert {"/reports/summary", "/reports/top-rated", "/reports/{pk}/approve", "/reports/schema"} <= paths
+    assert not paths & {"/reports", "/reports/{pk}", "/reports/bulk", "/reports/lookup"}
+
+
+def test_custom_only_viewset_serves_its_endpoints():
+    client = TestClient(make_custom_only_app())
+    assert client.get("/reports/summary").json() == {"name": "summary", "approved": False}
+    assert client.get("/reports/top-rated").json() == [{"name": "top", "approved": False}]
+    assert client.post("/reports/7/approve").json() == {"name": "report 7", "approved": True}
+
+
+def test_schema_names_the_method_serving_each_custom_endpoint():
+    """`x-viewset-action` is the method name, whatever the path: a parameter segment, a hyphen."""
+    paths = TestClient(make_custom_only_app()).get("/reports/schema").json()["paths"]
+    assert paths["/reports/summary"]["get"]["x-viewset-action"] == "summary"
+    assert paths["/reports/top-rated"]["get"]["x-viewset-action"] == "top_rated"
+    assert paths["/reports/{pk}/approve"]["post"]["x-viewset-action"] == "approve"
+
+
+def test_schema_names_the_method_serving_each_mixin_endpoint():
+    paths = TestClient(make_search_app()).get("/items/schema").json()["paths"]
+    assert paths["/items/search"]["get"]["x-viewset-action"] == "search"
+    assert paths["/items/{pk}"]["get"]["x-viewset-action"] == "retrieve"
+
+
+def test_muxws_schema_names_the_method_serving_each_custom_endpoint():
+    reset_registry()
+    try:
+        make_custom_only_app()
+        paths = schema_for("/reports")["paths"]
+        assert paths["/reports/top-rated"]["get"]["x-viewset-action"] == "top_rated"
+        assert paths["/reports/{pk}/approve"]["post"]["x-viewset-action"] == "approve"
+    finally:
+        reset_registry()
+
+
+def test_custom_endpoint_declaring_request_receives_it():
+    from fastapi import Request
+
+    app = FastAPI()
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/items", pk_field_name="id")
+    class ItemViewSet(CollectionViewSet[int, Item]):
+        __router = APIRouter()
+
+        def __init__(self):
+            super().__init__(container=make_database(), pk_field="id")
+
+        @__router.get("/caller")
+        async def caller(self, request: Request) -> str:
+            return request.headers["x-caller"]
+
+    app.include_router(router)
+    assert TestClient(app).get("/items/caller", headers={"x-caller": "me"}).json() == "me"

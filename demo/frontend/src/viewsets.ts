@@ -1,12 +1,6 @@
 import { connect, type Peer } from 'muxws';
 
-import {
-  BulkViewSetMixin,
-  CursorListMixin,
-  LookupMixin,
-  PaginatedListMixin,
-  RetrieveMixin,
-} from '../../../vue/mixins';
+import { BulkViewSetMixin, CursorListMixin, LookupMixin, PaginatedListMixin, RetrieveMixin } from '../../../vue/mixins';
 import { ViewSetInternals } from '../../../vue/proxy-base';
 import { muxwsViewSet, restViewSet } from '../../../vue/viewset';
 
@@ -59,7 +53,7 @@ function WithCount<TBase extends abstract new (...args: any[]) => ViewSetInterna
   Base: TBase,
 ): TBase & (abstract new (...args: any[]) => MusicTrackMethods) {
   abstract class Counting extends Base {
-    /** The method name must match the BE path segment (GET /music/count → count). */
+    /** Served by the BE method `count` (GET /music/count). */
     async count(): Promise<number> {
       return this.request<number>('GET', '/count');
     }
@@ -98,10 +92,7 @@ export function muxwsPeer(): Promise<Peer> {
  * the memory ones, so what callers may rely on is what all four have.
  */
 export type MusicTrackViewSet =
-  | MusicTrackRestViewSet
-  | MusicTrackDbRestViewSet
-  | MusicTrackMuxwsViewSet
-  | MusicTrackDbMuxwsViewSet;
+  MusicTrackRestViewSet | MusicTrackDbRestViewSet | MusicTrackMuxwsViewSet | MusicTrackDbMuxwsViewSet;
 
 /** One proxy per (transport, backend) pair, built once - each does a schema check on construction. */
 const proxies = new Map<string, MusicTrackViewSet>();

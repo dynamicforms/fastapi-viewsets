@@ -11,6 +11,12 @@
 | `dict` / `MutableMapping` | list, retrieve, create, update, destroy |
 | Any `Iterable` (read-only) | list, retrieve only |
 
+A write to a read-only container raises `ReadOnlyCollectionError`: status 405, code `read_only`.
+
+A partial update (`PATCH`) writes the fields the request stated onto the stored item: into a `dict`,
+as attributes of any other object. An item of a set is hashable and is replaced by a copy holding
+the new values, so a set holds pydantic models (frozen), named tuples or dataclasses (frozen).
+
 ## Basic usage
 
 ```python

@@ -45,7 +45,7 @@ async def apply_sort(self, context, query: ListQuery, records: ListRecords) -> L
 rows alone. Each stage is marked independently: push down the sort, leave the filter to the
 default, and neither needs to know about the other.
 
-Stage names are `"filter"`, `"sort"` and `"pagination"`.
+Stage names are `"filter"`, `"sort"` and `"pagination"`, plus `"conversion"`, which `land()` marks once it has converted the materialised rows into the response model.
 
 `filter_list` and `sort_list` remain the place to implement in-memory filtering and sorting; the
 default `apply_*` stages call them.
@@ -94,7 +94,7 @@ The declaration decides the endpoint's parameters and its response model:
 | `paginated` | `+ offset, limit` | `PaginatedList_Track_` |
 | `cursor` | `+ cursor, limit` | `CursorPage_Track_` |
 
-`limit` is capped at `max_page_size`.
+`limit` is capped at `max_page_size`. A `limit` below 1 or an `offset` below 0 is a 422.
 
 ### Letting the client choose
 
@@ -109,7 +109,8 @@ class TrackViewSet(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter])
 The endpoint gains the header and every parameter those shapes use, and its response becomes a
 union of exactly those models. Each is documented with an example named after the header value that
 produces it, so the dropdown reads `plain` rather than `ListOf_Track_`. A value not in
-`list_shapes` is a 422.
+`list_shapes` is a 422. A viewset whose `list_shape` or `list_shapes` names a shape other than
+`plain`, `paginated` and `cursor` raises `fastapi_viewsets.list_shapes.ShapeError` (a `ValueError`).
 
 Declare one shape unless clients genuinely differ. A union has to be narrowed by every generated
 client, and OpenAPI cannot express that a request header selects between its members — that part is
@@ -246,7 +247,8 @@ Built in: `exact`, `iexact`, `contains`, `icontains`, `startswith`, `gt`, `gte`,
 
 `in` and `overlaps` take a comma-separated string (`?year__in=1999,2000`); FastAPI cannot expose a
 list-typed field of a `Depends()`-expanded model as a query parameter. Values are coerced to the
-field's own type, and one that will not convert is a 422.
+field's own type, and one that will not convert is a 422 in FastAPI's validation shape, with `loc`
+`["query", parameter, index]` (`["query", "year__in", 1]` for `?year__in=1999,abc`).
 
 Hand-written `filter_list` keeps working: a filter model built by hand carries no declaration, and
 the pipeline falls through to it.
@@ -287,6 +289,27 @@ A new operator needs no change to any backend, and a new backend needs no change
 
 Push-down is all or nothing: if any filter in a request has no compiler, the backend leaves the
 whole stage to the in-memory pass.
+
+### Reference
+
+`fastapi_viewsets.filters` exports:
+
+| Name | Description |
+|------|-------------|
+| `make_filter_model(model, declaration)` | The query-parameter model for a declaration; raises `FilterError` for an unknown field or operator |
+| `FilterDeclaration` | The declaration's type: field name → list of operator names |
+| `filters_from(fltr)` | The `FilterSet` a populated filter model asks for, or `None` for a model not built from a declaration |
+| `Filter` | Base class of an operator: `field`, `value`, the class variable `lookup`, `read(record)` and `matches(record)` |
+| `FilterSet` | The filters of one request, and the in-memory fallback for all of them |
+| `FilterError` | A declaration names a field the model does not have, or an unknown operator |
+| `Exact`, `IExact`, `Contains`, `IContains`, `StartsWith`, `Gt`, `Gte`, `Lt`, `Lte`, `In`, `IsNull`, `Overlaps` | The built-in operators |
+| `register_operator(cls)` | Registers an operator under its `lookup` |
+| `operator_for(lookup)`, `known_operators()` | The operator class for a name; the set of registered names |
+| `compiles(backend, filter_type)` | Registers a compiler for a (backend, filter) pair |
+| `compiler_for(backend, filter_type)` | The most specific registered compiler, or `None` |
+| `can_compile_all(backend, filters)`, `compile_all(backend, viewset, filters, query)` | Whether every filter has a compiler for `backend`; applies them all in turn |
+| `registered_pairs()` | Every registered (backend, filter) pair, by name |
+| `SPEC_ATTRIBUTE` | The attribute (`"__filter_spec__"`) on a filter model that holds its declaration |
 
 ## Backends
 

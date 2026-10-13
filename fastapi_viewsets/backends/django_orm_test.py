@@ -262,6 +262,19 @@ async def test_retrieve_create_update_and_destroy(viewset):
 
 
 @pytest.mark.asyncio
+async def test_a_partial_update_writes_only_the_fields_the_request_stated(viewset):
+    """The body of `PATCH {pk}` as `route_viewset` hands it to `perform_update`: a `Track` that has
+    set only the fields the request stated."""
+    from fastapi_viewsets.decorators.primary_key_model_helper import create_partial_model, partial_to_original_model
+
+    created = await viewset.perform_create(None, Track(id=0, title="Partial", artist="A", year=1999))
+    body = create_partial_model(Track, "id").model_validate({"year": 1990})
+    updated = await viewset.perform_update(None, created.id, partial_to_original_model(body, Track), partial=True)
+    assert (updated.title, updated.artist, updated.year) == ("Partial", "A", 1990)
+    await viewset.perform_destroy(None, created.id)
+
+
+@pytest.mark.asyncio
 async def test_a_missing_record_is_a_404_not_a_crash(viewset):
     from fastapi import HTTPException
 

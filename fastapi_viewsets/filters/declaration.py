@@ -11,13 +11,13 @@ the OpenAPI schema, most of them meaningless for the field they hang off, so the
 explicit. `exact` keeps the bare field name, since `?year=2003` is what anyone would write.
 
 The resulting model is an ordinary pydantic model, so FastAPI validates and documents the
-parameters exactly as it did for `make_all_optional` - which is now the special case of "every
-field, exact only".
+parameters as it does for `make_all_optional`, which is the case of "every field, exact only".
 """
 
 from typing import Any, get_args, get_origin, Union
 
-from pydantic import BaseModel, create_model, Field, TypeAdapter
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, create_model, Field, TypeAdapter, ValidationError
 
 from .base import Filter, FilterError, FilterSet
 from .operators import known_operators, operator_for
@@ -69,8 +69,7 @@ def make_filter_model(model: type[BaseModel], declaration: FilterDeclaration) ->
     Builds the query-parameter model for a filter declaration.
 
     Raises rather than ignoring an unknown field or operator: a typo in a declaration would
-    otherwise produce a filter parameter that silently never matches anything, which is the kind of
-    bug that gets found in production by someone wondering why their search box does nothing.
+    otherwise produce a filter parameter that silently never matches anything.
     """
     fields: dict[str, tuple[Any, Any]] = {}
     spec: dict[str, tuple[str, str, Any]] = {}
@@ -103,7 +102,7 @@ def make_filter_model(model: type[BaseModel], declaration: FilterDeclaration) ->
 def filters_from(fltr: Any) -> FilterSet | None:
     """
     The FilterSet a populated filter model asks for, or None when the model was not built from a
-    declaration - in which case the viewset is on the older hand-written `filter_list` path and
+    declaration - in which case the viewset is on the hand-written `filter_list` path and
     this machinery stays out of its way.
     """
     spec = getattr(type(fltr), SPEC_ATTRIBUTE, None)
@@ -116,21 +115,21 @@ def filters_from(fltr: Any) -> FilterSet | None:
         if value is None:
             continue
         if lookup in _LIST_LOOKUPS:
-            value = _split_values(value, item_annotation)
+            value = _split_values(value, item_annotation, parameter)
             if not value:
                 continue
         filters.append(operator_for(lookup)(field=field_name, value=value))
     return FilterSet(filters)
 
 
-def _split_values(raw: Any, item_annotation: Any) -> list:
+def _split_values(raw: Any, item_annotation: Any, parameter: str) -> list:
     """
     Comma-separated string to a validated list of the field's own type.
 
     Coercion matters: `?year__in=1957,1959` arrives as strings, and comparing those to an integer
-    column would quietly match nothing. An entry that will not convert is refused rather than
-    dropped - a filter that silently ignores half of what it was given is worse than one that says
-    it could not.
+    column would match nothing. An entry that will not convert is refused rather than dropped: a
+    `RequestValidationError`, which FastAPI answers with a 422 whose `loc` is
+    `["query", parameter, index]`, the shape of any other query parameter that fails validation.
     """
     if isinstance(raw, (list, tuple)):
         items = list(raw)
@@ -140,5 +139,7 @@ def _split_values(raw: Any, item_annotation: Any) -> list:
         return []
     try:
         return TypeAdapter(list[item_annotation]).validate_python(items)
-    except Exception as error:
-        raise FilterError(f"cannot read {raw!r} as a list of {item_annotation}: {error}") from None
+    except ValidationError as error:
+        raise RequestValidationError(
+            [{**entry, "loc": ("query", parameter, *entry["loc"])} for entry in error.errors(include_url=False)]
+        ) from None

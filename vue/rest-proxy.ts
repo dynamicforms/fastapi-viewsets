@@ -82,10 +82,9 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
   }
 
   /**
-   * Dispatches to axios' per-verb methods rather than to `http.request()`, deliberately. Those
-   * are the calls this proxy has always made, and they are what application interceptors and test
-   * doubles are written against — routing everything through `request()` would be invisible on
-   * the wire but would break every one of them.
+   * Dispatches to axios' per-verb methods rather than to `http.request()`: those are what
+   * application interceptors and test doubles are written against — routing everything through
+   * `request()` would be invisible on the wire but would break every one of them.
    *
    * axios throws its own AxiosError on a non-2xx, which already carries `response.status` — the
    * shape ViewSetRequestError mirrors for the muxws side. Nothing to translate here.

@@ -1,3 +1,5 @@
+import dataclasses
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, MutableMapping, MutableSequence, MutableSet
 from typing import Any, Generic, TypeVar
@@ -5,7 +7,7 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel
 
 from .context import Context
-from .exceptions import NotFoundError
+from .exceptions import NotFoundError, ReadOnlyCollectionError
 from .mixins import ImplMixin
 
 T = TypeVar("T")
@@ -94,7 +96,7 @@ class CollectionViewSet(AsyncCollectionViewSet[K, T]):
             elif isinstance(container, MutableSet):
                 self._add_func = container.add
                 self._update_func = self._update_set
-                self._delete_func = container.remove
+                self._delete_func = self._delete_set
             elif isinstance(container, MutableMapping):
                 self._add_func = self._add_mapping
                 self._update_func = self._update_mapping
@@ -102,23 +104,36 @@ class CollectionViewSet(AsyncCollectionViewSet[K, T]):
 
     def _check_mutable(self):
         if not self.is_mutable:
-            raise Exception("Provided container is not mutable")
+            raise ReadOnlyCollectionError()
 
     def _get_pk(self, item: T) -> K:
         if isinstance(item, dict):
             return item[self.pk_field]
         return getattr(item, self.pk_field)
 
+    @staticmethod
+    def _stated_fields(data: T) -> dict[str, Any]:
+        """The fields a partial update states: those a model has set, or a dict's keys."""
+        if isinstance(data, BaseModel):
+            return {name: getattr(data, name) for name in data.model_fields_set}
+        return dict(data)
+
+    def _apply_partial(self, item: T, data: T) -> T:
+        """`item` with the fields `data` states written onto it, in place."""
+        fields = self._stated_fields(data)
+        if isinstance(item, dict):
+            item.update(fields)
+        else:
+            for key, value in fields.items():
+                setattr(item, key, value)
+        return item
+
     # Sequence helpers
     def _update_sequence(self, pk: K, data: T, partial: bool):
         for i, item in enumerate(self.container):
             if self._get_pk(item) == pk:
                 if partial:
-                    if isinstance(item, dict):
-                        item.update(data)
-                    else:
-                        for key, value in data.items():
-                            setattr(item, key, value)
+                    self._apply_partial(item, data)
                 else:
                     self.container[i] = data
                 return self.container[i]
@@ -132,17 +147,22 @@ class CollectionViewSet(AsyncCollectionViewSet[K, T]):
         raise NotFoundError(pk)
 
     # Set helpers
-    def _update_set(
-        self,
-        pk: K,
-        data: T,
-        partial: bool,  # noqa: ARG002 - `container_update` passes `(pk, data, partial)` whichever helper is bound
-    ):
+    def _update_set(self, pk: K, data: T, partial: bool):
+        # an item of a set is hashable, so it is replaced rather than changed in place
+        for item in self.container:
+            if self._get_pk(item) == pk:
+                if partial:
+                    data = _replaced(item, self._stated_fields(data))
+                self.container.remove(item)
+                self.container.add(data)
+                return data
+        raise NotFoundError(pk)
+
+    def _delete_set(self, pk: K):
         for item in self.container:
             if self._get_pk(item) == pk:
                 self.container.remove(item)
-                self.container.add(data)  # Sets don't really support partial update easily without mutation
-                return data
+                return
         raise NotFoundError(pk)
 
     # Mapping helpers
@@ -154,12 +174,7 @@ class CollectionViewSet(AsyncCollectionViewSet[K, T]):
         if pk not in self.container:
             raise NotFoundError(pk)
         if partial:
-            item = self.container[pk]
-            if isinstance(item, dict):
-                item.update(data)
-            else:
-                for key, value in data.items():
-                    setattr(item, key, value)
+            self._apply_partial(self.container[pk], data)
         else:
             self.container[pk] = data
         return self.container[pk]
@@ -220,3 +235,17 @@ class CollectionViewSet(AsyncCollectionViewSet[K, T]):
             self._delete_func(pk)
         except KeyError as e:
             raise NotFoundError(pk) from e
+
+
+def _replaced(item: Any, fields: dict[str, Any]) -> Any:
+    """A copy of the hashable `item` with `fields` written onto it: a pydantic model, a named tuple
+    or a dataclass."""
+    if isinstance(item, BaseModel):
+        return item.model_copy(update=fields)
+    if hasattr(item, "_replace"):
+        return item._replace(**fields)
+    if dataclasses.is_dataclass(item):
+        return dataclasses.replace(item, **fields)
+    raise TypeError(
+        f"{type(item).__name__} cannot be updated partially: it is neither a model, a named tuple nor a dataclass"
+    )

@@ -1,13 +1,10 @@
 # Architecture
 
-This page builds up the full request pipeline one real problem at a time, using a single running
-example (an `Item` viewset that needs authentication). Every guide page it links to
-([Context Processors](./context-processors), [Command Middleware](./command-middleware),
-[Action Configuration](./action-configuration), [Authentication](./authentication),
-[Authorization](./authorization), [ViewSet Lifecycle](./lifecycle),
-[Routers & Decorators](./routers)) is reference material - exhaustive, structured, meant to be
-looked up once you already know what you're looking for. This page is the opposite: read it top to
-bottom once, and you'll know *why* each of those pieces exists before you ever need to look one up.
+This page describes the request pipeline piece by piece, on one example: an `Item` viewset that
+needs authentication. Each piece has its own reference page: [Context Processors](./context-processors),
+[Command Middleware](./command-middleware), [Action Configuration](./action-configuration),
+[Authentication](./authentication), [Authorization](./authorization),
+[ViewSet Lifecycle](./lifecycle) and [Routers & Decorators](./routers).
 
 ---
 
@@ -16,24 +13,21 @@ bottom once, and you'll know *why* each of those pieces exists before you ever n
 ```python
 database: dict[int, Item] = {1: Item(id=1, name="Widget")}
 
-@route_viewset(router, base_path="/items")
-class ItemViewSet(CollectionViewSet[int, Item]):
+@route_viewset(router, base_path="/items", pk_field_name="id")
+class ItemViewSet(CollectionViewSet[int, Item], ViewSetMixin[int, Item]):
     def __init__(self):
         super().__init__(container=database, pk_field="id")
 ```
 
-That's a complete, working `GET /items` (and `POST`, `PUT`, `DELETE`, ...) endpoint. No context, no
-middleware, no lifecycle concerns - `route_viewset` registers the routes, `CollectionViewSet`
-implements every `perform_*` against the in-memory `database` dict. For a lot of viewsets, this is
+That serves `GET /items`, `POST /items`, `GET`/`PUT`/`PATCH`/`DELETE /items/{pk}`. No middleware, no
+lifecycle concerns - `ViewSetMixin` declares the routes, `route_viewset` registers them, and
+`CollectionViewSet` implements every `perform_*` against the in-memory `database` dict. For a lot of viewsets, this is
 the whole story. Now let's add requirements one at a time and see what each one forces us to add.
 
 ## Problem: "who's calling?"
 
 Say `ItemViewSet` needs to know who's making the request - to filter results, to stamp an owner
-field, whatever. `perform_list(self)` has no way to see the request at all: `route_viewset` calls
-it with no arguments, deliberately, because most viewsets don't need one.
-
-The fix is a parameter, `context`, that carries per-request facts:
+field. Every `perform_*` takes a `context` parameter, which carries per-request facts:
 
 ```python
 class ItemViewSet(CollectionViewSet[int, Item]):
@@ -52,11 +46,10 @@ async def whoami_processor(request: Request, viewset) -> dict:
 settings.viewsets_context_processors = [whoami_processor]
 ```
 
-`route_viewset` sees that `perform_list` declares a `context` parameter, builds one by running
-every configured processor and merging their dicts, and passes it in. `context.user` is *always*
-awaitable - even here, where the value is already a plain string sitting in a dict - because the
-next section is about to make that matter for real. → full depth in
-[Context Processors](./context-processors).
+`route_viewset` builds the context once per request by running every configured processor and
+merging their dicts; the route method (`list_items`) passes it to `perform_list`. `context.user` is
+always awaitable, also where the value is a plain string, because a value can be resolved lazily
+(next section). → full depth in [Context Processors](./context-processors).
 
 ## Problem: "real auth has more than one way to prove who you are"
 
@@ -217,8 +210,9 @@ chain unwinds, in a `finally` block, so it runs even if something above raised. 
 
 Last requirement: `perform_list` turns out to be slow enough that it shouldn't block the request -
 it should run on a Celery worker instead. `celery_viewset` does this transparently: the same
-`ItemViewSet` class, decorated once more, dispatches its `perform_*` methods to a worker and awaits
-the result over Redis instead of running them in-process.
+`ItemViewSet` class, decorated once more, dispatches its route methods (`list_items`, `create`, …)
+to a worker as Celery tasks and awaits the result over Redis instead of running them in-process; the
+worker runs the route method, which calls `perform_*` there.
 
 The one thing that has to survive that trip is `context` - the worker has no live `Request` to
 build one from. That's exactly what `serialize_context`/`deserialize_context` are for: plain values
@@ -277,17 +271,16 @@ HTTP transport adapter: ViewSetResult.body → JSON response body
 HTTP response
 ```
 
-A route that doesn't declare a `context` parameter skips the context-building step entirely inside
-`route_viewset` (no `Request` is even injected there) - a genuinely zero-cost opt-out, not just
-"context ends up empty" - though `depends()` may still build one earlier if any configured
-middleware needs it. Command middleware, by contrast, is not opt-in per route: if
+Every route builds its context once per request, in the dependency that runs `depends()`; a route
+that doesn't declare a `context` parameter is called without it, and the command middleware chain
+still receives it. Command middleware, by contrast, is not opt-in per route: if
 `settings.viewsets_command_middleware` is non-empty, it wraps every request-facing execution (a
 viewset opts *itself* out per-middleware, as `Session` above shows via `@action_configuration`);
 with no middleware configured at all, the wrapping is a no-op. "Lifecycle uses state" means
 `"singleton"` or `"instance-key"` - see [ViewSet Lifecycle](./lifecycle) for what each mode
 actually does and why `"per-request"` skips both hooks, and note `depends()` runs *before*
 `load_state()` for `per-request`/`instance-key` lifecycles (no shipped context processor reads
-viewset instance state, so this doesn't matter in practice).
+viewset instance state).
 
 | Piece | What it does | Guide |
 |---|---|---|
@@ -328,11 +321,12 @@ Both `Context` and `ViewSetResult` are deliberately transport-agnostic types, no
 ones. `route_viewset` is the HTTP **transport adapter**: it's the only place that knows about a
 real `fastapi.Request`/`Response`. The pipeline above - build context, run command middleware,
 execute, unwind - doesn't otherwise care whether "the connection" is a single HTTP request/response
-or one message on a long-lived WebSocket. No WS transport exists in this library yet, but
-`Context.clone_for_command()` (an isolated per-command copy, built by round-tripping through
-`serialize_context`/`deserialize_context`) exists specifically so a future WS adapter can run this
-same pipeline once per message on one connection, without retrofitting `Context`/`ViewSetResult`
-themselves.
+or one message on a long-lived WebSocket. The [muxws transport](./muxws) hands each command to the
+same FastAPI app as a request, so the pipeline runs once per command unchanged, and the result's
+status and headers travel in the reply's leading headers. `Context.clone_for_command()` makes an
+isolated per-command copy of a context (round-tripping through
+`serialize_context`/`deserialize_context`), for code that serves several commands from one
+context.
 
 ## Where to go next
 

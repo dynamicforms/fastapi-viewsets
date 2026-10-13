@@ -1,9 +1,19 @@
 import vuetify from 'vite-plugin-vuetify';
 import { defineConfig } from 'vitepress';
+import { crosslinksConfig } from 'vitepress-plugin-crosslinks';
 
 export default defineConfig({
   title: 'DynamicForms Viewsets',
+  // the directory's own README, for contributors
+  srcExclude: ['readme.md'],
   description: 'Full-stack ViewSet library for FastAPI (Python) and Vue/TypeScript',
+  markdown: {
+    config: crosslinksConfig({
+      projects: {
+        'vue-forms': 'https://docs.velis.si/dynamicforms/vue-forms',
+      },
+    }),
+  },
   themeConfig: {
     logo: '/logo.png',
     nav: [
@@ -83,6 +93,8 @@ export default defineConfig({
             { text: 'Vue mixins', link: '/api/vue-mixins' },
             { text: 'restViewSet / muxwsViewSet', link: '/api/viewset-factory' },
             { text: 'route_rest', link: '/api/route-rest' },
+            { text: 'route_muxws', link: '/api/route-muxws' },
+            { text: 'settings', link: '/api/settings' },
           ],
         },
       ],

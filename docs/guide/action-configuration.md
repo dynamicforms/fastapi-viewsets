@@ -80,16 +80,14 @@ class ItemViewSet(...): ...
 ```
 
 `ByAction` is resolved at **read time** (against whichever action a `Context` currently represents)
-rather than once when the configuration was merged - this matters for a hypothetical future WS
-transport, where one `Context` (via `clone_for_command()`) could serve several different actions on
-one long-lived connection; each read resolves fresh instead of reusing whatever the first action
-resolved to.
+rather than once when the configuration was merged: where one `Context` (via
+`clone_for_command()`) serves several actions, each read resolves for the action it serves.
 
 ## Receiving configuration in a context processor
 
 A processor opts in by declaring a parameter literally named `config` (detected by name, the same
-convention this library uses for detecting `context` in `route_viewset.py`) - a processor that
-doesn't declare it is called exactly as before, unaffected:
+convention this library uses for detecting `context` in `route_viewset.py`); a processor that
+doesn't declare it is called without it:
 
 ```python
 async def authz_context_processor(request, viewset, config) -> dict:
@@ -104,18 +102,20 @@ settings.viewsets_context_processors = [authz_context_processor]
 `context.configuration_for(type(self))`:
 
 ```python
-from fastapi_viewsets.middleware import Middleware, ViewSetResult
+from fastapi_viewsets.exceptions import RateLimitedError
+from fastapi_viewsets.middleware import Middleware
 
 class RateLimiter(Middleware):
-    async def __call__(self, request, viewset, context, call_next):
+    async def depends(self, request, cls, context):
         config = self.config_from(context)
         limit = self.default_limit if config is None else config
-        ...
-        return await call_next()
+        if not await self._increment(self.key_func(request, cls, context), limit):
+            raise RateLimitedError()
 ```
 
-`RateLimiter` is a real, ready-to-use middleware shipped with this library - see
-[Rate Limiter](./rate-limiter) for the full implementation.
+`config_from(context)` reads the same in `depends()` and in `__call__`. `RateLimiter` is a
+ready-to-use middleware shipped with this library, and decides in `depends()`, before the request
+body is parsed - see [Rate Limiter](./rate-limiter) for the full implementation.
 
 ## Configuring an existing middleware
 
@@ -150,14 +150,13 @@ singleton would be.
 ## Rejecting a request: just raise
 
 There's no dedicated "reject" hook - a context processor or command middleware that wants to
-short-circuit with an error can simply raise `fastapi.HTTPException`. This isn't special machinery:
-an exception raised anywhere in the `await` chain that builds context or runs the middleware chain
-propagates straight out to FastAPI's own exception handling, exactly like it would from a plain
-endpoint function - `save_state()` (see [ViewSet Lifecycle](./lifecycle)) still runs in its
-`finally` block either way. Command middleware also has the `ViewSetResult(status_code=...)`
-short-circuit shown above for `Session` - either approach works; raise when the rejection logic
-lives in a context processor (which has no `ViewSetResult` to return), use `ViewSetResult` when it
-lives in command middleware and you also want to shape headers/cookies on the way out.
+short-circuit with an error raises `fastapi.HTTPException`. An exception raised anywhere in the
+`await` chain that builds context or runs the middleware chain propagates to FastAPI's own
+exception handling, as it would from a plain endpoint function - `save_state()` (see
+[ViewSet Lifecycle](./lifecycle)) still runs in its `finally` block either way. A command
+middleware's `__call__` can also return `ViewSetResult(status_code=...)` without calling
+`call_next()`, which rejects the call and shapes its headers and cookies on the way out; a context
+processor or a `depends()` has no result to return and raises.
 
 ## Known limitations
 

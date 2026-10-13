@@ -1,8 +1,8 @@
 """
 The HTTP exceptions this package raises on its own behalf.
 
-`detail` is the English default, fully interpolated - a plain string, exactly as it always was, so
-an application that does nothing further sees exactly what it always has. `code` names what went
+`detail` is the English default, fully interpolated - a plain string, so an application that does
+nothing further receives FastAPI's usual `{"detail": "..."}`. `code` names what went
 wrong independently of `detail`'s wording, and `params` are the raw values `detail` was
 interpolated with; both reach the response body only once the application registers
 `df_viewset_exception_handler` for `DfViewSetError` (see that function). A view's own
@@ -29,6 +29,14 @@ class DfViewSetError(HTTPException):
 class NotFoundError(DfViewSetError):
     def __init__(self, pk: Any):
         super().__init__(404, f"Item with pk {pk} not found", "not_found", {"pk": pk})
+
+
+class ReadOnlyCollectionError(DfViewSetError):
+    """A write to a `CollectionViewSet` whose container is immutable (a tuple, a frozenset, a
+    read-only mapping)."""
+
+    def __init__(self):
+        super().__init__(405, "This collection is read-only", "read_only")
 
 
 class SessionExpiredError(DfViewSetError):
@@ -70,9 +78,8 @@ async def df_viewset_exception_handler(_request: Request, exc: DfViewSetError) -
 
         app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
 
-    An application that never registers this sees exactly what it always has -
-    `{"detail": "..."}`, from FastAPI's own default `HTTPException` handling; `code` and `params`
-    reach nothing without it.
+    An application that never registers this receives `{"detail": "..."}`, from FastAPI's own
+    default `HTTPException` handling; `code` and `params` reach nothing without it.
     """
     return JSONResponse(
         status_code=exc.status_code,

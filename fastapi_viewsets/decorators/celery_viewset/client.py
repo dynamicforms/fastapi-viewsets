@@ -6,8 +6,11 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 
-from ...context import Context, serialize_context, to_jsonable
+from pydantic import BaseModel
+
+from ...context import Context, SerializableObject, serialize_context, to_jsonable
 from ..build_schema import build_schema
+from ..primary_key_model_helper import PARTIAL_UPDATE_ACTIONS
 from . import result_reader
 from .result_reader import get_result_queue_key
 
@@ -81,17 +84,20 @@ def celery_viewset_client(
     return decorator
 
 
-async def _serialize_value(value):
+async def _serialize_value(value, partial: bool = False):
     """Convert a Context, dict, or list/tuple value into a JSON-safe structure for Celery/Kombu
     transport, recursing async since Context serialization needs to await context values. Anything
     else - a Pydantic model, a SerializableObject, or an already JSON-native value - is handled by
-    the shared, synchronous fastapi_viewsets.context.to_jsonable()."""
+    the shared, synchronous fastapi_viewsets.context.to_jsonable(). With `partial`, a model is
+    dumped with only the fields it has set: a partial update's body states no others."""
     if isinstance(value, Context):
         return await serialize_context(value.raw())
     if isinstance(value, dict):
-        return {k: await _serialize_value(v) for k, v in value.items()}
+        return {k: await _serialize_value(v, partial) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [await _serialize_value(v) for v in value]
+        return [await _serialize_value(v, partial) for v in value]
+    if partial and isinstance(value, BaseModel) and not isinstance(value, SerializableObject):
+        return value.model_dump(mode="json", exclude_unset=True)
     return to_jsonable(value)
 
 
@@ -113,7 +119,7 @@ def _patch_method(cls: type, original_endpoint, task_name: str, celery_app, queu
                 if k == "context":
                     serializable_kwargs[k] = await serialize_context(v.raw())
                 else:
-                    serializable_kwargs[k] = await _serialize_value(v)
+                    serializable_kwargs[k] = await _serialize_value(v, method_name in PARTIAL_UPDATE_ACTIONS)
             logger.info("Celery task scheduling: %s (correlation_id=%s)", task_name, correlation_id)
             extra_kwargs = await _celery_dispatch_hook(kwargs) if _celery_dispatch_hook is not None else {}
             celery_app.send_task(

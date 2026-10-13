@@ -70,9 +70,8 @@ def resolve_register_rest(endpoint: Any, viewset_level: bool | None = None) -> b
     """
     Endpoint decision beats viewset decision beats "yes" - the same ladder muxws uses.
 
-    Symmetric on purpose. `route_viewset` is what registers a viewset on *both* transports, so not
-    calling it turns off muxws as well; there was no way to say "this viewset is muxws-only" short
-    of annotating every endpoint on it.
+    Symmetric with muxws: `route_viewset` registers a viewset on *both* transports, so a viewset that
+    is muxws-only says so with `register_rest=False` rather than by annotating every endpoint.
     """
     for value in (getattr(endpoint, "__register_rest__", None), viewset_level):
         if value is not None:
@@ -94,8 +93,8 @@ def register_viewset(
     Two different viewsets sharing one base path are warned about: routing picks the first match,
     so the later one's endpoints are simply unreachable, and neither FastAPI nor this library would
     otherwise say so. A warning rather than an error, because that is proportionate to how easily
-    it is fixed and to how little else in this area is strict - and because refusing would be a new
-    way for an application that starts today to stop starting.
+    it is fixed and to how little else in this area is strict, and an application that registers
+    such a pair still starts.
 
     It is noisy in a suite that builds a throwaway viewset per test; the suite filters it (see
     pyproject.toml) rather than the design absorbing the noise.

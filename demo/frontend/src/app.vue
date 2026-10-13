@@ -24,10 +24,9 @@
             See API documentation
           </v-btn>
           <span class="text-caption">
-            <span data-testid="loaded-count">{{ records.length }}</span> loaded<template
-              v-if="!hasMore"
-            > · end of list</template>
-            <template v-if="lastLoadMs"> · last page {{ lastLoadMs.toFixed(0) }} ms</template>
+            <span data-testid="loaded-count">{{ records.length }}</span> loaded
+            <template v-if="!hasMore">· end of list</template>
+            <template v-if="lastLoadMs">· last page {{ lastLoadMs.toFixed(0) }} ms</template>
           </span>
           <v-btn :loading="benchmarking" variant="tonal" @click="runComparison">Compare transports</v-btn>
         </div>
@@ -41,7 +40,12 @@
                 <th>{{ results[0].burstCount }} at once</th>
               </tr>
               <tr>
-                <th /><th>min</th><th>p50</th><th>p95</th><th>max</th><th>total (ms)</th>
+                <th />
+                <th>min</th>
+                <th>p50</th>
+                <th>p95</th>
+                <th>max</th>
+                <th>total (ms)</th>
               </tr>
             </thead>
             <tbody>
@@ -56,10 +60,9 @@
             </tbody>
           </table>
           <div class="text-caption mt-2">
-            Sequential cost is close on both — once a connection is warm, HTTP header parsing
-            against muxws frame decoding is a small difference. The burst column is the real one:
-            a browser opens about six concurrent HTTP/1.1 connections per host, so the seventh
-            request waits. muxws multiplexes all of them onto one socket.
+            Sequential cost is close on both — once a connection is warm, HTTP header parsing against muxws frame
+            decoding is a small difference. The burst column is the real one: a browser opens about six concurrent
+            HTTP/1.1 connections per host, so the seventh request waits. muxws multiplexes all of them onto one socket.
           </div>
         </v-alert>
 
@@ -84,7 +87,6 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
 import {
   createColumn,
   filterColumns,
@@ -95,6 +97,10 @@ import {
   type ResponsiveColumnDefinitions,
   type SortState,
 } from '@dynamicforms/vue-grid';
+import { ref, watch } from 'vue';
+
+import { toErrorDescription, type ApiErrorBody } from '../../../vue/errors';
+
 import { runBenchmark, type BenchmarkResult } from './benchmark';
 import { viewSetFor, type Backend, type MusicTrack, type Transport } from './viewsets';
 
@@ -166,6 +172,19 @@ const columnsResponsive: ResponsiveColumnDefinitions = [
   { cssClass: 'single-column', rows: columns.length, columns },
 ];
 
+/**
+ * The text of a failed call: the server's own `detail` and `code` where the response body names
+ * one failure (both transports throw the same shape), the error's message otherwise.
+ */
+function failureText(what: string, e: any): string {
+  const body = e?.response?.data;
+  if (body && typeof body === 'object' && typeof body.detail === 'string') {
+    const error = toErrorDescription(body as ApiErrorBody);
+    return `${what}: ${error.detail}${error.code ? ` (${error.code})` : ''}`;
+  }
+  return `${what}: ${e?.response?.status ?? ''} ${e?.message ?? e}`;
+}
+
 /** Sort and filters as the backend's query parameters. Same on every page of a walk. */
 function queryParams(): Record<string, any> {
   const params: Record<string, any> = {};
@@ -202,8 +221,7 @@ async function reload() {
     cursor.value = page.next;
     hasMore.value = page.hasMore;
   } catch (e: any) {
-    // Both transports throw the same shape, so this needs no transport-specific handling.
-    error.value = `Failed to load data: ${e.response?.status ?? ''} ${e.message}`;
+    error.value = failureText('Failed to load data', e);
   } finally {
     loading.value = false;
   }
@@ -228,7 +246,7 @@ async function loadMore() {
     cursor.value = page.next;
     hasMore.value = page.hasMore;
   } catch (e: any) {
-    error.value = `Failed to load more: ${e.response?.status ?? ''} ${e.message}`;
+    error.value = failureText('Failed to load more', e);
   } finally {
     loading.value = false;
   }
@@ -252,7 +270,7 @@ async function runComparison() {
       results.value = [...results.value, await runBenchmark(which, { backend: backend.value })];
     }
   } catch (e: any) {
-    error.value = `Benchmark failed: ${e.message}`;
+    error.value = failureText('Benchmark failed', e);
   } finally {
     benchmarking.value = false;
   }
@@ -303,7 +321,7 @@ void reload();
  */
 :deep(.df-record-grid) {
   display: grid;
-  gap: .25em;
+  gap: 0.25em;
   font-size: 0.85rem;
 }
 :deep(.df-grid.card) {
@@ -313,7 +331,7 @@ void reload();
 :deep(.df-grid.cell) {
   border: 1px solid darkgray;
   border-radius: 4px;
-  padding: 0 .25em;
+  padding: 0 0.25em;
 }
 :deep(.df-grid.cell.favorite) {
   text-align: center;
@@ -328,49 +346,130 @@ void reload();
 :deep(.df-record-grid.single-line) {
   grid-template-columns: repeat(9, minmax(min-content, max-content)) 1fr minmax(min-content, max-content);
 }
-:deep(.df-record-grid.single-line .df-grid.cell) { grid-row: calc(var(--row-base) + 1); }
-:deep(.df-record-grid.single-line .df-grid.cell.id) { grid-column: 1; }
-:deep(.df-record-grid.single-line .df-grid.cell.title) { grid-column: 2; }
-:deep(.df-record-grid.single-line .df-grid.cell.artist) { grid-column: 3; }
-:deep(.df-record-grid.single-line .df-grid.cell.year) { grid-column: 4; }
-:deep(.df-record-grid.single-line .df-grid.cell.duration) { grid-column: 5; }
-:deep(.df-record-grid.single-line .df-grid.cell.genres) { grid-column: 6; }
-:deep(.df-record-grid.single-line .df-grid.cell.rating) { grid-column: 7; }
-:deep(.df-record-grid.single-line .df-grid.cell.favorite) { grid-column: 8; }
-:deep(.df-record-grid.single-line .df-grid.cell.play_count) { grid-column: 9; }
-:deep(.df-record-grid.single-line .df-grid.cell.moods) { grid-column: 10; }
-:deep(.df-record-grid.single-line .df-grid.cell.language) { grid-column: 11; }
+:deep(.df-record-grid.single-line .df-grid.cell) {
+  grid-row: calc(var(--row-base) + 1);
+}
+:deep(.df-record-grid.single-line .df-grid.cell.id) {
+  grid-column: 1;
+}
+:deep(.df-record-grid.single-line .df-grid.cell.title) {
+  grid-column: 2;
+}
+:deep(.df-record-grid.single-line .df-grid.cell.artist) {
+  grid-column: 3;
+}
+:deep(.df-record-grid.single-line .df-grid.cell.year) {
+  grid-column: 4;
+}
+:deep(.df-record-grid.single-line .df-grid.cell.duration) {
+  grid-column: 5;
+}
+:deep(.df-record-grid.single-line .df-grid.cell.genres) {
+  grid-column: 6;
+}
+:deep(.df-record-grid.single-line .df-grid.cell.rating) {
+  grid-column: 7;
+}
+:deep(.df-record-grid.single-line .df-grid.cell.favorite) {
+  grid-column: 8;
+}
+:deep(.df-record-grid.single-line .df-grid.cell.play_count) {
+  grid-column: 9;
+}
+:deep(.df-record-grid.single-line .df-grid.cell.moods) {
+  grid-column: 10;
+}
+:deep(.df-record-grid.single-line .df-grid.cell.language) {
+  grid-column: 11;
+}
 
 /* three-row: id, title, artist, year / genres, rating, duration / moods, favorite, play count, language */
 :deep(.df-record-grid.three-row) {
   grid-template-columns: minmax(2em, 4em) repeat(3, auto) minmax(2em, 4em) minmax(2em, 8em);
 }
-:deep(.df-record-grid.three-row .df-grid.cell.id) { grid-column: 1; grid-row: calc(var(--row-base) + 1); }
-:deep(.df-record-grid.three-row .df-grid.cell.title) { grid-column: 2 / 4; grid-row: calc(var(--row-base) + 1); }
-:deep(.df-record-grid.three-row .df-grid.cell.artist) { grid-column: 4 / 6; grid-row: calc(var(--row-base) + 1); }
-:deep(.df-record-grid.three-row .df-grid.cell.year) { grid-column: 6; grid-row: calc(var(--row-base) + 1); }
-:deep(.df-record-grid.three-row .df-grid.cell.genres) { grid-column: 1 / 5; grid-row: calc(var(--row-base) + 2); }
-:deep(.df-record-grid.three-row .df-grid.cell.rating) { grid-column: 5; grid-row: calc(var(--row-base) + 2); }
-:deep(.df-record-grid.three-row .df-grid.cell.duration) { grid-column: 6; grid-row: calc(var(--row-base) + 2); }
-:deep(.df-record-grid.three-row .df-grid.cell.moods) { grid-column: 1 / 4; grid-row: calc(var(--row-base) + 3); }
-:deep(.df-record-grid.three-row .df-grid.cell.favorite) { grid-column: 4; grid-row: calc(var(--row-base) + 3); }
-:deep(.df-record-grid.three-row .df-grid.cell.play_count) { grid-column: 5; grid-row: calc(var(--row-base) + 3); }
-:deep(.df-record-grid.three-row .df-grid.cell.language) { grid-column: 6; grid-row: calc(var(--row-base) + 3); }
+:deep(.df-record-grid.three-row .df-grid.cell.id) {
+  grid-column: 1;
+  grid-row: calc(var(--row-base) + 1);
+}
+:deep(.df-record-grid.three-row .df-grid.cell.title) {
+  grid-column: 2 / 4;
+  grid-row: calc(var(--row-base) + 1);
+}
+:deep(.df-record-grid.three-row .df-grid.cell.artist) {
+  grid-column: 4 / 6;
+  grid-row: calc(var(--row-base) + 1);
+}
+:deep(.df-record-grid.three-row .df-grid.cell.year) {
+  grid-column: 6;
+  grid-row: calc(var(--row-base) + 1);
+}
+:deep(.df-record-grid.three-row .df-grid.cell.genres) {
+  grid-column: 1 / 5;
+  grid-row: calc(var(--row-base) + 2);
+}
+:deep(.df-record-grid.three-row .df-grid.cell.rating) {
+  grid-column: 5;
+  grid-row: calc(var(--row-base) + 2);
+}
+:deep(.df-record-grid.three-row .df-grid.cell.duration) {
+  grid-column: 6;
+  grid-row: calc(var(--row-base) + 2);
+}
+:deep(.df-record-grid.three-row .df-grid.cell.moods) {
+  grid-column: 1 / 4;
+  grid-row: calc(var(--row-base) + 3);
+}
+:deep(.df-record-grid.three-row .df-grid.cell.favorite) {
+  grid-column: 4;
+  grid-row: calc(var(--row-base) + 3);
+}
+:deep(.df-record-grid.three-row .df-grid.cell.play_count) {
+  grid-column: 5;
+  grid-row: calc(var(--row-base) + 3);
+}
+:deep(.df-record-grid.three-row .df-grid.cell.language) {
+  grid-column: 6;
+  grid-row: calc(var(--row-base) + 3);
+}
 
 /* single-column: one field per row, in declaration order */
 :deep(.df-record-grid.single-column) {
   grid-template-columns: auto;
 }
-:deep(.df-record-grid.single-column .df-grid.cell) { grid-column: 1; }
-:deep(.df-record-grid.single-column .df-grid.cell.id) { grid-row: calc(var(--row-base) + 1); }
-:deep(.df-record-grid.single-column .df-grid.cell.title) { grid-row: calc(var(--row-base) + 2); }
-:deep(.df-record-grid.single-column .df-grid.cell.artist) { grid-row: calc(var(--row-base) + 3); }
-:deep(.df-record-grid.single-column .df-grid.cell.year) { grid-row: calc(var(--row-base) + 4); }
-:deep(.df-record-grid.single-column .df-grid.cell.duration) { grid-row: calc(var(--row-base) + 5); }
-:deep(.df-record-grid.single-column .df-grid.cell.genres) { grid-row: calc(var(--row-base) + 6); }
-:deep(.df-record-grid.single-column .df-grid.cell.rating) { grid-row: calc(var(--row-base) + 7); }
-:deep(.df-record-grid.single-column .df-grid.cell.favorite) { grid-row: calc(var(--row-base) + 8); }
-:deep(.df-record-grid.single-column .df-grid.cell.play_count) { grid-row: calc(var(--row-base) + 9); }
-:deep(.df-record-grid.single-column .df-grid.cell.moods) { grid-row: calc(var(--row-base) + 10); }
-:deep(.df-record-grid.single-column .df-grid.cell.language) { grid-row: calc(var(--row-base) + 11); }
+:deep(.df-record-grid.single-column .df-grid.cell) {
+  grid-column: 1;
+}
+:deep(.df-record-grid.single-column .df-grid.cell.id) {
+  grid-row: calc(var(--row-base) + 1);
+}
+:deep(.df-record-grid.single-column .df-grid.cell.title) {
+  grid-row: calc(var(--row-base) + 2);
+}
+:deep(.df-record-grid.single-column .df-grid.cell.artist) {
+  grid-row: calc(var(--row-base) + 3);
+}
+:deep(.df-record-grid.single-column .df-grid.cell.year) {
+  grid-row: calc(var(--row-base) + 4);
+}
+:deep(.df-record-grid.single-column .df-grid.cell.duration) {
+  grid-row: calc(var(--row-base) + 5);
+}
+:deep(.df-record-grid.single-column .df-grid.cell.genres) {
+  grid-row: calc(var(--row-base) + 6);
+}
+:deep(.df-record-grid.single-column .df-grid.cell.rating) {
+  grid-row: calc(var(--row-base) + 7);
+}
+:deep(.df-record-grid.single-column .df-grid.cell.favorite) {
+  grid-row: calc(var(--row-base) + 8);
+}
+:deep(.df-record-grid.single-column .df-grid.cell.play_count) {
+  grid-row: calc(var(--row-base) + 9);
+}
+:deep(.df-record-grid.single-column .df-grid.cell.moods) {
+  grid-row: calc(var(--row-base) + 10);
+}
+:deep(.df-record-grid.single-column .df-grid.cell.language) {
+  grid-row: calc(var(--row-base) + 11);
+}
 </style>

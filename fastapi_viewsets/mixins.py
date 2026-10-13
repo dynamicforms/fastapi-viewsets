@@ -299,8 +299,8 @@ class ListMixin(Generic[T, TFilter], ABC):
         context: Context,
         fltr: Annotated[TFilter, Query()] = None,
         sort: str | None = None,
-        offset: int = 0,
-        limit: int | None = None,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int | None, Query(ge=1)] = None,
         cursor: str | None = None,
         x_list_shape: Annotated[str | None, Header()] = None,
     ) -> Union[ListOf[T], PaginatedList[T], CursorPage[T]]:  # noqa: UP007 - see list_shapes.response_model
@@ -341,7 +341,7 @@ class ListMixin(Generic[T, TFilter], ABC):
 
         Each stage is a separate method so a subclass can replace just the one it cares about and
         call `super()` for the rest - a viewset that can sort in its database overrides
-        `apply_sort`, marks the stage applied, and everything else keeps working unchanged.
+        `apply_sort`, marks the stage applied, and the other stages run as before it.
         """
         if query.shape is None:
             query.shape = self.resolve_shapes()[0]
@@ -370,7 +370,7 @@ class ListMixin(Generic[T, TFilter], ABC):
                     query.mark_applied("filter")
                 return await super().apply_filter(context, query, records)
 
-        The default delegates to the older `filter_list` hook, which stays supported.
+        The default delegates to the `filter_list` hook.
         """
         if not query.has_filter or not query.needs("filter"):
             return records
@@ -399,7 +399,7 @@ class ListMixin(Generic[T, TFilter], ABC):
     ) -> ListRecords:
         """
         Orders `records`. Override to sort in the backend and mark the stage applied; the default
-        delegates to the older `sort_list` hook.
+        delegates to the `sort_list` hook.
         """
         if not query.has_sort or not query.needs("sort"):
             return records
@@ -411,10 +411,9 @@ class ListMixin(Generic[T, TFilter], ABC):
 
         Every in-memory stage goes through this, because a filter declaration is written against
         the *response* model - `make_filter_model(Track, ...)` names Track's fields - while the
-        source yields whatever the backend stores. Where the two shapes differ the filter would
-        otherwise be reading the wrong thing: the demo's SQLite backend keeps `genres` as a
-        comma-joined string, and `genres__overlaps` against that matched nothing at all while
-        looking like it worked.
+        source yields whatever the backend stores. Where the two shapes differ an unconverted row
+        holds the stored value: a backend keeping `genres` as a comma-joined string would match
+        nothing on `genres__overlaps`.
 
         Idempotent, so a later stage does not convert twice, and `apply_pagination` knows from
         `query.applied` whether the page still needs it. `to_record` implementations must tolerate
@@ -640,8 +639,7 @@ class PaginatedListMixin(ListMixin[T, TFilter], ABC):
     """
     Shorthand for `ListMixin` with `list_shape = "paginated"`.
 
-    Kept because it reads well at the point of use and because it was the way to ask for offset
-    paging before shapes existed; it adds nothing `list_shape` does not.
+    It reads well at the point of use; it adds nothing `list_shape` does not.
     """
 
     list_shape = "paginated"

@@ -15,8 +15,8 @@ and in-memory filtering for free:
 
 Each filter carries one implementation - `matches()`, in memory, always present. A backend that can
 do better registers a compiler for the filters it understands (see registry.compiles); one it has
-not learned simply leaves the whole stage to `matches()`. Hand-written `filter_list` keeps working
-unchanged and is still the right answer for anything an operator would express badly.
+not learned simply leaves the whole stage to `matches()`. Hand-written `filter_list` is the answer
+for anything an operator would express badly.
 """
 
 from .base import Filter, FilterError, FilterSet

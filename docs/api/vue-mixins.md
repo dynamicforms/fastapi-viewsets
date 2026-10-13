@@ -58,6 +58,46 @@ interface CursorPage<T> {
 }
 ```
 
+### Requests and actions
+
+```ts
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+/** Query values; an array becomes a repeated key, which is how FastAPI binds `list[str]`. */
+type QueryParams = Record<string, string | number | boolean | null | undefined | Array<string | number>>;
+
+interface RequestOptions {
+  query?: QueryParams;
+  body?: unknown;
+}
+
+/** One entry of a ViewSet's `declares`: a mixin naming the actions it contributes. */
+interface ViewSetMixinDeclaration {
+  readonly actions: readonly string[];
+}
+
+/** Every action a mixin can name: 'list', 'listPage', 'listCursor', 'create', 'retrieve', ... */
+type ActionName = keyof ActionSurface<KeyType, unknown, never, string>;
+
+/** The members of the mixins whose actions are in `A`, intersected: the public surface of a factory-built ViewSet. */
+type ActionSurface<K extends KeyType, T, PK extends keyof T, A> = ('create' extends A
+  ? CreateMixin<T, PK>
+  : unknown) &
+  ('bulkCreate' extends A ? BulkOnlyCreateMixin<T, PK> : unknown) &
+  ('list' extends A ? ListMixin<T> : unknown) &
+  ('listPage' extends A ? PaginatedListMixin<T> : unknown) &
+  ('listCursor' extends A ? CursorListMixin<T> : unknown) &
+  ('retrieve' extends A ? RetrieveMixin<K, T> : unknown) &
+  ('update' extends A ? UpdateMixin<K, T> : unknown) &
+  ('bulkUpdate' extends A ? BulkOnlyUpdateMixin<K, T> : unknown) &
+  ('destroy' extends A ? DestroyMixin<K> : unknown) &
+  ('bulkDestroy' extends A ? BulkOnlyDestroyMixin<K> : unknown) &
+  ('lookup' extends A ? LookupMixin : unknown);
+```
+
+`request<R>(method: HttpMethod, path: string, options?: RequestOptions): Promise<R>` is the one call
+a transport implements; see [custom endpoints](../guide/vue-custom-endpoints#this-request).
+
 ## Errors
 
 ```ts
@@ -74,6 +114,43 @@ message is `Request failed with status code {status}`.
 
 Which transport throws this and which throws axios' own `AxiosError`, and what a handler may read off
 either, is in [handling a failed call](../guide/vue-mixins#handling-a-failed-call).
+
+### Error bodies
+
+```ts
+/** A failed request's body naming one failure; `detail_*` appear with `df_viewset_exception_handler`. */
+interface ApiErrorBody {
+  detail: string;
+  detail_code?: string;
+  detail_params?: Record<string, unknown>;
+}
+
+/** One failure of a 422 body, as FastAPI reports it. */
+interface FieldErrorEntry {
+  type: string;
+  loc: (string | number)[];
+  msg: string;
+  input?: unknown;
+  ctx?: Record<string, unknown>;
+}
+
+interface FieldErrorsBody {
+  detail: FieldErrorEntry[];
+}
+
+/** Assignable to vue-forms' `ErrorDescription`. */
+interface ErrorDescription {
+  readonly code: string;
+  readonly params: Readonly<Record<string, unknown>>;
+  readonly detail: string;
+  readonly origin: 'server';
+}
+
+function toErrorDescription(body: ApiErrorBody): ErrorDescription;
+function toFieldErrors(body: FieldErrorsBody): Record<string, ErrorDescription[]>;
+```
+
+What each conversion produces is in [Error codes → Frontend](../guide/error-codes#frontend).
 
 ## Individual operation mixins
 

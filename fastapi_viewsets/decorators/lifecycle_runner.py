@@ -23,36 +23,43 @@ async def lifecycle_runner(
     response: Any = None,
     needs_context: bool = False,
     request: "Request | None" = None,
+    forwards_request: bool = False,
     **kwargs,
 ):
     """
     `response` is reserved for the command middleware chain (see below) - callers that have no
     live Response object (e.g. `celery_viewset_server`, running in a worker process) simply omit
     it, and the chain is never invoked - the worker just executes the action and returns the plain
-    result; command middleware only ever runs once that result is back in the FastAPI process,
-    same as the old `finalize_response` hook it replaces.
+    result; command middleware only ever runs once that result is back in the FastAPI process.
 
     `needs_context`/`request` are reserved for the context-processor mechanism (see
-    fastapi_viewsets/context.py): when needs_context is True, a Context is built (via
+    fastapi_viewsets/context): when needs_context is True, a Context is built (via
     settings.viewsets_context_processors) against whichever instance ends up handling this
     lifecycle and injected into kwargs as `context` before the endpoint runs. Callers that
     already have a resolved context (e.g. `celery_viewset_server`, reconstructing it from a
     Celery task payload) simply omit needs_context and pass `context` directly in kwargs.
+    `forwards_request` passes `request` on to an endpoint that declares a `request` parameter.
     """
 
+    if forwards_request:
+        kwargs["request"] = request
+
     action_configuration: dict = {}
+    chain_context = kwargs.get("context")
 
     async def inject_context(req_instance: Any) -> None:
-        nonlocal action_configuration
-        # Resolved unconditionally (not just when needs_context) - execute() needs it to compute
-        # any extra per-call middleware (see extra_middlewares_for) regardless of whether this
-        # route even declares a `context` param. Harmless in the celery-worker path: execute()
-        # returns before touching it there, since command middleware never runs in the worker.
+        nonlocal action_configuration, chain_context
+        # Resolved whether or not the route declares a `context` param: execute() needs it to
+        # compute any extra per-call middleware (see extra_middlewares_for), and the command
+        # middleware chain reads the context it is part of. Neither is built in the celery-worker
+        # path (no `response`), where command middleware never runs.
         action_configuration = resolve_action_configuration(cls, original_endpoint.__name__)
-        if needs_context:
-            kwargs["context"] = await get_shared_context(
+        if needs_context or response is not None:
+            chain_context = await get_shared_context(
                 request, req_instance, action_configuration, original_endpoint.__name__
             )
+        if needs_context:
+            kwargs["context"] = chain_context
 
     async def call_bound(req_instance: Any) -> Any:
         bound_method = getattr(req_instance, original_endpoint.__name__, None)
@@ -77,9 +84,7 @@ async def lifecycle_runner(
         effective_middlewares = settings.viewsets_command_middleware + extra_middlewares_for(
             action_configuration, settings.viewsets_command_middleware
         )
-        result = await run_command_chain(
-            effective_middlewares, request, req_instance, kwargs.get("context"), final_handler
-        )
+        result = await run_command_chain(effective_middlewares, request, req_instance, chain_context, final_handler)
         for key, value in result.headers.items():
             response.headers[key] = str(value)
         for key, value in result.cookies.items():
@@ -109,4 +114,4 @@ async def lifecycle_runner(
         req_instance = cls()
         return await run_with_state(req_instance)
 
-    return await original_endpoint(*args, **kwargs)
+    raise ValueError(f"unknown lifecycle {lifecycle!r}; one of: singleton, per-request, instance-key")

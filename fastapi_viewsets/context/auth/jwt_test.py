@@ -1,4 +1,5 @@
 import datetime
+import json
 
 import pytest
 
@@ -6,6 +7,7 @@ pytest.importorskip("jwt")
 
 from fastapi import Request  # noqa: E402
 
+from fastapi_viewsets.conf import settings  # noqa: E402
 from fastapi_viewsets.context.auth.jwt import (  # noqa: E402
     _JWTUserLazy,
     encode_jwt,
@@ -86,17 +88,39 @@ def test_custom_header_name():
     assert backend.try_handle(_make_request({"authorization": f"Bearer {token}"})) is None
 
 
+@pytest.fixture
+def configured_backend():
+    backend = JWTAuthBackend(secret=_SECRET)
+    settings.viewsets_auth_processors = [object(), backend]
+    yield backend
+    settings.viewsets_auth_processors = []
+
+
 @pytest.mark.asyncio
-async def test_serialize_recipe_round_trips_and_resolves_after_deserialize():
+async def test_serialize_recipe_round_trips_and_resolves_after_deserialize(configured_backend):
     token = encode_jwt({"sub": "1"}, secret=_SECRET)
-    lazy = _JWTUserLazy(token, _SECRET, "HS256")
+    lazy = configured_backend.try_handle(_make_request({"authorization": f"Bearer {token}"}))
 
     recipe = lazy.serialize_recipe()
-    assert recipe == {"token": token, "secret": _SECRET, "algorithm": "HS256"}
+    assert recipe == {"token": token, "backend": 1}
 
     restored = _JWTUserLazy.deserialize_recipe(recipe)
     claims = await restored
     assert claims["sub"] == "1"
+
+
+def test_the_recipe_carries_no_secret(configured_backend):
+    token = encode_jwt({"sub": "1"}, secret=_SECRET)
+    lazy = configured_backend.try_handle(_make_request({"authorization": f"Bearer {token}"}))
+    assert _SECRET not in json.dumps(lazy.__serialize__())
+
+
+@pytest.mark.asyncio
+async def test_a_recipe_naming_no_jwt_backend_resolves_to_none(configured_backend):  # noqa: ARG001
+    token = encode_jwt({"sub": "1"}, secret=_SECRET)
+    assert await _JWTUserLazy.deserialize_recipe({"token": token, "backend": 0}) is None
+    assert await _JWTUserLazy.deserialize_recipe({"token": token, "backend": 5}) is None
+    assert await _JWTUserLazy.deserialize_recipe({"token": token, "backend": None}) is None
 
 
 def test_encode_jwt_stamps_exp_and_iat():

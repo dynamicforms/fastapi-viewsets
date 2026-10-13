@@ -13,8 +13,8 @@ class SerializeState(ABC):
         pass
 
     @abstractmethod
-    async def deserialize_state(self, state: str):
-        pass
+    async def deserialize_state(self, state: str | None):
+        """Restores what `serialize_state()` produced; `state` is None when nothing is stored yet."""
 
 
 class SerializeStateSlots(SerializeState):
@@ -24,7 +24,10 @@ class SerializeStateSlots(SerializeState):
             cls=self.custom_json_encoder,
         )
 
-    async def deserialize_state(self, state: str):
+    async def deserialize_state(self, state: str | None):
+        # nothing stored yet: the slots keep the values the constructor gave them
+        if state is None:
+            return
         state = json.loads(state, cls=self.custom_json_decoder)
         for slot in self.__slots__:
             setattr(self, slot, state.get(slot))

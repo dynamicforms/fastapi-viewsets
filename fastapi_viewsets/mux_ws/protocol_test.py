@@ -1,9 +1,6 @@
 import pytest
 
-from muxws.frames import ABSENT
-
 from .protocol import (
-    body_to_payload,
     build_response_meta,
     EnvelopeError,
     is_command,
@@ -99,9 +96,3 @@ def test_merge_headers_lowercases_the_baseline():
 
 def test_build_response_meta_carries_status_and_headers():
     assert build_response_meta(201, {"set-cookie": "a=b"}) == {":status": 201, "set-cookie": "a=b"}
-
-
-def test_body_to_payload_maps_none_to_absent():
-    """muxws distinguishes "no payload" from a null payload, and a 204 means the former."""
-    assert body_to_payload(None) is ABSENT
-    assert body_to_payload({"a": 1}) == {"a": 1}

@@ -1,7 +1,7 @@
 {
   "name": "@dynamicforms/fastapi-viewsets",
   "private": false,
-  "version": "0.7.3",
+  "version": "0.8.0",
   "type": "module",
   "description": "RESTful viewsets for Vue",
   "author": "Jure Erznožnik",
@@ -25,8 +25,8 @@
   "scripts": {
     "build": "vite build",
     "test": "vitest run --coverage",
-    "lint": "eslint vue --fix && vue-tsc --noEmit",
-    "lint:ci": "eslint vue && vue-tsc --noEmit",
+    "lint": "eslint vue demo/frontend/src --fix && vue-tsc --noEmit",
+    "lint:ci": "eslint vue demo/frontend/src && vue-tsc --noEmit",
     "docs:dev": "npm run docs:dev -w docs",
     "docs:build": "npm run docs:build -w docs",
     "docs:preview": "npm run docs:preview -w docs",
@@ -46,14 +46,10 @@
   },
   "issues": "https://github.com/dynamicforms/fastapi-viewsets/issues",
   "peerDependencies": {
-    "@dynamicforms/translatable": "^0.1.0",
     "axios": "^1.13.6",
-    "lodash-es": "^4.17.12",
-    "vue": "^3.4",
     "muxws": "^0.3.1"
   },
   "devDependencies": {
-    "@types/lodash-es": "^4.17.12",
     "@types/node": "^26",
     "@vitejs/plugin-vue": "^6",
     "@vitest/coverage-v8": "^4",
