@@ -80,10 +80,8 @@ class ItemViewSet(...): ...
 ```
 
 `ByAction` is resolved at **read time** (against whichever action a `Context` currently represents)
-rather than once when the configuration was merged - this matters for a hypothetical future WS
-transport, where one `Context` (via `clone_for_command()`) could serve several different actions on
-one long-lived connection; each read resolves fresh instead of reusing whatever the first action
-resolved to.
+rather than once when the configuration was merged: where one `Context` (via
+`clone_for_command()`) serves several actions, each read resolves for the action it serves.
 
 ## Receiving configuration in a context processor
 

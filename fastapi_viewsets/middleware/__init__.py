@@ -21,9 +21,9 @@ class ViewSetResult(SerializableObject, Generic[T]):
     chain with a non-200 result (e.g. 401 for an expired session) without ever calling `perform_*`.
     What this all actually becomes on the wire is up to the transport adapter: the HTTP adapter
     (route_viewset.py/lifecycle_runner.py) maps `headers` onto real response headers, `cookies`
-    onto real Set-Cookie, and `status_code` onto the real Response's status code; a future WS
-    adapter would fold all three into the outgoing message payload as plain JSON keys instead (no
-    real headers/cookies/status line exist over WS).
+    onto real Set-Cookie, and `status_code` onto the real Response's status code; the muxws
+    transport, which serves each command through the same FastAPI app, carries the resulting status
+    and headers in the reply's leading headers.
 
     A registered route endpoint (a mixin-provided one, or a custom `__router` method - never a
     `perform_*` hook, which is called by the actual route method and never registered as a route

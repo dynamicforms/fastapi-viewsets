@@ -69,25 +69,27 @@ it exists, not just a naming convention.
 
 ## Django ORM access convention
 
-There is no Django-QuerySet-backed ViewSet/container equivalent to `CollectionViewSet` in this
-library — the `django` extra (`pip install "dynamicforms-fastapi-viewsets[django]"`) only wires up
-Django-based [authentication backends](./authentication#djangosessionauthbackend-djangosessioncookieauthbackend-real-django-sessions),
-nothing ORM-related. ([More backends are planned](./rationale#built-in-implementation-classes), just not shipped yet.)
+`DjangoORMViewSet` (`fastapi_viewsets.backends.django_orm`, the `django` extra:
+`pip install "dynamicforms-fastapi-viewsets[django]"`) backs a viewset with a Django model and
+implements every `perform_*` with the ORM's async API; see [Backends](./list-pipeline#backends).
 
-Until then, the recommended convention: keep business logic in plain **synchronous** functions that
-call the Django ORM normally, and call them from `perform_*` (or any `async def` endpoint method)
-via `asgiref.sync.sync_to_async(fn, thread_sensitive=True)` — the same pattern the library's own
+A hand-written `perform_*` that reaches the ORM keeps business logic in plain **synchronous**
+functions that call the Django ORM normally, and calls them via
+`asgiref.sync.sync_to_async(fn, thread_sensitive=True)` — the same pattern the library's own
 `DjangoSessionAuthBackend` uses internally to resolve a session:
 
 ```python
 from asgiref.sync import sync_to_async
 from myapp.models import Item as DjangoItem
 
+from fastapi_viewsets.context import Context
+from fastapi_viewsets.mixins import ListMixin
+
 def _list_items_sync() -> list[dict]:
     return list(DjangoItem.objects.values())
 
 class ItemViewSet(ListMixin[Item]):
-    async def perform_list(self) -> list[Item]:
+    async def perform_list(self, context: Context) -> list[Item]:
         rows = await sync_to_async(_list_items_sync, thread_sensitive=True)()
         return [Item(**row) for row in rows]
 ```

@@ -327,11 +327,12 @@ Both `Context` and `ViewSetResult` are deliberately transport-agnostic types, no
 ones. `route_viewset` is the HTTP **transport adapter**: it's the only place that knows about a
 real `fastapi.Request`/`Response`. The pipeline above - build context, run command middleware,
 execute, unwind - doesn't otherwise care whether "the connection" is a single HTTP request/response
-or one message on a long-lived WebSocket. No WS transport exists in this library yet, but
-`Context.clone_for_command()` (an isolated per-command copy, built by round-tripping through
-`serialize_context`/`deserialize_context`) exists specifically so a future WS adapter can run this
-same pipeline once per message on one connection, without retrofitting `Context`/`ViewSetResult`
-themselves.
+or one message on a long-lived WebSocket. The [muxws transport](./muxws) hands each command to the
+same FastAPI app as a request, so the pipeline runs once per command unchanged, and the result's
+status and headers travel in the reply's leading headers. `Context.clone_for_command()` makes an
+isolated per-command copy of a context (round-tripping through
+`serialize_context`/`deserialize_context`), for code that serves several commands from one
+context.
 
 ## Where to go next
 

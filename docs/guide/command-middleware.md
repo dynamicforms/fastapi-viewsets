@@ -275,13 +275,7 @@ rejected anyway.
 
 ## Known limitations
 
-- No WebSocket transport exists in this library yet. `ViewSetResult` (and `Context`, from
-  [Context Processors](./context-processors)) are designed to be transport-agnostic - a future WS
-  adapter would run the command middleware chain once per message on a long-lived connection, using
-  `Context.clone_for_command()` to give each command an isolated copy - but only the HTTP adapter is
-  actually implemented today.
-- `depends()` (see above) runs before `load_state()` for `per-request`/`instance-key` lifecycles
-  (previously always after, back when everything ran in the onion chain) - accepted since no
-  shipped context processor reads viewset instance state.
+- `depends()` (see above) runs before `load_state()` for `per-request`/`instance-key` lifecycles;
+  no shipped context processor reads viewset instance state.
 - `load_state`/`save_state` (see [ViewSet Lifecycle](./lifecycle)) remain a separate mechanism -
   command middleware doesn't replace them.
