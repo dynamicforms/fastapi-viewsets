@@ -35,3 +35,25 @@ at write time:
   conflict after the fact.
 
 Both need a counterpart in the Vue mixins (sending the version, handling 409).
+
+## To assess: worth doing at all?
+
+None of these hurts in normal use. Each needs a decision on whether it is worth the change before
+any work starts.
+
+- **`CollectionViewSet.create` on an existing key.** A mapping overwrites the stored record, a list
+  appends a duplicate. A CRUD create would answer 409 for every container type.
+- **`DjangoORMViewSet.perform_bulk_destroy` is not atomic.** It deletes row by row; a missing key
+  in the middle answers 404 with the earlier rows already gone. `transaction.atomic()` around the
+  loop, or per-record results in the response (the latter needs a Vue counterpart).
+- **Strict list pipeline.** A setting that rejects the in-memory fallback instead of reading the
+  whole table, plus a signal when the fallback happens. The trade-offs are in `GAPS.md`, "A
+  declined push-down reads the whole table, and says nothing".
+- **Separate input and output schemas.** `CreateSchema`, `UpdateSchema`, `ResponseSchema` per
+  viewset, settling where the PK, read-only fields and validators belong. Changes the public API on
+  every transport and in the Vue mixins.
+- **Configuration bound to the application.** Settings, registries and Celery hooks are global, so
+  two applications with different configuration cannot share a process, and tests share state.
+- **Tests for contracts and failures.** Multiple processes, cancellation, concurrent `PATCH`,
+  input model constraints, the same contract run against every backend, CI against minimum
+  dependency versions.
