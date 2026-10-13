@@ -115,7 +115,7 @@ class CollectionViewSet(AsyncCollectionViewSet[K, T]):
     def _stated_fields(data: T) -> dict[str, Any]:
         """The fields a partial update states: those a model has set, or a dict's keys."""
         if isinstance(data, BaseModel):
-            return data.model_dump(exclude_unset=True)
+            return {name: getattr(data, name) for name in data.model_fields_set}
         return dict(data)
 
     def _apply_partial(self, item: T, data: T) -> T:

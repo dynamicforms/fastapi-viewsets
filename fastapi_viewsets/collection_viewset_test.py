@@ -1,6 +1,6 @@
 import pytest
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from fastapi_viewsets.collection_viewset import CollectionViewSet
 from fastapi_viewsets.exceptions import ReadOnlyCollectionError
@@ -276,6 +276,46 @@ def test_bulk_patch_writes_only_the_fields_each_record_states():
     response = client.patch("/tracks/bulk", json={"1": {"rating": 9}, "2": {"title": "Deux"}})
     assert response.status_code == 200
     assert response.json() == [{"id": 1, "title": "One", "rating": 9}, {"id": 2, "title": "Deux", "rating": 2}]
+
+
+class Address(BaseModel):
+    city: str
+    zip: str = "1000"
+
+
+class Venue(BaseModel):
+    id: int = 0
+    name: str
+    tags: list[str] = Field(default_factory=list)
+    address: Address | None = None
+
+    @field_validator("name")
+    @classmethod
+    def name_is_not_reserved(cls, value: str) -> str:
+        if value == "reserved":
+            raise ValueError("reserved name")
+        return value
+
+
+def test_patch_with_a_default_factory_field_writes_only_the_fields_it_states():
+    client = _client([Venue(id=1, name="Hall", tags=["big"])], Venue)
+    response = client.patch("/tracks/1", json={"name": "Arena"})
+    assert response.json() == {"id": 1, "name": "Arena", "tags": ["big"], "address": None}
+
+
+def test_patch_stores_a_nested_model_as_the_model():
+    container = [Venue(id=1, name="Hall", address=Address(city="Kranj"))]
+    client = _client(container, Venue)
+    response = client.patch("/tracks/1", json={"address": {"city": "Bled"}})
+    assert response.json()["address"] == {"city": "Bled", "zip": "1000"}
+    assert isinstance(container[0].address, Address)
+
+
+def test_patch_applies_the_models_field_validators():
+    client = _client([Venue(id=1, name="Hall")], Venue)
+    response = client.patch("/tracks/1", json={"name": "reserved"})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "name"]
 
 
 def test_put_still_replaces_the_whole_record():

@@ -695,3 +695,67 @@ def test_reconstruct_kwargs_with_none_defaulted_optional_model():
     assert isinstance(result["data"], Item)
     assert result["data"].id == 5
     assert result["data"].name == "full item"
+
+
+class Described(BaseModel):
+    id: int = 0
+    name: str
+    description: str | None = None
+
+
+def test_reconstruct_kwargs_of_a_partial_update_holds_the_stated_fields():
+    from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
+
+    async def partial_update(pk: int, data: Described) -> Described:  # noqa: ARG001 - the mixin signature
+        return data
+
+    result = _reconstruct_kwargs(partial_update, {"pk": 1, "data": {"name": "x"}})
+    assert isinstance(result["data"], Described)
+    assert result["data"].model_dump(exclude_unset=True) == {"name": "x"}
+
+
+def test_reconstruct_kwargs_of_a_bulk_partial_update_holds_the_stated_fields():
+    from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
+
+    async def bulk_partial_update(data: dict[int, Described]) -> list[Described]:
+        return list(data.values())
+
+    result = _reconstruct_kwargs(bulk_partial_update, {"data": {"1": {"name": "x"}, "2": {"description": "d"}}})
+    assert {pk: item.model_dump(exclude_unset=True) for pk, item in result["data"].items()} == {
+        1: {"name": "x"},
+        2: {"description": "d"},
+    }
+
+
+def test_celery_viewset_server_pushes_request_validation_error_as_422():
+    import json
+
+    from fastapi.exceptions import RequestValidationError
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+    registered_tasks = {}
+
+    def mock_task(name, **_kwargs):
+        def deck(func):
+            registered_tasks[name] = func
+            return func
+
+        return deck
+
+    celery_app.task.side_effect = mock_task
+
+    errors = [{"type": "int_parsing", "loc": ("query", "year__in", 1), "msg": "not an int", "input": "abc"}]
+
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self, _context) -> list[Item]:
+            raise RequestValidationError(errors)
+
+    result = registered_tasks["items.list_items"](
+        context={}, _correlation_id="corr", _result_queue_key="celery_viewset_results:items"
+    )
+    assert result is None
+    payload = json.loads(redis_mock.rpush.call_args[0][1])
+    assert payload["http_status_code"] == 422
+    assert payload["http_detail"][0]["loc"] == ["query", "year__in", 1]

@@ -31,14 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The body of `PATCH {pk}` and `PATCH bulk` is a partial model: every field optional, the primary
-  key left out, a stated field validated as the model validates it. `perform_update` and
+  key left out, a stated field validated by its annotation, its constraints and the model's
+  `@field_validator`s. `@model_validator`s are not applied to it. `perform_update` and
   `perform_bulk_update` receive the model holding the stated fields only, so
-  `data.model_dump(exclude_unset=True)` is what the request stated.
+  `data.model_dump(exclude_unset=True)` is what the request stated; on a `celery_viewset` the worker
+  receives the same.
 - **Breaking (Celery):** the JWT user crosses to a worker as the token and the position of its
   `JWTAuthBackend` in `settings.viewsets_auth_processors`, not the secret. The worker verifies the
   token with its own configured backend, so it needs the same `viewsets_auth_processors`.
 - A filter value that will not convert (`?year__in=1999,abc`) is a 422 with `loc`
-  `["query", parameter, index]`.
+  `["query", parameter, index]`, on a `celery_viewset` as well.
 - `limit` below 1 and `offset` below 0 are a 422.
 - A muxws command whose `:method`, `:path` or `:query` is malformed is answered with a 400.
 - `timeoutMs` of a muxws ViewSet bounds the wait for the reply headers as well as the body.
@@ -56,6 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   middleware chain; with `Authorization` (or any middleware reading the context) configured it
   answered 500.
 - `PATCH` accepts a body that leaves fields out; it answered 422 for any field missing.
+- A custom endpoint that declares `request: Request` receives the request; the call raised
+  `TypeError` (`got multiple values for keyword argument 'request'`).
 - `CollectionViewSet`: a partial update of a pydantic model item answered 500; a delete from a set
   never found the item; a partial update of a set's item replaced it with the request body.
 - `SerializeStateSlots.deserialize_state` while nothing is stored (None) raised.

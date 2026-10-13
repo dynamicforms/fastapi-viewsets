@@ -39,9 +39,9 @@ It converts an error body into an `ErrorDescription`, and the application transl
       position of its backend in `settings.viewsets_auth_processors`, which the worker reads from
       its own settings. A worker of 0.7.x cannot read the new recipe, and a 0.8.0 worker cannot read
       the old one.
-- [ ] A `perform_update` that applies a `PATCH` reads the fields the request stated with
-      `data.model_dump(exclude_unset=True)`; the body no longer carries the primary key or the
-      fields it left out.
+- [ ] A `perform_update` that applies a `PATCH` reads the fields the request stated from
+      `data.model_fields_set` (with `getattr`, which keeps a nested model as the model); the body no
+      longer carries the primary key or the fields it left out.
 - [ ] A ViewSet with custom endpoints only can be built with `restViewSet<T>()(pk, [])`; the schema
       check matches custom endpoints by the BE method's name (`top_rated` → `topRated()` or
       `top_rated()`), so a FE method named after a hyphenated path segment is reported until it is

@@ -23,6 +23,7 @@ async def lifecycle_runner(
     response: Any = None,
     needs_context: bool = False,
     request: "Request | None" = None,
+    forwards_request: bool = False,
     **kwargs,
 ):
     """
@@ -37,7 +38,11 @@ async def lifecycle_runner(
     lifecycle and injected into kwargs as `context` before the endpoint runs. Callers that
     already have a resolved context (e.g. `celery_viewset_server`, reconstructing it from a
     Celery task payload) simply omit needs_context and pass `context` directly in kwargs.
+    `forwards_request` passes `request` on to an endpoint that declares a `request` parameter.
     """
+
+    if forwards_request:
+        kwargs["request"] = request
 
     action_configuration: dict = {}
     chain_context = kwargs.get("context")

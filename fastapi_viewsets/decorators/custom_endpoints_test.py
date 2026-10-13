@@ -291,3 +291,24 @@ def test_muxws_schema_names_the_method_serving_each_custom_endpoint():
         assert paths["/reports/{pk}/approve"]["post"]["x-viewset-action"] == "approve"
     finally:
         reset_registry()
+
+
+def test_custom_endpoint_declaring_request_receives_it():
+    from fastapi import Request
+
+    app = FastAPI()
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/items", pk_field_name="id")
+    class ItemViewSet(CollectionViewSet[int, Item]):
+        __router = APIRouter()
+
+        def __init__(self):
+            super().__init__(container=make_database(), pk_field="id")
+
+        @__router.get("/caller")
+        async def caller(self, request: Request) -> str:
+            return request.headers["x-caller"]
+
+    app.include_router(router)
+    assert TestClient(app).get("/items/caller", headers={"x-caller": "me"}).json() == "me"

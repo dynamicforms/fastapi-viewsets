@@ -29,8 +29,9 @@ from .build_schema import _pydantic_generic_args, build_schema, route_to_add_api
 from .lifecycle_runner import lifecycle_runner, LifecycleType
 from .primary_key_model_helper import (
     create_model_without_pk,
-    create_partial_model,
-    partial_to_original_model,
+    from_partial_body,
+    partial_body_annotation,
+    PARTIAL_UPDATE_ACTIONS,
     typecast_to_original_model,
 )
 
@@ -100,31 +101,6 @@ def resolve_typevars(type_map, annotation):
             except:
                 return annotation
     return annotation
-
-
-PARTIAL_UPDATE_ACTIONS = frozenset({"partial_update", "bulk_partial_update"})
-"""The mixin endpoints whose body is a partial update: `PATCH {pk}` and `PATCH bulk`."""
-
-
-def _partial_annotation(annotation, pk_field_name: str | None):
-    """The body annotation of a partial update in place of `annotation`, a model or a `dict` of
-    models keyed by pk; None for any other annotation."""
-    if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
-        return create_partial_model(annotation, pk_field_name)
-    if get_origin(annotation) is dict:
-        key, model = get_args(annotation)
-        if inspect.isclass(model) and issubclass(model, BaseModel):
-            return dict[key, create_partial_model(model, pk_field_name)]
-    return None
-
-
-def _from_partial(value, annotation):
-    """A validated partial-update body as `annotation`, the parameter's own: each model holds the
-    fields the request stated and no others."""
-    if get_origin(annotation) is dict:
-        model = get_args(annotation)[1]
-        return {key: partial_to_original_model(item, model) for key, item in value.items()}
-    return partial_to_original_model(value, annotation)
 
 
 def _make_middleware_depends(cls: type, action_name: str):
@@ -310,7 +286,7 @@ def route_viewset(
                 # every field optional, then handed to perform_* as the original model holding only
                 # those fields (see partial_to_original_model)
                 if original_endpoint.__name__ in PARTIAL_UPDATE_ACTIONS:
-                    partial_annotation = _partial_annotation(annotation, pk_field_name)
+                    partial_annotation = partial_body_annotation(annotation, pk_field_name)
                     if partial_annotation is not None:
                         partial_params[name] = annotation
                         new_params.append(new_p.replace(annotation=partial_annotation))
@@ -332,9 +308,11 @@ def route_viewset(
 
             # Reserved param name - FastAPI injects the REAL Request here. lifecycle_runner builds
             # the context from it (see fastapi_viewsets/context) for the command middleware chain,
-            # and injects that context as `context` into an endpoint declaring the parameter. Never
-            # forwarded to the endpoint itself.
-            new_params.append(inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
+            # and injects that context as `context` into an endpoint declaring the parameter. An
+            # endpoint that declares `request` itself keeps its own parameter and receives it.
+            forwards_request = "request" in sig.parameters
+            if not forwards_request:
+                new_params.append(inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
 
             # -> ViewSetResult[X] documents/validates as X - see unwrap_viewset_result_type.
             new_return_annotation = unwrap_viewset_result_type(resolve_typevars(type_map, sig.return_annotation))
@@ -352,7 +330,7 @@ def route_viewset(
                 new_kwargs = {}
                 for param_name, value in kwargs.items():
                     if param_name in partial_params:
-                        new_kwargs[param_name] = _from_partial(value, partial_params[param_name])
+                        new_kwargs[param_name] = from_partial_body(value, partial_params[param_name])
                     elif param_name in sig.parameters:
                         orig_param = sig.parameters[param_name]
                         orig_annotation = resolve_typevars(type_map, orig_param.annotation)
@@ -373,6 +351,7 @@ def route_viewset(
                     response=response_obj,
                     needs_context=needs_context,
                     request=request_obj,
+                    forwards_request=forwards_request,
                     **new_kwargs,
                 )
 
