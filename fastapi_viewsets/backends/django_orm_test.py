@@ -592,9 +592,8 @@ async def test_a_renamed_primary_key_retrieves_updates_and_destroys(coded_rows):
 # Primary keys the model and the response schema call different things
 # ---------------------------------------------------------------------------
 # `_meta.pk` is a relation on both of these: the parent link of an inherited model, and a
-# one-to-one field declared as the key. The model knows it as `artist`, the response schema
-# carries `artist_id`, and the cursor reads its ordering out of the model and its position out of
-# the schema - so only a name both of them have walks the table.
+# one-to-one field declared as the key. The cursor reads its ordering out of the model and its
+# position out of the schema - so only a name both of them have walks the table.
 
 
 class MediaModel(models.Model):
@@ -643,7 +642,7 @@ class ArtistProfileModel(models.Model):
 
 
 class ArtistProfile(BaseModel):
-    artist_id: int
+    artist: int
     title: str
     year: int
 
@@ -703,10 +702,9 @@ async def test_walking_an_inherited_model_on_a_tied_key_visits_every_row_once(so
     assert len(titles) == len(set(titles))
 
 
-def test_a_relation_primary_key_keys_on_the_column_its_schema_carries():
-    """A one-to-one primary key is `artist` on the model and `artist_id` on the response model."""
+def test_a_relation_primary_key_keys_on_the_relation_name():
     assert ArtistProfileModel._meta.pk.name == "artist"
-    assert ArtistProfileViewSet().pk_field_name == "artist_id"
+    assert ArtistProfileViewSet().pk_field_name == "artist"
 
 
 @pytest.mark.asyncio
@@ -721,11 +719,7 @@ async def test_walking_a_relation_primary_key_on_a_tied_key_visits_every_row_onc
 
 @pytest.mark.asyncio
 async def test_a_relation_primary_key_still_pushes_the_cursor_down(artist_profile_rows):  # noqa: ARG001
-    """
-    `artist_id` is the attribute name of a field Django calls `artist`, and both name the same
-    column in a lookup - so the cursor's predicate on it goes into SQL rather than taking the whole
-    filter set to the in-memory pass.
-    """
+    """The cursor's predicate on `artist` goes into SQL, on the `artist_id` column."""
     viewset = ArtistProfileViewSet()
     first = build_list_query(None, "year:asc", limit=4)
     page = await viewset.get_list(None, first)
@@ -734,8 +728,23 @@ async def test_a_relation_primary_key_still_pushes_the_cursor_down(artist_profil
     second.cursor = page.next
     await viewset.get_list(None, second)
 
-    assert second._cursor_keys == (("year", False), ("artist_id", False))
+    assert second._cursor_keys == (("year", False), ("artist", False))
     assert second.applied == {"filter", "sort", "pagination"}
+
+
+@pytest.mark.asyncio
+async def test_a_relation_primary_key_is_written_on_create_and_kept_on_update(artist_profile_rows):  # noqa: ARG001
+    viewset = ArtistProfileViewSet()
+    artist = await ArtistModel.objects.acreate(name="Artist new")
+
+    created = await viewset.perform_create(None, ArtistProfile(artist=artist.pk, title="New", year=2001))
+    assert created.artist == artist.pk
+
+    updated = await viewset.perform_update(
+        None, artist.pk, ArtistProfile(artist=1, title="Renamed", year=2001), partial=False
+    )
+    assert updated.artist == artist.pk
+    assert (await viewset.perform_retrieve(None, 1)).title == "Profile 001"
 
 
 def test_a_composite_primary_key_says_so():
@@ -763,3 +772,169 @@ def test_a_composite_primary_key_says_so():
 
     with pytest.raises(TypeError, match="composite primary key"):
         _ = CompositeKeyViewSet().pk_field_name
+
+
+# ---------------------------------------------------------------------------
+# Relation fields
+# ---------------------------------------------------------------------------
+
+
+class OwnerModel(models.Model):
+    name = models.CharField(max_length=50)
+
+    class Meta:
+        app_label = "backends"
+        ordering = ["-name"]
+
+
+class NoteModel(models.Model):
+    owner = models.ForeignKey(OwnerModel, on_delete=models.CASCADE)
+    reviewer = models.ForeignKey(OwnerModel, null=True, on_delete=models.SET_NULL, related_name="+")
+    title = models.CharField(max_length=200)
+
+    class Meta:
+        app_label = "backends"
+
+
+class Note(BaseModel):
+    id: int
+    owner: int
+    reviewer: int | None = None
+    title: str
+
+
+NoteFilter = make_filter_model(Note, {"owner": ["exact", "in"], "reviewer": ["isnull"]})
+
+
+class NoteViewSet(DjangoORMViewSet[int, Note], CursorListMixin[Note, NoteFilter]):
+    model = NoteModel
+    schema = Note
+    default_page_size = 3
+
+
+@pytest.fixture
+def note_rows():
+    """Owners named so `OwnerModel.Meta.ordering` (by name, descending) is the reverse of their keys."""
+    with connection.schema_editor() as editor:
+        editor.create_model(OwnerModel)
+        editor.create_model(NoteModel)
+    owners = [OwnerModel.objects.create(name=f"Owner {n}") for n in range(1, 4)]
+    for n in range(1, 10):
+        NoteModel.objects.create(owner=owners[n % 3], title=f"Note {n:03d}")
+    yield owners
+    with connection.schema_editor() as editor:
+        editor.delete_model(NoteModel)
+        editor.delete_model(OwnerModel)
+
+
+@pytest.mark.asyncio
+async def test_a_relation_field_reads_the_related_key(note_rows):
+    """Reading `owner` off the instance would load the related row, which raises in an async context."""
+    record = await NoteViewSet().perform_retrieve(None, 1)
+    assert record.owner == note_rows[1].pk
+    assert record.reviewer is None
+
+
+@pytest.mark.asyncio
+async def test_a_relation_field_is_written_on_create(note_rows):
+    viewset = NoteViewSet()
+    created = await viewset.perform_create(
+        None, Note(id=0, owner=note_rows[2].pk, reviewer=note_rows[0].pk, title="New")
+    )
+    row = await NoteModel.objects.aget(pk=created.id)
+    assert (row.owner_id, row.reviewer_id) == (note_rows[2].pk, note_rows[0].pk)
+    assert (created.owner, created.reviewer) == (note_rows[2].pk, note_rows[0].pk)
+
+
+@pytest.mark.asyncio
+async def test_bulk_create_writes_relation_fields(note_rows):
+    created = await NoteViewSet().perform_bulk_create(
+        None, [Note(id=0, owner=note_rows[0].pk, title="A"), Note(id=0, owner=note_rows[1].pk, title="B")]
+    )
+    rows = [row async for row in NoteModel.objects.filter(title__in=["A", "B"]).order_by("title")]
+    assert [row.owner_id for row in rows] == [note_rows[0].pk, note_rows[1].pk]
+    assert [record.owner for record in created] == [note_rows[0].pk, note_rows[1].pk]
+
+
+@pytest.mark.asyncio
+async def test_a_relation_field_is_written_on_update(note_rows):
+    viewset = NoteViewSet()
+    updated = await viewset.perform_update(None, 1, Note(id=1, owner=note_rows[0].pk, title="Moved"), partial=False)
+    assert updated.owner == note_rows[0].pk
+    assert (await NoteModel.objects.aget(pk=1)).owner_id == note_rows[0].pk
+
+
+@pytest.mark.asyncio
+async def test_a_partial_update_leaves_an_unstated_relation_alone(note_rows):
+    viewset = NoteViewSet()
+    body = Note.model_construct(title="Renamed")
+    body.__pydantic_fields_set__ = {"title"}
+    updated = await viewset.perform_update(None, 1, body, partial=True)
+    assert (updated.title, updated.owner) == ("Renamed", note_rows[1].pk)
+
+
+@pytest.mark.asyncio
+async def test_a_filter_on_a_relation_field_is_pushed_into_sql(note_rows):
+    viewset = NoteViewSet()
+    query = build_list_query(NoteFilter(owner__in=f"{note_rows[0].pk},{note_rows[2].pk}"), "id:asc", limit=10)
+    page = await viewset.get_list(None, query)
+    assert "filter" in query.applied
+    assert [record.id for record in page.results] == [2, 3, 5, 6, 8, 9]
+
+
+@pytest.mark.asyncio
+async def test_a_sort_on_a_relation_field_orders_by_the_key_in_sql(note_rows):  # noqa: ARG001
+    """The sort is by the related row's key, not by `OwnerModel.Meta.ordering`."""
+    viewset = NoteViewSet()
+    query = build_list_query(None, "owner:asc", limit=10)
+    page = await viewset.get_list(None, query)
+    assert "sort" in query.applied
+    owners = [record.owner for record in page.results]
+    assert owners == sorted(owners)
+
+
+@pytest.mark.asyncio
+async def test_walking_a_relation_field_by_cursor_visits_every_row_once(note_rows):  # noqa: ARG001
+    viewset = NoteViewSet()
+    seen, cursor = [], None
+    while True:
+        query = build_list_query(None, "owner:desc", limit=3)
+        query.cursor = cursor
+        page = await viewset.get_list(None, query)
+        seen += [(record.owner, record.id) for record in page.results]
+        if cursor is not None:
+            assert query.applied == {"filter", "sort", "pagination"}
+        if page.next is None:
+            break
+        cursor = page.next
+    assert len(seen) == 9 == len(set(seen))
+    assert seen == sorted(seen, key=lambda pair: (-pair[0], pair[1]))
+
+
+@pytest.mark.asyncio
+async def test_walking_a_nullable_relation_field_by_cursor_visits_every_row_once(note_rows):
+    await NoteModel.objects.filter(pk__in=[2, 4, 6]).aupdate(reviewer=note_rows[0])
+    viewset = NoteViewSet()
+    seen, cursor = [], None
+    while True:
+        query = build_list_query(None, "reviewer:asc", limit=2)
+        query.cursor = cursor
+        page = await viewset.get_list(None, query)
+        seen += [record.id for record in page.results]
+        if page.next is None:
+            break
+        cursor = page.next
+    assert sorted(seen) == list(range(1, 10))
+
+
+def test_a_schema_declaring_a_relation_column_is_refused():
+    class NoteByColumn(BaseModel):
+        id: int
+        owner_id: int
+        title: str
+
+    with pytest.raises(TypeError, match=r"declares `owner_id`.*Declare the relation as `owner`"):
+
+        class NoteByColumnViewSet(DjangoORMViewSet[int, NoteByColumn]):
+            model = NoteModel
+            schema = NoteByColumn

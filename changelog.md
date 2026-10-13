@@ -54,9 +54,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `timeoutMs` of a muxws ViewSet bounds the wait for the reply headers as well as the body.
 - `route_viewset` raises `ValueError` for an unknown `lifecycle`.
 - **npm:** `vue` and `lodash-es` are no longer peer dependencies; the package imports neither.
+- **Breaking (Django):** a relation field (`ForeignKey`, `OneToOneField`) appears in a
+  `DjangoORMViewSet`'s `schema` under its name and carries the related row's key (`owner: int`). The
+  backend reads, writes, filters and sorts it on the `owner_id` column. A `schema` declaring
+  `owner_id` raises `TypeError` when the viewset class is defined, and `pk_field_name` for a
+  one-to-one primary key is the relation's name (`artist`).
 
 ### Fixed
 
+- `DjangoORMViewSet` create and update write relation fields; a create writes a natural or
+  relation primary key from the body and leaves out only a key the database or Django assigns.
 - `celery_viewset` with more than one FastAPI process sharing a Redis (several workers or replicas):
   each process receives its results on its own list, `{queue_key}:{host name}:{process id}`. All
   processes read one list per prefix, and a process that popped another process's result discarded
