@@ -181,6 +181,9 @@ def route_viewset(
     rather than a third `register_*`; see GAPS.md for why a set of flags is the worse shape.
     """
 
+    if lifecycle not in get_args(LifecycleType):
+        raise ValueError(f"unknown lifecycle {lifecycle!r}; one of: {', '.join(get_args(LifecycleType))}")
+
     def decorator(cls: type[T]):
         instance = cls() if lifecycle == "singleton" else None
 
@@ -290,7 +293,6 @@ def route_viewset(
                 if _is_filter_param(annotation):
                     inner_type = annotation.__args__[0]
                     if inspect.isclass(inner_type) and issubclass(inner_type, BaseModel):
-                        # optional_model = make_all_optional(inner_type)
                         new_p = new_p.replace(annotation=Annotated[inner_type, Query()])
                     new_params.append(new_p)
                     continue
@@ -314,16 +316,11 @@ def route_viewset(
                         new_params.append(new_p.replace(annotation=partial_annotation))
                         continue
 
-                # If we have a PK field and this parameter is a model from which we want to exclude PK
+                # A create's body is the model without its primary key, which the backend assigns
                 if pk_field_name and inspect.isclass(annotation) and issubclass(annotation, BaseModel):
-                    # Check if {pk} is in the path and if the method is one that normally accepts a model in the body
-                    # (POST without {pk} or PUT/PATCH with {pk})
                     is_create = "POST" in route_methods and "{pk}" not in route_path
-                    is_update = False  # ("PUT" in route_methods or "PATCH" in route_methods) and "{pk}" in route_path
-
-                    if (is_create or is_update) and pk_field_name in annotation.model_fields:
-                        new_model = create_model_without_pk(annotation, pk_field_name)
-                        new_p = new_p.replace(annotation=new_model)
+                    if is_create and pk_field_name in annotation.model_fields:
+                        new_p = new_p.replace(annotation=create_model_without_pk(annotation, pk_field_name))
 
                 new_params.append(new_p)
 

@@ -110,4 +110,4 @@ async def lifecycle_runner(
         req_instance = cls()
         return await run_with_state(req_instance)
 
-    return await original_endpoint(*args, **kwargs)
+    raise ValueError(f"unknown lifecycle {lifecycle!r}; one of: singleton, per-request, instance-key")

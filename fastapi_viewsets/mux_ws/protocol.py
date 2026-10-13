@@ -114,10 +114,3 @@ def build_response_meta(status: int, headers: dict[str, str]) -> dict[str, Any]:
     meta: dict[str, Any] = {STATUS_KEY: status}
     meta.update(headers)
     return meta
-
-
-def body_to_payload(body: Any) -> Any:
-    """`ABSENT` is muxws' "no payload at all", which is a different frame from a null payload."""
-    from muxws.frames import ABSENT
-
-    return ABSENT if body is None else body
