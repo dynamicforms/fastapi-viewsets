@@ -287,8 +287,7 @@ to refresh state when the socket comes back.
 Dispatch builds a synthetic ASGI request and calls the dispatch app. It costs one JSON
 decode/re-encode per call: about 15% of a read, a third of a large write.
 
-Measured against the demo — 5000 records, localhost, Python client, so no browser connection limit
-in play:
+The demo — 5000 records, localhost, Python client, so no browser connection limit in play:
 
 | | sequential p50 | sequential p95 | 100 requests at once |
 |---|---|---|---|

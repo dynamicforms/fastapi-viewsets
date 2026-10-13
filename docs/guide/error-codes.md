@@ -23,8 +23,8 @@ from fastapi_viewsets.exceptions import DfViewSetError, df_viewset_exception_han
 app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
 ```
 
-An application that never registers this sees exactly what it always has, `{"detail": "..."}`,
-from FastAPI's own default `HTTPException` handling. A view's own `raise HTTPException(status_code,
+An application that never registers this receives `{"detail": "..."}`, from FastAPI's own default
+`HTTPException` handling. A view's own `raise HTTPException(status_code,
 detail="...")` is unaffected either way - only exceptions descending from `DfViewSetError` carry a
 `code`.
 

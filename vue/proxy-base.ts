@@ -210,7 +210,7 @@ export abstract class ViewSetInternals {
    * transport is actually held to implementing it. It cannot be abstract at this level because
    * TypeScript propagates an abstract member through a constructor type, and the factory hands one
    * back - every ViewSet a consumer wrote would then fail TS2515 for a method the transport
-   * underneath it has always implemented.
+   * underneath it implements.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the signature is the point; the body cannot run
   protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): Promise<R> {

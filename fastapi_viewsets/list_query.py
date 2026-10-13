@@ -72,7 +72,7 @@ class ListQuery:
     def is_paginated(self) -> bool:
         """
         Pagination is opt-in per request: without a `limit` the endpoint answers with a plain list,
-        exactly as it always has, and only a client that asks for a page gets a page envelope.
+        and only a client that asks for a page gets a page envelope.
         """
         return self.limit is not None
 

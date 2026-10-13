@@ -147,7 +147,7 @@ also the honest type — it has `listCursor` and nothing else.
 
 ### route_rest
 
-[`route_rest`](./route-rest) and `route_muxws` are the older form and still work. They return a bare
+[`route_rest`](./route-rest) and `route_muxws` are the other form. They return a bare
 proxy cast to the mixin interface named in `M`: the standard actions are there, but a custom endpoint
 named in that interface type-checks and is `undefined` when called, because the object is not the
 consumer's own class.

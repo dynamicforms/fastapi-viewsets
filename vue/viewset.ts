@@ -48,7 +48,7 @@ type PkType<T, PK extends keyof T> = NonNullable<T[PK]> & KeyType;
  * property" line naming `declares` itself, rather than TypeScript recursing into which method each
  * mixin in the plain, unbranded replacement array is missing relative to the original. A record
  * type wrapping `D` behind the phantom key, not `D & {brand}`: an intersection would still expose
- * `D`'s own array shape to the comparison and recurse into it exactly as before; a plain array
+ * `D`'s own array shape to the comparison and recurse into it; a plain array
  * literal has no property at all under this key, so the mismatch stops at the top. Erased at
  * runtime - `bindViewSet` casts through `unknown`, so the actual `static declares` stays a plain
  * array, and every internal reader (rest-proxy.ts, muxws-proxy.ts, proxy-base.ts's
@@ -110,7 +110,7 @@ function bindViewSet(
       // would clobber what the base constructor had just set.
       //
       // `declares: undefined` so that the static above is what the check reads. A subclass stating
-      // its own `static declares` then shadows it by ordinary static lookup, as it always has.
+      // its own `static declares` then shadows it by ordinary static lookup.
       super({ ...options, pkFieldName, declares: undefined });
     }
   };

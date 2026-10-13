@@ -11,8 +11,7 @@ the OpenAPI schema, most of them meaningless for the field they hang off, so the
 explicit. `exact` keeps the bare field name, since `?year=2003` is what anyone would write.
 
 The resulting model is an ordinary pydantic model, so FastAPI validates and documents the
-parameters exactly as it did for `make_all_optional` - which is now the special case of "every
-field, exact only".
+parameters as it does for `make_all_optional`, which is the case of "every field, exact only".
 """
 
 from typing import Any, get_args, get_origin, Union
@@ -70,8 +69,7 @@ def make_filter_model(model: type[BaseModel], declaration: FilterDeclaration) ->
     Builds the query-parameter model for a filter declaration.
 
     Raises rather than ignoring an unknown field or operator: a typo in a declaration would
-    otherwise produce a filter parameter that silently never matches anything, which is the kind of
-    bug that gets found in production by someone wondering why their search box does nothing.
+    otherwise produce a filter parameter that silently never matches anything.
     """
     fields: dict[str, tuple[Any, Any]] = {}
     spec: dict[str, tuple[str, str, Any]] = {}
@@ -104,7 +102,7 @@ def make_filter_model(model: type[BaseModel], declaration: FilterDeclaration) ->
 def filters_from(fltr: Any) -> FilterSet | None:
     """
     The FilterSet a populated filter model asks for, or None when the model was not built from a
-    declaration - in which case the viewset is on the older hand-written `filter_list` path and
+    declaration - in which case the viewset is on the hand-written `filter_list` path and
     this machinery stays out of its way.
     """
     spec = getattr(type(fltr), SPEC_ATTRIBUTE, None)

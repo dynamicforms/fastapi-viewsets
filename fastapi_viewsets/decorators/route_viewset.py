@@ -94,7 +94,7 @@ def resolve_typevars(type_map, annotation):
         args = get_args(annotation)
         new_args = tuple(resolve_typevars(type_map, arg) for arg in args)
         if new_args != args:
-            # To deluje za List, Dict, Union, itd.
+            # list[...], dict[...], Union[...] and the other subscriptable generics
             try:
                 return origin[new_args]
             except:
@@ -384,8 +384,8 @@ def route_viewset(
 
         # Command middleware (see fastapi_viewsets/middleware) can reshape the response body via
         # ViewSetResult - only middleware that actually declares modifies_response_shape=True
-        # untrusts the endpoint's declared return type as the response_model (same reasoning as the
-        # old finalize_response hook); typical middleware (auth, rate limiting, sessions) only adds
+        # untrusts the endpoint's declared return type as the response_model; typical middleware
+        # (auth, rate limiting, sessions) only adds
         # headers/cookies and leaves the declared model - and therefore the OpenAPI docs - in place.
         build_schema(
             cls,

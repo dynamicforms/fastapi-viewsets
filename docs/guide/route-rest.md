@@ -2,10 +2,9 @@
 
 `route_rest` is the frontend counterpart of the `route_viewset` decorator. It creates a fully typed HTTP client (backed by axios) that mirrors the operations of your backend viewset.
 
-It is the older of the two forms, and it still works exactly as documented here. New code declares a
-ViewSet with the `restViewSet` factory instead: it hands back a class you extend, so the object is
-your own class — its methods exist at runtime — and an action the ViewSet did not declare is a
-compile error rather than a 404:
+It is one of two forms. The other declares a ViewSet with the `restViewSet` factory: it hands back
+a class you extend, so the object is your own class — its methods exist at runtime — and an action
+the ViewSet did not declare is a compile error rather than a 404:
 
 ```ts
 import { restViewSet, BulkViewSetMixin, LookupMixin } from '@dynamicforms/fastapi-viewsets';

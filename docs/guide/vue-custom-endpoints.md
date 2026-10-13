@@ -220,7 +220,7 @@ Here `pkFieldName` is a constructor option and `declares` a static, since there 
 to bind them. A custom axios instance is passed the same way to a factory-built REST ViewSet:
 `new ItemApi({ basePath: '/items', axiosInstance: http })`.
 
-## The older form: route_rest
+## The other form: route_rest
 
 `route_rest` and `route_muxws` are supported. They build a bare proxy and cast
 it to the mixin interface named as `M`:

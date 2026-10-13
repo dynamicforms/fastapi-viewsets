@@ -74,8 +74,8 @@ settings.viewsets_command_middleware = [SessionCookieMiddleware()]
 `settings.viewsets_command_middleware` is a bare function or a `Middleware` instance - both are just
 called as `middleware(request, viewset, context, call_next)`. See
 [Authentication](./authentication#rejecting-unauthenticated-requests-session) for `Session`, a
-`Middleware` shipped by this library - though, as of the next section, most of its actual logic
-doesn't live in `__call__` at all anymore.
+`Middleware` shipped by this library, whose check lives in `depends()` (next section) rather than
+in `__call__`.
 
 ## Early rejection: `Middleware.depends()`
 
@@ -104,8 +104,8 @@ for a malformed body on the same request - the conventional, correct ordering fo
 native OpenAPI/Swagger discoverability (see `settings.viewsets_security_scheme` below),
 `app.dependency_overrides` testability (impossible with the pure onion-chain mechanism, since it's
 never part of FastAPI's own dependency graph), and - since `depends()` is entirely optional -
-existing plain-function middleware and `Middleware` subclasses that don't define it are completely
-unaffected, running only in the onion chain exactly as before.
+plain-function middleware and `Middleware` subclasses that don't define it run only in the onion
+chain.
 
 `context` is real and usable inside `depends()` (built as early as possible - see
 [Context Processors](./context-processors) - and shared/cached for the rest of the request, so
@@ -187,8 +187,8 @@ response's status code is unaffected. For a middleware whose *entire* job is rej
 no "after" phase (e.g. `Session`'s `401`), prefer raising `HTTPException` from `depends()` instead
 (see above) - it runs earlier and gets OpenAPI/testability benefits `status_code` alone doesn't.
 
-With no middleware configured (the default), behaviour is unchanged: the endpoint's return value
-becomes the response body as-is, no headers/cookies are touched.
+With no middleware configured (the default), the endpoint's return value becomes the response
+body as-is, and no headers/cookies are touched.
 
 ### Returning `ViewSetResult` directly from an endpoint
 

@@ -175,7 +175,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
 
         filter_set = filter_set_for(query)
         if not filter_set and filters_from(query.fltr) is None:
-            # A hand-written filter model, on the older filter_list path. Nothing declarative to
+            # A hand-written filter model, on the filter_list path. Nothing declarative to
             # translate, so the in-memory pass takes it.
             return await super().apply_filter(context, query, records)
 

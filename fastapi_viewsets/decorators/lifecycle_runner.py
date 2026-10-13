@@ -29,8 +29,7 @@ async def lifecycle_runner(
     `response` is reserved for the command middleware chain (see below) - callers that have no
     live Response object (e.g. `celery_viewset_server`, running in a worker process) simply omit
     it, and the chain is never invoked - the worker just executes the action and returns the plain
-    result; command middleware only ever runs once that result is back in the FastAPI process,
-    same as the old `finalize_response` hook it replaces.
+    result; command middleware only ever runs once that result is back in the FastAPI process.
 
     `needs_context`/`request` are reserved for the context-processor mechanism (see
     fastapi_viewsets/context): when needs_context is True, a Context is built (via

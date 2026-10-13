@@ -1,8 +1,8 @@
 """
 The HTTP exceptions this package raises on its own behalf.
 
-`detail` is the English default, fully interpolated - a plain string, exactly as it always was, so
-an application that does nothing further sees exactly what it always has. `code` names what went
+`detail` is the English default, fully interpolated - a plain string, so an application that does
+nothing further receives FastAPI's usual `{"detail": "..."}`. `code` names what went
 wrong independently of `detail`'s wording, and `params` are the raw values `detail` was
 interpolated with; both reach the response body only once the application registers
 `df_viewset_exception_handler` for `DfViewSetError` (see that function). A view's own
@@ -78,9 +78,8 @@ async def df_viewset_exception_handler(_request: Request, exc: DfViewSetError) -
 
         app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
 
-    An application that never registers this sees exactly what it always has -
-    `{"detail": "..."}`, from FastAPI's own default `HTTPException` handling; `code` and `params`
-    reach nothing without it.
+    An application that never registers this receives `{"detail": "..."}`, from FastAPI's own
+    default `HTTPException` handling; `code` and `params` reach nothing without it.
     """
     return JSONResponse(
         status_code=exc.status_code,

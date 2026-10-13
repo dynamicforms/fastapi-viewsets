@@ -74,9 +74,9 @@ An onion-style chain around the actual perform_*/endpoint execution, configured 
 settings.viewsets_command_middleware (see fastapi_viewsets/conf.py). `call_next()` (no arguments -
 context and the viewset instance are the only mutable structures in the pipeline, so a middleware
 that wants to influence what happens next mutates `context` in place rather than threading a new
-one through) invokes the next middleware, or the actual execution at the innermost layer. This
-replaces the old `finalize_response` hook: a middleware can inspect/replace the ViewSetResult
-`call_next()` returns and mutate its `headers`/`cookies` before returning it back up the chain.
+one through) invokes the next middleware, or the actual execution at the innermost layer. A
+middleware can inspect/replace the ViewSetResult `call_next()` returns and mutate its
+`headers`/`cookies` before returning it back up the chain.
 """
 
 
@@ -124,8 +124,7 @@ class Middleware(ABC):
         than sometimes a real instance and sometimes not, depending on which one). `context` is
         real and usable here (see `fastapi_viewsets.context.get_shared_context`) - built as early as
         this method can possibly run, which for `per-request`/`instance-key` lifecycles is *before*
-        `load_state()` (a real, accepted change in ordering - no shipped context processor reads
-        viewset instance state, so this doesn't affect anything today).
+        `load_state()`; no shipped context processor reads viewset instance state.
 
         Put here *only* logic that might actually reject - there's no benefit to running
         unconditional work (e.g. enriching context with no reject path - see

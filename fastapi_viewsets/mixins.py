@@ -341,7 +341,7 @@ class ListMixin(Generic[T, TFilter], ABC):
 
         Each stage is a separate method so a subclass can replace just the one it cares about and
         call `super()` for the rest - a viewset that can sort in its database overrides
-        `apply_sort`, marks the stage applied, and everything else keeps working unchanged.
+        `apply_sort`, marks the stage applied, and the other stages run as before it.
         """
         if query.shape is None:
             query.shape = self.resolve_shapes()[0]
@@ -370,7 +370,7 @@ class ListMixin(Generic[T, TFilter], ABC):
                     query.mark_applied("filter")
                 return await super().apply_filter(context, query, records)
 
-        The default delegates to the older `filter_list` hook, which stays supported.
+        The default delegates to the `filter_list` hook.
         """
         if not query.has_filter or not query.needs("filter"):
             return records
@@ -399,7 +399,7 @@ class ListMixin(Generic[T, TFilter], ABC):
     ) -> ListRecords:
         """
         Orders `records`. Override to sort in the backend and mark the stage applied; the default
-        delegates to the older `sort_list` hook.
+        delegates to the `sort_list` hook.
         """
         if not query.has_sort or not query.needs("sort"):
             return records
@@ -639,8 +639,7 @@ class PaginatedListMixin(ListMixin[T, TFilter], ABC):
     """
     Shorthand for `ListMixin` with `list_shape = "paginated"`.
 
-    Kept because it reads well at the point of use and because it was the way to ask for offset
-    paging before shapes existed; it adds nothing `list_shape` does not.
+    It reads well at the point of use; it adds nothing `list_shape` does not.
     """
 
     list_shape = "paginated"

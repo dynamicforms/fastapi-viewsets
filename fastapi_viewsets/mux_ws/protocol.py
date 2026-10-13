@@ -20,7 +20,7 @@ headers that is *not* `:`-prefixed is passed through as an ordinary HTTP header.
         },
     )
 
-The response direction is symmetric as of muxws 0.3.1, which carries `headers` on the first `data`
+The response direction is symmetric: muxws (0.3.1 and later) carries `headers` on the first `data`
 frame a peer sends as well as on `open` (SPEC §2.2, WSM-FRM-016). So the status is announced ahead
 of the body, exactly as HTTP/2 puts `:status` in HEADERS before DATA:
 
@@ -29,9 +29,8 @@ of the body, exactly as HTTP/2 puts `:status` in HEADERS before DATA:
 and the caller reads it from `stream.reply_headers` (`replyHeaders` in TypeScript), which is final
 once `reply_headers_arrived` is set.
 
-Before 0.3.1 this had to ride in `trailers`, which only attach to a frame with `end: true`. That
-was free for a unary reply but wrong for a streaming one, where the caller would have had to
-consume the whole body before learning whether it was an error at all.
+The status is not sent in `trailers`: those attach only to a frame with `end: true`, so a
+streaming reply's caller would consume the whole body before learning whether it was an error.
 """
 
 from typing import Any

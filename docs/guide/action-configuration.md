@@ -86,8 +86,8 @@ rather than once when the configuration was merged: where one `Context` (via
 ## Receiving configuration in a context processor
 
 A processor opts in by declaring a parameter literally named `config` (detected by name, the same
-convention this library uses for detecting `context` in `route_viewset.py`) - a processor that
-doesn't declare it is called exactly as before, unaffected:
+convention this library uses for detecting `context` in `route_viewset.py`); a processor that
+doesn't declare it is called without it:
 
 ```python
 async def authz_context_processor(request, viewset, config) -> dict:

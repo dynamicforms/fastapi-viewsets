@@ -138,7 +138,7 @@ def apply_viewset_tags(app: Any, extra: list[dict[str, str]] | None = None) -> A
 
     `extra` is merged in for tags the application owns itself; anything it defines wins, since a
     viewset's docstring is a default rather than the last word. Groups a viewset never described
-    are left out entirely - a tag with no description renders exactly as it did before.
+    are left out entirely, and such a tag renders without a description.
     """
     by_name = {tag["name"]: tag for tag in viewset_tags()}
     for tag in extra or []:
