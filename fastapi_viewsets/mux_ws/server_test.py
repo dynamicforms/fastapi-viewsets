@@ -195,6 +195,51 @@ async def test_headers_stated_on_the_stream_override_the_connection():
         settings.viewsets_context_processors = []
 
 
+class FakeConnection:
+    """Stands in for the WebSocket: `process_command` reads its `headers` and `scope`."""
+
+    def __init__(self, client: tuple[str, int]):
+        self.headers: dict[str, str] = {}
+        self.scope = {"client": client, "server": ("10.0.0.1", 8000)}
+
+
+@pytest.mark.asyncio
+async def test_the_request_carries_the_connection_address():
+    captured: dict[str, Any] = {}
+
+    async def capture(request, _viewset) -> dict[str, Any]:
+        captured["client"] = (request.client.host, request.client.port)
+        return {}
+
+    settings.viewsets_context_processors = [capture]
+    try:
+        make_viewset()
+        stream = FakeStream({":method": "GET", ":path": "/tracks"})
+        await process_command(ABSENT, stream, connection=FakeConnection(("203.0.113.7", 51234)))
+        assert stream.status == 200
+        assert captured["client"] == ("203.0.113.7", 51234)
+    finally:
+        settings.viewsets_context_processors = []
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_counts_each_connection_address_separately():
+    from ..middleware.rate_limiter import RateLimiter
+
+    settings.viewsets_command_middleware = [RateLimiter(default_limit=1)]
+    try:
+        make_viewset()
+        first = FakeStream({":method": "GET", ":path": "/tracks"})
+        other = FakeStream({":method": "GET", ":path": "/tracks"})
+        again = FakeStream({":method": "GET", ":path": "/tracks"})
+        await process_command(ABSENT, first, connection=FakeConnection(("203.0.113.7", 1)))
+        await process_command(ABSENT, other, connection=FakeConnection(("203.0.113.8", 1)))
+        await process_command(ABSENT, again, connection=FakeConnection(("203.0.113.7", 2)))
+        assert (first.status, other.status, again.status) == (200, 200, 429)
+    finally:
+        settings.viewsets_command_middleware = []
+
+
 @pytest.mark.asyncio
 async def test_register_muxws_false_keeps_the_viewset_off_the_transport():
     cls = make_viewset(register_muxws=False)

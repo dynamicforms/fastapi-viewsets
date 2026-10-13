@@ -292,6 +292,10 @@ new TrackViewSet({
 Authenticating the connection itself belongs *before* `accept()`, in your own websocket endpoint —
 muxws interprets no credential anywhere.
 
+The connection also supplies each command's `request.client` and `request.server`: the
+WebSocket's own addresses, which [`RateLimiter`](./rate-limiter#identity-key) keys on by default.
+`process_command` called without `connection=` gives every command the client `("muxws", 0)`.
+
 ## Reconnection
 
 Nothing survives a muxws reconnect: every in-flight stream fails with `ConnectionLost` and the id

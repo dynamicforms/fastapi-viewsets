@@ -46,6 +46,10 @@ context)` (`cls` is the viewset *class*, not an instance - see
 [Command Middleware](./command-middleware#early-rejection-middleware-depends) for why). `key_func`
 may itself be sync or async (checked the same way as `Authorization`'s callable config):
 
+Over [muxws](./muxws) the client IP is the WebSocket connection's address, given that
+`process_command` is called with `connection=`; without it every command has the client
+`("muxws", 0)`, and all muxws callers of a viewset share one count.
+
 ```python
 def per_ip_key(request, cls, context):
     return f"{cls.__name__}:{request.client.host}"
@@ -68,9 +72,14 @@ RateLimiter(default_limit=100, key_func=per_user_key)
 ## Storage
 
 Defaults to an in-memory dict - correct for a single process (and tests), but each worker process
-in a multi-process deployment would track its own counts independently. Pass a `redis_client`
-(`redis.asyncio.Redis`) for a shared, multi-process-correct counter (`INCR` + `EXPIRE` on the first
-increment in a window - the same fixed-window algorithm either way):
+in a multi-process deployment would track its own counts independently. Entries whose window has
+passed are removed at most once per window.
+
+Pass a `redis_client` (`redis.asyncio.Redis`) for a shared, multi-process-correct counter. Each
+request runs one Lua script on the key `<key_prefix><identity key>` (`key_prefix` defaults to
+`"ratelimit:"`): `INCR`, then `PEXPIRE` to `window_seconds` in milliseconds when the key has no
+expiry. Both steps are atomic, so a key always expires. The algorithm is the same fixed window as
+in memory:
 
 ```python
 from redis.asyncio import Redis

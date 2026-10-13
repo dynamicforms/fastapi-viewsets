@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `RateLimiter(key_prefix=...)`: the prefix of its Redis keys, default `"ratelimit:"`.
 - `toErrorDescription(body)` converts a failed request's body into an `ErrorDescription`
   (`code`, `params`, `detail`, `origin: 'server'`), the shape of `ErrorDescription` in
   `@dynamicforms/vue-forms`: `detail_code` becomes `code` (`''` where the body has none),
@@ -64,6 +65,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-to-one primary key is the relation's name (`artist`).
 
 ### Fixed
+
+- muxws commands carry the WebSocket connection's client and server address (`request.client`)
+  when `process_command` is given `connection=`. Every command had the client `("muxws", 0)`, so
+  `RateLimiter`'s default key counted all muxws callers of a viewset as one.
+- `RateLimiter` with `redis_client` increments and sets the window's expiry in one Lua script and
+  sets the expiry on any key that has none. A call interrupted between `INCR` and `EXPIRE` left a
+  key that never expired, and a `window_seconds` below 1 set an expiry of 0, which deleted the
+  key. The expiry is in milliseconds. Keys are prefixed with `key_prefix` (default `"ratelimit:"`).
+- `RateLimiter`'s in-memory storage removes entries whose window has passed; it kept one entry for
+  every identity key ever seen.
 
 - `list()`, `listPage()` and `listCursor()` send `X-List-Shape` with the shape they return, so each
   receives its own envelope from a viewset with `list_shapes`. A reply in another shape throws
