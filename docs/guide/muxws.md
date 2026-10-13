@@ -249,7 +249,9 @@ body, for a streaming reply as much as a unary one.
 ### Errors
 
 A 404 or a 422 comes back as a normal reply carrying that status. Stream resets are reserved for
-transport and protocol failures.
+transport and protocol failures. A command whose `:method`, `:path` or `:query` is malformed — a
+path that is not absolute, a method that is not a string, a `:query` that is neither a string nor a
+mapping — is answered with status 400 and `{"detail": "..."}`.
 
 On the client that status becomes a `ViewSetRequestError`, whose shape is the one axios raises —
 `error.response.status`, `error.response.data` — so error handling written against axios works over

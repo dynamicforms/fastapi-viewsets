@@ -361,3 +361,20 @@ def test_two_viewsets_on_one_base_path_warn():
 
     with pytest.warns(UserWarning, match="unreachable"):
         route_viewset(router, base_path="/tracks", pk_field_name="id")(ImpostorViewSet)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {":method": "GET", ":path": "tracks"},
+        {":method": "GET", ":path": "/tracks", ":query": 42},
+        {":method": 1, ":path": "/tracks"},
+    ],
+)
+async def test_a_malformed_envelope_is_answered_with_a_400(headers):
+    make_viewset()
+    stream = FakeStream(headers)
+    assert await process_command(ABSENT, stream) is True
+    assert stream.status == 400
+    assert isinstance(stream.payload["detail"], str)
