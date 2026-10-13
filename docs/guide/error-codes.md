@@ -83,7 +83,7 @@ package's own errors and an application's own alike.
 
 ## Frontend
 
-`@dynamicforms/fastapi-viewsets/vue` converts an error body into an `ErrorDescription`: `code`,
+`@dynamicforms/fastapi-viewsets` converts an error body into an `ErrorDescription`: `code`,
 `params`, the English `detail` and `origin: 'server'`. The interface has the shape of
 `ErrorDescription` in `@dynamicforms/vue-forms`, so the application renders and translates a
 server's errors with the same function as its validators' errors. The package holds no
@@ -96,7 +96,7 @@ the codes of this page are added to the application's translations next to the v
 `toErrorDescription(body)` converts the body of a failed request:
 
 ```ts
-import { toErrorDescription } from '@dynamicforms/fastapi-viewsets/vue';
+import { toErrorDescription } from '@dynamicforms/fastapi-viewsets';
 
 const error = toErrorDescription(body); // body: { detail, detail_code?, detail_params? }
 // { code: 'not_found', params: { pk: 42 }, detail: 'Item with pk 42 not found', origin: 'server' }
@@ -129,7 +129,7 @@ body as a whole is keyed `''`. Each error has pydantic's `type` as `code`, `ctx`
 `msg` as `detail`:
 
 ```ts
-import { toFieldErrors } from '@dynamicforms/fastapi-viewsets/vue';
+import { toFieldErrors } from '@dynamicforms/fastapi-viewsets';
 
 toFieldErrors(body);
 // {
@@ -139,34 +139,69 @@ toFieldErrors(body);
 ```
 
 A name is a path through the members of a vue-forms form: a `Group` member by its name, a `List`
-row by its index. The errors keyed `''` belong to the form itself:
+row by its index. The errors keyed `''` belong to the form itself, and so do the errors of a name
+the form does not hold. A `SubmitAction` sends the form through a ViewSet and, where the server
+refuses it, writes the server's errors to the form before it throws:
 
 ```ts
-import { toFieldErrors, type FieldErrorsBody } from '@dynamicforms/fastapi-viewsets/vue';
-import { type FieldBase, Group, List, ValidationError } from '@dynamicforms/vue-forms';
+import {
+  type ApiErrorBody,
+  type ErrorDescription,
+  type FieldErrorsBody,
+  toErrorDescription,
+  toFieldErrors,
+} from '@dynamicforms/fastapi-viewsets';
+import { Action, type FieldBase, Group, List, SubmitAction, ValidationError } from '@dynamicforms/vue-forms';
 
-function elementAt(form: Group, name: string): FieldBase | null {
-  let element: FieldBase | null = form;
+function elementAt(root: FieldBase, name: string): FieldBase | undefined {
+  let element: FieldBase | null | undefined = root;
   for (const key of name ? name.split('.') : []) {
     if (element instanceof Group) element = element.field(key);
-    else if (element instanceof List) element = element.get(Number(key)) ?? null;
-    else return null;
+    else if (element instanceof List) element = element.get(Number(key));
+    else return undefined;
   }
-  return element;
+  return element ?? undefined;
 }
 
-function showServerErrors(form: Group, body: FieldErrorsBody) {
-  for (const [name, errors] of Object.entries(toFieldErrors(body))) {
-    const element = elementAt(form, name);
-    if (element) {
-      element.errors = [
-        ...element.errors,
-        ...errors.map((e) => new ValidationError(e.code, e.params, e.detail, e.origin)),
-      ];
-    }
-  }
+function addErrors(element: FieldBase, errors: ErrorDescription[]) {
+  element.errors = [
+    ...element.errors,
+    ...errors.map((e) => new ValidationError(e.code, e.params, e.detail, e.origin)),
+  ];
 }
+
+const save = new Action({
+  value: { label: 'Save', defaultConfirm: true },
+  actions: [
+    new SubmitAction(
+      (action) => action.parent?.parent,
+      async (value, target) => {
+        try {
+          return await itemsApi.update(value.id, value);
+        } catch (error: any) {
+          const status = error.response?.status;
+          const body = error.response?.data;
+          if (status === 422) {
+            for (const [name, errors] of Object.entries(toFieldErrors(body as FieldErrorsBody))) {
+              addErrors(elementAt(target, name) ?? target, errors);
+            }
+          } else if (typeof body?.detail === 'string') {
+            addErrors(target, [toErrorDescription(body as ApiErrorBody)]);
+          }
+          throw error;
+        }
+      },
+    ),
+  ],
+});
+
+const form = new Group({ /* the item's fields */ actions: new Group({ save }) });
 ```
+
+`execute()` of the action, and `form.confirm()`, resolve with a `SubmitFailedException` whose
+`cause` is the error; see vue-forms' [`SubmitAction`](:vue-forms:/api/action.html#submitaction-target-handler-options).
+Its button in `<df-actions>` of `@dynamicforms/vuetify-inputs` is disabled while the form is
+invalid, so the form is not sent again until the user has changed a value the server refused.
 
 Whether an error of origin `'server'` counts toward `valid` and when it is removed is set by
 vue-forms' [`ErrorPolicy`](:vue-forms:/api/validators.html#errorpolicy). By default it counts, and
