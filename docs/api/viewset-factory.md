@@ -54,14 +54,22 @@ type PkFieldName<T> = Extract<
 >;
 
 type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> =
-  // A declaration naming no action resolves to its own error message; see TS2507 below.
-  [ActionsOf<D[number]>] extends [never]
-    ? 'declares must name at least one action: pass the mixin classes themselves, unannotated'
-    : {
-        new (options: Omit<O, 'pkFieldName' | 'declares'>): ViewSetInternals &
-          ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>>;
-        readonly declares: D;
-      };
+  // `[]` builds a ViewSet with no standard action; a list whose mixins name no action resolves to
+  // its own error message, see TS2507 below.
+  [D[number]] extends [never]
+    ? ViewSetClassOf<T, PK, D, O>
+    : [ActionsOf<D[number]>] extends [never]
+      ? 'declares must name at least one action: pass the mixin classes themselves, unannotated'
+      : ViewSetClassOf<T, PK, D, O>;
+
+type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> = {
+  new (options: Omit<O, 'pkFieldName' | 'declares'>): ViewSetInternals &
+    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>> & { readonly pkFieldName: PK };
+  readonly declares: FactoryDeclares<D>;
+};
+
+/** The factory's `declares`, branded so a subclass restating it fails on one line (TS2417). */
+type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTORY_BUILT]: D };
 ```
 
 ## Why the call is curried
@@ -171,12 +179,12 @@ class ItemDbApi extends restViewSet<Item>()('id', [CursorListMixin, RetrieveMixi
 | `TS2345` | `restViewSet<Item>()('nope', [...])` | *Argument of type '"nope"' is not assignable to parameter of type '"name" \| "id"'.* The pk field must exist on the model and be a `string` or `number` field — a `string[]` field is rejected the same way. |
 | `TS2353` | `new ItemApi({ basePath: '/items', pkFieldName: 'id' })` | *'pkFieldName' does not exist in type `Omit<RestProxyOptions, "pkFieldName" \| "declares">`.* Both are bound by the factory; passing them again is an error. The same applies to `declares`. |
 | `TS2417` | `static declares = [...]` on a subclass of a factory-built class | *Class static side incorrectly extends base class static side.* `declares` is pinned to the tuple the factory was given. Call the factory again with the smaller list instead of restating it. |
-| `TS2507` | `declares` names no action — `[]`, or an array annotated `ViewSetMixinClass[]`, which erases which mixins are in it | *Type `'declares must name at least one action: pass the mixin classes themselves, unannotated'` is not a constructor function type.* The message is the return type: a ViewSet with no actions would otherwise be built without complaint. |
+| `TS2507` | `declares` is an array annotated `ViewSetMixinClass[]`, which erases which mixins are in it | *Type `'declares must name at least one action: pass the mixin classes themselves, unannotated'` is not a constructor function type.* The message is the return type: a ViewSet with no actions would otherwise be built without complaint. An empty literal, `[]`, is accepted: it builds a ViewSet with custom endpoints only. |
 | `TS2558` | `restViewSet<Item, 'id', [...]>(...)` | *Expected 1 type arguments, but got 3.* The call is curried; see [above](#why-the-call-is-curried). |
 
 ## Schema check
 
-On construction, unless `validateSchema: false`, the ViewSet fetches `GET {basePath}/schema` over its own transport and compares the declaration against it, `console.warn`-ing any disagreement: an action declared that the BE does not serve, an endpoint served that the ViewSet declares no action for, and a custom BE endpoint the ViewSet has no method of that name for. It is advisory — failures to fetch or parse are ignored.
+On construction, unless `validateSchema: false`, the ViewSet fetches `GET {basePath}/schema` over its own transport and compares the declaration against it, `console.warn`-ing any disagreement: an action declared that the BE does not serve, an endpoint served that the ViewSet declares no action for, and a custom BE endpoint the ViewSet has no method for — the BE method's name (`x-viewset-action`) in camelCase, or the name itself. It is advisory — failures to fetch or parse are ignored.
 
 ## Relation to route_rest / route_muxws
 

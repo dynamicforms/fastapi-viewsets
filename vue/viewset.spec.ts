@@ -11,7 +11,7 @@
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { muxwsViewSet, restViewSet } from './viewset';
+import { muxwsViewSet, restViewSet, type ViewSetMixinClass } from './viewset';
 
 import {
   BulkViewSetMixin,
@@ -115,7 +115,9 @@ describe('restViewSet', () => {
   it('puts a custom endpoint on the prototype, so it is not reported as missing', async () => {
     // route_rest cannot do this: it returns a bare proxy, so a custom method typed into M is
     // undefined when called. Here the object is ItemApi itself.
-    const api = build({ paths: { ...READONLY_LOOKUP_SCHEMA.paths, '/items/count': { get: {} } } });
+    const api = build({
+      paths: { ...READONLY_LOOKUP_SCHEMA.paths, '/items/count': { get: { 'x-viewset-action': 'count' } } },
+    });
     expect(typeof Object.getPrototypeOf(api).count).toBe('function');
     await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema'));
     await new Promise((r) => setTimeout(r, 0));
@@ -124,7 +126,9 @@ describe('restViewSet', () => {
 
   it('reports a custom BE endpoint the ViewSet has no method for', async () => {
     class NoCount extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin, LookupMixin]) {}
-    mockSchema({ paths: { ...READONLY_LOOKUP_SCHEMA.paths, '/items/count': { get: {} } } });
+    mockSchema({
+      paths: { ...READONLY_LOOKUP_SCHEMA.paths, '/items/count': { get: { 'x-viewset-action': 'count' } } },
+    });
     new NoCount({ basePath: '/items', axiosInstance: http as unknown as typeof axios });
     await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled());
     expect(warnSpy.mock.calls[0][0] as string).toContain("no 'count()' method");
@@ -178,9 +182,9 @@ describe('muxwsViewSet', () => {
       open: (payload: unknown) => {
         sent.push(payload);
         return {
-          reply_headers: Promise.resolve({ ':status': '200' }),
-          replyHeaders: Promise.resolve({ ':status': '200' }),
-          read: () => Promise.resolve(MOCK_ITEMS),
+          replyHeadersArrived: Promise.resolve(),
+          replyHeaders: { ':status': '200' },
+          result: () => Promise.resolve(MOCK_ITEMS),
           close: () => {},
         };
       },
@@ -253,5 +257,201 @@ describe('the type surface', () => {
       static declares = [CursorListMixin];
     }
     expect(Narrowed).toBeDefined();
+  });
+});
+
+describe('a ViewSet with custom endpoints only', () => {
+  interface Report {
+    id: number;
+    name: string;
+    approved: boolean;
+  }
+
+  const REPORT: Report = { id: 7, name: 'report 7', approved: true };
+
+  /** What `route_viewset` serves for a BE viewset with three custom endpoints and no mixin. */
+  const CUSTOM_ONLY_SCHEMA = {
+    paths: {
+      '/reports/schema': { get: {} },
+      '/reports/summary': { get: { 'x-viewset-action': 'summary' } },
+      '/reports/top-rated': { get: { 'x-viewset-action': 'top_rated' } },
+      '/reports/{pk}/approve': { post: { 'x-viewset-action': 'approve' } },
+    },
+  };
+
+  class ReportApi extends restViewSet<Report>()('id', []) {
+    async summary(): Promise<Report> {
+      return this.request<Report>('GET', '/summary');
+    }
+
+    async topRated(): Promise<Report[]> {
+      return this.request<Report[]>('GET', '/top-rated');
+    }
+
+    async approve(pk: number): Promise<Report> {
+      return this.request<Report>('POST', `/${pk}/approve`);
+    }
+  }
+
+  let http: ReturnType<typeof makeMockAxios>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    http = makeMockAxios();
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  function mockSchema(schema: object) {
+    http.get.mockImplementation((url: string) =>
+      url === '/reports/schema' ? Promise.resolve({ data: schema }) : Promise.resolve({ data: REPORT }),
+    );
+    http.post.mockResolvedValue({ data: REPORT });
+  }
+
+  async function schemaChecked() {
+    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/reports/schema'));
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  function build<C extends new (options: { basePath: string; axiosInstance: typeof axios }) => object>(
+    ViewSet: C,
+    schema: object = CUSTOM_ONLY_SCHEMA,
+  ): InstanceType<C> {
+    mockSchema(schema);
+    return new ViewSet({ basePath: '/reports', axiosInstance: http as unknown as typeof axios }) as InstanceType<C>;
+  }
+
+  it('calls its custom endpoints', async () => {
+    const api = build(ReportApi);
+    await expect(api.summary()).resolves.toEqual(REPORT);
+    expect(http.get).toHaveBeenCalledWith('/reports/summary');
+    await api.topRated();
+    expect(http.get).toHaveBeenCalledWith('/reports/top-rated');
+    await expect(api.approve(7)).resolves.toEqual(REPORT);
+    expect(http.post).toHaveBeenCalledWith('/reports/7/approve', undefined);
+  });
+
+  it('agrees with a BE that serves exactly its custom endpoints', async () => {
+    build(ReportApi);
+    await schemaChecked();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('matches an endpoint under a path parameter by the BE method name, not by the path', async () => {
+    // `POST /reports/{pk}/approve` is served by `approve()`; the first path segment is `{pk}`
+    class ApproveOnly extends restViewSet<Report>()('id', []) {
+      async approve(pk: number): Promise<Report> {
+        return this.request<Report>('POST', `/${pk}/approve`);
+      }
+    }
+    build(ApproveOnly, { paths: { '/reports/{pk}/approve': CUSTOM_ONLY_SCHEMA.paths['/reports/{pk}/approve'] } });
+    await schemaChecked();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('matches a snake_case BE method by its camelCase name or by the name itself', async () => {
+    // `GET /reports/top-rated` is served by `top_rated` on the BE: `topRated()` and `top_rated()` both answer
+    class SnakeCase extends restViewSet<Report>()('id', []) {
+      async top_rated(): Promise<Report[]> {
+        return this.request<Report[]>('GET', '/top-rated');
+      }
+    }
+    build(SnakeCase, { paths: { '/reports/top-rated': CUSTOM_ONLY_SCHEMA.paths['/reports/top-rated'] } });
+    await schemaChecked();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports a custom BE endpoint the ViewSet has no method for, by both names it would accept', async () => {
+    class NoTopRated extends restViewSet<Report>()('id', []) {
+      async summary(): Promise<Report> {
+        return this.request<Report>('GET', '/summary');
+      }
+
+      async approve(pk: number): Promise<Report> {
+        return this.request<Report>('POST', `/${pk}/approve`);
+      }
+    }
+    build(NoTopRated);
+    await vi.waitFor(() => expect(warnSpy).toHaveBeenCalledTimes(1));
+    const message = warnSpy.mock.calls[0][0] as string;
+    expect(message).toContain(
+      "BE serves 'GET /reports/top-rated' but the ViewSet has no 'topRated()' or 'top_rated()' method",
+    );
+    expect(message).not.toContain('summary');
+    expect(message).not.toContain('approve');
+  });
+
+  it('does not check an operation the BE names no method for', async () => {
+    // a BE without `x-viewset-action` on its operations: the path does not say which method serves it
+    build(ReportApi, { paths: { '/reports/{pk}/history': { get: {} }, '/reports/export-all': { get: {} } } });
+    await schemaChecked();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports a standard endpoint the BE serves, since the ViewSet declared none', async () => {
+    build(ReportApi, { paths: { ...CUSTOM_ONLY_SCHEMA.paths, '/reports': { get: {} } } });
+    await vi.waitFor(() => expect(warnSpy).toHaveBeenCalledTimes(1));
+    expect(warnSpy.mock.calls[0][0] as string).toContain("BE serves 'GET /reports' but the ViewSet declares no list");
+  });
+
+  it('builds a muxws ViewSet with custom endpoints only', async () => {
+    const opened: unknown[] = [];
+    const schemaRead = vi.fn(() => Promise.resolve(CUSTOM_ONLY_SCHEMA));
+    const peer = {
+      open: (payload: unknown) => {
+        opened.push(payload);
+        return {
+          replyHeadersArrived: Promise.resolve(),
+          replyHeaders: { ':status': '200' },
+          result: schemaRead,
+          close: () => {},
+        };
+      },
+    };
+    class ReportWs extends muxwsViewSet<Report>()('id', []) {
+      async summary(): Promise<Report> {
+        return this.request<Report>('GET', '/summary');
+      }
+
+      async topRated(): Promise<Report[]> {
+        return this.request<Report[]>('GET', '/top-rated');
+      }
+
+      async approve(pk: number): Promise<Report> {
+        return this.request<Report>('POST', `/${pk}/approve`);
+      }
+    }
+    new ReportWs({ basePath: '/reports', peer: () => Promise.resolve(peer as never) });
+    await vi.waitFor(() => expect(schemaRead).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 10));
+    expect(opened).toHaveLength(1);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  // Never called: these bodies are assertions for vue-tsc.
+  function _surface(api: ReportApi) {
+    void api.summary;
+    void api.topRated;
+    void api.approve;
+    void api.pkFieldName;
+    // @ts-expect-error a ViewSet with custom endpoints only has no standard action
+    void api.list;
+    // @ts-expect-error a ViewSet with custom endpoints only has no standard action
+    void api.retrieve;
+  }
+
+  it('exposes its own methods and no standard action', () => {
+    expect(_surface).toBeTypeOf('function');
+  });
+
+  it('still refuses a list annotated as ViewSetMixinClass[], which hides what it holds', () => {
+    const declares: ViewSetMixinClass[] = [RetrieveMixin];
+    // @ts-expect-error the annotation erases the mixins: the factory cannot tell which actions there are
+    class Hidden extends restViewSet<Report>()('id', declares) {}
+    expect(Hidden).toBeDefined();
   });
 });

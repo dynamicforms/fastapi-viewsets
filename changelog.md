@@ -18,12 +18,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field name (`loc` without its source element, joined with `.`), with pydantic's `type` as `code`,
   `ctx` as `params` and `msg` as `detail`.
 - The `ErrorDescription`, `FieldErrorEntry` and `FieldErrorsBody` types.
+- Every operation in a viewset's `/schema` (REST and muxws) carries `x-viewset-action`, the name of
+  the viewset method that serves it.
+- `restViewSet<T>()(pk, [])` and `muxwsViewSet<T>()(pk, [])` build a ViewSet with no standard
+  action, for a BE viewset with custom endpoints only. An empty `declares` was a compile error
+  (TS2507).
+
+### Fixed
+
+- The schema check matches a custom endpoint to a ViewSet method by the BE method's name
+  (`x-viewset-action`), in camelCase or as it is, where it read the first path segment: an endpoint
+  under a path parameter (`POST /items/{pk}/approve`) asked for a `{pk}()` method and one with a
+  hyphen (`GET /items/top-rated`) for a `top-rated()` method, and both were reported as missing. An
+  operation without `x-viewset-action` is not checked.
 
 ### Removed
 
 - **Breaking (npm):** `translateApiError`, `translateStrings` and `translatableStrings`, and the
   `@dynamicforms/translatable` peer dependency. The package holds no translations; the application
   translates an error by its `code`.
+
+## [0.7.3] - 2026-10-04
+
+### Removed
+
+- `@dynamicforms/vue-forms` is no longer a peer dependency of the npm package, which imports nothing
+  from it.
+
+## [0.7.2] - 2026-09-25
+
+### Changed
+
+- The npm package is ESM only: the UMD build is dropped. `exports["."]` points at the ES module and
+  states a `types` condition first, so TypeScript with `bundler` or `node16` module resolution finds
+  `dist/index.d.ts`.
+
+### Removed
+
+- The `./styles.css` export, which named a file the package does not ship.
 
 ## [0.7.1] - 2026-09-24
 

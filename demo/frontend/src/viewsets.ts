@@ -59,7 +59,7 @@ function WithCount<TBase extends abstract new (...args: any[]) => ViewSetInterna
   Base: TBase,
 ): TBase & (abstract new (...args: any[]) => MusicTrackMethods) {
   abstract class Counting extends Base {
-    /** The method name must match the BE path segment (GET /music/count → count). */
+    /** Served by the BE method `count` (GET /music/count). */
     async count(): Promise<number> {
       return this.request<number>('GET', '/count');
     }

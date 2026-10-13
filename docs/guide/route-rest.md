@@ -247,7 +247,7 @@ format is ignored silently.
 |-----------|----------------|
 | The ViewSet declares an action the BE viewset does not serve | `declares 'create' but the BE viewset serves no such endpoint` |
 | The BE serves a standard endpoint the ViewSet never declared | `BE serves 'POST /items' but the ViewSet declares no create` |
-| The BE serves a custom endpoint the ViewSet has no method for | `BE serves 'GET /items/export' but the ViewSet has no 'export()' method` |
+| The BE serves a custom endpoint the ViewSet has no method for | `BE serves 'GET /items/top-rated' but the ViewSet has no 'topRated()' or 'top_rated()' method` |
 
 `GET {basePath}` is one endpoint that answers in whichever shape the BE viewset declared, so
 `ListMixin`, `PaginatedListMixin` and `CursorListMixin` each satisfy it — declaring `listCursor`
@@ -257,20 +257,37 @@ Custom endpoints are the one place the check asks whether a method exists on the
 there the answer means something: the base implements no custom actions, so whatever answers is
 something the ViewSet's own author wrote.
 
+A custom endpoint is matched by the name of the BE method that serves it, which the schema states in
+the operation's `x-viewset-action` extension; the path is not read for it. The FE method is that
+name in camelCase or the name itself:
+
+| BE endpoint | BE method (`x-viewset-action`) | FE method |
+|-------------|--------------------------------|-----------|
+| `GET /items/search` | `search` | `search()` |
+| `GET /items/top-rated` | `top_rated` | `topRated()` or `top_rated()` |
+| `POST /items/{pk}/approve` | `approve` | `approve()` |
+
+An operation without `x-viewset-action` is not checked.
+
 ### Example output
 
 ```
 [ViewSet /items] FE/BE definition mismatch:
   • declares 'create' but the BE viewset serves no such endpoint
   • declares 'update' but the BE viewset serves no such endpoint
-  • BE serves 'GET /items/export' but the ViewSet has no 'export()' method
+  • BE serves 'GET /items/top-rated' but the ViewSet has no 'topRated()' or 'top_rated()' method
 ```
 
 ### A ViewSet that declares nothing
 
-It is not checked, and does not pay for the schema request. That is deliberate: a ViewSet that
-never said what it has cannot be caught contradicting itself, and guessing on its behalf is what
-made the check report actions nobody had claimed.
+It is not checked, and does not pay for the schema request: a ViewSet that never said what it has
+cannot be caught contradicting itself, and a guess on its behalf would report actions nobody
+claimed.
+
+An empty list, `static declares = []`, is a statement: the ViewSet has no standard action. It is
+checked, so a standard endpoint the BE serves is reported, and every custom endpoint is matched
+against the ViewSet's methods. This is the declaration of a ViewSet with custom endpoints only; see
+[Custom endpoints](./vue-custom-endpoints#a-viewset-with-custom-endpoints-only).
 
 A subclass of `RestProxyImpl` may state a smaller list, which replaces the parent's by ordinary
 static lookup. TypeScript checks the subclass's static side against its base, so the new list's

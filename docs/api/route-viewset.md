@@ -48,10 +48,10 @@ the class gained. Applied as `@route_viewset(...)` on the class or called as
 - Resolves all generic `TypeVar` parameters using the concrete types declared on the viewset class.
 - Deduplicates routes by HTTP methods plus full path; the most derived class in the MRO wins, so a mixin can replace a route it would otherwise inherit.
 - Registers routes most specific first: literal segments such as `bulk` and `lookup`, then `{pk}`, then the bare `base_path`; within one path the order is `DELETE`, `PATCH`, `PUT`, `POST`, `GET`.
-- Adds `GET {base_path}/schema`, answering with the OpenAPI document of the viewset's own FastAPI app.
+- Adds `GET {base_path}/schema`, answering with the OpenAPI document of the viewset's own FastAPI app. Each operation in it carries `x-viewset-action`, the name of the viewset method that serves it (`top_rated` for `GET {base_path}/top-rated`); the FE schema check matches a custom endpoint to a ViewSet method by it.
 - Derives an OpenAPI tag from the class name (strips `ViewSet` suffix) and records the class's own docstring as that tag's description.
 - Gives every route a dependency that runs each configured `Middleware`'s `depends()` before the request body is parsed, plus `settings.viewsets_security_scheme` when one is set.
-- Drops the declared `response_model` from every route when `settings.viewsets_command_middleware` is non-empty, since middleware may reshape the body.
+- Drops the declared `response_model` from every route when a middleware in `settings.viewsets_command_middleware` declares `modifies_response_shape`, since that middleware may reshape the body.
 - Raises `ValueError` when `@endpoint_docs` names an endpoint the class does not have.
 - Hands the routes that resolve to muxws — every one but `/schema`, for which the registry substitutes its own — to the muxws registry.
 - Stores metadata on the class as `cls.__viewset_metadata__`.

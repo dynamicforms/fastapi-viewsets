@@ -51,11 +51,60 @@ Four things about the base-class expression, each of which the compiler enforces
   `{ basePath, validateSchema?, peer, headers?, timeoutMs? }` for `muxwsViewSet`. `pkFieldName` and
   `declares` are bound by the factory; passing either is TS2353.
 
-The method's name is also what the [schema check](./route-rest#schema-validation) looks for: it
-compares the BE's custom paths against methods of the same name, so `GET /items/search` wants a
-`search()` and warns when the ViewSet has none.
+The method's name is also what the [schema check](./route-rest#schema-validation) looks for. The
+schema names the BE method that serves each custom endpoint (`x-viewset-action`), and the check
+wants a FE method of that name in camelCase or of the name itself: `GET /items/search`, served by
+`search`, wants `search()`; `GET /items/top-rated`, served by `top_rated`, wants `topRated()` or
+`top_rated()`. It warns when the ViewSet has neither.
 
 See [Mixins](./vue-mixins) for the mixin list itself.
+
+## A ViewSet with custom endpoints only
+
+A BE viewset with no mixin serves its custom endpoints and `GET {basePath}/schema`:
+
+```python
+@route_viewset(router, base_path="/reports", pk_field_name="id")
+class ReportViewSet:
+    __router = APIRouter()
+
+    @__router.get("summary")
+    async def summary(self, context: Context) -> Report: ...
+
+    @__router.get("top-rated")
+    async def top_rated(self, context: Context) -> list[Report]: ...
+
+    @__router.post("{pk}/approve")
+    async def approve(self, context: Context, pk: int) -> Report: ...
+```
+
+Its FE ViewSet declares an empty mixin list. The class has no standard action; its methods are the
+class body's own:
+
+```ts
+class ReportApi extends restViewSet<Report>()('id', []) {
+  async summary(): Promise<Report> {
+    return this.request<Report>('GET', '/summary');
+  }
+
+  async topRated(): Promise<Report[]> {
+    return this.request<Report[]>('GET', '/top-rated');
+  }
+
+  async approve(pk: number): Promise<Report> {
+    return this.request<Report>('POST', `/${pk}/approve`);
+  }
+}
+
+const reportsApi = new ReportApi({ basePath: '/reports' });
+
+// TS2339: list was not declared
+await reportsApi.list();
+```
+
+The schema check matches the three endpoints to `summary()`, `topRated()` and `approve()`, and
+reports any standard endpoint the BE serves. `muxwsViewSet<Report>()('id', [])` builds the same
+ViewSet on muxws.
 
 ## this.request()
 
@@ -117,7 +166,7 @@ function WithCount<TBase extends abstract new (...args: any[]) => ViewSetInterna
   Base: TBase,
 ): TBase & (abstract new (...args: any[]) => CountEndpoint) {
   abstract class Counting extends Base {
-    /** The method name must match the BE path segment (GET /items/count → count). */
+    /** Served by the BE method `count` (GET /items/count). */
     async count(): Promise<number> {
       return this.request<number>('GET', '/count');
     }

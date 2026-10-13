@@ -62,9 +62,10 @@ type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTO
 /**
  * What the factory hands back: a class to extend.
  *
- * A `declares` list naming no action — `[]`, or one annotated `ViewSetMixinClass[]`, which erases
- * which mixins are in it — would otherwise produce a ViewSet with no actions and no complaint.
- * TS2507 prints the type it was given, so the type is the sentence.
+ * An empty `declares` list, `[]`, builds a ViewSet with no standard actions, for a BE viewset that
+ * serves custom endpoints only; its methods are the class body's own. A list annotated
+ * `ViewSetMixinClass[]` erases which mixins are in it and would produce a ViewSet with no actions
+ * and no complaint; TS2507 prints the type it was given, so the type is the sentence.
  *
  * `pkFieldName: PK` is added on top of `ViewSetInternals` explicitly: the constructed instance's
  * real runtime type is `ProxyBaseOptions`'s `ViewSetProxyBase`, which already carries the public
@@ -73,15 +74,19 @@ type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTO
  * `string`, since the factory already knows exactly which field it is.
  */
 export type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> = [
-  ActionsOf<D[number]>,
+  D[number],
 ] extends [never]
-  ? 'declares must name at least one action: pass the mixin classes themselves, unannotated'
-  : {
-      new (
-        options: Omit<O, 'pkFieldName' | 'declares'>,
-      ): ViewSetInternals & ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>> & { readonly pkFieldName: PK };
-      readonly declares: FactoryDeclares<D>;
-    };
+  ? ViewSetClassOf<T, PK, D, O>
+  : [ActionsOf<D[number]>] extends [never]
+    ? 'declares must name at least one action: pass the mixin classes themselves, unannotated'
+    : ViewSetClassOf<T, PK, D, O>;
+
+type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> = {
+  new (
+    options: Omit<O, 'pkFieldName' | 'declares'>,
+  ): ViewSetInternals & ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>> & { readonly pkFieldName: PK };
+  readonly declares: FactoryDeclares<D>;
+};
 
 /**
  * `any` on the constructor because a class expression may only extend a constructor whose members

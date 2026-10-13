@@ -69,6 +69,18 @@ export class ViewSetRequestError extends Error {
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
 
+/** The OpenAPI extension in which the BE names the method serving an operation, e.g. `top_rated`. */
+const ACTION_EXTENSION = 'x-viewset-action';
+
+/**
+ * The FE method names that serve the BE method `action`: its camelCase form, and the name itself
+ * where that differs. `top_rated` is served by `topRated()` or `top_rated()`.
+ */
+function customMethodNames(action: string): string[] {
+  const camel = action.replace(/(?<=[a-zA-Z0-9])_+([a-z0-9])/g, (_, char: string) => char.toUpperCase());
+  return camel === action ? [action] : [camel, action];
+}
+
 /**
  * Maps (path type, HTTP method) → the actions that endpoint can satisfy.
  * Path types: 'base' = root, 'pk' = /{pk}, 'bulk' = /bulk, 'lookup' = /lookup.
@@ -270,9 +282,8 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    */
   private async validateAgainstSchema(): Promise<void> {
     // A ViewSet that declares nothing is not checked, and does not pay for the schema request
-    // either. The alternative - assuming it meant "all of them" - is what the previous
-    // implementation effectively did, and it is why a viewset built from one mixin reported every
-    // action it had never claimed to have.
+    // either. Assuming it meant "all of them" would report, for a viewset built from one mixin,
+    // every action it never claimed to have.
     const declared = declaredActions(this, this.declaredMixins);
     if (declared === null) return;
 
@@ -282,7 +293,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
 
       const beActions = new Set<string>();
       const beAlternatives: { endpoint: string; actions: readonly string[] }[] = [];
-      const customEndpoints: { endpoint: string; method: string }[] = [];
+      const customEndpoints: { endpoint: string; action: string }[] = [];
 
       for (const [path, pathItem] of Object.entries(paths)) {
         const suffix = path.slice(this.basePath.length).replace(/^\//, '');
@@ -302,9 +313,12 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
         } else {
           // A custom endpoint. Here - and only here - asking whether the proxy has a method of that
           // name is honest: the base implements no custom actions, so whatever answers is something
-          // this ViewSet's own author wrote.
+          // this ViewSet's own author wrote. The name is the BE method's, from the operation's
+          // `x-viewset-action`; an operation without it is not checked.
           for (const verb of verbs) {
-            customEndpoints.push({ endpoint: `${verb.toUpperCase()} ${path}`, method: suffix.split('/')[0] });
+            const action = (pathItem[verb] as { [ACTION_EXTENSION]?: unknown } | undefined)?.[ACTION_EXTENSION];
+            if (typeof action !== 'string' || !action) continue;
+            customEndpoints.push({ endpoint: `${verb.toUpperCase()} ${path}`, action });
           }
           continue;
         }
@@ -332,9 +346,10 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
         }
       }
 
-      for (const { endpoint, method } of customEndpoints) {
-        if (typeof (this as unknown as Record<string, unknown>)[method] !== 'function') {
-          warnings.push(`BE serves '${endpoint}' but the ViewSet has no '${method}()' method`);
+      for (const { endpoint, action } of customEndpoints) {
+        const names = customMethodNames(action);
+        if (!names.some((name) => typeof (this as unknown as Record<string, unknown>)[name] === 'function')) {
+          warnings.push(`BE serves '${endpoint}' but the ViewSet has no '${names.join("()' or '")}()' method`);
         }
       }
 

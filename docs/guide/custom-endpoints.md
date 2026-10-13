@@ -55,6 +55,10 @@ class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item], Loo
 
 This registers `GET /items/search?q=...` in addition to all standard mixin routes.
 
+A viewset needs no mixin. A class with a `__router` only serves its custom endpoints and
+`GET {base_path}/schema`; its FE counterpart is in
+[A ViewSet with custom endpoints only](./vue-custom-endpoints#a-viewset-with-custom-endpoints-only).
+
 ### Custom POST endpoint with a request body
 
 ```python

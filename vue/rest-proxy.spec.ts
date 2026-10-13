@@ -571,7 +571,7 @@ describe('schema validation — validateAgainstSchema()', () => {
     // Here `typeof this[name]` IS honest: the base implements no custom actions, so whatever
     // answers is something this ViewSet's own author wrote.
     await createAndValidate(
-      { paths: { ...FULL_SCHEMA.paths, '/items/export': { get: {} } } },
+      { paths: { ...FULL_SCHEMA.paths, '/items/export': { get: { 'x-viewset-action': 'export' } } } },
       [BulkViewSetMixin, LookupMixin],
       { export: () => Promise.resolve(null) },
     );
@@ -579,7 +579,9 @@ describe('schema validation — validateAgainstSchema()', () => {
   });
 
   it('warns about a custom BE endpoint the ViewSet has no method for', async () => {
-    await createAndValidate({ paths: { ...FULL_SCHEMA.paths, '/items/import': { post: {} } } });
+    await createAndValidate({
+      paths: { ...FULL_SCHEMA.paths, '/items/import': { post: { 'x-viewset-action': 'import' } } },
+    });
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const msg = warnSpy.mock.calls[0][0] as string;
     expect(msg).toContain("BE serves 'POST /items/import'");
