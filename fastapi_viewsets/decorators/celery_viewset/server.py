@@ -82,7 +82,7 @@ def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> di
     """Reconstruct dict values back into Pydantic BaseModel instances based on endpoint type hints.
 
     `context` is handled unconditionally (by name, not by type hint) via deserialize_context - see
-    fastapi_viewsets/context.py - since its declared type is a plain Context and its actual values
+    fastapi_viewsets/context - since its declared type is a plain Context and its actual values
     may need SerializableObject-aware reconstruction.
     """
     result = {}

@@ -8,6 +8,7 @@ nothing. There is no docstring to attach per viewset, because there is no per-vi
 
 This attaches one:
 
+    @route_viewset(router, base_path="/music", pk_field_name="id")
     @endpoint_docs({
         "list_items": {
             "summary": "Browse the catalogue",
@@ -16,7 +17,6 @@ This attaches one:
         "create": {"summary": "Add a track"},
         "count":  {"summary": "How many tracks there are"},
     })
-    @route_viewset(router, base_path="/music", pk_field_name="id")
     class MusicTrackViewSet(...):
         ...
 

@@ -210,8 +210,9 @@ chain unwinds, in a `finally` block, so it runs even if something above raised. 
 
 Last requirement: `perform_list` turns out to be slow enough that it shouldn't block the request -
 it should run on a Celery worker instead. `celery_viewset` does this transparently: the same
-`ItemViewSet` class, decorated once more, dispatches its `perform_*` methods to a worker and awaits
-the result over Redis instead of running them in-process.
+`ItemViewSet` class, decorated once more, dispatches its route methods (`list_items`, `create`, …)
+to a worker as Celery tasks and awaits the result over Redis instead of running them in-process; the
+worker runs the route method, which calls `perform_*` there.
 
 The one thing that has to survive that trip is `context` - the worker has no live `Request` to
 build one from. That's exactly what `serialize_context`/`deserialize_context` are for: plain values

@@ -33,7 +33,7 @@ async def lifecycle_runner(
     same as the old `finalize_response` hook it replaces.
 
     `needs_context`/`request` are reserved for the context-processor mechanism (see
-    fastapi_viewsets/context.py): when needs_context is True, a Context is built (via
+    fastapi_viewsets/context): when needs_context is True, a Context is built (via
     settings.viewsets_context_processors) against whichever instance ends up handling this
     lifecycle and injected into kwargs as `context` before the endpoint runs. Callers that
     already have a resolved context (e.g. `celery_viewset_server`, reconstructing it from a

@@ -281,7 +281,7 @@ def route_viewset(
                 annotation = resolve_typevars(type_map, p.annotation)
                 new_p = p.replace(annotation=annotation)
 
-                # context is built centrally (see fastapi_viewsets/context.py) from a live Request -
+                # context is built centrally (see fastapi_viewsets/context) from a live Request -
                 # it must never reach FastAPI's own signature/validation, so it's dropped here and
                 # rebuilt by lifecycle_runner right before the endpoint runs. Detected by parameter
                 # name (by convention) rather than type, since its type is just a plain dict.
@@ -382,7 +382,7 @@ def route_viewset(
             wrapper.__shape_openapi_extra__ = shape_openapi_extra
             return wrapper, new_return_annotation
 
-        # Command middleware (see fastapi_viewsets/middleware.py) can reshape the response body via
+        # Command middleware (see fastapi_viewsets/middleware) can reshape the response body via
         # ViewSetResult - only middleware that actually declares modifies_response_shape=True
         # untrusts the endpoint's declared return type as the response_model (same reasoning as the
         # old finalize_response hook); typical middleware (auth, rate limiting, sessions) only adds

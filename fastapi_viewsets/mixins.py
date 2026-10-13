@@ -411,10 +411,9 @@ class ListMixin(Generic[T, TFilter], ABC):
 
         Every in-memory stage goes through this, because a filter declaration is written against
         the *response* model - `make_filter_model(Track, ...)` names Track's fields - while the
-        source yields whatever the backend stores. Where the two shapes differ the filter would
-        otherwise be reading the wrong thing: the demo's SQLite backend keeps `genres` as a
-        comma-joined string, and `genres__overlaps` against that matched nothing at all while
-        looking like it worked.
+        source yields whatever the backend stores. Where the two shapes differ an unconverted row
+        holds the stored value: a backend keeping `genres` as a comma-joined string would match
+        nothing on `genres__overlaps`.
 
         Idempotent, so a later stage does not convert twice, and `apply_pagination` knows from
         `query.applied` whether the page still needs it. `to_record` implementations must tolerate

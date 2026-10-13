@@ -222,7 +222,7 @@ to bind them. A custom axios instance is passed the same way to a factory-built 
 
 ## The older form: route_rest
 
-`route_rest` and `route_muxws` are unchanged and still supported. They build a bare proxy and cast
+`route_rest` and `route_muxws` are supported. They build a bare proxy and cast
 it to the mixin interface named as `M`:
 
 ```ts

@@ -376,15 +376,6 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   }
 
   /**
-   * Fetches one page. Only meaningful against a viewset built on the BE PaginatedListMixin — a
-   * plain ListMixin ignores offset/limit and answers with the whole collection, which would not
-   * match this return type.
-   *
-   * The BE speaks snake_case (`has_more`); the rest of this client speaks whatever the model
-   * declares, so only the envelope's own fields are renamed here. The records inside are passed
-   * through untouched.
-   */
-  /**
    * Fetches one cursor page. Only meaningful against a viewset built on the BE CursorListMixin.
    *
    * Follow `next` to walk forward. Unlike offset paging, a row inserted or removed behind you
@@ -413,6 +404,15 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     };
   }
 
+  /**
+   * Fetches one page. Only meaningful against a viewset built on the BE PaginatedListMixin — a
+   * plain ListMixin ignores offset/limit and answers with the whole collection, which would not
+   * match this return type.
+   *
+   * The BE speaks snake_case (`has_more`); the rest of this client speaks whatever the model
+   * declares, so only the envelope's own fields are renamed here. The records inside are passed
+   * through untouched.
+   */
   async listPage(params?: PageParams): Promise<PaginatedList<T>> {
     const page = await this.request<{
       results: T[];

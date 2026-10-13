@@ -45,7 +45,7 @@ async def apply_sort(self, context, query: ListQuery, records: ListRecords) -> L
 rows alone. Each stage is marked independently: push down the sort, leave the filter to the
 default, and neither needs to know about the other.
 
-Stage names are `"filter"`, `"sort"` and `"pagination"`.
+Stage names are `"filter"`, `"sort"` and `"pagination"`, plus `"conversion"`, which `land()` marks once it has converted the materialised rows into the response model.
 
 `filter_list` and `sort_list` remain the place to implement in-memory filtering and sorting; the
 default `apply_*` stages call them.

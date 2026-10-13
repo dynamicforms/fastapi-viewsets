@@ -150,6 +150,8 @@ also accepts a function. It is called once and its result cached: a muxws Peer s
 reconnects, so there is nothing to re-resolve.
 
 ```ts
+import { connect, type Peer } from 'muxws';
+
 let peerPromise: Promise<Peer> | undefined;
 const peer = () => (peerPromise ??= connect('ws://localhost:8000/ws'));
 

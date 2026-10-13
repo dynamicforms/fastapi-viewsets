@@ -35,14 +35,14 @@ class Settings:
         self.default_list_shape: str = "plain"
         """
         The shape a list endpoint answers in when the viewset does not say - "plain", "paginated"
-        or "cursor". Left at "plain" so that adding this setting changed nothing for anybody;
-        an application that pages everything sets it once here instead of on every viewset.
+        or "cursor". An application that pages everything sets it once here instead of on every
+        viewset.
         """
         self.viewsets_register_muxws: bool = True
         """
         Whether a viewset is reachable over the muxws transport (see fastapi_viewsets/mux_ws/) when
         it does not say either way itself. `route_viewset(register_muxws=...)` overrides this per
-        viewset, and `muxws_endpoint(register_muxws=...)` overrides it again per endpoint - each
+        viewset, and `@transports(muxws=...)` overrides it again per endpoint - each
         level only decides for the levels below it that left the question open (None). Read at
         decoration time, so it must be set before any viewset class is decorated.
         """
@@ -51,8 +51,8 @@ class Settings:
         Purely for OpenAPI/Swagger discoverability (a lock icon + testable Authorize flow) - attached
         as an extra sub-dependency alongside the per-route Middleware.depends() bridge (see
         route_viewset.py), not otherwise consumed by this library. Must be set before any viewset
-        class is decorated with route_viewset (same existing constraint as
-        disable_response_model=bool(settings.viewsets_command_middleware) already has).
+        class is decorated with route_viewset, as `viewsets_command_middleware` must, which decides
+        `disable_response_model` when the routes are built.
         """
 
 

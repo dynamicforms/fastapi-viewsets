@@ -52,7 +52,7 @@ function route_rest<M>(
 ## Basic usage
 
 ```ts
-import { route_rest, BulkViewSetMixin } from '@dynamicforms/fastapi-viewsets';
+import { route_rest, BulkViewSetMixin, LookupMixin } from '@dynamicforms/fastapi-viewsets';
 
 interface Item {
   id: number;
@@ -219,7 +219,7 @@ A ViewSet lists the mixins it is made of, and the proxy checks that list against
 when it is constructed:
 
 ```ts
-import { BulkViewSetMixin, LookupMixin } from '@dynamicforms/fastapi-viewsets';
+import { BulkViewSetMixin, LookupMixin, RestProxyImpl } from '@dynamicforms/fastapi-viewsets';
 
 class ItemViewSet extends RestProxyImpl<number, Item, 'id'> {
   static declares = [BulkViewSetMixin, LookupMixin];
