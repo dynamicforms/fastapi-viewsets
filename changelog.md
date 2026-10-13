@@ -71,6 +71,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   404 for an update as for a retrieve.
 - `DjangoORMViewSet` create and update write relation fields; a create writes a natural or
   relation primary key from the body and leaves out only a key the database or Django assigns.
+- `celery_viewset` encodes an action's result like REST and muxws do: a dict is encoded
+  recursively, and a value that is not JSON-native (`datetime`, `Decimal`, `UUID`, ...) takes the
+  form FastAPI's response serialization gives it. A result such as `{"record": Item(...)}` failed
+  with `TypeError: Object of type Item is not JSON serializable`. A `SerializableObject` nested in
+  a dict or list, including in a `ViewSetResult` body, is reconstructed in the FastAPI process.
 - `celery_viewset` with more than one FastAPI process sharing a Redis (several workers or replicas):
   each process receives its results on its own list, `{queue_key}:{host name}:{process id}`. All
   processes read one list per prefix, and a process that popped another process's result discarded

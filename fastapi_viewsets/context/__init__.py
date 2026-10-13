@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Any, TYPE_CHECKING
 
 from pydantic import BaseModel
+from pydantic_core import to_jsonable_python
 
 from ..conf import settings
 
@@ -318,25 +319,43 @@ def serialize_value(value: Any) -> Any:
 def to_jsonable(value: Any) -> Any:
     """
     Recursively convert a value into a JSON-safe structure: a SerializableObject is tagged (see
-    serialize_value()), a Pydantic model is dumped, a list/tuple is recursed into element-wise -
-    anything else passes through unchanged. The one shared implementation of a conversion several
-    call sites need on their own single (non-Context, non-dict) return/body value - ViewSetResult's
-    own (de)serialization, and a celery_viewset worker's task result - rather than each keeping a
-    slightly different copy that drifts out of sync with what the others handle.
+    serialize_value()), a Pydantic model is dumped, a dict is recursed into value-wise, a
+    list/tuple element-wise, and any other value goes through pydantic_core.to_jsonable_python()
+    (datetime, Decimal, UUID, Enum, set, dataclass, ...) - the encoding FastAPI's response
+    serialization applies to the same value on REST/muxws. Shared by ViewSetResult's own
+    serialization and celery_viewset's worker/client payloads. from_jsonable() is its inverse for
+    tagged objects.
     """
     if isinstance(value, SerializableObject):
         return serialize_value(value)
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {k: to_jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [to_jsonable(v) for v in value]
-    return value
+    return to_jsonable_python(value)
 
 
 def deserialize_value(value: Any) -> Any:
     """Inverse of serialize_value() - passes through anything that isn't a tagged payload."""
     if isinstance(value, dict) and _TYPE_KEY in value and _VALUE_KEY in value:
         return _resolve_class(value[_TYPE_KEY]).__deserialize__(value[_VALUE_KEY])
+    return value
+
+
+def from_jsonable(value: Any) -> Any:
+    """
+    Inverse of to_jsonable() for tagged objects: reconstructs every tagged SerializableObject,
+    at any depth of dicts and lists. A Pydantic model and any other value to_jsonable() encoded
+    stay in their JSON form.
+    """
+    if isinstance(value, dict):
+        if _TYPE_KEY in value and _VALUE_KEY in value:
+            return deserialize_value(value)
+        return {k: from_jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [from_jsonable(v) for v in value]
     return value
 
 

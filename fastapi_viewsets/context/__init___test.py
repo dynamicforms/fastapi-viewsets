@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 
+from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -18,6 +19,7 @@ from fastapi_viewsets.context import (
     Context,
     deserialize_context,
     deserialize_value,
+    from_jsonable,
     LazyObject,
     SerializableObject,
     serialize_context,
@@ -363,7 +365,40 @@ def test_to_jsonable_tags_a_serializable_object():
 def test_to_jsonable_passes_through_plain_values():
     assert to_jsonable(42) == 42
     assert to_jsonable(None) is None
-    assert to_jsonable({"a": 1}) == {"a": 1}  # dict is not recursed into - see to_jsonable's own callers for that
+    assert to_jsonable({"a": 1}) == {"a": 1}
+
+
+def test_to_jsonable_recurses_into_dict():
+    class Item(BaseModel):
+        id: int
+
+    value = {"record": Item(id=1), "nested": {"items": [Item(id=2)]}, "tagged": _Tagged(7)}
+    encoded = to_jsonable(value)
+    assert encoded == {
+        "record": {"id": 1},
+        "nested": {"items": [{"id": 2}]},
+        "tagged": {"__fpv_type__": f"{_Tagged.__module__}.{_Tagged.__qualname__}", "__fpv_value__": 7},
+    }
+    json.dumps(encoded)
+
+
+def test_to_jsonable_encodes_non_json_native_leaves():
+    at = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)
+    encoded = to_jsonable({"at": at, "amount": Decimal("1.50"), "at_list": (at,)})
+    assert encoded == {"at": "2026-01-02T03:04:05Z", "amount": "1.50", "at_list": ["2026-01-02T03:04:05Z"]}
+
+
+def test_from_jsonable_reconstructs_tagged_objects_at_any_depth():
+    restored = from_jsonable(json.loads(json.dumps(to_jsonable({"a": [_Tagged(1)], "b": {"c": _Tagged(2)}}))))
+    assert isinstance(restored["a"][0], _Tagged)
+    assert restored["a"][0].value == 1
+    assert isinstance(restored["b"]["c"], _Tagged)
+    assert restored["b"]["c"].value == 2
+
+
+def test_from_jsonable_passes_through_untagged_values():
+    value = {"a": [1, {"b": None}], "c": "x"}
+    assert from_jsonable(value) == value
 
 
 def test_deserialize_context_is_loop_independent():
