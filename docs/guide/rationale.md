@@ -34,9 +34,9 @@ For in-memory data you don't write any implementation at all — just inherit fr
 
 ```python
 class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item], LookupMixin):
-    async def perform_lookup(self) -> list[LookupItem]:
+    async def perform_lookup(self, context: Context) -> list[LookupItem]:
         return [LookupItem(group=None, pk=item.id, title=item.name, icon=None)
-                for item in await self.perform_list()]
+                for item in await self.perform_list(context)]
 
     def __init__(self):
         super().__init__(container=database, pk_field="id")

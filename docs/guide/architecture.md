@@ -1,13 +1,10 @@
 # Architecture
 
-This page builds up the full request pipeline one real problem at a time, using a single running
-example (an `Item` viewset that needs authentication). Every guide page it links to
-([Context Processors](./context-processors), [Command Middleware](./command-middleware),
-[Action Configuration](./action-configuration), [Authentication](./authentication),
-[Authorization](./authorization), [ViewSet Lifecycle](./lifecycle),
-[Routers & Decorators](./routers)) is reference material - exhaustive, structured, meant to be
-looked up once you already know what you're looking for. This page is the opposite: read it top to
-bottom once, and you'll know *why* each of those pieces exists before you ever need to look one up.
+This page describes the request pipeline piece by piece, on one example: an `Item` viewset that
+needs authentication. Each piece has its own reference page: [Context Processors](./context-processors),
+[Command Middleware](./command-middleware), [Action Configuration](./action-configuration),
+[Authentication](./authentication), [Authorization](./authorization),
+[ViewSet Lifecycle](./lifecycle) and [Routers & Decorators](./routers).
 
 ---
 
@@ -16,24 +13,21 @@ bottom once, and you'll know *why* each of those pieces exists before you ever n
 ```python
 database: dict[int, Item] = {1: Item(id=1, name="Widget")}
 
-@route_viewset(router, base_path="/items")
-class ItemViewSet(CollectionViewSet[int, Item]):
+@route_viewset(router, base_path="/items", pk_field_name="id")
+class ItemViewSet(CollectionViewSet[int, Item], ViewSetMixin[int, Item]):
     def __init__(self):
         super().__init__(container=database, pk_field="id")
 ```
 
-That's a complete, working `GET /items` (and `POST`, `PUT`, `DELETE`, ...) endpoint. No context, no
-middleware, no lifecycle concerns - `route_viewset` registers the routes, `CollectionViewSet`
-implements every `perform_*` against the in-memory `database` dict. For a lot of viewsets, this is
+That serves `GET /items`, `POST /items`, `GET`/`PUT`/`PATCH`/`DELETE /items/{pk}`. No middleware, no
+lifecycle concerns - `ViewSetMixin` declares the routes, `route_viewset` registers them, and
+`CollectionViewSet` implements every `perform_*` against the in-memory `database` dict. For a lot of viewsets, this is
 the whole story. Now let's add requirements one at a time and see what each one forces us to add.
 
 ## Problem: "who's calling?"
 
 Say `ItemViewSet` needs to know who's making the request - to filter results, to stamp an owner
-field, whatever. `perform_list(self)` has no way to see the request at all: `route_viewset` calls
-it with no arguments, deliberately, because most viewsets don't need one.
-
-The fix is a parameter, `context`, that carries per-request facts:
+field. Every `perform_*` takes a `context` parameter, which carries per-request facts:
 
 ```python
 class ItemViewSet(CollectionViewSet[int, Item]):
@@ -52,11 +46,10 @@ async def whoami_processor(request: Request, viewset) -> dict:
 settings.viewsets_context_processors = [whoami_processor]
 ```
 
-`route_viewset` sees that `perform_list` declares a `context` parameter, builds one by running
-every configured processor and merging their dicts, and passes it in. `context.user` is *always*
-awaitable - even here, where the value is already a plain string sitting in a dict - because the
-next section is about to make that matter for real. → full depth in
-[Context Processors](./context-processors).
+`route_viewset` builds the context once per request by running every configured processor and
+merging their dicts; the route method (`list_items`) passes it to `perform_list`. `context.user` is
+always awaitable, also where the value is a plain string, because a value can be resolved lazily
+(next section). → full depth in [Context Processors](./context-processors).
 
 ## Problem: "real auth has more than one way to prove who you are"
 

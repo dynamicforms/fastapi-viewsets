@@ -21,6 +21,8 @@ def route_viewset(
     base_path: str,
     lifecycle: LifecycleType = "singleton",
     pk_field_name: str | None = None,
+    register_muxws: bool | None = None,
+    register_rest: bool | None = None,
 ) -> Callable[[type], type]:
 ```
 
@@ -32,6 +34,8 @@ def route_viewset(
 | `base_path` | `str` | — | URL prefix for all endpoints, e.g. `"/items"` |
 | `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle — see [ViewSet Lifecycle](./lifecycle) |
 | `pk_field_name` | `str \| None` | `None` | Name of the PK field; when set, the field is stripped from the `POST` request body |
+| `register_muxws` | `bool \| None` | `None` | Publish on the [muxws transport](./muxws); `None` defers to `settings.viewsets_register_muxws` |
+| `register_rest` | `bool \| None` | `None` | Publish on REST; `None` means yes |
 
 ### Usage
 
@@ -78,12 +82,14 @@ The decorator derives an OpenAPI tag from the class name by stripping the `ViewS
 
 ### Route ordering
 
-Routes are always registered in a consistent order:
+Routes are registered most specific first, so a literal segment is matched before `{pk}` would
+take it:
 
-1. `/items` — list / create
+1. `/items/bulk`, `/items/lookup` and other literal paths — bulk operations, lookup, custom endpoints
 2. `/items/{pk}` — retrieve / update / destroy
-3. `/items/bulk` — bulk operations
-4. `/items/lookup` — lookup
+3. `/items` — list / create
+
+Within one path the order is `DELETE`, `PATCH`, `PUT`, `POST`, `GET`.
 
 ### pk_field_name and request body
 
@@ -127,7 +133,8 @@ The same class definition is used in both processes. The decorator is typically 
 ```python
 # viewsets.py
 from fastapi_viewsets.decorators.celery_viewset import celery_viewset
-from fastapi_viewsets import CollectionViewSet, BulkViewSetMixin
+from fastapi_viewsets.collection_viewset import CollectionViewSet
+from fastapi_viewsets.mixins import BulkViewSetMixin
 
 database = {}
 
@@ -173,11 +180,12 @@ set_is_celery_worker(False)  # force client mode
 
 ### Task naming
 
-Each viewset method is registered as a Celery task named `{task_prefix}.{method_name}`:
+Each route method is registered as a Celery task named `{task_prefix}.{route_name}`, the route's
+name, which is the method's name unless the route states one:
 
 | Method | Task name (prefix `"items"`) |
 |--------|------------------------------|
-| `list` | `items.list` |
+| `list_items` | `items.list_items` |
 | `retrieve` | `items.retrieve` |
 | `create` | `items.create` |
 | `update` | `items.update` |
@@ -187,6 +195,7 @@ Each viewset method is registered as a Celery task named `{task_prefix}.{method_
 | `bulk_update` | `items.bulk_update` |
 | `bulk_partial_update` | `items.bulk_partial_update` |
 | `bulk_destroy` | `items.bulk_destroy` |
+| `lookup` | `items.lookup` |
 
 ### Result passing
 
