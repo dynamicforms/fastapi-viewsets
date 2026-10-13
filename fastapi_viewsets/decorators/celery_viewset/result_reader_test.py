@@ -313,3 +313,27 @@ async def test_stop_result_reader_with_queue_key_stops_only_that_reader():
 
     await stop_result_reader()
     assert task_orders.done()
+
+
+@pytest.mark.asyncio
+async def test_stopped_reader_fails_only_its_own_pending_futures():
+    """Stopping a queue_key's reader fails the futures registered for it and leaves other keys' futures pending."""
+    from fastapi_viewsets.exceptions import ResultReaderStoppedError
+
+    redis_mock = MagicMock()
+    redis_mock.lpop = AsyncMock(return_value=None)
+    loop = asyncio.get_running_loop()
+    own = loop.create_future()
+    other = loop.create_future()
+    result_reader.register_future("own-id", own, "q:own")
+    result_reader.register_future("other-id", other, "q:other")
+
+    await start_result_reader(redis_mock, "q:own")
+    await stop_result_reader("q:own")
+
+    with pytest.raises(ResultReaderStoppedError):
+        own.result()
+    assert not other.done()
+    assert "own-id" not in result_reader._pending_futures
+    assert "other-id" in result_reader._pending_futures
+    result_reader.unregister_future("other-id")

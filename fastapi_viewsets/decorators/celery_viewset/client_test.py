@@ -12,7 +12,7 @@ from fastapi_viewsets.context import SerializableObject
 from fastapi_viewsets.decorators import (
     celery_viewset_client,
 )
-from fastapi_viewsets.exceptions import ResultTimeoutError
+from fastapi_viewsets.exceptions import ResultReaderStoppedError, ResultTimeoutError
 from fastapi_viewsets.mixins import ListMixin
 
 
@@ -55,7 +55,7 @@ def test_celery_viewset_client_sends_task():
 
     original_register = result_reader.register_future
 
-    def mock_register(_correlation_id, future):
+    def mock_register(_correlation_id, future, _queue_key=None):
         # Immediately resolve the future with a mock result
         asyncio.get_event_loop().call_soon(lambda: future.set_result(["mocked"]))
 
@@ -90,7 +90,7 @@ def test_celery_viewset_client_sends_date_fields_as_json_safe_strings():
 
     original_register = result_reader.register_future
 
-    def mock_register(_correlation_id, future):
+    def mock_register(_correlation_id, future, _queue_key=None):
         asyncio.get_event_loop().call_soon(lambda: future.set_result(None))
 
     result_reader.register_future = mock_register
@@ -125,7 +125,7 @@ def test_celery_viewset_client_serializes_positional_basemodel_args():
 
     original_register = result_reader.register_future
 
-    def mock_register(_correlation_id, future):
+    def mock_register(_correlation_id, future, _queue_key=None):
         asyncio.get_event_loop().call_soon(lambda: future.set_result(None))
 
     result_reader.register_future = mock_register
@@ -217,7 +217,7 @@ def test_celery_viewset_client_sends_task_with_ignore_result():
 
     original_register = result_reader.register_future
 
-    def mock_register(_correlation_id, future):
+    def mock_register(_correlation_id, future, _queue_key=None):
         asyncio.get_event_loop().call_soon(lambda: future.set_result(["mocked"]))
 
     result_reader.register_future = mock_register
@@ -274,7 +274,9 @@ def test_celery_viewset_client_sends_this_process_result_queue_key(monkeypatch):
 
     monkeypatch.setattr(result_reader.os, "getpid", lambda: 4242)
     monkeypatch.setattr(
-        result_reader, "register_future", lambda _id, future: future.get_loop().call_soon(future.set_result, [])
+        result_reader,
+        "register_future",
+        lambda _id, future, _queue_key=None: future.get_loop().call_soon(future.set_result, []),
     )
     asyncio.run(ItemViewSet().list_items())
 
@@ -300,6 +302,97 @@ def test_celery_viewset_client_times_out_with_504():
             await ItemViewSet().list_items()
         assert exc_info.value.status_code == 504
         assert exc_info.value.params == {"task": "items.list_items", "timeout": 0.01}
+        assert len(result_reader._pending_futures) == 0
+
+    asyncio.run(run())
+
+
+def test_celery_viewset_client_cancelled_call_drops_the_pending_future():
+    """A call cancelled while it awaits its result leaves no pending future."""
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
+
+    async def run():
+        call = asyncio.create_task(ItemViewSet().list_items())
+        while not celery_app.send_task.called:
+            await asyncio.sleep(0.001)
+        await asyncio.sleep(0.01)
+        assert len(result_reader._pending_futures) == 1
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        assert len(result_reader._pending_futures) == 0
+
+    asyncio.run(run())
+
+
+def test_celery_viewset_client_sends_the_task_outside_the_event_loop_thread():
+    """send_task runs in a worker thread, so a blocking broker publish does not stall the event loop."""
+    import threading
+
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+    send_threads = []
+    celery_app.send_task.side_effect = lambda *_args, **_kwargs: send_threads.append(threading.get_ident())
+
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
+
+    original_register = result_reader.register_future
+
+    def mock_register(_correlation_id, future, _queue_key=None):
+        future.get_loop().call_soon(future.set_result, [])
+
+    result_reader.register_future = mock_register
+    try:
+        asyncio.run(ItemViewSet().list_items())
+    finally:
+        result_reader.register_future = original_register
+
+    assert len(send_threads) == 1
+    assert send_threads[0] != threading.get_ident()
+
+
+def test_celery_viewset_client_fails_with_503_when_the_result_reader_stops():
+    """A call pending when its queue_key's reader stops raises ResultReaderStoppedError."""
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+
+    async def lpop(_key):
+        return None
+
+    redis_mock.lpop = lpop
+
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
+
+    async def run():
+        queue_key = "celery_viewset_results:items"
+        await result_reader.start_result_reader(redis_mock, queue_key)
+        call = asyncio.create_task(ItemViewSet().list_items())
+        while not celery_app.send_task.called:
+            await asyncio.sleep(0.001)
+        await asyncio.sleep(0.01)
+        await result_reader.stop_result_reader(queue_key)
+        with pytest.raises(ResultReaderStoppedError) as exc_info:
+            await call
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.params == {"queue_key": queue_key}
         assert len(result_reader._pending_futures) == 0
 
     asyncio.run(run())
@@ -338,7 +431,7 @@ def test_celery_dispatch_hook_none_preserves_existing_behavior():
 
     original_register = result_reader.register_future
 
-    def mock_register(_correlation_id, future):
+    def mock_register(_correlation_id, future, _queue_key=None):
         asyncio.get_event_loop().call_soon(lambda: future.set_result(["mocked"]))
 
     result_reader.register_future = mock_register
@@ -377,7 +470,7 @@ def test_celery_dispatch_hook_awaited_before_send_task():
 
     original_register = result_reader.register_future
 
-    def mock_register(_correlation_id, future):
+    def mock_register(_correlation_id, future, _queue_key=None):
         asyncio.get_event_loop().call_soon(lambda: future.set_result(None))
 
     result_reader.register_future = mock_register
@@ -417,7 +510,7 @@ def test_celery_dispatch_hook_receives_call_kwargs():
 
     original_register = result_reader.register_future
 
-    def mock_register(_correlation_id, future):
+    def mock_register(_correlation_id, future, _queue_key=None):
         asyncio.get_event_loop().call_soon(lambda: future.set_result(None))
 
     result_reader.register_future = mock_register
@@ -451,7 +544,7 @@ def test_celery_dispatch_hook_empty_dict_adds_nothing():
 
     original_register = result_reader.register_future
 
-    def mock_register(_correlation_id, future):
+    def mock_register(_correlation_id, future, _queue_key=None):
         asyncio.get_event_loop().call_soon(lambda: future.set_result(None))
 
     result_reader.register_future = mock_register
@@ -490,7 +583,7 @@ def test_fastapi_client_endpoint_returns_200():
 
     original_register = result_reader.register_future
 
-    def mock_register(_correlation_id, future):
+    def mock_register(_correlation_id, future, _queue_key=None):
         loop = future.get_loop()
         loop.call_soon_threadsafe(future.set_result, [{"id": 1, "name": "test"}])
 

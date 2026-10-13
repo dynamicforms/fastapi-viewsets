@@ -117,9 +117,9 @@ def _patch_method(
     @wraps(original_endpoint)
     async def async_client_wrapper(_self, *args, **kwargs):
         correlation_id = str(uuid.uuid4())
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
-        result_reader.register_future(correlation_id, future)
+        result_reader.register_future(correlation_id, future, queue_key)
 
         try:
             serializable_args = [await _serialize_value(v) for v in args]
@@ -131,7 +131,9 @@ def _patch_method(
                     serializable_kwargs[k] = await _serialize_value(v, method_name in PARTIAL_UPDATE_ACTIONS)
             logger.info("Celery task scheduling: %s (correlation_id=%s)", task_name, correlation_id)
             extra_kwargs = await _celery_dispatch_hook(kwargs) if _celery_dispatch_hook is not None else {}
-            celery_app.send_task(
+            # send_task() blocks while it connects and publishes to the broker.
+            await asyncio.to_thread(
+                celery_app.send_task,
                 task_name,
                 args=serializable_args,
                 kwargs={
@@ -151,8 +153,7 @@ def _patch_method(
             except asyncio.TimeoutError:
                 logger.error("Celery task timed out: %s (correlation_id=%s)", task_name, correlation_id)
                 raise ResultTimeoutError(task_name, result_timeout) from None
-        except Exception:
+        finally:
             result_reader.unregister_future(correlation_id)
-            raise
 
     setattr(cls, method_name, async_client_wrapper)

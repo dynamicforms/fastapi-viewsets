@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (504, `result_timeout`, params `task` and `timeout`).
 - `get_process_queue_key(queue_key)`: the Redis list the calling process receives a queue key's
   results on.
+- `ResultReaderStoppedError` (503, `result_reader_stopped`, param `queue_key`): a `celery_viewset`
+  call pending when the result reader of its `queue_key` stops.
 
 ### Changed
 
@@ -60,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   processes read one list per prefix, and a process that popped another process's result discarded
   it, leaving that request waiting indefinitely. The worker renews a result list's expiry to one
   hour on every push, so the list of an exited process is removed.
+- `celery_viewset` client: a call cancelled while it awaits its result removes its pending entry,
+  which stayed in the registry. `send_task` runs in a worker thread instead of blocking the event
+  loop while it publishes to the broker.
 - The body of a create with `pk_field_name` set is validated as the model declares it: `Field`
   constraints, aliases, `model_config` (e.g. `extra="forbid"`) and the model's validators apply, and
   the OpenAPI schema carries them. A body breaking them was accepted and passed to `perform_create`

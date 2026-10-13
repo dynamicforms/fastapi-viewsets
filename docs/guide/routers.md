@@ -226,6 +226,12 @@ is removed from Redis.
 A call raises `ResultTimeoutError` (504, `result_timeout`) when its result does not arrive within
 `result_timeout` seconds, one hour by default.
 
+A call pending when `stop_result_reader` stops the reader of its `queue_key`, or when that reader task
+is cancelled, raises `ResultReaderStoppedError` (503, `result_reader_stopped`, param `queue_key`). A
+cancelled call removes its pending entry; its result, if the worker still sends one, is logged as
+having no pending call and dropped. `send_task` runs in a worker thread, so a slow broker does not
+block the event loop.
+
 A model argument crosses to the worker dumped by field name and is validated as its model there. A
 create body crosses without its primary key, and the action receives the model as it does in the
 FastAPI process. A model argument that fails validation on the worker fails the call.

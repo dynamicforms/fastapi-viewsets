@@ -703,7 +703,7 @@ def test_celery_context_round_trip_with_lazy_object():
 
     original_register = result_reader.register_future
 
-    def mock_register(_correlation_id, future):
+    def mock_register(_correlation_id, future, _queue_key=None):
         asyncio.get_event_loop().call_soon(lambda: future.set_result([]))
 
     result_reader.register_future = mock_register
