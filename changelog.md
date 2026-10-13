@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (504, `result_timeout`, params `task` and `timeout`).
 - `get_process_queue_key(queue_key)`: the Redis list the calling process receives a queue key's
   results on.
+- `RequestOptions.headers`: headers for a single `request()` call, sent by both transports; over
+  muxws they override the proxy's `headers`.
+- `ListShapeMismatchError` and the `ListShape` type.
 - `ResultReaderStoppedError` (503, `result_reader_stopped`, param `queue_key`): a `celery_viewset`
   call pending when the result reader of its `queue_key` stops.
 
@@ -62,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `list()`, `listPage()` and `listCursor()` send `X-List-Shape` with the shape they return, so each
+  receives its own envelope from a viewset with `list_shapes`. A reply in another shape throws
+  `ListShapeMismatchError`; it was returned as the method's type with the envelope fields
+  `undefined`.
 - `DjangoORMViewSet` updates run in one transaction that reads each row with `SELECT ... FOR
   UPDATE`, sets the stated fields on it, validates it as `schema` (`@model_validator`s included)
   and saves it. Two concurrent updates of different fields of a row kept only the later one's

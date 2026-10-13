@@ -75,7 +75,7 @@ export interface MuxwsProxyOptions extends ProxyBaseOptions {
   /**
    * Headers added to every request this proxy makes. The WebSocket handshake already carries
    * whatever identified the session and the server treats that as the baseline; these override it
-   * for this proxy's calls. There is no per-call header: `RequestOptions` is `{ query, body }`.
+   * for this proxy's calls; `RequestOptions.headers` override these for a single call.
    */
   headers?: Record<string, string>;
 }
@@ -112,6 +112,7 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
     // real HTTP headers. muxws itself never reads any of them (SPEC WSM-AUT-002).
     const headers: Record<string, unknown> = {
       ...this.headers,
+      ...options.headers,
       ':method': method,
       ':path': `${this.basePath}${path}`,
     };

@@ -191,3 +191,8 @@ async function retrieveOrNull(id: number): Promise<Item | null> {
 A muxws call whose socket dies mid-flight rejects with muxws' `ConnectionLost`, not with
 `ViewSetRequestError`: it carries no `response`, so the check above sends it down the same branch as
 an `AxiosError` that never got a reply. See [reconnection](./muxws#reconnection).
+
+`list()`, `listPage()` and `listCursor()` on either transport reject with `ListShapeMismatchError`
+when a successful reply is in another list shape than the one the method requested. It carries no
+`response` either; `expected` and `received` name the two shapes. See
+[the list mixins](../api/vue-mixins#cursorlistmixin-t).

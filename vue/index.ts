@@ -34,8 +34,15 @@ export type {
   PaginatedList,
 } from './mixins';
 
-export type { HttpMethod, ProxyBaseOptions, QueryParams, RequestOptions, ViewSetMixinDeclaration } from './proxy-base';
-export { ViewSetInternals, ViewSetProxyBase, ViewSetRequestError } from './proxy-base';
+export type {
+  HttpMethod,
+  ListShape,
+  ProxyBaseOptions,
+  QueryParams,
+  RequestOptions,
+  ViewSetMixinDeclaration,
+} from './proxy-base';
+export { ListShapeMismatchError, ViewSetInternals, ViewSetProxyBase, ViewSetRequestError } from './proxy-base';
 
 export type { PkFieldName, ViewSetClass, ViewSetMixinClass } from './viewset';
 export { muxwsViewSet, restViewSet } from './viewset';

@@ -20,6 +20,7 @@ import {
   RetrieveMixin,
   ViewSetMixin,
 } from './mixins';
+import { ListShapeMismatchError } from './proxy-base';
 import { RestProxyImpl, route_rest } from './rest-proxy';
 import { restViewSet } from './viewset';
 
@@ -74,7 +75,7 @@ describe('RestProxyImpl — direct instance', () => {
   it('list() — GET /items', async () => {
     http.get.mockResolvedValue({ data: MOCK_ITEMS });
     const result = await proxy.list();
-    expect(http.get).toHaveBeenCalledWith('/items');
+    expect(http.get).toHaveBeenCalledWith('/items', { headers: { 'X-List-Shape': 'plain' } });
     expect(result).toEqual(MOCK_ITEMS);
   });
 
@@ -143,6 +144,55 @@ describe('RestProxyImpl — direct instance', () => {
     const result = await proxy.bulkDestroy([1, 2]);
     expect(http.delete).toHaveBeenCalledWith('/items/bulk', { data: [1, 2] });
     expect(result).toEqual([{ deleted: 1 }]);
+  });
+
+  it('listPage() requests the paginated shape and passes offset/limit as params', async () => {
+    http.get.mockResolvedValue({
+      data: { results: MOCK_ITEMS, offset: 10, limit: 2, count: 42, has_more: true, has_previous: true },
+    });
+    const page = await proxy.listPage({ offset: 10, limit: 2 });
+    expect(http.get).toHaveBeenCalledWith('/items', {
+      params: { offset: 10, limit: 2 },
+      headers: { 'X-List-Shape': 'paginated' },
+    });
+    expect(page).toEqual({ results: MOCK_ITEMS, offset: 10, limit: 2, count: 42, hasMore: true, hasPrevious: true });
+  });
+
+  it('listCursor() requests the cursor shape', async () => {
+    const envelope = {
+      results: MOCK_ITEMS,
+      limit: 2,
+      has_more: true,
+      has_previous: false,
+      next: 'n',
+      previous: null,
+      first: 'f',
+      last: 'l',
+    };
+    http.get.mockResolvedValue({ data: envelope });
+    const page = await proxy.listCursor({ limit: 2 });
+    expect(http.get).toHaveBeenCalledWith('/items', { params: { limit: 2 }, headers: { 'X-List-Shape': 'cursor' } });
+    expect(page.next).toBe('n');
+    expect(page.hasMore).toBe(true);
+  });
+
+  it('listPage() rejects a cursor envelope from a viewset that offers only cursor paging', async () => {
+    http.get.mockResolvedValue({
+      data: { results: [], limit: 2, has_more: false, has_previous: false, next: null, previous: null },
+    });
+    const error = await proxy.listPage().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ListShapeMismatchError);
+    expect(error).toMatchObject({ expected: 'paginated', received: 'cursor' });
+  });
+
+  it('list() rejects a paged envelope', async () => {
+    http.get.mockResolvedValue({ data: { results: [], offset: 0, limit: 2, count: 0 } });
+    await expect(proxy.list()).rejects.toMatchObject({ expected: 'plain', received: 'paginated' });
+  });
+
+  it('listCursor() reports a body matching no envelope as unknown', async () => {
+    http.get.mockResolvedValue({ data: { detail: 'x' } });
+    await expect(proxy.listCursor()).rejects.toMatchObject({ expected: 'cursor', received: 'unknown' });
   });
 
   it('lookup() — GET /items/lookup', async () => {
@@ -381,7 +431,7 @@ describe('custom endpoints — extending RestProxyImpl', () => {
   it('standard mixin methods still work on extended class', async () => {
     http.get.mockResolvedValue({ data: [MOCK_ITEM] });
     const items = await api.list();
-    expect(http.get).toHaveBeenCalledWith('/items');
+    expect(http.get).toHaveBeenCalledWith('/items', { headers: { 'X-List-Shape': 'plain' } });
     expect(items).toEqual([MOCK_ITEM]);
   });
 

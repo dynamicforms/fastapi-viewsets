@@ -40,6 +40,41 @@ export type QueryParams = Record<string, string | number | boolean | null | unde
 export interface RequestOptions {
   query?: QueryParams;
   body?: unknown;
+  /** Headers for this call only; on muxws they override the proxy's own `headers`. */
+  headers?: Record<string, string>;
+}
+
+/** The response shapes of `GET {basePath}`, as the BE names them in `X-List-Shape`. */
+export type ListShape = 'plain' | 'paginated' | 'cursor';
+
+/**
+ * Thrown by `list()`, `listPage()` and `listCursor()` when the BE answers in a shape other than the
+ * one the method asked for. A BE viewset that declares a single shape does not read `X-List-Shape`
+ * and answers in that shape; this error is what such a viewset produces for the other two methods.
+ *
+ * `received` is `'unknown'` when the body matches none of the three envelopes.
+ */
+export class ListShapeMismatchError extends Error {
+  readonly expected: ListShape;
+  readonly received: ListShape | 'unknown';
+
+  constructor(expected: ListShape, received: ListShape | 'unknown') {
+    super(`Expected a '${expected}' list from the BE, received '${received}'`);
+    this.name = 'ListShapeMismatchError';
+    this.expected = expected;
+    this.received = received;
+  }
+}
+
+/** Identifies a list response by its envelope: an array, an object with `offset`, or one with `next` and `has_more`. */
+function listShapeOf(body: unknown): ListShape | 'unknown' {
+  if (Array.isArray(body)) return 'plain';
+  if (typeof body !== 'object' || body === null || !Array.isArray((body as { results?: unknown }).results)) {
+    return 'unknown';
+  }
+  if ('offset' in body) return 'paginated';
+  if ('next' in body && 'has_more' in body) return 'cursor';
+  return 'unknown';
 }
 
 /**
@@ -371,18 +406,30 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     return this.request<T[]>('POST', '/bulk', { body: data });
   }
 
+  /**
+   * Requests `shape` with `X-List-Shape` and verifies that the BE answered in it; see
+   * ListShapeMismatchError.
+   */
+  private async requestList<R>(shape: ListShape, query?: QueryParams): Promise<R> {
+    const body = await this.request<unknown>('GET', '', { query, headers: { 'X-List-Shape': shape } });
+    const received = listShapeOf(body);
+    if (received !== shape) throw new ListShapeMismatchError(shape, received);
+    return body as R;
+  }
+
   async list(params?: ListParams): Promise<T[]> {
-    return this.request<T[]>('GET', '', { query: params });
+    return this.requestList<T[]>('plain', params);
   }
 
   /**
-   * Fetches one cursor page. Only meaningful against a viewset built on the BE CursorListMixin.
+   * Fetches one cursor page, from a BE viewset whose `list_shape` is `cursor` or whose `list_shapes`
+   * include it.
    *
    * Follow `next` to walk forward. Unlike offset paging, a row inserted or removed behind you
    * cannot make the next page repeat or skip anything.
    */
   async listCursor(params?: CursorParams): Promise<CursorPage<T>> {
-    const page = await this.request<{
+    const page = await this.requestList<{
       results: T[];
       limit: number;
       has_more: boolean;
@@ -391,7 +438,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
       previous: string | null;
       first: string | null;
       last: string | null;
-    }>('GET', '', { query: params });
+    }>('cursor', params);
     return {
       results: page.results,
       limit: page.limit,
@@ -405,23 +452,22 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   }
 
   /**
-   * Fetches one page. Only meaningful against a viewset built on the BE PaginatedListMixin — a
-   * plain ListMixin ignores offset/limit and answers with the whole collection, which would not
-   * match this return type.
+   * Fetches one page, from a BE viewset whose `list_shape` is `paginated` or whose `list_shapes`
+   * include it.
    *
    * The BE speaks snake_case (`has_more`); the rest of this client speaks whatever the model
    * declares, so only the envelope's own fields are renamed here. The records inside are passed
    * through untouched.
    */
   async listPage(params?: PageParams): Promise<PaginatedList<T>> {
-    const page = await this.request<{
+    const page = await this.requestList<{
       results: T[];
       offset: number;
       limit: number | null;
       count: number | null;
       has_more: boolean;
       has_previous: boolean;
-    }>('GET', '', { query: params });
+    }>('paginated', params);
     return {
       results: page.results,
       offset: page.offset,

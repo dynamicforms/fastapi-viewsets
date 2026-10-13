@@ -132,12 +132,39 @@ const tracks = new TrackViewSet({ basePath: '/tracks' });
 let next = await tracks.listCursor({ limit: 50 });
 ```
 
-`list()` and `listPage()` are the same call against a viewset whose default is `plain` or
-`paginated`. The client sends no `X-List-Shape` header, so a viewset offering several shapes still
-answers this client in its default one.
+`list()` and `listPage()` read the same endpoint. Each method sends `X-List-Shape` with its shape
+(`plain`, `paginated`, `cursor`), so against a viewset with `list_shapes` every declared mixin
+receives its own envelope. A viewset with one shape ignores the header and answers in that shape;
+the methods for the other two throw `ListShapeMismatchError`.
 
 The envelope's `snake_case` fields are renamed to `hasMore`, `hasPrevious`; the records inside are
 untouched.
+
+### CORS
+
+`X-List-Shape` is not a CORS-safelisted header. When the page and the API are on different origins,
+the browser sends an `OPTIONS` preflight before every REST list request, and sends the `GET` only if
+the preflight's `Access-Control-Allow-Headers` names `X-List-Shape`. With FastAPI's
+`CORSMiddleware`:
+
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://app.example.com"],
+    allow_methods=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-List-Shape"],  # or ["*"]
+)
+```
+
+A preflight that does not allow the header blocks the request in the browser: the server never
+receives the `GET`, and the call rejects with an `AxiosError` that has no `response`.
+
+A same-origin page — including one served through a dev-server proxy — sends no preflight. muxws
+carries the header inside the WebSocket stream, where CORS does not apply.
 
 ## Paging behaviour
 

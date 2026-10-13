@@ -92,7 +92,11 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
   protected async request<R>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<R> {
     const url = `${this.basePath}${path}`;
     const hasQuery = options.query !== undefined && Object.keys(options.query).length > 0;
-    const config = hasQuery ? { params: options.query } : undefined;
+    const hasHeaders = options.headers !== undefined && Object.keys(options.headers).length > 0;
+    const config =
+      hasQuery || hasHeaders
+        ? { ...(hasQuery ? { params: options.query } : {}), ...(hasHeaders ? { headers: options.headers } : {}) }
+        : undefined;
 
     switch (method) {
       case 'GET': {
