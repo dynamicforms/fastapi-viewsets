@@ -137,8 +137,31 @@ let next = await tracks.listCursor({ limit: 50 });
 receives its own envelope. A viewset with one shape ignores the header and answers in that shape;
 the methods for the other two throw `ListShapeMismatchError`.
 
-Over REST the header makes a cross-origin list request a CORS preflighted one: the server's
-`CORSMiddleware` has to allow it, with `allow_headers=["X-List-Shape"]` or `["*"]`.
+### CORS
+
+`X-List-Shape` is not a CORS-safelisted header. When the page and the API are on different origins,
+the browser sends an `OPTIONS` preflight before every REST list request, and sends the `GET` only if
+the preflight's `Access-Control-Allow-Headers` names `X-List-Shape`. With FastAPI's
+`CORSMiddleware`:
+
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://app.example.com"],
+    allow_methods=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-List-Shape"],  # or ["*"]
+)
+```
+
+A preflight that does not allow the header blocks the request in the browser: the server never
+receives the `GET`, and the call rejects with an `AxiosError` that has no `response`.
+
+A same-origin page — including one served through a dev-server proxy — sends no preflight. muxws
+carries the header inside the WebSocket stream, where CORS does not apply.
 
 The envelope's `snake_case` fields are renamed to `hasMore`, `hasPrevious`; the records inside are
 untouched.
