@@ -67,7 +67,10 @@ declare const FACTORY_BUILT_REJECTION: 'route_muxws cannot take a factory-built 
 
 export interface MuxwsProxyOptions extends ProxyBaseOptions {
   peer: MuxwsPeerSource;
-  /** Per-request timeout in milliseconds, the wait for the reply headers included. muxws resets the stream with TIMEOUT when it expires. */
+  /**
+   * Per-request timeout in milliseconds, the wait for the reply headers included. muxws resets the
+   * stream with TIMEOUT when it expires.
+   */
   timeoutMs?: number;
   /**
    * Headers added to every request this proxy makes. The WebSocket handshake already carries
