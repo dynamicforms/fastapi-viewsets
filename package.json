@@ -47,12 +47,9 @@
   "issues": "https://github.com/dynamicforms/fastapi-viewsets/issues",
   "peerDependencies": {
     "axios": "^1.13.6",
-    "lodash-es": "^4.17.12",
-    "vue": "^3.4",
     "muxws": "^0.3.1"
   },
   "devDependencies": {
-    "@types/lodash-es": "^4.17.12",
     "@types/node": "^26",
     "@vitejs/plugin-vue": "^6",
     "@vitest/coverage-v8": "^4",
