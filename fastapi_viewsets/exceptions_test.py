@@ -8,6 +8,7 @@ from fastapi_viewsets.exceptions import (
     NotAuthorizedError,
     NotFoundError,
     RateLimitedError,
+    ResultTimeoutError,
     SessionExpiredError,
     UnsupportedListShapeError,
 )
@@ -40,6 +41,14 @@ def test_rate_limited_error():
     assert error.status_code == 429
     assert error.detail == "Rate limit exceeded"
     assert error.code == "rate_limited"
+
+
+def test_result_timeout_error_carries_task_and_timeout_as_params():
+    error = ResultTimeoutError("items.list_items", 3600.0)
+    assert error.status_code == 504
+    assert error.detail == "No result for items.list_items within 3600.0 s"
+    assert error.code == "result_timeout"
+    assert error.params == {"task": "items.list_items", "timeout": 3600.0}
 
 
 def test_unsupported_list_shape_error_carries_shape_and_allowed_as_params():

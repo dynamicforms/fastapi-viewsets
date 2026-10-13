@@ -43,6 +43,7 @@ knows which user it is answering, decides what language to show.
 | `SessionExpiredError()` | 401 | `session_expired` | — |
 | `NotAuthorizedError()` | 403 | `not_authorized` | — |
 | `RateLimitedError()` | 429 | `rate_limited` | — |
+| `ResultTimeoutError(task, timeout)` | 504 | `result_timeout` | `{task, timeout}` |
 | `UnsupportedListShapeError(shape, allowed)` | 422 | `unsupported_list_shape` | `{shape, allowed}` |
 | `CursorRequestError(error)` | 400 | one of the cursor codes below | varies |
 

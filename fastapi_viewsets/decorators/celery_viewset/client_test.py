@@ -12,6 +12,7 @@ from fastapi_viewsets.context import SerializableObject
 from fastapi_viewsets.decorators import (
     celery_viewset_client,
 )
+from fastapi_viewsets.exceptions import ResultTimeoutError
 from fastapi_viewsets.mixins import ListMixin
 
 
@@ -254,6 +255,51 @@ def test_celery_viewset_client_unregisters_future_on_send_task_error():
         with pytest.raises(RuntimeError, match="Celery broker unavailable"):
             await instance.list_items()
         # Future should be unregistered after error
+        assert len(result_reader._pending_futures) == 0
+
+    asyncio.run(run())
+
+
+def test_celery_viewset_client_sends_this_process_result_queue_key(monkeypatch):
+    """The task names the result list of the process that dispatches it, read at dispatch time."""
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
+
+    monkeypatch.setattr(result_reader.os, "getpid", lambda: 4242)
+    monkeypatch.setattr(
+        result_reader, "register_future", lambda _id, future: future.get_loop().call_soon(future.set_result, [])
+    )
+    asyncio.run(ItemViewSet().list_items())
+
+    sent_key = celery_app.send_task.call_args.kwargs["kwargs"]["_result_queue_key"]
+    assert sent_key == result_reader.get_process_queue_key("celery_viewset_results:items")
+    assert sent_key.endswith(":4242")
+
+
+def test_celery_viewset_client_times_out_with_504():
+    """A result that does not arrive within result_timeout raises ResultTimeoutError and drops the pending future."""
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock, result_timeout=0.01)
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
+
+    async def run():
+        with pytest.raises(ResultTimeoutError) as exc_info:
+            await ItemViewSet().list_items()
+        assert exc_info.value.status_code == 504
+        assert exc_info.value.params == {"task": "items.list_items", "timeout": 0.01}
         assert len(result_reader._pending_futures) == 0
 
     asyncio.run(run())

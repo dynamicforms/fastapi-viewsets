@@ -6,6 +6,7 @@ import pytest
 
 from fastapi_viewsets.decorators.celery_viewset import result_reader
 from fastapi_viewsets.decorators.celery_viewset.result_reader import (
+    get_process_queue_key,
     get_result_queue_key,
     push_result,
     start_result_reader,
@@ -45,6 +46,16 @@ def test_get_result_queue_key():
     assert get_result_queue_key("items") == "celery_viewset_results:items"
 
 
+def test_get_process_queue_key_names_host_and_process(monkeypatch):
+    """Each process has its own result list: the key carries host name and process id."""
+    monkeypatch.setattr(result_reader.socket, "gethostname", lambda: "web-1")
+    monkeypatch.setattr(result_reader.os, "getpid", lambda: 101)
+    assert get_process_queue_key("celery_viewset_results:items") == "celery_viewset_results:items:web-1:101"
+
+    monkeypatch.setattr(result_reader.os, "getpid", lambda: 102)
+    assert get_process_queue_key("celery_viewset_results:items") == "celery_viewset_results:items:web-1:102"
+
+
 # ---------------------------------------------------------------------------
 # push_result
 # ---------------------------------------------------------------------------
@@ -64,6 +75,7 @@ def test_push_result_success():
     assert payload["correlation_id"] == "corr-1"
     assert payload["result"] == {"id": 1}
     assert "error" not in payload
+    redis_mock.expire.assert_called_once_with("celery_viewset_results:items", result_reader.RESULT_QUEUE_TTL)
 
 
 def test_push_result_error():
@@ -111,6 +123,7 @@ async def test_result_reader_loop_resolves_future():
         pass
 
     assert result == [1, 2, 3]
+    redis_mock.lpop.assert_called_with(get_process_queue_key(queue_key))
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,6 @@
 import asyncio
 import functools
 import inspect
-import json
 import logging
 import types
 
@@ -25,6 +24,7 @@ from ..primary_key_model_helper import (
     typecast_to_original_model,
 )
 from ..route_viewset import build_type_map, resolve_typevars
+from .result_reader import push_payload
 
 if TYPE_CHECKING:
     import redis
@@ -193,14 +193,10 @@ def celery_viewset_server(
                     result = run(lifecycle_runner(original_endpoint, instance, cls, lifecycle, *args, **kwargs))
                     logger.info("Celery task completed: %s (correlation_id=%s)", task_name, correlation_id)
                     if correlation_id and result_queue_key and redis_client is not None:
-                        redis_client.rpush(
+                        push_payload(
+                            redis_client,
                             result_queue_key,
-                            json.dumps(
-                                {
-                                    "correlation_id": correlation_id,
-                                    "result": _to_jsonable(result),
-                                }
-                            ),
+                            {"correlation_id": correlation_id, "result": _to_jsonable(result)},
                         )
                         # celery_viewset_client never reads this task's own retval (only the queue
                         # entry just pushed above), so returning `result` a second time here would
@@ -231,7 +227,7 @@ def celery_viewset_server(
                         if isinstance(e, HTTPException):
                             error_payload["http_status_code"] = e.status_code
                             error_payload["http_detail"] = e.detail
-                        redis_client.rpush(result_queue_key, json.dumps(error_payload))
+                        push_payload(redis_client, result_queue_key, error_payload)
                     if not isinstance(e, HTTPException):
                         raise
 
@@ -246,7 +242,7 @@ def celery_viewset_server(
             seen_tasks.add(task_name)
 
             # ignore_result=True - celery_viewset_client never reads Celery's own result backend,
-            # it awaits the redis_client.rpush() queue above instead (see client.py). Without this,
+            # it awaits the result queue pushed to above instead (see client.py). Without this,
             # Celery still calls task.backend.mark_as_done(retval=result) on every task, and a raw
             # Pydantic model (or list of them) returned by the endpoint isn't JSON-serializable by
             # Celery's own encoder, crashing that unused store.
