@@ -11,7 +11,7 @@
   "dependencies": {
     "@dynamicforms/translatable": "^0.3.0",
     "@dynamicforms/vue-forms": "^3.0.0-alpha.1",
-    "@dynamicforms/vue-grid": "^0.7.0",
+    "@dynamicforms/vue-grid": "^0.7.1",
     "@dynamicforms/vuetify-inputs": "^0.14.1",
     "@mdi/font": "^7.4.47",
     "axios": "^1.16.1",
