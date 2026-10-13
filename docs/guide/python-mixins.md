@@ -32,6 +32,11 @@ class MyViewSet(BulkCreateMixin[int, Item]):
         return data
 ```
 
+With `pk_field_name` set on `route_viewset`, the `POST /` body carries no primary key, and every
+other field is validated as `Item` declares it. `perform_create` receives an `Item` without the
+primary key unless `Item` gives it a default. See
+[pk_field_name and request body](./routers#pk-field-name-and-request-body).
+
 ### List & Retrieve
 
 | Class | Endpoint | Description |

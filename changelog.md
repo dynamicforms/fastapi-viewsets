@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The body of a create with `pk_field_name` set is validated as the model declares it: `Field`
+  constraints, aliases, `model_config` (e.g. `extra="forbid"`) and the model's validators apply, and
+  the OpenAPI schema carries them. A body breaking them was accepted and passed to `perform_create`
+  unvalidated. A primary key the body gives as anything but null answers 422 with
+  `pk_assigned_by_server`; it was ignored. `perform_create` receives the model with its fields as
+  validated, without the primary key unless the model gives it a default, and `model_fields_set`
+  names the fields the body stated.
+
 - The schema check matches a custom endpoint to a ViewSet method by the BE method's name
   (`x-viewset-action`), in camelCase or as it is, where it read the first path segment: an endpoint
   under a path parameter (`POST /items/{pk}/approve`) asked for a `{pk}()` method and one with a

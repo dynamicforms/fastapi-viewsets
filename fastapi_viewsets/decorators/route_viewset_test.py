@@ -207,12 +207,11 @@ async def test_viewset_autoinc_and_pk_hiding():
     sig = inspect.signature(post_route.endpoint)
     data_param = sig.parameters["data"]
 
-    # Check that 'id' field is not in the model used for POST at all
-    assert "id" not in data_param.annotation.model_fields, "PK field should be hidden in POST"
+    # Check that 'id' is not in the schema of the model used for POST
+    assert "id" not in data_param.annotation.model_json_schema()["properties"], "PK field should be hidden in POST"
 
     # 2. Check that the endpoint call actually works and uses autoinc
     # Create data without ID (as the client would send it)
-    # Since 'id' is not in model_fields, we can't even provide it in the constructor
     item_no_pk = data_param.annotation
     item_in = item_no_pk(name="Item 2")
 

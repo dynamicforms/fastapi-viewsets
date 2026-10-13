@@ -24,7 +24,7 @@ def route_viewset(
 | `router` | `APIRouter` | — | FastAPI router to register routes on |
 | `base_path` | `str` | — | URL prefix for all endpoints |
 | `lifecycle` | `LifecycleType` | `"singleton"` | Viewset instance lifecycle |
-| `pk_field_name` | `str \| None` | `None` | PK field name; strips it from `POST` request body |
+| `pk_field_name` | `str \| None` | `None` | PK field name; a `POST` request body leaves it out or gives it as null, any other value answers 422 |
 | `register_muxws` | `bool \| None` | `None` | Whether this viewset's endpoints are published on the muxws transport. `None` defers to `settings.viewsets_register_muxws`, itself `True` by default |
 | `register_rest` | `bool \| None` | `None` | Whether this viewset's endpoints are published on `router` as HTTP routes. `None` defers to "yes" |
 

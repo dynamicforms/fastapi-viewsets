@@ -4,28 +4,74 @@ import types
 
 from typing import Annotated, Any, get_args, get_origin, TypeVar, Union
 
-from pydantic import BaseModel, create_model, field_validator
+from pydantic import AliasChoices, BaseModel, create_model, Field, field_validator, model_validator
 from pydantic.fields import FieldInfo
+from pydantic.json_schema import SkipJsonSchema
+from pydantic_core import core_schema, PydanticCustomError
 
 T = TypeVar("T", bound=BaseModel)
 
 
+class _AssignedByServer:
+    """The type of the primary key in `create_model_without_pk`: every value given for it fails
+    validation with `pk_assigned_by_server`."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source, handler):
+        def reject(_value):
+            raise PydanticCustomError("pk_assigned_by_server", "The primary key is assigned by the server")
+
+        return core_schema.no_info_plain_validator_function(reject)
+
+
 def create_model_without_pk(model: type[T], pk_field_name: str) -> type[BaseModel]:
     """
-    Creates a new Pydantic model based on the given model but without the specified primary key field.
+    The body of a create of `model`: a subclass of `model` whose `pk_field_name` is not in the JSON
+    schema and is None. The body may leave the primary key out or give it as null; any other value
+    fails validation with `pk_assigned_by_server`. Every other field, the model's config and its
+    validators are inherited. A `@field_validator` of the primary key in `after` mode never runs; one
+    in `before`, `wrap` or `plain` mode runs on a value other than null. A `@model_validator` in
+    `after` mode sees the primary key as None.
     """
-    fields = {
-        name: (field.annotation, field.default if field.default is not ... else ...)
-        for name, field in model.model_fields.items()
-        if name != pk_field_name
+    original = model.model_fields[pk_field_name]
+    pk = Field(default=None, validate_default=False, alias=original.alias, validation_alias=original.validation_alias)
+    aliases = original.validation_alias.choices if isinstance(original.validation_alias, AliasChoices) else []
+    keys = {key for key in (pk_field_name, original.alias, original.validation_alias, *aliases) if isinstance(key, str)}
+
+    def drop_null_pk(_cls, data):
+        if isinstance(data, dict) and any(key in data and data[key] is None for key in keys):
+            data = {key: value for key, value in data.items() if key not in keys or value is not None}
+        return data
+
+    return create_model(
+        f"{model.__name__}NoPK",
+        __base__=model,
+        __validators__={"drop_null_pk": model_validator(mode="before")(classmethod(drop_null_pk))},
+        **{pk_field_name: (SkipJsonSchema[_AssignedByServer], pk)},
+    )
+
+
+def _is_model_without_pk(model: type[BaseModel]) -> bool:
+    return any(field.annotation is _AssignedByServer for field in model.model_fields.values())
+
+
+def _without_pk_to_original_model(value: BaseModel, model: type[T]) -> T:
+    """`value`, an instance of `create_model_without_pk(model, ...)`, as a `model` without the primary
+    key unless `model` gives it a default. Its fields are taken as validated, not validated again."""
+    data = {
+        name: getattr(value, name)
+        for name, field in type(value).model_fields.items()
+        if field.annotation is not _AssignedByServer
     }
-    return create_model(f"{model.__name__}NoPK", **fields)
+    return model.model_construct(_fields_set=set(value.model_fields_set), **data)
 
 
 def typecast_to_original_model(value: Any, original_annotation: type[T]) -> T:
     """
-    Typecasts a value (usually a Pydantic model without PK) back to the original Pydantic model.
-    If validation fails (e.g., due to missing PK that will be auto-incremented), it uses model_construct.
+    `value` as `original_annotation`, the parameter's own annotation. An instance of
+    `create_model_without_pk(model, ...)` becomes a `model` (see `_without_pk_to_original_model`);
+    an instance of the model itself and a value that is no model are returned as they are; any other
+    model is validated as the model.
     """
     annotation = original_annotation
     if get_origin(annotation) is Annotated:
@@ -44,16 +90,13 @@ def typecast_to_original_model(value: Any, original_annotation: type[T]) -> T:
     else:
         origin = origin or annotation
 
-    if not isinstance(value, BaseModel) or isinstance(value, origin):
+    if not isinstance(value, BaseModel):
         return value
-
-    # noinspection PyBroadException
-    try:
-        return annotation.model_validate(value.model_dump())
-    except Exception:
-        # Fallback: create instance with model_construct if validation fails
-        # (e.g. required field missing but it will be filled by autoinc)
-        return annotation.model_construct(**value.model_dump())
+    if isinstance(value, origin) and _is_model_without_pk(type(value)):
+        return _without_pk_to_original_model(value, annotation)
+    if isinstance(value, origin):
+        return value
+    return annotation.model_validate(value.model_dump())
 
 
 def create_partial_model(model: type[T], pk_field_name: str | None) -> type[BaseModel]:

@@ -37,7 +37,7 @@ lazy source only as far as the page it is cutting. Both hand back the item type 
 ## Operation mixins
 
 ### CreateMixin `[K, T]`
-- `POST /` → calls `perform_create(context, data: T) -> T`
+- `POST /` → calls `perform_create(context, data: T) -> T`. With `pk_field_name` set on `route_viewset`, the body leaves the primary key out or gives it as null, and `data` is a `T` without it unless `T` gives it a default.
 
 ### BulkOnlyCreateMixin `[K, T]`
 - `POST /bulk` → calls `perform_bulk_create(context, data: list[T]) -> list[T]`
