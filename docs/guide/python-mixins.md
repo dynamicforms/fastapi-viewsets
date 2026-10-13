@@ -112,7 +112,9 @@ The `partial` parameter is `False` for `PUT` and `True` for `PATCH`.
 A `PUT` body is the whole model. A `PATCH` body states the fields it changes: every field is
 optional, the primary key is not part of it, and a field it states is validated by its annotation,
 its constraints and the model's `@field_validator`s. The model's `@model_validator`s are not
-applied: they validate a whole model, and a partial body is not one. `perform_update` receives it
+applied: they validate a whole model, and a partial body is not one. `DjangoORMViewSet` applies
+them to the stored row with the stated fields set on it
+([Backends](./list-pipeline#updates-under-a-row-lock)). `perform_update` receives it
 as the model holding the stated fields only: `data.model_fields_set` names them, and
 `data.model_dump(exclude_unset=True)` is what the request stated; `PATCH /bulk` does the same for
 each record. A field read with `getattr` keeps a nested model as the model; `model_dump` turns it

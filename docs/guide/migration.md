@@ -42,6 +42,13 @@ It converts an error body into an `ErrorDescription`, and the application transl
 - [ ] A `perform_update` that applies a `PATCH` reads the fields the request stated from
       `data.model_fields_set` (with `getattr`, which keeps a nested model as the model); the body no
       longer carries the primary key or the fields it left out.
+- [ ] `DjangoORMViewSet`: an update validates the stored row with the request's fields set on it,
+      `@model_validator`s included. Rows stored in breach of the schema's `@model_validator`s
+      answer 422 to every update that leaves them in breach; find them by reading each row through
+      `schema` and correct them.
+- [ ] `DjangoORMViewSet`: `save()` and `pre_save`/`post_save` handlers run inside the update's
+      transaction. A handler that starts work reading the row over another connection (a Celery
+      task) starts it with `transaction.on_commit`.
 - [ ] A ViewSet with custom endpoints only can be built with `restViewSet<T>()(pk, [])`; the schema
       check matches custom endpoints by the BE method's name (`top_rated` → `topRated()` or
       `top_rated()`), so a FE method named after a hyphenated path segment is reported until it is

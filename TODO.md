@@ -20,3 +20,18 @@ Postgres backend to hang it off.
   offer the other two through `X-List-Shape`, so offset paging is reachable but never the declared
   shape. That is the more interesting configuration to show; it does leave `list_shape =
   "paginated"` on its own exercised only by tests.
+
+## Conflicting updates of the same field
+
+`DjangoORMViewSet` serialises updates of a row, so two updates of different fields both land and
+`@model_validator`s see the stored values. Two updates of the same field still end with the later
+one's value, and the earlier client is not told. Detecting that needs the client's view of the row
+at write time:
+
+- an opt-in version field on the viewset (`version_field = "version"`): `PUT`/`PATCH` carry the
+  version they read, the update locks the row, compares, answers 409 on a mismatch and increments
+  it on save; or ETag / `If-Match` on the same mechanism;
+- an audit hook that records each write (who, when, the fields before and after), for resolving a
+  conflict after the fact.
+
+Both need a counterpart in the Vue mixins (sending the version, handling 409).
