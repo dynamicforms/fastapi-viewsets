@@ -131,11 +131,11 @@ In-memory hooks:
 
 ### UpdateMixin `[K, T]`
 - `PUT /{pk}` → calls `perform_update(context, pk, data, partial=False) -> T`
-- `PATCH /{pk}` → calls `perform_update(context, pk, data, partial=True) -> T`
+- `PATCH /{pk}` → calls `perform_update(context, pk, data, partial=True) -> T`. The body has every field of `T` optional and no primary key; `data` is a `T` whose `model_fields_set` names the fields the body stated.
 
 ### BulkOnlyUpdateMixin `[K, T]`
 - `PUT /bulk` → calls `perform_bulk_update(context, records, partial=False) -> list[T]`
-- `PATCH /bulk` → calls `perform_bulk_update(context, records, partial=True) -> list[T]`
+- `PATCH /bulk` → calls `perform_bulk_update(context, records, partial=True) -> list[T]`, each record as `PATCH /{pk}` passes `data`.
 
 ### BulkUpdateMixin `[K, T]`
 Combines `UpdateMixin` + `BulkOnlyUpdateMixin`.

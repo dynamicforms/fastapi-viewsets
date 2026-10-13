@@ -3,6 +3,7 @@ import types
 from typing import Annotated, Any, get_args, get_origin, TypeVar, Union
 
 from pydantic import BaseModel, create_model
+from pydantic.fields import FieldInfo
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -51,3 +52,26 @@ def typecast_to_original_model(value: Any, original_annotation: type[T]) -> T:
         # Fallback: create instance with model_construct if validation fails
         # (e.g. required field missing but it will be filled by autoinc)
         return annotation.model_construct(**value.model_dump())
+
+
+def create_partial_model(model: type[T], pk_field_name: str | None) -> type[BaseModel]:
+    """
+    The body of a partial update of `model`: every field optional, without `pk_field_name`. A field
+    the body states is validated as `model` validates it; one it leaves out stays unset.
+    """
+    fields = {
+        name: (field.annotation, FieldInfo.merge_field_infos(field, default=None))
+        for name, field in model.model_fields.items()
+        if name != pk_field_name
+    }
+    return create_model(f"{model.__name__}Partial", **fields)
+
+
+def partial_to_original_model(value: BaseModel, model: type[T]) -> T:
+    """
+    `value`, an instance of `create_partial_model(model, ...)`, as a `model` that holds the fields
+    `value` set and no others: its `model_fields_set` names them, so `model_dump(exclude_unset=True)`
+    returns exactly what the request stated.
+    """
+    data = value.model_dump(exclude_unset=True)
+    return model.model_construct(_fields_set=set(data), **data)

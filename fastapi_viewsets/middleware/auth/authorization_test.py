@@ -221,4 +221,5 @@ def test_an_endpoint_without_context_hands_the_request_to_the_chain():
 
     client = _make_contextless_app(check)
     assert client.get("/reports/ping").status_code == 200
-    assert seen and all(path == "/reports/ping" for path in seen)
+    assert seen
+    assert all(path == "/reports/ping" for path in seen)

@@ -27,7 +27,12 @@ from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, re
 
 from .build_schema import _pydantic_generic_args, build_schema, route_to_add_api_route_kwargs
 from .lifecycle_runner import lifecycle_runner, LifecycleType
-from .primary_key_model_helper import create_model_without_pk, typecast_to_original_model
+from .primary_key_model_helper import (
+    create_model_without_pk,
+    create_partial_model,
+    partial_to_original_model,
+    typecast_to_original_model,
+)
 
 T = TypeVar("T")
 
@@ -95,6 +100,31 @@ def resolve_typevars(type_map, annotation):
             except:
                 return annotation
     return annotation
+
+
+PARTIAL_UPDATE_ACTIONS = frozenset({"partial_update", "bulk_partial_update"})
+"""The mixin endpoints whose body is a partial update: `PATCH {pk}` and `PATCH bulk`."""
+
+
+def _partial_annotation(annotation, pk_field_name: str | None):
+    """The body annotation of a partial update in place of `annotation`, a model or a `dict` of
+    models keyed by pk; None for any other annotation."""
+    if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
+        return create_partial_model(annotation, pk_field_name)
+    if get_origin(annotation) is dict:
+        key, model = get_args(annotation)
+        if inspect.isclass(model) and issubclass(model, BaseModel):
+            return dict[key, create_partial_model(model, pk_field_name)]
+    return None
+
+
+def _from_partial(value, annotation):
+    """A validated partial-update body as `annotation`, the parameter's own: each model holds the
+    fields the request stated and no others."""
+    if get_origin(annotation) is dict:
+        model = get_args(annotation)[1]
+        return {key: partial_to_original_model(item, model) for key, item in value.items()}
+    return partial_to_original_model(value, annotation)
 
 
 def _make_middleware_depends(cls: type, action_name: str):
@@ -238,6 +268,8 @@ def route_viewset(
                 sig = _shape_signature(sig)
             new_params = []
             needs_context = False
+            # the body parameters of a partial update, by name, with the annotation they replace
+            partial_params: dict[str, object] = {}
 
             for name, p in sig.parameters.items():
                 if name == "self":
@@ -271,6 +303,16 @@ def route_viewset(
                     new_p = new_p.replace(annotation=Annotated[inner_type, Depends()])
                     new_params.append(new_p)
                     continue
+
+                # A partial update's body states the fields it changes: validated by a model with
+                # every field optional, then handed to perform_* as the original model holding only
+                # those fields (see partial_to_original_model)
+                if original_endpoint.__name__ in PARTIAL_UPDATE_ACTIONS:
+                    partial_annotation = _partial_annotation(annotation, pk_field_name)
+                    if partial_annotation is not None:
+                        partial_params[name] = annotation
+                        new_params.append(new_p.replace(annotation=partial_annotation))
+                        continue
 
                 # If we have a PK field and this parameter is a model from which we want to exclude PK
                 if pk_field_name and inspect.isclass(annotation) and issubclass(annotation, BaseModel):
@@ -312,7 +354,9 @@ def route_viewset(
                 # This happens if we replaced the model type with a NoPK version in get_wrapper
                 new_kwargs = {}
                 for param_name, value in kwargs.items():
-                    if param_name in sig.parameters:
+                    if param_name in partial_params:
+                        new_kwargs[param_name] = _from_partial(value, partial_params[param_name])
+                    elif param_name in sig.parameters:
                         orig_param = sig.parameters[param_name]
                         orig_annotation = resolve_typevars(type_map, orig_param.annotation)
                         # Filter params must not be typecast — they arrive as the all-optional model

@@ -3,6 +3,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from fastapi_viewsets.collection_viewset import CollectionViewSet
+from fastapi_viewsets.exceptions import ReadOnlyCollectionError
 
 CTX = {}
 
@@ -144,8 +145,10 @@ async def test_collection_viewset_immutable():
     assert (await viewset.perform_list(CTX)) == [{"id": 1, "name": "item1"}]
     assert (await viewset.perform_retrieve(CTX, 1)) == {"id": 1, "name": "item1"}
 
-    with pytest.raises(Exception, match="Provided container is not mutable"):
+    with pytest.raises(ReadOnlyCollectionError) as exc_info:
         await viewset.perform_create(CTX, {"id": 2})
+    assert exc_info.value.status_code == 405
+    assert exc_info.value.code == "read_only"
 
 
 @pytest.mark.asyncio
@@ -208,3 +211,91 @@ async def test_collection_viewset_autoinc():
     await viewset.perform_create(CTX, item6)
     assert item6.id == 6
     assert container[6] == item6
+
+
+# ---------------------------------------------------------------------------
+# Partial updates and sets, through the routes
+# ---------------------------------------------------------------------------
+
+
+class Track(BaseModel):
+    id: int
+    title: str = Field(min_length=1)
+    rating: int = 0
+
+
+class FrozenTrack(Track, frozen=True):
+    pass
+
+
+def _client(container, model):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+
+    from fastapi_viewsets.decorators import route_viewset
+    from fastapi_viewsets.exceptions import df_viewset_exception_handler, DfViewSetError
+    from fastapi_viewsets.mixins import BulkViewSetMixin
+
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/tracks", pk_field_name="id")
+    class TrackViewSet(CollectionViewSet[int, model], BulkViewSetMixin[int, model]):
+        def __init__(self):
+            super().__init__(container=container, pk_field="id")
+
+    app = FastAPI()
+    app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
+    app.include_router(router)
+    return TestClient(app)
+
+
+@pytest.mark.parametrize(
+    "container",
+    [
+        pytest.param(lambda: [Track(id=1, title="One", rating=3)], id="list"),
+        pytest.param(lambda: {1: Track(id=1, title="One", rating=3)}, id="dict"),
+    ],
+)
+def test_patch_writes_only_the_fields_it_states(container):
+    client = _client(container(), Track)
+    response = client.patch("/tracks/1", json={"rating": 5})
+    assert response.status_code == 200
+    assert response.json() == {"id": 1, "title": "One", "rating": 5}
+    assert client.get("/tracks/1").json() == {"id": 1, "title": "One", "rating": 5}
+
+
+def test_patch_validates_the_fields_it_states():
+    client = _client([Track(id=1, title="One")], Track)
+    response = client.patch("/tracks/1", json={"title": ""})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "title"]
+
+
+def test_bulk_patch_writes_only_the_fields_each_record_states():
+    client = _client([Track(id=1, title="One", rating=1), Track(id=2, title="Two", rating=2)], Track)
+    response = client.patch("/tracks/bulk", json={"1": {"rating": 9}, "2": {"title": "Deux"}})
+    assert response.status_code == 200
+    assert response.json() == [{"id": 1, "title": "One", "rating": 9}, {"id": 2, "title": "Deux", "rating": 2}]
+
+
+def test_put_still_replaces_the_whole_record():
+    client = _client([Track(id=1, title="One", rating=3)], Track)
+    response = client.put("/tracks/1", json={"id": 1, "title": "Uno"})
+    assert response.json() == {"id": 1, "title": "Uno", "rating": 0}
+
+
+def test_a_set_updates_partially_and_deletes():
+    container = {FrozenTrack(id=1, title="One", rating=3), FrozenTrack(id=2, title="Two")}
+    client = _client(container, FrozenTrack)
+
+    assert client.patch("/tracks/1", json={"rating": 5}).json() == {"id": 1, "title": "One", "rating": 5}
+    assert client.delete("/tracks/2").status_code == 200
+    assert {track.id for track in container} == {1}
+    assert client.delete("/tracks/2").status_code == 404
+
+
+def test_a_write_to_an_immutable_container_is_405():
+    client = _client((Track(id=1, title="One"),), Track)
+    response = client.post("/tracks", json={"id": 2, "title": "Two"})
+    assert response.status_code == 405
+    assert response.json()["detail_code"] == "read_only"

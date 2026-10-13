@@ -31,6 +31,14 @@ class NotFoundError(DfViewSetError):
         super().__init__(404, f"Item with pk {pk} not found", "not_found", {"pk": pk})
 
 
+class ReadOnlyCollectionError(DfViewSetError):
+    """A write to a `CollectionViewSet` whose container is immutable (a tuple, a frozenset, a
+    read-only mapping)."""
+
+    def __init__(self):
+        super().__init__(405, "This collection is read-only", "read_only")
+
+
 class SessionExpiredError(DfViewSetError):
     def __init__(self):
         super().__init__(401, "Session expired or invalid", "session_expired")

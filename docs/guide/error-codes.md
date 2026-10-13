@@ -39,6 +39,7 @@ knows which user it is answering, decides what language to show.
 | Class | Status | `code` | `params` |
 |-------|--------|--------|----------|
 | `NotFoundError(pk)` | 404 | `not_found` | `{pk}` |
+| `ReadOnlyCollectionError()` | 405 | `read_only` | — |
 | `SessionExpiredError()` | 401 | `session_expired` | — |
 | `NotAuthorizedError()` | 403 | `not_authorized` | — |
 | `RateLimitedError()` | 429 | `rate_limited` | — |
@@ -182,6 +183,7 @@ The codes this package raises, with their English `detail`:
 | `code` | `detail` | Params |
 |--------|----------|--------|
 | `not_found` | `Item with pk {pk} not found` | `pk` |
+| `read_only` | `This collection is read-only` | — |
 | `session_expired` | `Session expired or invalid` | — |
 | `not_authorized` | `Not authorized to perform this action` | — |
 | `rate_limited` | `Rate limit exceeded` | — |

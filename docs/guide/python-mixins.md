@@ -104,11 +104,16 @@ async def apply_sort(self, context, query, records):
 
 The `partial` parameter is `False` for `PUT` and `True` for `PATCH`.
 
+A `PUT` body is the whole model. A `PATCH` body states the fields it changes: every field is
+optional, the primary key is not part of it, and a field it states is validated as the model
+validates it. `perform_update` receives it as the model holding the stated fields only, so
+`data.model_dump(exclude_unset=True)` is exactly what the request stated; `PATCH /bulk` does the
+same for each record.
+
 ```python
 async def perform_update(self, context: Context, pk: int, data: Item, partial: bool = True) -> Item:
     if partial:
-        # apply only provided fields
-        ...
+        db[pk] = db[pk].model_copy(update=data.model_dump(exclude_unset=True))
     else:
         db[pk] = data
     return db[pk]

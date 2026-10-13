@@ -240,15 +240,15 @@ def make_custom_only_app():
         __router = APIRouter()
 
         @__router.get("summary")
-        async def summary(self, context: Context) -> Report:
+        async def summary(self) -> Report:
             return Report(name="summary")
 
         @__router.get("top-rated")
-        async def top_rated(self, context: Context) -> list[Report]:
+        async def top_rated(self) -> list[Report]:
             return [Report(name="top")]
 
         @__router.post("{pk}/approve")
-        async def approve(self, context: Context, pk: int) -> Report:
+        async def approve(self, pk: int) -> Report:
             return Report(name=f"report {pk}", approved=True)
 
     app.include_router(router)
