@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from fastapi import HTTPException
 
 from ...context import deserialize_value
+from ...exceptions import ResultReaderStoppedError
 
 if TYPE_CHECKING:
     import redis
@@ -19,15 +20,19 @@ logger = logging.getLogger(__name__)
 # the expiry removes it from Redis.
 RESULT_QUEUE_TTL = 3600
 
-# Global registry: correlation_id -> asyncio.Future
-_pending_futures: dict[str, asyncio.Future] = {}
+# Global registry: correlation_id -> (asyncio.Future, queue_key of the reader that resolves it)
+_pending_futures: dict[str, tuple[asyncio.Future, str | None]] = {}
 
 # Global reader task registry, keyed by queue_key - one reader per Celery viewset task_prefix
 _reader_tasks: dict[str, asyncio.Task] = {}
 
 
-def register_future(correlation_id: str, future: asyncio.Future) -> None:
-    _pending_futures[correlation_id] = future
+def register_future(correlation_id: str, future: asyncio.Future, queue_key: str | None = None) -> None:
+    """
+    Register a call's Future. When the reader of queue_key exits, a Future still pending for it
+    fails with ResultReaderStoppedError.
+    """
+    _pending_futures[correlation_id] = (future, queue_key)
 
 
 def unregister_future(correlation_id: str) -> None:
@@ -50,7 +55,28 @@ def get_process_queue_key(queue_key: str) -> str:
 
 
 async def result_reader_loop(redis_client: "redis.Redis", queue_key: str, poll_interval: float = 0.05) -> None:
-    """Background coroutine that reads this process's results for queue_key and resolves pending Futures."""
+    """
+    Background coroutine that reads this process's results for queue_key and resolves pending Futures.
+
+    On exit it fails every Future still pending for queue_key with ResultReaderStoppedError: no other
+    reader pops their results.
+    """
+    try:
+        await _read_results(redis_client, queue_key, poll_interval)
+    finally:
+        _fail_pending_futures(queue_key)
+
+
+def _fail_pending_futures(queue_key: str) -> None:
+    for correlation_id, (future, future_queue_key) in list(_pending_futures.items()):
+        if future_queue_key != queue_key:
+            continue
+        del _pending_futures[correlation_id]
+        if not future.done():
+            future.set_exception(ResultReaderStoppedError(queue_key))
+
+
+async def _read_results(redis_client: "redis.Redis", queue_key: str, poll_interval: float) -> None:
     process_queue_key = get_process_queue_key(queue_key)
     while True:
         try:
@@ -65,10 +91,11 @@ async def result_reader_loop(redis_client: "redis.Redis", queue_key: str, poll_i
             result = data.get("result")
             error = data.get("error")
 
-            future = _pending_futures.pop(correlation_id, None)
-            if future is None:
+            pending = _pending_futures.pop(correlation_id, None)
+            if pending is None:
                 logger.warning("No pending future for correlation_id=%s", correlation_id)
                 continue
+            future = pending[0]
 
             if not future.done():
                 if error is not None:
@@ -134,7 +161,8 @@ async def stop_result_reader(queue_key: str | None = None) -> None:
     """
     Stop background result reader task(s). Should be called on FastAPI shutdown.
 
-    If queue_key is given, stop only that reader; otherwise stop all running readers.
+    If queue_key is given, stop only that reader; otherwise stop all running readers. Calls still
+    pending for a stopped reader's queue_key fail with ResultReaderStoppedError (503).
     """
     keys = [queue_key] if queue_key is not None else list(_reader_tasks.keys())
     for key in keys:
@@ -145,3 +173,5 @@ async def stop_result_reader(queue_key: str | None = None) -> None:
                 await task
             except asyncio.CancelledError:
                 pass
+        # A task cancelled before its first step never runs result_reader_loop's finally.
+        _fail_pending_futures(key)

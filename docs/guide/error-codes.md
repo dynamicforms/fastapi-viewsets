@@ -44,6 +44,7 @@ knows which user it is answering, decides what language to show.
 | `NotAuthorizedError()` | 403 | `not_authorized` | — |
 | `RateLimitedError()` | 429 | `rate_limited` | — |
 | `ResultTimeoutError(task, timeout)` | 504 | `result_timeout` | `{task, timeout}` |
+| `ResultReaderStoppedError(queue_key)` | 503 | `result_reader_stopped` | `{queue_key}` |
 | `UnsupportedListShapeError(shape, allowed)` | 422 | `unsupported_list_shape` | `{shape, allowed}` |
 | `CursorRequestError(error)` | 400 | one of the cursor codes below | varies |
 

@@ -62,6 +62,14 @@ class ResultTimeoutError(DfViewSetError):
         super().__init__(504, message, "result_timeout", {"task": task, "timeout": timeout})
 
 
+class ResultReaderStoppedError(DfViewSetError):
+    """A `celery_viewset` call that was pending when the result reader of its `queue_key` stopped."""
+
+    def __init__(self, queue_key: str):
+        message = f"The result reader for {queue_key} stopped before the result arrived"
+        super().__init__(503, message, "result_reader_stopped", {"queue_key": queue_key})
+
+
 class UnsupportedListShapeError(DfViewSetError):
     def __init__(self, shape: str, allowed: list[str]):
         message = f"unsupported list shape {shape!r}; this endpoint offers {', '.join(allowed)}"

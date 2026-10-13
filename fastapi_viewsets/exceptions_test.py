@@ -8,6 +8,7 @@ from fastapi_viewsets.exceptions import (
     NotAuthorizedError,
     NotFoundError,
     RateLimitedError,
+    ResultReaderStoppedError,
     ResultTimeoutError,
     SessionExpiredError,
     UnsupportedListShapeError,
@@ -49,6 +50,14 @@ def test_result_timeout_error_carries_task_and_timeout_as_params():
     assert error.detail == "No result for items.list_items within 3600.0 s"
     assert error.code == "result_timeout"
     assert error.params == {"task": "items.list_items", "timeout": 3600.0}
+
+
+def test_result_reader_stopped_error_carries_queue_key_as_param():
+    error = ResultReaderStoppedError("celery_viewset_results:items")
+    assert error.status_code == 503
+    assert error.detail == "The result reader for celery_viewset_results:items stopped before the result arrived"
+    assert error.code == "result_reader_stopped"
+    assert error.params == {"queue_key": "celery_viewset_results:items"}
 
 
 def test_unsupported_list_shape_error_carries_shape_and_allowed_as_params():
