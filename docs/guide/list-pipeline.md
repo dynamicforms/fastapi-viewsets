@@ -365,6 +365,34 @@ Django equivalent is Postgres-only.
 
 A declined stage is handled by the default, never an error.
 
+### Updates under a row lock
+
+`perform_update` and `perform_bulk_update` run in one transaction, in one `sync_to_async` call:
+
+1. Each row is read with `SELECT ... FOR UPDATE` through the model's `_base_manager`, in key order.
+   A row that does not exist, or that `get_queryset(context)` excludes, raises `NotFoundError`.
+2. The fields of the record are set on the row: for `PATCH` the fields the request stated, for
+   `PUT` every field except the primary key.
+3. The row is validated as `schema`, `@model_validator`s included.
+4. Once every row is valid, each is saved with `save()`.
+
+A concurrent update of the same row waits for the lock and then reads this one's result, so it
+does not revert fields it did not state, and a rule over several fields is checked against the
+values that end up stored. Two updates of the same field end with the later one's value.
+
+A row that fails validation answers 422 with the errors of `schema` and `loc` `["body", field]`, or
+`["body", pk, field]` for `PATCH /bulk` and `PUT /bulk`, which report every failing row. A bulk
+update with a missing or invalid row writes none of its rows. A row already stored in breach of a
+`@model_validator` rejects every update that leaves it in breach, including one that changes an
+unrelated field.
+
+`save()` and the model's signals run inside the transaction, before the commit. Work they start that
+reads the row over another connection, such as a Celery task, is started with
+`transaction.on_commit`; started directly, it can read the values from before the update.
+
+The transaction uses the database `router.db_for_write(model)` names. SQLite has no row locks; its
+write transaction locks the whole database.
+
 ### Writing your own
 
 Override the stages your store can answer and chain the rest:

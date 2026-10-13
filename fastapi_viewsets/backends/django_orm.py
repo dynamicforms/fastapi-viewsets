@@ -26,9 +26,11 @@ from functools import reduce
 from typing import Any, ClassVar, Generic, TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
+from django.db import router, transaction
 from django.db.models import BooleanField, F, Func, Q, Value
 from django.db.models.fields import AutoFieldMixin
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeVar
 
 from ..context import Context
@@ -296,15 +298,69 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         return [self.to_record(instance) for instance in created]
 
     async def perform_update(self, context: Context, pk: K, data: T, partial: bool = True) -> T:
-        instance = await self._get_or_404(context, pk)
-        fields = self._writable_fields(data, exclude_unset=partial)
-        for name, value in fields.items():
-            setattr(instance, name, value)
-        await instance.asave()
-        return self.to_record(instance)
+        """
+        Writes `data` onto the row `pk` under a row lock; see `_update_locked`. A merged record that
+        fails `schema` raises `RequestValidationError` with `loc` `("body", *field)`.
+        """
+        (record,) = await sync_to_async(self._update_locked)(context, {pk: data}, partial, bulk=False)
+        return record
 
     async def perform_bulk_update(self, context: Context, records: dict[K, T], partial: bool = True) -> list[T]:
-        return [await self.perform_update(context, pk, data, partial=partial) for pk, data in records.items()]
+        """
+        Writes every record in one transaction, under a lock on each row; see `_update_locked`. A
+        missing row or a merged record that fails `schema` writes none of them. Every failing record
+        is reported in one `RequestValidationError`, with `loc` `("body", pk, *field)`.
+        """
+        return await sync_to_async(self._update_locked)(context, records, partial, bulk=True)
+
+    def _update_locked(self, context: Context, records: dict[K, T], partial: bool, bulk: bool) -> list[T]:
+        """
+        Reads each row with `SELECT ... FOR UPDATE`, sets the fields of its record on it, validates
+        the result as `schema` and saves the whole row, in one transaction.
+
+        The lock holds the row from the read to the commit, so a concurrent update of the same row
+        waits and then reads this one's result: it neither reverts the fields this one wrote nor
+        validates against values that are no longer stored. Two updates of the same field still
+        end with the later one's value.
+
+        The rows are locked in key order, so two bulk updates over the same rows do not deadlock.
+        The lock is taken through `_base_manager`, a query on the model's table alone: `FOR UPDATE`
+        refuses `distinct()`, aggregation and a nullable `select_related`, any of which
+        `get_queryset` may add. `get_queryset` decides whether the row is visible, and a row it
+        excludes is a `NotFoundError`. On SQLite, which has no row locks, the write
+        transaction locks the database instead.
+
+        `save()` and the model's signals run inside the transaction, before the commit. Work they
+        start that reads the row over another connection (a Celery task) is scheduled with
+        `transaction.on_commit`; started directly, it can read the values from before the update.
+        """
+        locked = self.model._base_manager.db_manager(router.db_for_write(self.model)).select_for_update()
+        errors: list[dict] = []
+        rows = {}
+        with transaction.atomic(using=locked.db):
+            for pk in sorted(records):
+                try:
+                    instance = locked.get(**{self.pk_field: pk})
+                except self.model.DoesNotExist:
+                    raise NotFoundError(pk) from None
+                if not self.get_queryset(context).filter(pk=instance.pk).exists():
+                    raise NotFoundError(pk)
+                for name, value in self._writable_fields(records[pk], exclude_unset=partial).items():
+                    setattr(instance, name, value)
+                try:
+                    self.to_record(instance)
+                except ValidationError as error:
+                    prefix = ("body", pk) if bulk else ("body",)
+                    errors.extend(
+                        {**entry, "loc": (*prefix, *entry["loc"])}
+                        for entry in error.errors(include_url=False, include_input=False)
+                    )
+                rows[pk] = instance
+            if errors:
+                raise RequestValidationError(errors)
+            for instance in rows.values():
+                instance.save()
+        return [self.to_record(rows[pk]) for pk in records]
 
     async def perform_destroy(self, context: Context, pk: K) -> dict:
         instance = await self._get_or_404(context, pk)

@@ -62,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `DjangoORMViewSet` updates run in one transaction that reads each row with `SELECT ... FOR
+  UPDATE`, sets the stated fields on it, validates it as `schema` (`@model_validator`s included)
+  and saves it. Two concurrent updates of different fields of a row kept only the later one's
+  fields, and a partial update was not checked by `@model_validator`s against the stored fields;
+  an invalid row answers 422 with `loc` `["body", field]` (`["body", pk, field]` in bulk). A bulk
+  update with a missing or invalid row writes none of its rows. A row `get_queryset` excludes is a
+  404 for an update as for a retrieve.
 - `DjangoORMViewSet` create and update write relation fields; a create writes a natural or
   relation primary key from the body and leaves out only a key the database or Django assigns.
 - `celery_viewset` with more than one FastAPI process sharing a Redis (several workers or replicas):

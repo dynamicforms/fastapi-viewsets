@@ -7,6 +7,8 @@ backend absorbed is not redone in memory, that a stage it declined still produce
 and that paging a queryset reads a page rather than a table.
 """
 
+import asyncio
+
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -16,7 +18,8 @@ import pytest
 # Django itself is configured once for the whole session in the repo-root conftest.py - see the
 # note there on why it cannot be done per module.
 from django.db import connection, models
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, model_validator
 
 from ..cursor import CursorPredicate, decode_cursor
 from ..filters import Filter, make_filter_model, register_operator
@@ -291,6 +294,131 @@ async def test_the_primary_key_in_the_body_cannot_overwrite_another_row(viewset)
     assert created.id != 1
     assert (await viewset.perform_retrieve(None, 1)).title == "Track 001"
     await viewset.perform_destroy(None, created.id)
+
+
+# ---------------------------------------------------------------------------
+# Updates under a row lock
+# ---------------------------------------------------------------------------
+
+
+class DatedTrack(Track):
+    """A track whose title may not say "Modern" before 2000: a rule over two fields."""
+
+    @model_validator(mode="after")
+    def _modern_after_2000(self):
+        if self.year < 2000 and self.title.startswith("Modern"):
+            raise ValueError("a modern title needs a year from 2000 on")
+        return self
+
+
+class DatedTrackViewSet(DjangoORMViewSet[int, DatedTrack]):
+    model = TrackModel
+    schema = DatedTrack
+
+
+def _patch(**fields) -> Track:
+    """The body of `PATCH {pk}` as `route_viewset` hands it to `perform_update`."""
+    from fastapi_viewsets.decorators.primary_key_model_helper import create_partial_model, partial_to_original_model
+
+    return partial_to_original_model(create_partial_model(DatedTrack, "id").model_validate(fields), DatedTrack)
+
+
+@pytest.fixture
+def dated_rows():
+    rows = [
+        TrackModel.objects.create(title=title, artist="A", year=year)
+        for title, year in [("Old", 2005), ("Old", 2005), ("Modern", 2005)]
+    ]
+    yield rows
+    TrackModel.objects.filter(pk__in=[row.pk for row in rows]).delete()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_updates_of_different_fields_keep_both(dated_rows):
+    viewset = DatedTrackViewSet()
+    pk = dated_rows[0].pk
+    await asyncio.gather(
+        viewset.perform_update(None, pk, _patch(title="New")),
+        viewset.perform_update(None, pk, _patch(year=2010)),
+    )
+    row = await TrackModel.objects.aget(pk=pk)
+    assert (row.title, row.year) == ("New", 2010)
+
+
+@pytest.mark.asyncio
+async def test_a_partial_update_is_validated_with_the_stored_fields(dated_rows):
+    viewset = DatedTrackViewSet()
+    with pytest.raises(RequestValidationError) as raised:
+        await viewset.perform_update(None, dated_rows[2].pk, _patch(year=1999))
+    assert [entry["loc"] for entry in raised.value.errors()] == [("body",)]
+    # `input` would be the row as `to_record` reads it, which the 422 body cannot encode
+    assert all("input" not in entry for entry in raised.value.errors())
+    assert (await TrackModel.objects.aget(pk=dated_rows[2].pk)).year == 2005
+
+
+@pytest.mark.asyncio
+async def test_concurrent_updates_cannot_combine_into_an_invalid_row(dated_rows):
+    """Each update is valid against the row it was sent for; together they break the rule. The
+    second one is validated against the first one's result and refused."""
+    viewset = DatedTrackViewSet()
+    pk = dated_rows[0].pk
+    results = await asyncio.gather(
+        viewset.perform_update(None, pk, _patch(title="Modern")),
+        viewset.perform_update(None, pk, _patch(year=1999)),
+        return_exceptions=True,
+    )
+    assert sum(isinstance(result, RequestValidationError) for result in results) == 1
+    row = await TrackModel.objects.aget(pk=pk)
+    assert not (row.title == "Modern" and row.year == 1999)
+
+
+@pytest.mark.asyncio
+async def test_a_bulk_update_with_an_invalid_record_writes_none(dated_rows):
+    viewset = DatedTrackViewSet()
+    first, second, modern = (row.pk for row in dated_rows)
+    with pytest.raises(RequestValidationError) as raised:
+        await viewset.perform_bulk_update(
+            None, {first: _patch(title="Renamed"), modern: _patch(year=1999), second: _patch(title="Modern", year=1)}
+        )
+    assert sorted(entry["loc"] for entry in raised.value.errors()) == [("body", second), ("body", modern)]
+    assert [row.title async for row in TrackModel.objects.filter(pk__in=[first, second]).order_by("pk")] == [
+        "Old",
+        "Old",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_bulk_update_with_a_missing_row_writes_none(dated_rows):
+    from fastapi import HTTPException
+
+    viewset = DatedTrackViewSet()
+    with pytest.raises(HTTPException) as raised:
+        await viewset.perform_bulk_update(None, {dated_rows[0].pk: _patch(title="Renamed"), 999999: _patch(year=2001)})
+    assert raised.value.status_code == 404
+    assert (await TrackModel.objects.aget(pk=dated_rows[0].pk)).title == "Old"
+
+
+@pytest.mark.asyncio
+async def test_a_bulk_update_returns_the_records_in_the_order_given(dated_rows):
+    viewset = DatedTrackViewSet()
+    first, second, _ = (row.pk for row in dated_rows)
+    updated = await viewset.perform_bulk_update(None, {second: _patch(title="B"), first: _patch(title="A")})
+    assert [(record.id, record.title) for record in updated] == [(second, "B"), (first, "A")]
+
+
+@pytest.mark.asyncio
+async def test_an_update_of_a_row_get_queryset_excludes_is_a_404(dated_rows):
+    from fastapi import HTTPException
+
+    class ScopedViewSet(DatedTrackViewSet):
+        def get_queryset(self, context):
+            return super().get_queryset(context).exclude(title="Modern").distinct()
+
+    with pytest.raises(HTTPException) as raised:
+        await ScopedViewSet().perform_update(None, dated_rows[2].pk, _patch(year=2001))
+    assert raised.value.status_code == 404
+    updated = await ScopedViewSet().perform_update(None, dated_rows[0].pk, _patch(year=2001))
+    assert updated.year == 2001
 
 
 class TagModel(models.Model):
