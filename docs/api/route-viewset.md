@@ -52,7 +52,7 @@ the class gained. Applied as `@route_viewset(...)` on the class or called as
 - Derives an OpenAPI tag from the class name (strips `ViewSet` suffix) and records the class's own docstring as that tag's description.
 - Gives every route a dependency that runs each configured `Middleware`'s `depends()` before the request body is parsed, plus `settings.viewsets_security_scheme` when one is set.
 - Drops the declared `response_model` from every route when a middleware in `settings.viewsets_command_middleware` declares `modifies_response_shape`, since that middleware may reshape the body.
-- Raises `ValueError` when `@endpoint_docs` names an endpoint the class does not have.
+- Raises `ValueError` when `lifecycle` is none of `"singleton"`, `"per-request"`, `"instance-key"`, and when `@endpoint_docs` names an endpoint the class does not have.
 - Hands the routes that resolve to muxws — every one but `/schema`, for which the registry substitutes its own — to the muxws registry.
 - Stores metadata on the class as `cls.__viewset_metadata__`.
 
