@@ -115,7 +115,7 @@ interface Options {
 | `axiosInstance` | `AxiosInstance` | global `axios` | REST only. |
 | `peer` | `MuxwsPeerSource` | — | muxws only. A `Peer`, or a function returning one — called once and cached. |
 | `timeoutMs` | `number` | — | muxws only. Per-request timeout, covering the wait for the reply headers and for the body; muxws resets the stream with `TIMEOUT` when it expires and the call rejects with its `StreamTimeout`. |
-| `headers` | `Record<string, string>` | `{}` | muxws only. Headers added to every request. |
+| `headers` | `Record<string, string>` | `{}` | muxws only. Headers added to every request; a call's `RequestOptions.headers` override them. |
 
 ## Inside the class body
 

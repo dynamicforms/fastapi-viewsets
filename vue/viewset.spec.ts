@@ -86,7 +86,7 @@ describe('restViewSet', () => {
   it('produces a working proxy for the actions it declares', async () => {
     const api = build();
     await expect(api.list()).resolves.toEqual(MOCK_ITEMS);
-    expect(http.get).toHaveBeenCalledWith('/items');
+    expect(http.get).toHaveBeenCalledWith('/items', { headers: { 'X-List-Shape': 'plain' } });
   });
 
   it('binds pkFieldName from the factory rather than the constructor', async () => {
@@ -160,7 +160,7 @@ describe('restViewSet', () => {
     mockSchema(READONLY_LOOKUP_SCHEMA);
     const api = new ItemApi({ basePath: '/items/', axiosInstance: http as unknown as typeof axios });
     await api.list();
-    expect(http.get).toHaveBeenCalledWith('/items');
+    expect(http.get).toHaveBeenCalledWith('/items', { headers: { 'X-List-Shape': 'plain' } });
   });
 
   it('still honours validateSchema: false per instance', async () => {

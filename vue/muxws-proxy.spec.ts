@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BulkViewSetMixin, LookupMixin } from './mixins';
 import { type MuxwsPeerLike, MuxwsProxyImpl, route_muxws } from './muxws-proxy';
-import { ViewSetRequestError } from './proxy-base';
+import { ListShapeMismatchError, ViewSetRequestError } from './proxy-base';
 import { muxwsViewSet } from './viewset';
 
 interface Item {
@@ -158,6 +158,25 @@ describe('MuxwsProxyImpl — envelope', () => {
     mock.reply(MOCK_ITEMS);
     await withHeaders.list();
     expect(mock.last.headers.authorization).toBe('Bearer tok');
+  });
+
+  it('sends the requested list shape as X-List-Shape, over the configured headers', async () => {
+    const withHeaders = new MuxwsProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      peer: mock.peer,
+      validateSchema: false,
+      headers: { authorization: 'Bearer tok', 'X-List-Shape': 'plain' },
+    });
+    mock.reply({ results: MOCK_ITEMS, offset: 0, limit: 2, count: 2, has_more: false, has_previous: false });
+    await withHeaders.listPage();
+    expect(mock.last.headers['X-List-Shape']).toBe('paginated');
+    expect(mock.last.headers.authorization).toBe('Bearer tok');
+  });
+
+  it('listCursor() rejects an answer in another shape', async () => {
+    mock.reply(MOCK_ITEMS);
+    await expect(proxy.listCursor()).rejects.toBeInstanceOf(ListShapeMismatchError);
   });
 
   it('never lets a configured header shadow a pseudo-header', async () => {

@@ -139,9 +139,9 @@ export class CursorListMixin<T> {
 }
 
 /**
- * FE counterpart of the BE PaginatedListMixin. `GET {basePath}` is one endpoint answering in the
- * shape the BE viewset declared as its default; this client sends no X-List-Shape header, so a
- * ViewSet declares the mixin matching that default rather than one per shape it might want.
+ * FE counterpart of the BE PaginatedListMixin. `list()`, `listPage()` and `listCursor()` read the same
+ * `GET {basePath}` and each requests its shape with `X-List-Shape`, so a ViewSet declares one mixin
+ * per shape the BE viewset offers through `list_shape` and `list_shapes`.
  */
 export interface PaginatedListMixin<T> {
   listPage(params?: PageParams): Promise<PaginatedList<T>>;

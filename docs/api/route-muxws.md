@@ -68,7 +68,8 @@ A muxws `Peer` satisfies `MuxwsPeerLike`.
 ## MuxwsProxyImpl
 
 The concrete class behind every muxws proxy and every `muxwsViewSet` class. Each call opens one
-stream with `:method`, `:path` and `:query` pseudo-headers and the request body as payload, and
+stream with `:method`, `:path` and `:query` pseudo-headers, the proxy's `headers` overridden by the
+call's `RequestOptions.headers`, and the request body as payload, and
 reads the status from the reply's `:status` header (200 when absent). A status of 400 or above
 throws a `ViewSetRequestError`. The HTTP mapping is [`route_rest`'s](./route-rest#http-mapping).
 

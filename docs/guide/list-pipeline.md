@@ -132,9 +132,13 @@ const tracks = new TrackViewSet({ basePath: '/tracks' });
 let next = await tracks.listCursor({ limit: 50 });
 ```
 
-`list()` and `listPage()` are the same call against a viewset whose default is `plain` or
-`paginated`. The client sends no `X-List-Shape` header, so a viewset offering several shapes still
-answers this client in its default one.
+`list()` and `listPage()` read the same endpoint. Each method sends `X-List-Shape` with its shape
+(`plain`, `paginated`, `cursor`), so against a viewset with `list_shapes` every declared mixin
+receives its own envelope. A viewset with one shape ignores the header and answers in that shape;
+the methods for the other two throw `ListShapeMismatchError`.
+
+Over REST the header makes a cross-origin list request a CORS preflighted one: the server's
+`CORSMiddleware` has to allow it, with `allow_headers=["X-List-Shape"]` or `["*"]`.
 
 The envelope's `snake_case` fields are renamed to `hasMore`, `hasPrevious`; the records inside are
 untouched.

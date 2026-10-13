@@ -69,7 +69,12 @@ type QueryParams = Record<string, string | number | boolean | null | undefined |
 interface RequestOptions {
   query?: QueryParams;
   body?: unknown;
+  /** Headers for this call only; on muxws they override the proxy's own `headers`. */
+  headers?: Record<string, string>;
 }
+
+/** The response shapes of `GET {basePath}`, as the BE names them in `X-List-Shape`. */
+type ListShape = 'plain' | 'paginated' | 'cursor';
 
 /** One entry of a ViewSet's `declares`: a mixin naming the actions it contributes. */
 interface ViewSetMixinDeclaration {
@@ -112,7 +117,20 @@ class ViewSetRequestError extends Error {
 stringified, `{}` when the constructor is not given any. `name` is `'ViewSetRequestError'` and the
 message is `Request failed with status code {status}`.
 
-Which transport throws this and which throws axios' own `AxiosError`, and what a handler may read off
+```ts
+class ListShapeMismatchError extends Error {
+  readonly expected: ListShape;
+  readonly received: ListShape | 'unknown';
+}
+```
+
+Thrown by `list()`, `listPage()` and `listCursor()` when the reply is not the envelope the method
+requested: `plain` is an array, `paginated` an object with `results` and `offset`, `cursor` an object
+with `results`, `next` and `has_more`. `received` is `'unknown'` for a body that matches none of them.
+`name` is `'ListShapeMismatchError'` and the message is
+`Expected a '{expected}' list from the BE, received '{received}'`.
+
+Which transport throws `ViewSetRequestError` and which throws axios' own `AxiosError`, and what a handler may read off
 either, is in [handling a failed call](../guide/vue-mixins#handling-a-failed-call).
 
 ### Error bodies
@@ -182,7 +200,7 @@ listPage(params?: PageParams): Promise<PaginatedList<T>>;
 listCursor(params?: CursorParams): Promise<CursorPage<T>>;
 ```
 
-`GET {basePath}` is one endpoint that answers in whichever shape the BE viewset declared as its default. This client sends no `X-List-Shape` header, so declare the mixin matching that default - declaring several does not let you choose between them.
+The three methods read the same `GET {basePath}`. Each sends `X-List-Shape` with its own shape - `plain`, `paginated`, `cursor` - and throws `ListShapeMismatchError` when the reply is in another one. A BE viewset that declares one shape does not read the header and answers in that shape, so a ViewSet declares the mixins of the shapes the BE viewset offers through `list_shape` and `list_shapes`. A shape the BE viewset's `list_shapes` leave out is a 422 `unsupported_list_shape`.
 
 ### RetrieveMixin `<K extends KeyType, T>`
 ```ts

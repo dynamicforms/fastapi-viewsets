@@ -175,29 +175,6 @@ Two things a reader must be told, both measured. The helper's return type must b
 
 The library does not ship the helper. It is four lines, it is standard TypeScript, and a wrapper would have to guess at the constraint. What would change it: if every consumer ends up writing the same wrapper, exporting a typed one is a small addition — but I would rather see the copies first.
 
-### A ViewSet cannot ask for a list shape, so declaring more than one is a claim it cannot honour
-
-`GET {basePath}` answers in the shape the BE viewset declared as its default, and a client selects a
-different one with an `X-List-Shape` header. This client cannot choose one per call: `RequestOptions` is
-`{ query?, body? }` and neither transport takes a per-call header. It can send the header on *every*
-call — muxws through its constructor `headers`, REST through the axios instance's defaults — which
-pins one shape for the whole proxy rather than selecting per method. So `list()`, `listPage()` and
-`listCursor()` issue the identical request, and
-calling the one that does not match the BE's default decodes the wrong envelope silently:
-`listPage()` against a cursor-default viewset yields `offset`/`limit`/`count` undefined.
-
-The documentation now says this plainly rather than teaching the header. What it leaves standing is
-that the demo declares `[BulkViewSetMixin, CursorListMixin, PaginatedListMixin, LookupMixin]` for
-`/music`, whose default is `cursor` - so `listPage` is declared and unusable, and `list`, arriving
-through `BulkViewSetMixin`, is in exactly the same position. It calls only `listCursor`, so nothing
-is broken; the declaration is simply wider than the truth.
-
-Two ways out, and the choice is not obvious. Give `RequestOptions` a `headers` field and have each
-list method send the shape it wants, which makes the declaration honest and costs a per-call header
-on both transports. Or accept that the shape is a property of the endpoint, and have the demo
-enumerate leaves - `[CursorListMixin, CreateMixin, RetrieveMixin, …]` - which is truthful and
-verbose, and makes the composites useless for any viewset with `list_shapes`.
-
 ## Settled, kept for the reasoning
 
 ### An unhandled exception answers 500 rather than resetting the stream
