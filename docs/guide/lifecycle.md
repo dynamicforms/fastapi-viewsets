@@ -75,20 +75,41 @@ if the endpoint or a middleware raises. See the full ordering in [Architecture](
 Redis, if you don't want to write your own:
 
 ```python
+import json
+
+from redis.asyncio import Redis
+
 from fastapi_viewsets.save_state.save_state import SaveStateRedis
+
+redis = Redis()
+
 
 @route_viewset(router, base_path="/session", lifecycle="instance-key")
 class SessionViewSet(SaveStateRedis, ListMixin[str]):
     save_state_redis_key = "session:items"  # required class variable
 
-    def __init__(self, redis):
+    def __init__(self):
         super().__init__(instance_id="session", redis=redis)
         self.items: list[str] = []
+
+    async def serialize_state(self) -> str:
+        return json.dumps(self.items)
+
+    async def deserialize_state(self, state: str | None):
+        if state is not None:
+            self.items = json.loads(state)
+
+    async def perform_list(self, context: Context) -> list[str]:
+        return self.items
 ```
+
+`route_viewset` constructs the viewset with no arguments, so the Redis client comes from the module
+rather than the constructor.
 
 `SaveStateRedis(instance_id, redis)` reads/writes `save_state_redis_key` via `redis.get`/`redis.set`,
 serializing through `serialize_state()`/`deserialize_state()` (from the `SerializeState` base it
-also inherits). `SerializeStateSlots` is a ready-made `serialize_state`/`deserialize_state` pair for
+also inherits), which the viewset implements; `deserialize_state()` receives None while the key
+holds nothing. `SerializeStateSlots` is a ready-made `serialize_state`/`deserialize_state` pair for
 classes that declare `__slots__`: it JSON-dumps/loads exactly those slots, optionally through a
 `custom_json_encoder`/`custom_json_decoder` pair (the same pattern used by
 `settings.viewsets_context_json_encoder`/`decoder` - see [Context Processors](./context-processors)).
