@@ -299,8 +299,8 @@ class ListMixin(Generic[T, TFilter], ABC):
         context: Context,
         fltr: Annotated[TFilter, Query()] = None,
         sort: str | None = None,
-        offset: int = 0,
-        limit: int | None = None,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int | None, Query(ge=1)] = None,
         cursor: str | None = None,
         x_list_shape: Annotated[str | None, Header()] = None,
     ) -> Union[ListOf[T], PaginatedList[T], CursorPage[T]]:  # noqa: UP007 - see list_shapes.response_model

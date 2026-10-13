@@ -94,7 +94,7 @@ The declaration decides the endpoint's parameters and its response model:
 | `paginated` | `+ offset, limit` | `PaginatedList_Track_` |
 | `cursor` | `+ cursor, limit` | `CursorPage_Track_` |
 
-`limit` is capped at `max_page_size`.
+`limit` is capped at `max_page_size`. A `limit` below 1 or an `offset` below 0 is a 422.
 
 ### Letting the client choose
 

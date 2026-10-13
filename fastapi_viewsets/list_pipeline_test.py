@@ -266,3 +266,15 @@ def test_a_filter_value_that_will_not_convert_is_a_422_on_the_query_parameter():
     [error] = response.json()["detail"]
     assert error["loc"] == ["query", "year__in", 1]
     assert error["type"] == "int_parsing"
+
+
+@pytest.mark.parametrize(("parameter", "value"), [("limit", -1), ("limit", 0), ("offset", -1)])
+def test_a_page_window_out_of_range_is_a_422(parameter, value):
+    class PagedViewSet(CollectionViewSet[int, Track], PaginatedListMixin[Track, None]):
+        def __init__(self):
+            super().__init__(container=library(3), pk_field="id")
+
+    client = client_for(PagedViewSet)
+    response = client.get("/tracks", params={parameter: value})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", parameter]

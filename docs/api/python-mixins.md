@@ -81,7 +81,7 @@ Class attributes:
 - `list_shapes: tuple[str, ...] | None = None` — shapes a client may ask for with `X-List-Shape`.
   `None` means the default one only.
 - `default_page_size: int = 100` — `limit` when a paged shape is asked for without one.
-- `max_page_size: int = 1000` — ceiling on `limit`.
+- `max_page_size: int = 1000` — ceiling on `limit`. `limit` is at least 1 and `offset` at least 0; a request outside that is a 422.
 - `pk_field_name: str = "id"` — appended to the cursor's ordering so every key tuple is unique.
   `DjangoORMViewSet` supplies the model's own primary key instead.
 - `nulls: str = "first"` — which end NULLs sit at when sorting ascending, `"first"` or `"last"`.
