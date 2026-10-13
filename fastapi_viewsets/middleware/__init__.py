@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Generic, get_args, get_origin, TYPE_CHECKING, TypeVar
 
-from ..context import Context, SerializableObject, to_jsonable
+from ..context import Context, from_jsonable, SerializableObject, to_jsonable
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -38,7 +38,7 @@ class ViewSetResult(SerializableObject, Generic[T]):
 
     Inherits `SerializableObject` so it survives the Celery/Redis boundary: a
     `celery_viewset`-dispatched action's worker-side return value is passed through
-    `serialize_value()`/`deserialize_value()` (see fastapi_viewsets.context) exactly like any other
+    `to_jsonable()`/`from_jsonable()` (see fastapi_viewsets.context) exactly like any other
     `SerializableObject`, the same mechanism `LazyObject`/`Context` values already rely on. Only
     `__serialize__`/`__deserialize__` are overridden here - a `ViewSetResult` is never itself placed
     in a `Context` and never awaited, so `SerializableObject`'s `value`/`__await__`/`__init__` go
@@ -60,7 +60,12 @@ class ViewSetResult(SerializableObject, Generic[T]):
 
     @classmethod
     def __deserialize__(cls, data: Any) -> "ViewSetResult":
-        return cls(body=data["body"], headers=data["headers"], cookies=data["cookies"], status_code=data["status_code"])
+        return cls(
+            body=from_jsonable(data["body"]),
+            headers=data["headers"],
+            cookies=data["cookies"],
+            status_code=data["status_code"],
+        )
 
 
 CommandMiddleware = Callable[
