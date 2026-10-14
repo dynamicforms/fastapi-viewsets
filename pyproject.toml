@@ -73,6 +73,9 @@ exclude = [
     "**/*_test.py",
 ]
 
+[tool.publish]
+tests = "pytest"
+
 [tool.ruff]
 exclude = ['dockertest',
     'tests', 'docs', 'examples', 'scripts', 'setup.py', 'setup.cfg', 'README.md', 'LICENSE', 'MANIFEST.in',
