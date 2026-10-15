@@ -98,6 +98,16 @@ Two behaviours of HTTP middleware have no counterpart on a WebSocket:
 - **Cookies.** A `set-cookie` header reaches the client in the reply headers, but a browser does not
   set a cookie from a WebSocket message. A cookie the browser has to store is set over HTTP.
 
+### A stream that ends early
+
+`process_command` runs the request as a task of its own. When the stream ends before the answer —
+the peer cancels it or the socket is lost, and muxws cancels the stream handler — the request runs
+to completion and its answer is discarded, as an HTTP server lets a request run after its client
+disconnected. An exception the request raises after that is logged. Cancelling the stream does not
+stop the action; an action that has to be stoppable is stopped through the application. A client
+that repeats the call with the same `Idempotency-Key` receives the outcome of the first one (see
+[Idempotent Calls](./idempotency)).
+
 ## Client
 
 A ViewSet is a class built by `muxwsViewSet`, given the name of the pk field and the mixins the BE
@@ -338,7 +348,8 @@ WebSocket's own addresses, which [`RateLimiter`](./rate-limiter#identity-key) ke
 
 Nothing survives a muxws reconnect: every in-flight stream fails with `ConnectionLost` and the id
 space restarts. The proxy propagates that to the caller; it does not retry. Hook `peer.onReconnect`
-to refresh state when the socket comes back.
+to refresh state when the socket comes back. On the server the requests of those streams run to
+completion (see [A stream that ends early](#a-stream-that-ends-early)).
 
 ## Performance
 

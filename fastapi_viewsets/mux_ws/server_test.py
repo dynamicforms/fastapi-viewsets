@@ -681,3 +681,38 @@ async def test_each_transport_answers_schema_with_its_own_endpoints():
     assert "/both/muxws-only" in stream.payload["paths"]
     assert "/both" in rest_paths
     assert "/both" in stream.payload["paths"]
+
+
+@pytest.mark.asyncio
+async def test_a_request_whose_stream_ended_runs_to_completion_and_its_answer_is_discarded():
+    import asyncio
+
+    started, release = asyncio.Event(), asyncio.Event()
+    finished: list[str] = []
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/slow")
+    class SlowViewSet:
+        __router = APIRouter()
+
+        @__router.post("")
+        async def create(self) -> dict:
+            started.set()
+            await release.wait()
+            finished.append("create")
+            return {"ok": True}
+
+    stream = FakeStream({":method": "POST", ":path": "/slow"})
+    handler = asyncio.ensure_future(process_command(ABSENT, stream, app=app_of(SlowViewSet)))
+    await started.wait()
+    handler.cancel()  # what muxws does to the handler when the stream is reset or the socket lost
+    with pytest.raises(asyncio.CancelledError):
+        await handler
+
+    release.set()
+    for _ in range(100):
+        if finished:
+            break
+        await asyncio.sleep(0.01)
+    assert finished == ["create"]
+    assert stream.replies == 0
