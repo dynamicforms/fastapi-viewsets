@@ -7,14 +7,11 @@ identically named module inside this package would make every import in this fil
 the reader even where it is unambiguous to Python. Nothing here is a typo.
 
 What this gives you is the same viewsets you already registered over REST, reachable over a
-single WebSocket instead. A command is dispatched into the app `get_dispatch_app()` builds from the
-endpoints published on muxws, each registered with the route kwargs `route_viewset` built for it -
-the same ones the REST router is given for an endpoint published on both - so validation,
-dependencies, command middleware, context processors and response models behave identically.
-That app is this library's, not the application object you created: what a command carries is what
-`route_viewset` put on the route, and nothing you attached elsewhere. `request.app` inside an
-endpoint reached this way is the dispatch app. docs/guide/muxws.md lists what that leaves behind and
-what to use instead; `app=` on `process_command` sends a command through your application instead.
+single WebSocket instead. A command goes through the application that serves the WebSocket
+endpoint, as an HTTP request does: its middleware, exception handlers, router, dependencies and
+state. muxws is a transport only - it turns a stream into an ASGI request and the response back
+into a reply. Each viewset endpoint is one route on the application's router, matching only the
+transports it is published on (`fastapi_viewsets.routing`).
 
 Server side:
 
@@ -38,7 +35,6 @@ Which viewsets get registered is decided at three levels, each able to defer to 
 
 from .protocol import METHOD_KEY, PATH_KEY, QUERY_KEY, STATUS_KEY
 from .registry import (
-    get_dispatch_app,
     is_registered,
     register_viewset,
     registered_viewsets,
@@ -55,7 +51,6 @@ __all__ = [
     "PATH_KEY",
     "QUERY_KEY",
     "STATUS_KEY",
-    "get_dispatch_app",
     "is_registered",
     "process_command",
     "register_viewset",

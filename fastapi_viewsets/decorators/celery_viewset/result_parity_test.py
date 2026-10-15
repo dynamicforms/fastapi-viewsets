@@ -58,9 +58,12 @@ def rest_result() -> Any:
 
 
 async def muxws_result() -> Any:
-    route_viewset(APIRouter(), base_path="/reports", pk_field_name="id")(make_viewset())
+    app = FastAPI()
+    router = APIRouter()
+    route_viewset(router, base_path="/reports", pk_field_name="id")(make_viewset())
+    app.include_router(router)
     stream = FakeStream({":method": "GET", ":path": "/reports/report"})
-    await process_command(ABSENT, stream)
+    await process_command(ABSENT, stream, app=app)
     assert stream.status == 200
     return stream.payload
 

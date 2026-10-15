@@ -24,6 +24,7 @@ from fastapi_viewsets.endpoint_docs import (
 from fastapi_viewsets.middleware import any_modifies_response_shape, Middleware, unwrap_viewset_result_type
 from fastapi_viewsets.mixins import FilterParam
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
+from fastapi_viewsets.routing import MUXWS, openapi_endpoint, REST, transport_route_class
 
 from .build_schema import _pydantic_generic_args, build_schema, route_to_add_api_route_kwargs
 from .lifecycle_runner import lifecycle_runner, LifecycleType
@@ -374,6 +375,25 @@ def route_viewset(
             disable_response_model=any_modifies_response_shape(settings.viewsets_command_middleware),
         )
 
+        def is_schema_route(route) -> bool:
+            return getattr(route.endpoint, "__viewset_schema_endpoint__", False)
+
+        def add_route(route_kwargs: dict, transports: set[str]) -> None:
+            # One route per endpoint on the application's router, whichever transports publish it,
+            # so both transports go through the application's middleware, exception handlers and
+            # router dependencies. The route matches only its own transports (see routing.py), and
+            # only a route published on REST appears in the application's OpenAPI document.
+            router.add_api_route(
+                **{**route_kwargs, "include_in_schema": route_kwargs["include_in_schema"] and REST in transports},
+                route_class_override=transport_route_class(router.route_class, frozenset(transports)),
+            )
+
+        on_muxws_any = any(
+            resolve_register_muxws(route.endpoint, register_muxws)
+            for route in cls.__router.routes
+            if not is_schema_route(route)
+        )
+        rest_routes = []
         muxws_routes = []
         documented = set()
         for route in cls.__router.routes:
@@ -384,16 +404,29 @@ def route_viewset(
             # Per-viewset wording for an endpoint the mixin provided - the mixin's own docstring is
             # the same sentence on every viewset in the application. See endpoint_docs.py.
             route_kwargs.update(docs_for(cls, action_name))
+            on_rest = resolve_register_rest(route.endpoint, register_rest)
 
-            if resolve_register_rest(route.endpoint, register_rest):
-                router.add_api_route(**route_kwargs)
+            if is_schema_route(route):
+                # Two /schema routes on one path, one per transport, each answering with the
+                # endpoints published on its own transport.
+                if on_rest:
+                    rest_schema_kwargs = {**route_kwargs, "endpoint": openapi_endpoint(rest_routes)}
+                    rest_routes.append(rest_schema_kwargs)
+                    add_route(rest_schema_kwargs, {REST})
+                if on_muxws_any:
+                    add_route({**route_kwargs, "endpoint": openapi_endpoint(muxws_routes)}, {MUXWS})
+                continue
 
-            # The /schema route is deliberately not carried over: it closes over the REST app and
-            # would report the REST endpoint set no matter which transport asked. The muxws
-            # registry substitutes its own.
-            is_schema_route = getattr(route.endpoint, "__viewset_schema_endpoint__", False)
-            if not is_schema_route and resolve_register_muxws(route.endpoint, register_muxws):
+            on_muxws = resolve_register_muxws(route.endpoint, register_muxws)
+            transports = set()
+            if on_rest:
+                transports.add(REST)
+                rest_routes.append(route_kwargs)
+            if on_muxws:
+                transports.add(MUXWS)
                 muxws_routes.append(route_kwargs)
+            if transports:
+                add_route(route_kwargs, transports)
 
         # Checked here rather than in the decorator, which runs before any route exists. A name
         # that matches nothing would otherwise leave that endpoint on the mixin's generic

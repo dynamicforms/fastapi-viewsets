@@ -28,9 +28,11 @@ An application that never registers this receives `{"detail": "..."}`, from Fast
 detail="...")` is unaffected either way - only exceptions descending from `DfViewSetError` carry a
 `code`.
 
-The server never picks a locale for a response: each request is handled independently, with no
-per-request state that could hold one, so it always answers in English. Only the client, which
-knows which user it is answering, decides what language to show.
+The server never picks a locale for an error: `detail` is always English, and the client shows the
+error in its own language by its `code`.
+
+The handler is registered on the application, so it shapes a `DfViewSetError` over REST and over
+[muxws](./muxws) alike.
 
 ## Backend
 

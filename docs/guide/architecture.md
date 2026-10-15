@@ -322,8 +322,9 @@ ones. `route_viewset` is the HTTP **transport adapter**: it's the only place tha
 real `fastapi.Request`/`Response`. The pipeline above - build context, run command middleware,
 execute, unwind - doesn't otherwise care whether "the connection" is a single HTTP request/response
 or one message on a long-lived WebSocket. The [muxws transport](./muxws) hands each command to the
-same FastAPI app as a request, so the pipeline runs once per command unchanged, and the result's
-status and headers travel in the reply's leading headers. `Context.clone_for_command()` makes an
+application as a request, so the application's middleware and exception handlers and this pipeline
+run once per command unchanged, and the result's status and headers travel in the reply's leading
+headers. `Context.clone_for_command()` makes an
 isolated per-command copy of a context (round-tripping through
 `serialize_context`/`deserialize_context`), for code that serves several commands from one
 context.

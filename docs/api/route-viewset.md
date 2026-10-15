@@ -21,7 +21,7 @@ def route_viewset(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `router` | `APIRouter` | — | FastAPI router to register routes on |
+| `router` | `APIRouter` | — | FastAPI router to register routes on, for REST and muxws alike; include it in the application |
 | `base_path` | `str` | — | URL prefix for all endpoints |
 | `lifecycle` | `LifecycleType` | `"singleton"` | Viewset instance lifecycle |
 | `pk_field_name` | `str \| None` | `None` | PK field name; a `POST` request body leaves it out or gives it as null, any other value answers 422 |
@@ -50,9 +50,10 @@ the class gained. Applied as `@route_viewset(...)` on the class or called as
   route it would otherwise inherit.
 - Registers routes most specific first: literal segments such as `bulk` and `lookup`, then `{pk}`, then the bare
   `base_path`; within one path the order is `DELETE`, `PATCH`, `PUT`, `POST`, `GET`.
-- Adds `GET {base_path}/schema`, answering with the OpenAPI document of the viewset's own FastAPI app. Each operation in
-  it carries `x-viewset-action`, the name of the viewset method that serves it (`top_rated` for
-  `GET {base_path}/top-rated`); the FE schema check matches a custom endpoint to a ViewSet method by it.
+- Adds `GET {base_path}/schema` once per transport, each answering with the OpenAPI document of the endpoints
+  published on that transport. Each operation in it carries `x-viewset-action`, the name of the viewset method that
+  serves it (`top_rated` for `GET {base_path}/top-rated`); the FE schema check matches a custom endpoint to a ViewSet
+  method by it.
 - Derives an OpenAPI tag from the class name (strips `ViewSet` suffix) and records the class's own docstring as that
   tag's description.
 - Gives every route a dependency that runs each configured `Middleware`'s `depends()` before the request body is parsed,
@@ -61,8 +62,9 @@ the class gained. Applied as `@route_viewset(...)` on the class or called as
   declares `modifies_response_shape`, since that middleware may reshape the body.
 - Raises `ValueError` when `lifecycle` is none of `"singleton"`, `"per-request"`, `"instance-key"`, and when
   `@endpoint_docs` names an endpoint the class does not have.
-- Hands the routes that resolve to muxws — every one but `/schema`, for which the registry substitutes its own — to the
-  muxws registry.
+- Adds each endpoint to `router` once, as a route that matches only the transports it is published on (see
+  [muxws](../guide/muxws#choosing-which-viewsets-are-published)); a route not published on REST is left out of the
+  application's OpenAPI document. Records the endpoints published on muxws in the muxws registry.
 - Stores metadata on the class as `cls.__viewset_metadata__`.
 
 ## Lifecycle modes

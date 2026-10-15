@@ -18,6 +18,7 @@ from fastapi_viewsets.mixins import (
     RetrieveMixin,
     ViewSetMixin,
 )
+from fastapi_viewsets.routing import REST
 
 
 class Item(BaseModel):
@@ -356,8 +357,8 @@ def test_viewset_route_order():
     router = APIRouter()
     route_viewset(router, base_path="/items", pk_field_name="id")(FullViewSet)
 
-    # Build (path, method) list in registration order
-    registered = [(r.path, sorted(r.methods)[0]) for r in router.routes]
+    # Build (path, method) list in registration order, of the routes REST requests reach
+    registered = [(r.path, sorted(r.methods)[0]) for r in router.routes if REST in r.transports]
 
     # Expected order: first by path group ("" < "{pk}" < "bulk" < "lookup"),
     # then by HTTP method (GET < POST < PUT < PATCH < DELETE)

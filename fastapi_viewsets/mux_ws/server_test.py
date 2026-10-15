@@ -2,7 +2,8 @@ from typing import Any
 
 import pytest
 
-from fastapi import APIRouter
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.testclient import TestClient
 from muxws.frames import ABSENT
 from pydantic import BaseModel, Field
 
@@ -11,7 +12,7 @@ from ..conf import settings
 from ..context import Context
 from ..decorators import route_viewset
 from ..mixins import BulkViewSetMixin
-from .registry import get_dispatch_app, is_registered, registered_viewsets, reset_registry, schema_for
+from .registry import is_registered, registered_viewsets, reset_registry, schema_for
 from .server import process_command
 from .transports import transports
 
@@ -64,6 +65,13 @@ def make_viewset(register_muxws: bool | None = None) -> type:
     return TrackViewSet
 
 
+def app_of(cls: type, prefix: str = "") -> FastAPI:
+    """The application a viewset's router is included in, as `route_viewset`'s caller would build it."""
+    app = FastAPI()
+    app.include_router(cls.__viewset_metadata__["router"], prefix=prefix)
+    return app
+
+
 @pytest.fixture(autouse=True)
 def _clean_registry():
     reset_registry()
@@ -77,17 +85,17 @@ async def test_non_command_streams_are_left_alone():
     A peer may carry the application's own protocol alongside viewset traffic, so a stream we do
     not recognise must come back unhandled and unanswered rather than being refused.
     """
-    make_viewset()
+    cls = make_viewset()
     stream = FakeStream({"action": "quote", "symbol": "ACME"})
-    assert await process_command({"any": "payload"}, stream) is False
+    assert await process_command({"any": "payload"}, stream, app=app_of(cls)) is False
     assert stream.replies == 0
 
 
 @pytest.mark.asyncio
 async def test_list_returns_the_collection():
-    make_viewset()
+    cls = make_viewset()
     stream = FakeStream({":method": "GET", ":path": "/tracks"})
-    assert await process_command(ABSENT, stream) is True
+    assert await process_command(ABSENT, stream, app=app_of(cls)) is True
     assert stream.status == 200
     assert stream.payload == [
         {"id": 1, "title": "Kind of Blue"},
@@ -97,18 +105,18 @@ async def test_list_returns_the_collection():
 
 @pytest.mark.asyncio
 async def test_retrieve_binds_the_path_parameter():
-    make_viewset()
+    cls = make_viewset()
     stream = FakeStream({":method": "GET", ":path": "/tracks/2"})
-    await process_command(ABSENT, stream)
+    await process_command(ABSENT, stream, app=app_of(cls))
     assert stream.status == 200
     assert stream.payload == {"id": 2, "title": "Blue Train"}
 
 
 @pytest.mark.asyncio
 async def test_create_binds_the_payload_as_the_request_body():
-    make_viewset()
+    cls = make_viewset()
     stream = FakeStream({":method": "POST", ":path": "/tracks"})
-    await process_command({"title": "Giant Steps"}, stream)
+    await process_command({"title": "Giant Steps"}, stream, app=app_of(cls))
     assert stream.status == 200
     assert stream.payload["title"] == "Giant Steps"
 
@@ -119,42 +127,42 @@ async def test_a_missing_record_answers_with_a_status_not_a_reset():
     404 is an outcome, not a transport failure. Resetting the stream would tell the caller the
     connection misbehaved, when in fact the server answered perfectly well.
     """
-    make_viewset()
+    cls = make_viewset()
     stream = FakeStream({":method": "GET", ":path": "/tracks/999"})
-    assert await process_command(ABSENT, stream) is True
+    assert await process_command(ABSENT, stream, app=app_of(cls)) is True
     assert stream.status == 404
 
 
 @pytest.mark.asyncio
 async def test_validation_errors_come_back_as_422():
-    make_viewset()
+    cls = make_viewset()
     stream = FakeStream({":method": "POST", ":path": "/tracks"})
-    await process_command({"title": 12345, "id": "not-an-int"}, stream)
+    await process_command({"title": 12345, "id": "not-an-int"}, stream, app=app_of(cls))
     assert stream.status == 422
 
 
 @pytest.mark.asyncio
 async def test_an_unregistered_path_answers_404():
-    make_viewset()
+    cls = make_viewset()
     stream = FakeStream({":method": "GET", ":path": "/nonexistent"})
-    assert await process_command(ABSENT, stream) is True
+    assert await process_command(ABSENT, stream, app=app_of(cls)) is True
     assert stream.status == 404
 
 
 @pytest.mark.asyncio
 async def test_query_parameters_reach_the_endpoint():
-    make_viewset()
+    cls = make_viewset()
     stream = FakeStream({":method": "GET", ":path": "/tracks", ":query": {"sort": "id:desc"}})
-    await process_command(ABSENT, stream)
+    await process_command(ABSENT, stream, app=app_of(cls))
     assert stream.status == 200
     assert [record["id"] for record in stream.payload] == [2, 1]
 
 
 @pytest.mark.asyncio
 async def test_schema_reports_the_muxws_endpoint_set():
-    make_viewset()
+    cls = make_viewset()
     stream = FakeStream({":method": "GET", ":path": "/tracks/schema"})
-    await process_command(ABSENT, stream)
+    await process_command(ABSENT, stream, app=app_of(cls))
     assert stream.status == 200
     assert "/tracks" in stream.payload["paths"]
 
@@ -187,7 +195,12 @@ async def test_headers_stated_on_the_stream_override_the_connection():
                 "authorization": "Bearer per-call",
             }
         )
-        await process_command(ABSENT, stream, base_headers={"authorization": "Bearer handshake", "x-trace": "abc"})
+        await process_command(
+            ABSENT,
+            stream,
+            base_headers={"authorization": "Bearer handshake", "x-trace": "abc"},
+            app=app_of(CtxViewSet),
+        )
         assert stream.status == 200
         assert captured["authorization"] == "Bearer per-call"
         assert captured["x-trace"] == "abc"
@@ -198,9 +211,15 @@ async def test_headers_stated_on_the_stream_override_the_connection():
 class FakeConnection:
     """Stands in for the WebSocket: `process_command` reads its `headers` and `scope`."""
 
-    def __init__(self, client: tuple[str, int]):
-        self.headers: dict[str, str] = {}
-        self.scope = {"client": client, "server": ("10.0.0.1", 8000)}
+    def __init__(
+        self,
+        app: FastAPI,
+        client: tuple[str, int] = ("203.0.113.7", 51234),
+        headers: dict[str, str] | None = None,
+        state: dict[str, Any] | None = None,
+    ):
+        self.headers: dict[str, str] = headers or {}
+        self.scope = {"app": app, "client": client, "server": ("10.0.0.1", 8000), "state": state or {}}
 
 
 @pytest.mark.asyncio
@@ -213,9 +232,9 @@ async def test_the_request_carries_the_connection_address():
 
     settings.viewsets_context_processors = [capture]
     try:
-        make_viewset()
+        cls = make_viewset()
         stream = FakeStream({":method": "GET", ":path": "/tracks"})
-        await process_command(ABSENT, stream, connection=FakeConnection(("203.0.113.7", 51234)))
+        await process_command(ABSENT, stream, connection=FakeConnection(app_of(cls), ("203.0.113.7", 51234)))
         assert stream.status == 200
         assert captured["client"] == ("203.0.113.7", 51234)
     finally:
@@ -228,13 +247,14 @@ async def test_rate_limiter_counts_each_connection_address_separately():
 
     settings.viewsets_command_middleware = [RateLimiter(default_limit=1)]
     try:
-        make_viewset()
+        cls = make_viewset()
         first = FakeStream({":method": "GET", ":path": "/tracks"})
         other = FakeStream({":method": "GET", ":path": "/tracks"})
         again = FakeStream({":method": "GET", ":path": "/tracks"})
-        await process_command(ABSENT, first, connection=FakeConnection(("203.0.113.7", 1)))
-        await process_command(ABSENT, other, connection=FakeConnection(("203.0.113.8", 1)))
-        await process_command(ABSENT, again, connection=FakeConnection(("203.0.113.7", 2)))
+        app = app_of(cls)
+        await process_command(ABSENT, first, connection=FakeConnection(app, ("203.0.113.7", 1)))
+        await process_command(ABSENT, other, connection=FakeConnection(app, ("203.0.113.8", 1)))
+        await process_command(ABSENT, again, connection=FakeConnection(app, ("203.0.113.7", 2)))
         assert (first.status, other.status, again.status) == (200, 200, 429)
     finally:
         settings.viewsets_command_middleware = []
@@ -245,7 +265,7 @@ async def test_register_muxws_false_keeps_the_viewset_off_the_transport():
     cls = make_viewset(register_muxws=False)
     assert not is_registered(cls)
     stream = FakeStream({":method": "GET", ":path": "/tracks"})
-    await process_command(ABSENT, stream)
+    await process_command(ABSENT, stream, app=app_of(cls))
     assert stream.status == 404
 
 
@@ -286,11 +306,13 @@ async def test_transports_can_publish_an_endpoint_on_muxws_only():
         def __init__(self):
             super().__init__(container=database, pk_field="id")
 
-    rest_paths = {route.path for route in rest_router.routes}
-    assert "/split/live" not in rest_paths
+    app = app_of(SplitViewSet)
+    # Over REST the route is not there: /split/live reaches /split/{pk}, which refuses "live" as a key.
+    assert TestClient(app).get("/split/live").status_code == 422
+    assert "/split/live" not in app.openapi()["paths"]
 
     stream = FakeStream({":method": "GET", ":path": "/split/live"})
-    await process_command(ABSENT, stream)
+    await process_command(ABSENT, stream, app=app)
     assert stream.status == 200
     assert stream.payload == 1
 
@@ -312,11 +334,14 @@ async def test_transports_can_keep_an_endpoint_off_muxws():
         def __init__(self):
             super().__init__(container=database, pk_field="id")
 
-    assert "/restonly/secret" in {route.path for route in rest_router.routes}
-    # Asserted against the dispatch app rather than by calling it: /restonly/secret would be
-    # matched by the /restonly/{pk} route and fail pk validation, so a request-level assertion
-    # would pass whether or not the endpoint had been excluded.
-    assert "/restonly/secret" not in {route.path for route in get_dispatch_app().router.routes}
+    app = app_of(RestOnlyViewSet)
+    assert TestClient(app).get("/restonly/secret").json() == 42
+
+    # Over muxws the route is not there: /restonly/secret reaches /restonly/{pk}, which refuses
+    # "secret" as a key.
+    stream = FakeStream({":method": "GET", ":path": "/restonly/secret"})
+    await process_command(ABSENT, stream, app=app)
+    assert stream.status == 422
 
 
 def test_transports_refuses_an_unreachable_endpoint():
@@ -324,21 +349,18 @@ def test_transports_refuses_an_unreachable_endpoint():
         transports(rest=False, muxws=False)
 
 
-@pytest.mark.asyncio
-async def test_re_registering_the_same_class_replaces_rather_than_duplicates():
+def test_re_registering_the_same_class_replaces_rather_than_duplicates():
     """Re-importing a module re-runs the decorator; that must not shadow the first registration."""
     database = {1: Track(id=1, title="Kind of Blue")}
-    router = APIRouter()
 
     class TwiceViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
         def __init__(self):
             super().__init__(container=database, pk_field="id")
 
     for _ in range(2):
-        route_viewset(router, base_path="/twice", pk_field_name="id")(TwiceViewSet)
+        route_viewset(APIRouter(), base_path="/twice", pk_field_name="id")(TwiceViewSet)
 
-    paths = [route.path for route in get_dispatch_app().router.routes]
-    assert paths.count("/twice/schema") == 1
+    assert list(registered_viewsets().values()).count("/twice") == 1
 
 
 def test_registry_reports_registered_viewsets():
@@ -350,10 +372,6 @@ def test_registry_reports_registered_viewsets():
 
 @pytest.mark.asyncio
 async def test_register_rest_false_makes_a_viewset_muxws_only():
-    """
-    There was no way to say this before. `route_viewset` is what registers *both* transports, so
-    not calling it removed muxws too, and the only alternative was annotating every endpoint.
-    """
     database = {1: Track(id=1, title="Kind of Blue")}
     rest_router = APIRouter()
 
@@ -362,11 +380,13 @@ async def test_register_rest_false_makes_a_viewset_muxws_only():
         def __init__(self):
             super().__init__(container=database, pk_field="id")
 
-    assert rest_router.routes == []
     assert is_registered(WsOnlyViewSet)
+    app = app_of(WsOnlyViewSet)
+    assert TestClient(app).get("/wsonly").status_code == 404
+    assert app.openapi()["paths"] == {}
 
     stream = FakeStream({":method": "GET", ":path": "/wsonly"})
-    await process_command(ABSENT, stream)
+    await process_command(ABSENT, stream, app=app)
     assert stream.status == 200
 
 
@@ -388,7 +408,7 @@ async def test_an_endpoint_may_still_opt_back_into_rest():
         def __init__(self):
             super().__init__(container=database, pk_field="id")
 
-    assert [route.path for route in rest_router.routes] == ["/mostly-ws/health"]
+    assert list(app_of(MostlyWsViewSet).openapi()["paths"]) == ["/mostly-ws/health"]
 
 
 def test_two_viewsets_on_one_base_path_warn():
@@ -418,8 +438,246 @@ def test_two_viewsets_on_one_base_path_warn():
     ],
 )
 async def test_a_malformed_envelope_is_answered_with_a_400(headers):
-    make_viewset()
+    cls = make_viewset()
     stream = FakeStream(headers)
-    assert await process_command(ABSENT, stream) is True
+    assert await process_command(ABSENT, stream, app=app_of(cls)) is True
     assert stream.status == 400
     assert isinstance(stream.payload["detail"], str)
+
+
+# A command goes through the application, as an HTTP request to the same path does.
+
+
+@pytest.mark.asyncio
+async def test_a_command_without_connection_or_app_raises():
+    make_viewset()
+    with pytest.raises(ValueError, match="connection= .* or app="):
+        await process_command(ABSENT, FakeStream({":method": "GET", ":path": "/tracks"}))
+
+
+@pytest.mark.asyncio
+async def test_the_command_goes_through_the_app_serving_the_connection():
+    cls = make_viewset()
+    app = app_of(cls)
+    seen: list[str] = []
+
+    @app.middleware("http")
+    async def mark(request, call_next):
+        seen.append(request.url.path)
+        response = await call_next(request)
+        response.headers["x-app-middleware"] = "yes"
+        return response
+
+    stream = FakeStream({":method": "GET", ":path": "/tracks"})
+    await process_command(ABSENT, stream, connection=FakeConnection(app))
+    assert stream.status == 200
+    assert seen == ["/tracks"]
+    assert stream.reply_headers["x-app-middleware"] == "yes"
+
+
+@pytest.mark.asyncio
+async def test_the_apps_exception_handler_shapes_a_viewset_error():
+    from ..exceptions import df_viewset_exception_handler, DfViewSetError
+
+    cls = make_viewset()
+    app = app_of(cls)
+    app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
+
+    rest = TestClient(app).get("/tracks/999")
+    stream = FakeStream({":method": "GET", ":path": "/tracks/999"})
+    await process_command(ABSENT, stream, app=app)
+    assert stream.status == rest.status_code == 404
+    assert stream.payload == rest.json()
+    assert stream.payload["detail_code"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_the_apps_500_handler_answers_an_unhandled_error():
+    from fastapi.responses import JSONResponse
+
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/broken", pk_field_name="id")
+    class BrokenViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+        async def perform_list(self, context: Context) -> list[Track]:  # noqa: ARG002 - fails before reading it
+            raise RuntimeError("boom")
+
+    app = app_of(BrokenViewSet)
+
+    @app.exception_handler(Exception)
+    async def crashed(_request, _error):
+        return JSONResponse({"detail": "crashed"}, status_code=500)
+
+    stream = FakeStream({":method": "GET", ":path": "/broken"})
+    await process_command(ABSENT, stream, app=app)
+    assert stream.status == 500
+    assert stream.payload == {"detail": "crashed"}
+
+
+@pytest.mark.asyncio
+async def test_dependencies_on_the_router_guard_both_transports():
+    from fastapi import Depends, HTTPException, Request
+
+    async def gate(request: Request) -> None:
+        if request.headers.get("x-pass") != "1":
+            raise HTTPException(status_code=403)
+
+    database = {1: Track(id=1, title="Kind of Blue")}
+    router = APIRouter(dependencies=[Depends(gate)])
+
+    @route_viewset(router, base_path="/gated", pk_field_name="id")
+    class GatedViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        def __init__(self):
+            super().__init__(container=database, pk_field="id")
+
+    app = app_of(GatedViewSet)
+    assert TestClient(app).get("/gated").status_code == 403
+
+    refused = FakeStream({":method": "GET", ":path": "/gated"})
+    allowed = FakeStream({":method": "GET", ":path": "/gated", "x-pass": "1"})
+    await process_command(ABSENT, refused, app=app)
+    await process_command(ABSENT, allowed, app=app)
+    assert (refused.status, allowed.status) == (403, 200)
+
+
+@pytest.mark.asyncio
+async def test_the_endpoint_sees_the_apps_state_and_the_lifespan_state():
+    captured: dict[str, Any] = {}
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/stateful", pk_field_name="id")
+    class StatefulViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        __router = APIRouter()
+
+        @__router.get("probe", tags=["Stateful"])
+        async def probe(self, request: Request) -> int:
+            captured["app"] = request.app.state.name
+            captured["lifespan"] = request.state.pool
+            request.state.pool = "replaced"
+            return 1
+
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+    app = app_of(StatefulViewSet)
+    app.state.name = "the application"
+    lifespan_state = {"pool": "the pool"}
+
+    stream = FakeStream({":method": "GET", ":path": "/stateful/probe"})
+    await process_command(ABSENT, stream, connection=FakeConnection(app, state=lifespan_state))
+    assert stream.status == 200
+    assert captured == {"app": "the application", "lifespan": "the pool"}
+    assert lifespan_state == {"pool": "the pool"}
+
+
+@pytest.mark.asyncio
+async def test_dependency_overrides_apply_to_a_command():
+    from fastapi import Depends
+
+    def real_limit() -> int:
+        return 1
+
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/overridden", pk_field_name="id")
+    class OverriddenViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        __router = APIRouter()
+
+        @__router.get("limit", tags=["Overridden"])
+        async def limit(self, value: int = Depends(real_limit)) -> int:  # noqa: B008
+            return value
+
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+    app = app_of(OverriddenViewSet)
+    app.dependency_overrides[real_limit] = lambda: 7
+
+    stream = FakeStream({":method": "GET", ":path": "/overridden/limit"})
+    await process_command(ABSENT, stream, app=app)
+    assert stream.payload == 7
+
+
+@pytest.mark.asyncio
+async def test_a_compression_middleware_leaves_the_reply_uncompressed():
+    from starlette.middleware.gzip import GZipMiddleware
+
+    cls = make_viewset()
+    app = app_of(cls)
+    app.add_middleware(GZipMiddleware, minimum_size=1)
+    connection = FakeConnection(
+        app,
+        headers={
+            "Accept-Encoding": "gzip, deflate",
+            "Connection": "Upgrade",
+            "Upgrade": "websocket",
+            "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+            "Cookie": "session=abc",
+        },
+    )
+    captured: dict[str, str] = {}
+
+    async def capture(request, _viewset) -> dict[str, Any]:
+        captured.update(request.headers)
+        return {}
+
+    settings.viewsets_context_processors = [capture]
+    try:
+        stream = FakeStream({":method": "GET", ":path": "/tracks"})
+        await process_command(ABSENT, stream, connection=connection)
+    finally:
+        settings.viewsets_context_processors = []
+    assert stream.payload[0] == {"id": 1, "title": "Kind of Blue"}
+    assert "content-encoding" not in stream.reply_headers
+    assert captured["cookie"] == "session=abc"
+    assert not {"accept-encoding", "connection", "upgrade", "sec-websocket-key"} & set(captured)
+
+
+@pytest.mark.asyncio
+async def test_the_path_carries_the_include_router_prefix():
+    cls = make_viewset()
+    app = app_of(cls, prefix="/api")
+
+    prefixed = FakeStream({":method": "GET", ":path": "/api/tracks/1"})
+    bare = FakeStream({":method": "GET", ":path": "/tracks/1"})
+    await process_command(ABSENT, prefixed, app=app)
+    await process_command(ABSENT, bare, app=app)
+    assert TestClient(app).get("/api/tracks/1").json() == prefixed.payload == {"id": 1, "title": "Kind of Blue"}
+    assert bare.status == 404
+
+
+@pytest.mark.asyncio
+async def test_each_transport_answers_schema_with_its_own_endpoints():
+    database = {1: Track(id=1, title="Kind of Blue")}
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/both", pk_field_name="id")
+    class BothViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        __router = APIRouter()
+
+        @transports(muxws=False)
+        @__router.get("rest-only", tags=["Both"])
+        async def rest_only(self) -> int:
+            return 1
+
+        @transports(rest=False)
+        @__router.get("muxws-only", tags=["Both"])
+        async def muxws_only(self) -> int:
+            return 2
+
+        def __init__(self):
+            super().__init__(container=database, pk_field="id")
+
+    app = app_of(BothViewSet)
+    stream = FakeStream({":method": "GET", ":path": "/both/schema"})
+    await process_command(ABSENT, stream, app=app)
+    rest_paths = TestClient(app).get("/both/schema").json()["paths"]
+    assert "/both/rest-only" in rest_paths
+    assert "/both/muxws-only" not in rest_paths
+    assert "/both/rest-only" not in stream.payload["paths"]
+    assert "/both/muxws-only" in stream.payload["paths"]
+    assert "/both" in rest_paths
+    assert "/both" in stream.payload["paths"]
