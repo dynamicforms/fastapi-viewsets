@@ -211,7 +211,8 @@ const created = await call;
 ```
 
 An attempt that ends without an answer — an axios error without `response` (a network error, the
-attempt's `attemptTimeoutMs`), or `502`, `503`, `504` — is aborted and repeated with the same key;
+attempt's `attemptTimeoutMs`), or `502`, `503`, `504` from a gateway — is aborted and repeated with
+the same key, and with the headers the first attempt was sent with;
 the backend's `Idempotency` middleware answers the repeat with the outcome of the first attempt. The
 rules and the options are in [Idempotent Calls](./idempotency#frontend).
 

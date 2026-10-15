@@ -5,8 +5,9 @@
  *
  * The key follows draft-ietf-httpapi-idempotency-key-header-07: a fresh UUID per call, sent as a
  * Structured Field string, and the same key on every repeat of that call. The BE's `Idempotency`
- * middleware answers a repeat with the outcome of the first attempt, or attaches it to the attempt
- * that is still running, so a repeat never runs the action twice.
+ * middleware answers a repeat with the stored outcome of the first attempt, or attaches it to the
+ * attempt that is still running. Where it has neither (no `Idempotency` on the BE, a `GET` outcome
+ * that was not stored, an outcome that set a cookie, an expired record), the repeat runs the action.
  */
 
 /** The header that carries the key. */
@@ -102,6 +103,19 @@ export function idempotencyKeyHeader(key: string): string {
     throw new TypeError(`An idempotency key must be a non-empty string of printable ASCII, got ${JSON.stringify(key)}`);
   }
   return `"${key.replace(/[\\"]/g, '\\$&')}"`;
+}
+
+/**
+ * `headers` with the `Idempotency-Key` of `key` and no other spelling of that header name: header
+ * names are case-insensitive, and a second spelling would send the header twice.
+ */
+export function withKeyHeader<V>(headers: Record<string, V>, key: string): Record<string, V | string> {
+  const out: Record<string, V | string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() !== IDEMPOTENCY_KEY_HEADER.toLowerCase()) out[name] = value;
+  }
+  out[IDEMPOTENCY_KEY_HEADER] = idempotencyKeyHeader(key);
+  return out;
 }
 
 // ---------------------------------------------------------------------------

@@ -69,9 +69,11 @@ rejected from `depends()`, before the request body is parsed.
   Starlette does not interrupt an application when the client disconnects; over muxws a stream that
   ends early does not cancel the request (see [muxws](./muxws#a-stream-that-ends-early)). The outcome
   is recorded as for any other call.
-- **Outcome.** The `ViewSetResult` of the chain below the middleware: body, headers, cookies and
-  status code. A repeat returns a copy of it, and FastAPI serialises it through the same response
-  model as the first answer.
+- **Outcome.** The `ViewSetResult` of the chain below the middleware: body, headers and status code.
+  A repeat returns a copy of it, and FastAPI serialises it through the same response model as the
+  first answer. With `redis_client` the body is stored as `jsonable_encoder` encodes it (a model by
+  its aliases), which the response model validates again on a repeat; an outcome that cannot be
+  encoded is not stored.
 - **Error outcomes are stored too.** An `HTTPException` is raised again on a repeat with its status
   code, `detail` and headers, a `DfViewSetError` with its `code` and `params`. A
   `RequestValidationError` raised by the action is replayed as a `422` with its errors as `detail`.
@@ -102,15 +104,17 @@ With `redis_client`:
 | Redis key | Content |
 |-----------|---------|
 | `<key_prefix><key>` | The record, a JSON string: the fingerprint and the owner of the running call, or the fingerprint and the outcome |
-| `<key_prefix><key>:attached` | Set by a repeat on another process that attached to a running `GET` or `HEAD` |
+| `<key_prefix><key>:attached` | Set by a repeat on another process that attached to the running call, with the running record's remaining lifetime; read for a `GET` or `HEAD` |
 | channel `<key_prefix><key>` | A message is published when the call completes |
 
 - The running record is written with `SET NX PX` and the lock TTL in milliseconds.
 - On completion one Lua script replaces the running record with the outcome (with the TTL in
   milliseconds) or deletes it, provided it is still the record this process wrote. The process then
-  publishes on the key's channel and resolves the futures of the repeats it holds, in that order.
+  publishes on the key's channel, also when the script failed, and resolves the futures of the
+  repeats it holds, in that order.
 - A repeat on the process running the call awaits that call's future. A repeat on another process
-  sets the `:attached` key, subscribes to the channel, reads the record again (an outcome stored
+  reads the record, sets the `:attached` key through a Lua script that sets it only while that
+  running record still exists, subscribes to the channel, reads the record again (an outcome stored
   before the subscription) and waits for the message or for the running record to expire.
 
 ## Frontend
@@ -156,13 +160,27 @@ A key that is empty or holds a character outside printable ASCII rejects the cal
 | Transport | An attempt that ended without an answer | Repeated |
 |-----------|-----------------------------------------|----------|
 | REST | an axios error without `response`, other than a cancellation | at once after the attempt's timeout (`ECONNABORTED`, `ETIMEDOUT`), after the delay otherwise |
-| REST | `502`, `503` or `504` | after the delay |
+| REST | `502`, `503` or `504` whose body is not a JSON object with `detail` | after the delay |
 | muxws | the stream failed with `StreamTimeout` | at once |
-| muxws | the stream failed with `ConnectionLost` or `StreamRefused`, or `open()` threw `ConnectionClosed` while the peer was between sockets | after the delay, and once the peer has reconnected |
+| muxws | the stream failed with `ConnectionLost` or `StreamRefused`, or `open()` threw `ConnectionClosed` (the peer is between sockets) or `ConnectionGoingAway` (its connection drains after a goaway) while the peer has not closed for good | after the delay, and once the peer has reconnected |
 
-Any other outcome settles the call. A repeated attempt is abandoned first: its axios request is
-aborted through its `AbortSignal`, its muxws stream is cancelled. Only the last attempt settles the
-promise, and `key` stays the same across attempts.
+Any other outcome settles the call. A `502`, `503` or `504` with a JSON body holding `detail` is the
+body FastAPI gives an `HTTPException`, so the status is the application's answer (e.g.
+`result_timeout` of a `celery_viewset` call); `Idempotency` stores it, and it settles the call as it
+does over muxws, where a status is never repeated.
+
+A repeated attempt is abandoned first: its axios request is aborted through its `AbortSignal`, its
+muxws stream is cancelled. Only the last attempt settles the promise, and `key` stays the same across
+attempts.
+
+Every attempt is sent with the headers of the first: over REST the headers of the first attempt's
+axios `config` after the request interceptors (other than `Accept`, `Accept-Encoding`,
+`Content-Length`, `Content-Type` and `User-Agent`, which axios sets again), over muxws the `headers` of
+the first stream, after the peer's open interceptors. A header an interceptor adds from state bound
+for the caller's synchronous part (such as a taskwire `run()` token) thus reaches every repeat. An
+attempt that failed before axios built its config, or before a stream was opened, has no headers to
+carry over. `Idempotency-Key` is matched in any letter case: a header of that name in the proxy's or
+the call's headers is replaced by the call's key.
 
 ```ts
 const items = new ItemApi({
@@ -199,6 +217,13 @@ call to it, `GET` included, is preflighted.
   the same key and the same request share one record. A client-generated UUID makes this unlikely.
 - In-memory storage (the default) serves one process; a repeat that reaches another process runs the
   action again.
-- A repeat of a call that raised an exception other than `HTTPException` answers `{"detail":
-  "Internal Server Error"}` through FastAPI's `HTTPException` handling, not through the application's
-  handler for `Exception`.
+- A repeat of a call that raised an exception other than `HTTPException` or `RequestValidationError`
+  answers `{"detail": "Internal Server Error"}` through FastAPI's `HTTPException` handling, not through
+  the application's handler for `Exception`.
+- A running record is not extended while the action runs. An action that runs longer than
+  `viewsets_idempotency_lock_ttl` is run again by a repeat that arrives after the lock expired, and by
+  a repeat attached to it at that moment. A `celery_viewset` action can run up to its
+  `result_timeout` (default 3600 s); such an action needs a `viewsets_idempotency_lock_ttl` at least
+  as long.
+- A `celery_viewset` call answered `504 result_timeout` or `503 result_reader_stopped` stores that
+  outcome, although the worker may complete the action later; a repeat answers the stored error.

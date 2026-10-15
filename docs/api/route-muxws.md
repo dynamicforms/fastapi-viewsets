@@ -44,7 +44,7 @@ interface MuxwsProxyOptions {
 |--------|-------------|
 | `peer` | A muxws `Peer`, or a function returning one or a promise of one; the function is called once and its result cached |
 | `timeoutMs` | Bounds an attempt from opening the stream to the last byte of the reply; muxws resets the stream with `TIMEOUT` and the call is repeated at once, or rejects with that `StreamTimeout` when it is not repeated. Unset, an attempt has no timeout |
-| `headers` | Sent on every call; a pseudo-header (`:method`, `:path`, `:query`) and `Idempotency-Key` cannot be overridden |
+| `headers` | Sent on every call; a pseudo-header (`:method`, `:path`, `:query`) and `Idempotency-Key` (in any letter case) cannot be overridden |
 | `repeat` | [`RepeatOptions`](./idempotency#repeatoptions); default `{ withinMs: 600000, delayMs: 1000 }` |
 
 ## Peer types
@@ -56,6 +56,8 @@ interface MuxwsStreamLike {
   result(options?: { timeoutMs?: number }): Promise<unknown>;
   readonly replyHeadersArrived: Promise<void>;
   readonly replyHeaders: Record<string, unknown> | null | undefined;
+  /** The headers the stream was opened with, after the peer's open interceptors. */
+  readonly headers?: Record<string, unknown>;
   /** Resets the stream with CANCELLED; called on an attempt the proxy repeats. */
   cancel?(reason?: string): Promise<void>;
 }
@@ -87,8 +89,11 @@ of 400 or above throws a `ViewSetRequestError`. The HTTP mapping is
 
 Once the peer has resolved, `request()` opens the stream of the first attempt synchronously. An
 attempt that fails with `ConnectionLost`, `StreamTimeout` or `StreamRefused`, or whose `open()` throws
-`ConnectionClosed` while the peer is between sockets, is repeated as described in
-[Idempotent Calls](../guide/idempotency#repeats); its stream is cancelled first.
+`ConnectionClosed` (the peer is between sockets) or `ConnectionGoingAway` (its connection drains after
+a goaway) while the peer has not closed for good, is repeated as described in
+[Idempotent Calls](../guide/idempotency#repeats); its stream is cancelled first. A repeat is opened
+with the `headers` of the call's first stream, those the peer's open interceptors added included; a
+stream without `headers` leaves the repeat with the headers the proxy built.
 
 ## ViewSetProxyBase
 

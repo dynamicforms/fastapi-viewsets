@@ -22,9 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `settings.viewsets_idempotency_lock_ttl` (seconds, default 600).
 - `IdempotencyKeyInvalidError` (400, `idempotency_key_invalid`) and `IdempotencyKeyReusedError`
   (422, `idempotency_key_reused`, param `key`).
-- `set_execution_hook(hook)` and `ActionExecution` in `fastapi_viewsets.decorators`: an async context
-  manager entered around the execution of a viewset method, in the FastAPI process for an in-process
-  action and in the Celery worker for a `celery_viewset` action.
+- `set_execution_hook(hook)`, `ActionExecution` and `ExecutionHook` in `fastapi_viewsets.decorators`:
+  an async context manager entered around the execution of a viewset method, in the FastAPI process
+  for an in-process action and in the Celery worker for a `celery_viewset` action.
 - `CELERY_DISPATCH_ATTRIBUTE` in `fastapi_viewsets.decorators.lifecycle_runner`, set on the methods
   `celery_viewset_client` installs.
 - npm: every call through a proxy, REST and muxws, sends `Idempotency-Key`, a new UUID per call as a
@@ -32,15 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - npm: `ViewSetCall<R>`, a `Promise<R>` with the call's `key`. `request()` returns it, and every
   method of a proxy sets `key` on its promise when it issues a request before its first `await`.
   `ViewSetActionCall<R>` (the type of a declared action, `key` optional) and `ViewSetCalls<M>`.
-- npm: a call whose attempt ends without an answer is repeated with the same key — REST: an axios
-  error without `response`, `502`, `503`, `504`; muxws: `ConnectionLost`, `StreamTimeout`,
-  `StreamRefused`, after the peer has reconnected. The repeated attempt is aborted (REST) or its
-  stream cancelled (muxws). Options `repeat: RepeatOptions` (`withinMs`, default 600000, `0` turns
+- npm: a call whose attempt ends without an answer is repeated with the same key and with the headers
+  of its first attempt — REST: an axios error without `response`, or `502`, `503`, `504` whose body
+  is not a JSON object with `detail`; muxws: `ConnectionLost`, `StreamTimeout`, `StreamRefused`, and
+  `ConnectionClosed` or `ConnectionGoingAway` thrown by `open()` while the peer has not closed for
+  good, after the peer has reconnected. The repeated attempt is aborted (REST) or its stream
+  cancelled (muxws). Options `repeat: RepeatOptions` (`withinMs`, default 600000, `0` turns
   repeating off; `delayMs`, default 1000, doubled per repeat up to 30000) on every proxy and on
   `RequestOptions`, and `attemptTimeoutMs` (default 30000) on REST proxies.
 - npm: `IDEMPOTENCY_KEY_HEADER`, `newCallKey()`, `idempotencyKeyHeader(key)` and
   `issueCall(promise, key)`.
-- npm: `MuxwsStreamLike.cancel` and `MuxwsPeerLike.isOpen`, `onReconnect`, `onClose`, all optional.
+- npm: `MuxwsStreamLike.cancel`, `MuxwsStreamLike.headers` and `MuxwsPeerLike.isOpen`,
+  `onReconnect`, `onClose`, all optional.
 
 ### Changed
 
@@ -50,6 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking (npm):** a call that gets no answer is repeated, for up to 10 minutes by default, and a
   REST attempt times out after 30 s (`attemptTimeoutMs`); before, a REST call had no timeout of its
   own and no call was repeated. Without `Idempotency` on the backend a repeat runs the action again.
+- **Breaking (npm):** `MuxwsProxyOptions.timeoutMs` bounds one attempt; an attempt that reaches it is
+  repeated, up to `repeat.withinMs`, instead of rejecting the call with `StreamTimeout`.
 - **Breaking (npm):** `Idempotency-Key` is sent on every call; a cross-origin REST backend has to
   allow the header, and every call to it is preflighted.
 - **Breaking (npm):** the actions of the mixin interfaces and of `ViewSetProxyBase` return

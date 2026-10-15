@@ -7,7 +7,7 @@
  * 3. That the proxy calls the correct HTTP methods on the correct URLs
  */
 
-import axios, { AxiosError, CanceledError, type InternalAxiosRequestConfig } from 'axios';
+import axios, { AxiosError, AxiosHeaders, CanceledError, type InternalAxiosRequestConfig } from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -698,13 +698,13 @@ describe('RestProxyImpl — Idempotency-Key and repeats', () => {
     return new AxiosError('Network Error', code);
   }
 
-  function statusError(status: number): AxiosError {
+  function statusError(status: number, data: unknown = null): AxiosError {
     return new AxiosError(`Request failed with status code ${status}`, 'ERR_BAD_RESPONSE', undefined, undefined, {
       status,
       statusText: '',
       headers: {},
       config: {} as InternalAxiosRequestConfig,
-      data: null,
+      data,
     });
   }
 
@@ -824,6 +824,44 @@ describe('RestProxyImpl — Idempotency-Key and repeats', () => {
     await vi.advanceTimersByTimeAsync(1000);
     await expect(call).resolves.toEqual(MOCK_ITEM);
     expect(http.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('settles with a gateway status the application answered', async () => {
+    const timeout = statusError(504, { detail: 'No result for items.create within 3600 s' });
+    http.post.mockRejectedValueOnce(timeout);
+    await expect(proxy.create(MOCK_ITEM)).rejects.toBe(timeout);
+    expect(http.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('repeats with the headers the first attempt was sent with, interceptors’ included', async () => {
+    const lost = new AxiosError('Network Error', 'ERR_NETWORK', {
+      headers: new AxiosHeaders({
+        'Idempotency-Key': '"k"',
+        'X-Token': 't1',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': '12',
+      }),
+    } as InternalAxiosRequestConfig);
+    http.post.mockRejectedValueOnce(lost).mockResolvedValueOnce({ data: MOCK_ITEM });
+    class Headed extends RestProxyImpl<number, Item, 'id'> {
+      send(): Promise<Item> {
+        return this.request<Item>('POST', '', { body: MOCK_ITEM, key: 'k', headers: { 'X-Own': 'o' } });
+      }
+    }
+    const api = new Headed({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+      validateSchema: false,
+    });
+    const call = api.send();
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(call).resolves.toEqual(MOCK_ITEM);
+    expect((http.post.mock.calls[1][2] as { headers: Record<string, string> }).headers).toEqual({
+      'X-Token': 't1',
+      'X-Own': 'o',
+      'Idempotency-Key': '"k"',
+    });
   });
 
   it('repeats at once after the attempt timeout', async () => {

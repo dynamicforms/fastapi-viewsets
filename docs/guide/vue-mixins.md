@@ -105,10 +105,12 @@ the constructor options.
 |--------|---------|-------------|
 | `basePath` | both | Base path to the resource, e.g. `'/items'` |
 | `validateSchema` | both | Set `false` to skip the startup schema check |
+| `repeat` | both | [`RepeatOptions`](../api/idempotency#repeatoptions) of a call whose attempt ended without an answer; default `{ withinMs: 600000, delayMs: 1000 }` |
 | `axiosInstance` | `restViewSet` | Custom axios instance; defaults to the global one |
+| `attemptTimeoutMs` | `restViewSet` | Timeout of one attempt in milliseconds; default `30000`, `0` for none |
 | `peer` | `muxwsViewSet` | The muxws peer, or a function returning one (required) |
 | `headers` | `muxwsViewSet` | Sent on every command, on top of the handshake's |
-| `timeoutMs` | `muxwsViewSet` | Per-call timeout, from opening the stream to the last byte of the reply |
+| `timeoutMs` | `muxwsViewSet` | Per-attempt timeout, from opening the stream to the last byte of the reply; on expiry the call is repeated |
 
 `pkFieldName` and `declares` are bound by the factory and are TS2353 if passed.
 

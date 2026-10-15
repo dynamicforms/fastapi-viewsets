@@ -186,7 +186,8 @@ Each call opens one stream, with the call's `Idempotency-Key` among its headers 
 [Idempotent Calls](./idempotency#frontend)). Once the peer has resolved, the stream of a call's first
 attempt is opened synchronously, inside the method call: whatever the application binds for the
 synchronous part of the call, and a muxws open interceptor reads, reaches that stream. The first
-call made while a function `peer` is still resolving, and every repeat, open their streams later.
+call made while a function `peer` is still resolving, and every repeat, open their streams later; a
+repeat is opened with the headers of the call's first stream, those the interceptors added included.
 
 ```ts
 import { connect, type Peer } from 'muxws';

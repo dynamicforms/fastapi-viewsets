@@ -21,6 +21,9 @@ releases at once, work from the bottom of the page upwards.
       every proxy: without the middleware a repeat runs the action again. A REST call that
       legitimately takes longer than 30 s needs a larger `attemptTimeoutMs`, or `Idempotency` on the
       backend, which attaches the repeat to the running call.
+- [ ] npm: a muxws proxy's `timeoutMs` bounds one attempt; an attempt that reaches it is repeated, up
+      to `repeat.withinMs`, instead of rejecting the call with `StreamTimeout`. Pass
+      `repeat: { withinMs: 0 }` to reject on the first timeout.
 - [ ] npm: a REST backend on another origin adds `Idempotency-Key` to its CORS allowed headers.
 - [ ] npm: code that calls the proxy's methods by `Promise<R>` is unaffected; `ViewSetCall<R>` is a
       subtype. A transport of one's own that extends `ViewSetProxyBase` returns

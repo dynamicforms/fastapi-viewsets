@@ -84,7 +84,10 @@ class AuthenticatedProxy<K extends KeyType, T, PK extends keyof T> extends RestP
 Each attempt of a call goes through the axios instance's per-verb method (`get`, `post`, `put`, `patch`, `delete`) with
 a config of the call's `params` and `headers`, `Idempotency-Key`, `timeout: attemptTimeoutMs` and the attempt's
 `signal`. An attempt that ends in an axios error without `response` (other than a cancellation), or with `502`, `503`
-or `504`, is repeated as described in [Idempotent Calls](../guide/idempotency#repeats); its signal is aborted first.
+or `504` whose body is not a JSON object with `detail`, is repeated as described in
+[Idempotent Calls](../guide/idempotency#repeats); its signal is aborted first. A repeat is sent with the headers of the
+first attempt's `config` after the request interceptors, other than `Accept`, `Accept-Encoding`, `Content-Length`,
+`Content-Type` and `User-Agent`, under the call's own headers.
 
 ## HTTP mapping
 

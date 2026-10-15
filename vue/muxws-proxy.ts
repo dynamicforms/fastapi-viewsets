@@ -16,13 +16,12 @@
 import {
   type AttemptFailure,
   type CallAttempt,
-  IDEMPOTENCY_KEY_HEADER,
-  idempotencyKeyHeader,
   issueCall,
   newCallKey,
   runCall,
   type ViewSetCall,
   type ViewSetCalls,
+  withKeyHeader,
 } from './call';
 import type { KeyType } from './mixins';
 import {
@@ -45,6 +44,8 @@ export interface MuxwsStreamLike {
   result(options?: { timeoutMs?: number }): Promise<unknown>;
   readonly replyHeadersArrived: Promise<void>;
   readonly replyHeaders: Record<string, unknown> | null | undefined;
+  /** The headers the stream was opened with, after the peer's open interceptors. */
+  readonly headers?: Record<string, unknown>;
   /** Resets the stream with CANCELLED; called on an attempt the proxy repeats. */
   cancel?(reason?: string): Promise<void>;
 }
@@ -143,8 +144,10 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
 
   /**
    * Opens a stream for the call, with its `Idempotency-Key`, and repeats the call with the same key
-   * while an attempt ends with ConnectionLost, StreamTimeout or StreamRefused. A repeat after a lost
-   * connection waits for the peer to reconnect; a repeated attempt's stream is cancelled.
+   * while an attempt ends with ConnectionLost, StreamTimeout or StreamRefused, or `open()` throws
+   * ConnectionClosed or ConnectionGoingAway while the peer has not closed for good. A repeat after a
+   * lost connection waits for the peer to reconnect; a repeated attempt's stream is cancelled. A
+   * repeat is opened with the headers of the call's first stream.
    *
    * The first attempt's stream is opened synchronously once the peer has resolved, so whatever the
    * caller binds for the synchronous part of the call (a muxws open interceptor reading it) reaches
@@ -157,17 +160,23 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
       // Addressing mirrors HTTP/2: :-prefixed pseudo-headers for the request line, plain keys for
       // real HTTP headers. muxws itself never reads any of them (SPEC WSM-AUT-002).
       const headers: Record<string, unknown> = {
-        ...this.headers,
-        ...options.headers,
-        [IDEMPOTENCY_KEY_HEADER]: idempotencyKeyHeader(key),
+        ...withKeyHeader({ ...this.headers, ...options.headers }, key),
         ':method': method,
         ':path': `${this.basePath}${path}`,
       };
       if (options.query && Object.keys(options.query).length > 0) headers[':query'] = cleanQuery(options.query);
 
+      // Every attempt is opened with the headers the first stream went out with, those that open
+      // interceptors added included: an interceptor that reads state bound only for the caller's
+      // synchronous part does not see it when a repeat is opened.
+      let sent: Record<string, unknown> | undefined;
       const run = (peer: MuxwsPeerLike): Promise<R> =>
         runCall(
-          () => this.attempt<R>(peer, options.body, headers),
+          () => {
+            const attempt = this.attempt<R>(peer, options.body, sent ?? headers);
+            sent ??= attempt.headers ? { ...attempt.headers } : undefined;
+            return attempt;
+          },
           (error) => muxwsAttemptFailure(peer, error),
           options.repeat ?? this.repeatOptions,
           (deadline) => waitForOpen(peer, deadline),
@@ -180,11 +189,16 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
     return issueCall(call, key);
   }
 
-  /** One attempt: one stream, opened synchronously. */
-  private attempt<R>(peer: MuxwsPeerLike, body: unknown, headers: Record<string, unknown>): CallAttempt<R> {
+  /** One attempt: one stream, opened synchronously. `headers` are those the stream went out with. */
+  private attempt<R>(
+    peer: MuxwsPeerLike,
+    body: unknown,
+    headers: Record<string, unknown>,
+  ): CallAttempt<R> & { readonly headers?: Record<string, unknown> } {
     // end: true — this is a unary call, so the request is complete with its opening frame.
     const stream = peer.open(body, { headers, end: true });
     return {
+      headers: stream.headers,
       result: this.answer<R>(stream),
       abandon: () => {
         try {
@@ -198,7 +212,7 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
 
   private async answer<R>(stream: MuxwsStreamLike): Promise<R> {
     // The status is in the answering side's leading headers. `result()` is started first so that
-    // `timeoutMs` bounds the whole call, the wait for those headers included: a stream that never
+    // `timeoutMs` bounds the whole attempt, the wait for those headers included: a stream that never
     // answers rejects with muxws' StreamTimeout instead of waiting for headers that do not come.
     const result = stream.result(this.timeoutMs === undefined ? undefined : { timeoutMs: this.timeoutMs });
     await Promise.race([stream.replyHeadersArrived, result]);
@@ -217,8 +231,9 @@ function isPeer(value: MuxwsPeerLike | Promise<MuxwsPeerLike>): value is MuxwsPe
 /**
  * The muxws errors after which no answer reached the client, by their `name` (muxws sets `name` on
  * every error class, and the package is not imported here). StreamTimeout is the attempt's own
- * timeout. ConnectionClosed is what `open()` throws while the peer is between sockets; a peer closed
- * for good answers it too, and that is not repeated.
+ * timeout. ConnectionClosed is what `open()` throws while the peer is between sockets, and
+ * ConnectionGoingAway while its connection drains after a goaway; a peer closed for good throws
+ * either, and that is not repeated.
  */
 function muxwsAttemptFailure(peer: MuxwsPeerLike, error: unknown): AttemptFailure {
   switch ((error as { name?: unknown } | null)?.name) {
@@ -228,6 +243,7 @@ function muxwsAttemptFailure(peer: MuxwsPeerLike, error: unknown): AttemptFailur
     case 'StreamRefused':
       return 'lost';
     case 'ConnectionClosed':
+    case 'ConnectionGoingAway':
       return peerWatches.get(peer)?.closed ? null : 'lost';
     default:
       return null;
