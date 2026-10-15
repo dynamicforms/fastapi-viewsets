@@ -6,7 +6,7 @@ from fastapi_viewsets.collection_viewset import CollectionViewSet
 
 ## Class hierarchy
 
-```
+```text
 AsyncCollectionViewSet[K, T]  (ImplMixin[K, T], ABC)
 └── CollectionViewSet[K, T]
 ```
@@ -50,11 +50,14 @@ CollectionViewSet(container, pk_field="id")
 | `MutableSet` (e.g. `set`) | ✅ | ✅ |
 | `MutableMapping` (e.g. `dict`) | ✅ | ✅ |
 
-A write to a non-mutable container raises `ReadOnlyCollectionError` (405, `read_only`). A partial update replaces a set's item with a copy (`model_copy`, `_replace` or `dataclasses.replace`) and raises `TypeError` for an item that is none of a pydantic model, a named tuple or a dataclass.
+A write to a non-mutable container raises `ReadOnlyCollectionError` (405, `read_only`). A partial update replaces a
+set's item with a copy (`model_copy`, `_replace` or `dataclasses.replace`) and raises `TypeError` for an item that is
+none of a pydantic model, a named tuple or a dataclass.
 
 ### Auto-increment PK
 
-Fields with `json_schema_extra={"autoinc_int": True}` are automatically assigned the next integer value on create when the field is `None` or `0`.
+Fields with `json_schema_extra={"autoinc_int": True}` are automatically assigned the next integer value on create when
+the field is `None` or `0`.
 
 ```python
 class Item(BaseModel):

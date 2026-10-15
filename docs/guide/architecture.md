@@ -226,7 +226,7 @@ happens. → full depth in [Routers & Decorators](./routers).
 
 Pulling every piece from the sections above into one picture, for a single HTTP request, in order:
 
-```
+```text
 HTTP request
      │
      ▼
@@ -337,4 +337,5 @@ context.
 - Need per-viewset/per-action configuration for a processor or middleware (not just one boolean)? See [Action Configuration](./action-configuration).
 - Need your viewset instance to remember something between requests? See [ViewSet Lifecycle](./lifecycle).
 - Moving execution to a background worker? See the `celery_viewset` section in [Routers & Decorators](./routers).
-- Want to see all built-in middleware/processor implementations this library ships (not just the mechanisms behind them)? See [Authentication](./authentication), [Authorization](./authorization), and [Rate Limiter](./rate-limiter).
+- Want to see all built-in middleware/processor implementations this library ships (not just the mechanisms behind
+  them)? See [Authentication](./authentication), [Authorization](./authorization), and [Rate Limiter](./rate-limiter).

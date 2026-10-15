@@ -266,6 +266,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.7] - 2026-08-26
 
 ### Fixed
+
 - `muxws` is no longer imported at module load time. `fastapi_viewsets.decorators` (and therefore
   the whole package) now imports cleanly without the `muxws` extra installed; code that actually
   builds a muxws response payload still requires the package and raises `ModuleNotFoundError` if
@@ -279,6 +280,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.5] - 2026-08-24
 
 ### Changed
+
 - `ViewSetProxyBase.pkFieldName` is now public instead of protected, so a caller holding a
   ViewSet instance without knowing its concrete class — a grid or table component asking which
   field identifies a row — can read it. A factory-built class's constructed instance type now
@@ -288,6 +290,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.4] - 2026-08-23
 
 ### Changed
+
 - `set_celery_dispatch_hook` now receives the call's current kwargs (a `Context`, if the action
   declares one, included), instead of taking no arguments. This lets a registered hook read what a
   context processor already put there instead of needing its own request-level plumbing.
@@ -295,6 +298,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.3] - 2026-08-23
 
 ### Changed
+
 - `route_rest` and `route_muxws` now fail to compile when passed a factory-built ViewSet class,
   instead of silently handing back an object missing that class's own methods. The error surfaces
   as `TS2339` on the first property or method accessed on the result, not on the `route_rest` /
@@ -307,12 +311,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails to compile instead of silently narrowing what the FE/BE schema mismatch check can report.
 
 ### Fixed
+
 - `vite.config.ts` no longer uses `__dirname`, which `vite`'s native config loader warns is
   unsupported and slated to become the default loader in a future major version.
 
 ## [0.5.2] - 2026-08-23
 
 ### Added
+
 - `celery_viewset_server` and `celery_viewset_client` each expose a hook slot for external
   packages to attach dispatch/execute logic without this repo depending on them.
   `set_celery_kwargs_hook` registers a `Callable[[Callable, dict], tuple[Callable, dict]]` run on
@@ -324,12 +330,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.1] - 2026-08-22
 
 ### Changed
+
 - `vuetify-inputs` in the demo moves to `^0.10.0` and `vue-grid` to `^0.3.1`. Dev dependencies
   `@types/node` and `eslint-config-velis` move to `^26` and `^3`.
 
 ## [0.5.0] - 2026-08-22
 
 ### Changed
+
 - The `@dynamicforms/vue-forms` peer dependency moves to `^0.17.1`, `vue-grid` in the demo to
   `^0.3.0`, and `vuetify-inputs` to `^0.9.2`. Build, lint and the Vue test suite pass unchanged
   against the new versions.
@@ -337,6 +345,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.0] - 2026-08-16
 
 ### Added
+
 - **muxws transport.** A viewset registered with `route_viewset` is now also reachable over a
   [muxws](https://docs.velis.si/muxws) WebSocket alongside REST. A command is dispatched into a
   FastAPI app the library builds from the endpoints published on muxws, each carrying the same
@@ -467,6 +476,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schema-checked and does not pay for the schema request.
 
 ### Changed
+
 - **Breaking:** `ListMixin.setup_filter`/`setup_sort`, the pre-filter/pre-sort hooks that mutated
   instance state ahead of `perform_list`, are removed. Override `apply_filter`/`apply_sort` instead
   — both now receive the query and the records together, so nothing needs to be stashed on the
@@ -477,6 +487,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than a single fixed name.
 
 ### Fixed
+
 - `RestProxyImpl`'s startup schema check no longer warns about a backend endpoint being "missing"
   whenever a ViewSet is built from one mixin, or none. `typeof this[action] === 'function'` is true
   for every action on every proxy regardless of what the ViewSet actually declares, so the check
@@ -490,6 +501,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unresolved.
 
 ### Documentation
+
 - muxws is documented as dispatching into the library's own app rather than your application object
   — see the Added entry above for exactly what that leaves unreached, and `app=` on
   `process_command` for reaching your application anyway.
@@ -510,6 +522,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.6] - 2026-08-01
 
 ### Fixed
+
 - A `BaseModel` field holding a `date` or `datetime` no longer breaks a `celery_viewset` call. Both
   the client, serializing an argument before `send_task()`, and the server, serializing a result
   before pushing it to Redis, call `model_dump(mode="json")` rather than `model_dump()`, so a
@@ -522,6 +535,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.5] - 2026-07-30
 
 ### Added
+
 - `check_result_readers()` compares every `queue_key` registered by a `celery_viewset_client`
   decorator against the ones with a running result reader and logs a warning for each mismatch.
   Call it once, right after starting readers in the FastAPI `lifespan`, so a missing reader shows up
@@ -534,12 +548,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `sync_to_async` convention for Django ORM access from `perform_*`.
 
 ### Changed
+
 - `start_result_reader(redis_client, queue_key)` and `stop_result_reader(queue_key=None)` take a
   `queue_key` and keep one reader task per key instead of a single global one, so an app with more
   than one `celery_viewset` prefix runs a reader for each. `stop_result_reader()` with no argument
   stops every running reader; passed a `queue_key` it stops only that one.
 
 ### Documentation
+
 - [Combining both decorators](https://docs.velis.si/dynamicforms/fastapi-viewsets/guide/routers#combining-both-decorators)
   states the two valid ways to apply `celery_viewset` and `route_viewset` to the same viewset —
   subclassing in `main.py` versus stacking both decorators on one class — and the order stacking
@@ -550,6 +566,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.2] - 2026-07-13
 
 ### Changed
+
 - **Breaking:** the context serializer's type-tagging keys are `__fpv_type__` and `__fpv_value__`,
   replacing `__type__`/`__value__`. The prefix avoids colliding with Kombu's own `__type__`/
   `__value__` convention for its JSON codec — without it, a Celery worker's `object_hook` intercepted
@@ -558,6 +575,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-07-13
 
 ### Added
+
 - Initial implementation: Python mixin classes (`CreateMixin`, `ListMixin`, `RetrieveMixin`,
   `UpdateMixin`, `DestroyMixin`, and bulk counterparts) that compose into FastAPI CRUD/bulk
   endpoints; the `route_viewset` decorator, registering a mixin-composed ViewSet on a FastAPI
@@ -625,6 +643,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `fastapi_viewsets/__init__.py`, a `py.typed` marker, and a `README.md`.
 
 ### Changed
+
 - **Breaking:** every `perform_*` method (`perform_create`, `perform_list`, `perform_retrieve`,
   `perform_update`, `perform_bulk_create`, `perform_bulk_update`, `perform_destroy`,
   `perform_bulk_destroy`) takes `context: Context` as its first parameter, ahead of the existing ones —
@@ -644,6 +663,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request body.
 
 ### Fixed
+
 - `route_sort_key`, used to order registered routes, no longer raises `TypeError: '<' not supported
   between instances of 'int' and 'tuple'` for a viewset with custom action paths of different depths
   sharing a common prefix (`account/register` alongside `account/register/verify/resend`). The path
@@ -651,6 +671,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consistently regardless of path depth.
 
 ### Removed
+
 - The unused `CeleryViewSet` class (`fastapi_viewsets.celery_viewset`) and its documentation pages.
   It was never wired into `route_viewset`, and its `perform_*` methods returned raw,
   non-JSON-serializable Celery `AsyncResult` objects directly, so it could not serve as an HTTP

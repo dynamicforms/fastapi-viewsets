@@ -46,11 +46,18 @@ interface RestProxyOptions {
 
 ## Return value
 
-Returns a `RestProxy<M>`, which is `M` — an instance of `RestProxyImpl` cast to it. The cast is unchecked: `M` is whatever the caller wrote, and nothing compares it with the object. The standard actions listed under [HTTP mapping](#http-mapping) are implemented by `RestProxyImpl` and are therefore really there; anything else named in `M` — a custom endpoint of your own — type-checks at the call site and is `undefined` when called.
+Returns a `RestProxy<M>`, which is `M` — an instance of `RestProxyImpl` cast to it. The cast is unchecked: `M` is
+whatever the caller wrote, and nothing compares it with the object. The standard actions listed under [HTTP
+mapping](#http-mapping) are implemented by `RestProxyImpl` and are therefore really there; anything else named in `M` —
+a custom endpoint of your own — type-checks at the call site and is `undefined` when called.
 
-The object is a bare `RestProxyImpl`, not an instance of `viewSetClass`: methods written on that class do not survive the cast. To have a ViewSet's own methods exist on the object, subclass `RestProxyImpl` as below, or build the class with the `restViewSet` factory.
+The object is a bare `RestProxyImpl`, not an instance of `viewSetClass`: methods written on that class do not survive
+the cast. To have a ViewSet's own methods exist on the object, subclass `RestProxyImpl` as below, or build the class
+with the `restViewSet` factory.
 
-Passing a factory-built class to `route_rest` fails to compile — it would otherwise type-check and hand back an object without that class's own methods. A factory-built ViewSet is constructed directly: `new ItemApi({ basePath: '/items' })`.
+Passing a factory-built class to `route_rest` fails to compile — it would otherwise type-check and hand back an object
+without that class's own methods. A factory-built ViewSet is constructed directly:
+`new ItemApi({ basePath: '/items' })`.
 
 ## RestProxyImpl
 

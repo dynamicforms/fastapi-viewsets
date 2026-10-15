@@ -1,6 +1,7 @@
 # route_rest factory
 
-`route_rest` is the frontend counterpart of the `route_viewset` decorator. It creates a fully typed HTTP client (backed by axios) that mirrors the operations of your backend viewset.
+`route_rest` is the frontend counterpart of the `route_viewset` decorator. It creates a fully typed HTTP client (backed
+by axios) that mirrors the operations of your backend viewset.
 
 It is one of two forms. The other declares a ViewSet with the `restViewSet` factory: it hands back
 a class you extend, so the object is your own class — its methods exist at runtime — and an action
@@ -270,7 +271,7 @@ An operation without `x-viewset-action` is not checked.
 
 ### Example output
 
-```
+```text
 [ViewSet /items] FE/BE definition mismatch:
   • declares 'create' but the BE viewset serves no such endpoint
   • declares 'update' but the BE viewset serves no such endpoint

@@ -37,12 +37,16 @@ lazy source only as far as the page it is cutting. Both hand back the item type 
 ## Operation mixins
 
 ### CreateMixin `[K, T]`
-- `POST /` → calls `perform_create(context, data: T) -> T`. With `pk_field_name` set on `route_viewset`, the body leaves the primary key out or gives it as null, and `data` is a `T` without it unless `T` gives it a default.
+
+- `POST /` → calls `perform_create(context, data: T) -> T`. With `pk_field_name` set on `route_viewset`, the body leaves
+  the primary key out or gives it as null, and `data` is a `T` without it unless `T` gives it a default.
 
 ### BulkOnlyCreateMixin `[K, T]`
+
 - `POST /bulk` → calls `perform_bulk_create(context, data: list[T]) -> list[T]`
 
 ### BulkCreateMixin `[K, T]`
+
 Combines `CreateMixin` + `BulkOnlyCreateMixin`.
 
 ### ListMixin `[T, TFilter=None]`
@@ -76,12 +80,14 @@ async def list_items(
 - A cursor that does not decode against the current ordering and filters is a 400.
 
 Class attributes:
+
 - `list_shape: str | None = None` — this endpoint's shape, one of `"plain"`, `"paginated"`,
   `"cursor"`. `None` takes `settings.default_list_shape`, which is `"plain"`.
 - `list_shapes: tuple[str, ...] | None = None` — shapes a client may ask for with `X-List-Shape`.
   `None` means the default one only.
 - `default_page_size: int = 100` — `limit` when a paged shape is asked for without one.
-- `max_page_size: int = 1000` — ceiling on `limit`. `limit` is at least 1 and `offset` at least 0; a request outside that is a 422.
+- `max_page_size: int = 1000` — ceiling on `limit`. `limit` is at least 1 and `offset` at least 0; a request outside
+  that is a 422.
 - `pk_field_name: str = "id"` — appended to the cursor's ordering so every key tuple is unique.
   `DjangoORMViewSet` supplies the model's own primary key instead.
 - `nulls: str = "first"` — which end NULLs sit at when sorting ascending, `"first"` or `"last"`.
@@ -91,6 +97,7 @@ Class attributes:
 
 Pipeline hooks, overridable one at a time — see [the list pipeline](../guide/list-pipeline) for
 what pushing a stage into a backend involves:
+
 - `get_list(context: Context, query: ListQuery) -> Any` — the pipeline as a whole:
   `perform_list` → `apply_filter` → `apply_sort` → `apply_pagination`.
 - `apply_filter(context: Context, query: ListQuery, records: ListRecords) -> ListRecords` — default
@@ -112,6 +119,7 @@ what pushing a stage into a backend involves:
   record.
 
 In-memory hooks:
+
 - `filter_list(fltr: TFilter, records: list[T]) -> list[T]` — post-filter hook with no default
   implementation; it returns `None`, which `apply_filter` reads as "unfiltered" and answers with the
   records as they stand.
@@ -119,34 +127,45 @@ In-memory hooks:
   multi-key in-memory sort through `compare_in_order`, placing NULLs where `nulls` says.
 
 ### PaginatedListMixin `[T, TFilter=None]`
+
 `ListMixin` with `list_shape = "paginated"`. `GET /` →
 [`PaginatedList[T]`](../guide/list-pipeline#declaring-a-shape), taking `offset` and `limit`.
 
 ### CursorListMixin `[T, TFilter=None]`
+
 `ListMixin` with `list_shape = "cursor"`. `GET /` →
 [`CursorPage[T]`](../guide/list-pipeline#declaring-a-shape), taking `cursor` and `limit`.
 
 ### RetrieveMixin `[K, T]`
+
 - `GET /{pk}` → calls `perform_retrieve(context, pk: K) -> T`
 
 ### UpdateMixin `[K, T]`
+
 - `PUT /{pk}` → calls `perform_update(context, pk, data, partial=False) -> T`
-- `PATCH /{pk}` → calls `perform_update(context, pk, data, partial=True) -> T`. The body has every field of `T` optional and no primary key; `data` is a `T` whose `model_fields_set` names the fields the body stated.
+- `PATCH /{pk}` → calls `perform_update(context, pk, data, partial=True) -> T`. The body has every field of `T` optional
+  and no primary key; `data` is a `T` whose `model_fields_set` names the fields the body stated.
 
 ### BulkOnlyUpdateMixin `[K, T]`
+
 - `PUT /bulk` → calls `perform_bulk_update(context, records, partial=False) -> list[T]`
-- `PATCH /bulk` → calls `perform_bulk_update(context, records, partial=True) -> list[T]`, each record as `PATCH /{pk}` passes `data`.
+- `PATCH /bulk` → calls `perform_bulk_update(context, records, partial=True) -> list[T]`, each record as `PATCH /{pk}`
+  passes `data`.
 
 ### BulkUpdateMixin `[K, T]`
+
 Combines `UpdateMixin` + `BulkOnlyUpdateMixin`.
 
 ### DestroyMixin `[K, T]`
+
 - `DELETE /{pk}` → calls `perform_destroy(context, pk: K) -> dict[K, Any]`
 
 ### BulkOnlyDestroyMixin `[K, T]`
+
 - `DELETE /bulk` → calls `perform_bulk_destroy(context, pk: list[K]) -> list[dict[K, Any]]`
 
 ### BulkDestroyMixin `[K, T]`
+
 Combines `DestroyMixin` + `BulkOnlyDestroyMixin`.
 
 ### Sort types
@@ -168,6 +187,7 @@ SortState = list[SortStateColumn]
 unknown direction are skipped.
 
 ### LookupMixin `[TLookupFilter=LookupFilter]`
+
 - `GET /lookup` → calls `perform_lookup(context) -> list[LookupItem]`
 - `TLookupFilter` defaults to `LookupFilter` (single `q: str | None` field), so basic title search
   works without any configuration.
@@ -190,12 +210,15 @@ class LookupFilter(BaseModel):
 ## Combined viewset mixins
 
 ### ReadOnlyViewSetMixin `[K, T]`
+
 Inherits: `ListMixin[T]`, `RetrieveMixin[K, T]`
 
 ### ViewSetMixin `[K, T, TFilter=None]`
+
 Inherits: `CreateMixin`, `ListMixin`, `RetrieveMixin`, `UpdateMixin`, `DestroyMixin`
 
 ### BulkViewSetMixin `[K, T, TFilter=None]`
+
 Inherits: `BulkCreateMixin`, `ListMixin`, `RetrieveMixin`, `BulkUpdateMixin`, `BulkDestroyMixin`
 
 ## NotFoundError

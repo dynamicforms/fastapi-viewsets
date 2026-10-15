@@ -99,7 +99,8 @@ Context is built **once per request**, centrally, by `route_viewset` - not by a 
 mixin method. The route's dependency builds it before FastAPI parses the request body, for each
 middleware's `depends()`; the command middleware chain and the endpoint receive the same object.
 
-Building it centrally matters because a viewset's execution can be transparently delegated to a Celery worker (see the `celery_viewset` section in
+Building it centrally matters because a viewset's execution can be transparently delegated to a Celery worker (see the
+`celery_viewset` section in
 [Routers & Decorators](./routers)): the worker process has no live `Request` to build a context
 from, so the context has to be built in the FastAPI process (which has the `Request`) and carried
 across the Celery/Redis boundary to the worker.

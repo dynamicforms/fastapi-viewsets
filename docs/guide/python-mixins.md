@@ -1,12 +1,17 @@
 # Python Mixins
 
-The mixin system is the core of `fastapi-viewsets`. Each mixin adds one or more HTTP endpoints to a viewset class. You compose viewsets by inheriting from the mixins you need.
+The mixin system is the core of `fastapi-viewsets`. Each mixin adds one or more HTTP endpoints to a viewset class. You
+compose viewsets by inheriting from the mixins you need.
 
 ## How it works
 
-Every mixin class owns a private `APIRouter` and registers its endpoints on it using standard FastAPI decorators. The `route_viewset` decorator later collects all routes from the class hierarchy, resolves generic type parameters, and registers them on your application router.
+Every mixin class owns a private `APIRouter` and registers its endpoints on it using standard FastAPI decorators. The
+`route_viewset` decorator later collects all routes from the class hierarchy, resolves generic type parameters, and
+registers them on your application router.
 
-You implement the actual business logic by overriding the corresponding `perform_*` method from `ImplMixin`. Every `perform_*` method takes a `context: Context` as its first parameter after `self` - see [Architecture](./architecture) for the request pipeline that builds it, and [Context Processors](./context-processors) for how to use it.
+You implement the actual business logic by overriding the corresponding `perform_*` method from `ImplMixin`. Every
+`perform_*` method takes a `context: Context` as its first parameter after `self` - see [Architecture](./architecture)
+for the request pipeline that builds it, and [Context Processors](./context-processors) for how to use it.
 
 ## Individual operation mixins
 
@@ -84,7 +89,7 @@ class MyViewSet(ListMixin[Item, ItemFilter], RetrieveMixin[int, Item]):
 
 **Sorting** works out of the box without any overrides:
 
-```
+```text
 GET /items?sort=name:asc,score:desc
 ```
 

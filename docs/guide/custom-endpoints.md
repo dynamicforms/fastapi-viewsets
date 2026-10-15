@@ -1,6 +1,7 @@
 # Custom Endpoints
 
-Mixins automatically register standard CRUD routes. When you need an endpoint that doesn't fit the standard pattern, you can add it manually — both on the backend and the frontend.
+Mixins automatically register standard CRUD routes. When you need an endpoint that doesn't fit the standard pattern, you
+can add it manually — both on the backend and the frontend.
 
 ---
 
@@ -24,7 +25,8 @@ class ListMixin(Generic[T], ABC):
 
 ### Adding a custom route
 
-Declare your own `__router` on the ViewSet class and decorate a method with it. `route_viewset` will pick it up automatically alongside the mixin routes:
+Declare your own `__router` on the ViewSet class and decorate a method with it. `route_viewset` will pick it up
+automatically alongside the mixin routes:
 
 ```python
 from fastapi import APIRouter
@@ -88,8 +90,9 @@ class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
 
 ### Notes
 
-- The `__router` attribute on the ViewSet class **must not** shadow the one inherited from a mixin. Declare it as a fresh `APIRouter()` directly on your class.
+- The `__router` attribute on the ViewSet class **must not** shadow the one inherited from a mixin. Declare it as a
+  fresh `APIRouter()` directly on your class.
 - Route paths are relative to `base_path`. `"search"` becomes `/items/search`.
 - All standard FastAPI route parameters (`tags`, `summary`, `response_model`, `status_code`, …) are supported.
-- The method receives `self` — the viewset instance — so you have full access to `perform_*` helpers and any other instance state.
-
+- The method receives `self` — the viewset instance — so you have full access to `perform_*` helpers and any other
+  instance state.
