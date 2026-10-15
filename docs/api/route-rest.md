@@ -30,8 +30,12 @@ interface RestProxyOptions {
   validateSchema?: boolean;
   /** The mixins the ViewSet declares, for the schema check. */
   declares?: readonly ViewSetMixinDeclaration[];
+  /** When a call whose attempt ended without an answer is repeated. */
+  repeat?: RepeatOptions;
   /** Optional: existing axios instance. Defaults to the global axios. */
   axiosInstance?: AxiosInstance;
+  /** The timeout of one attempt in milliseconds, passed to axios as `timeout`; 0 for none. */
+  attemptTimeoutMs?: number;
 }
 ```
 
@@ -43,10 +47,13 @@ interface RestProxyOptions {
 | `basePath` | `string` | Base URL path, e.g. `'/items'`. Trailing slash is stripped automatically. |
 | `pkFieldName` | `string` | Name of the PK field on the model |
 | `axiosInstance` | `AxiosInstance` | Optional custom axios instance; defaults to global `axios` |
+| `attemptTimeoutMs` | `number` | Options object only. Timeout of one attempt in milliseconds, default `30000`, `0` for none |
+| `repeat` | [`RepeatOptions`](./idempotency#repeatoptions) | Options object only. Default `{ withinMs: 600000, delayMs: 1000 }` |
 
 ## Return value
 
-Returns a `RestProxy<M>`, which is `M` — an instance of `RestProxyImpl` cast to it. The cast is unchecked: `M` is
+Returns a `RestProxy<M>`, which is `ViewSetCalls<M>` — `M` with every method returning a
+[`ViewSetCall`](./idempotency#frontend) — an instance of `RestProxyImpl` cast to it. The cast is unchecked: `M` is
 whatever the caller wrote, and nothing compares it with the object. The standard actions listed under [HTTP
 mapping](#http-mapping) are implemented by `RestProxyImpl` and are therefore really there; anything else named in `M` —
 a custom endpoint of your own — type-checks at the call site and is `undefined` when called.
@@ -73,6 +80,11 @@ class AuthenticatedProxy<K extends KeyType, T, PK extends keyof T> extends RestP
   }
 }
 ```
+
+Each attempt of a call goes through the axios instance's per-verb method (`get`, `post`, `put`, `patch`, `delete`) with
+a config of the call's `params` and `headers`, `Idempotency-Key`, `timeout: attemptTimeoutMs` and the attempt's
+`signal`. An attempt that ends in an axios error without `response` (other than a cancellation), or with `502`, `503`
+or `504`, is repeated as described in [Idempotent Calls](../guide/idempotency#repeats); its signal is aborted first.
 
 ## HTTP mapping
 

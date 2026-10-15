@@ -37,6 +37,8 @@
  */
 /* eslint-disable @typescript-eslint/no-unsafe-declaration-merging, @typescript-eslint/no-unused-vars */
 
+import type { ViewSetActionCall } from './call';
+
 export interface LookupItem {
   group: unknown;
   pk: unknown;
@@ -51,14 +53,14 @@ export type DestroyReturnData = Record<KeyType, any>;
 // ---------------------------------------------------------------------------
 
 export interface CreateMixin<T, PK extends keyof T> {
-  create(data: Omit<T, PK>): Promise<T>;
+  create(data: Omit<T, PK>): ViewSetActionCall<T>;
 }
 export class CreateMixin<T, PK extends keyof T> {
   static readonly actions: readonly string[] = ['create'];
 }
 
 export interface BulkOnlyCreateMixin<T, PK extends keyof T> {
-  bulkCreate(data: Omit<T, PK>[]): Promise<T[]>;
+  bulkCreate(data: Omit<T, PK>[]): ViewSetActionCall<T[]>;
 }
 export class BulkOnlyCreateMixin<T, PK extends keyof T> {
   static readonly actions: readonly string[] = ['bulkCreate'];
@@ -70,7 +72,7 @@ export class BulkCreateMixin<T, PK extends keyof T> extends CreateMixin<T, PK> {
 }
 
 export interface ListMixin<T> {
-  list(params?: ListParams): Promise<T[]>;
+  list(params?: ListParams): ViewSetActionCall<T[]>;
 }
 export class ListMixin<T> {
   static readonly actions: readonly string[] = ['list'];
@@ -132,7 +134,7 @@ export interface CursorParams extends ListParams {
 
 /** FE counterpart of the BE CursorListMixin. See PaginatedListMixin on declaring several shapes. */
 export interface CursorListMixin<T> {
-  listCursor(params?: CursorParams): Promise<CursorPage<T>>;
+  listCursor(params?: CursorParams): ViewSetActionCall<CursorPage<T>>;
 }
 export class CursorListMixin<T> {
   static readonly actions: readonly string[] = ['listCursor'];
@@ -144,30 +146,30 @@ export class CursorListMixin<T> {
  * per shape the BE viewset offers through `list_shape` and `list_shapes`.
  */
 export interface PaginatedListMixin<T> {
-  listPage(params?: PageParams): Promise<PaginatedList<T>>;
+  listPage(params?: PageParams): ViewSetActionCall<PaginatedList<T>>;
 }
 export class PaginatedListMixin<T> {
   static readonly actions: readonly string[] = ['listPage'];
 }
 
 export interface RetrieveMixin<K extends KeyType, T> {
-  retrieve(pk: K): Promise<T>;
+  retrieve(pk: K): ViewSetActionCall<T>;
 }
 export class RetrieveMixin<K extends KeyType, T> {
   static readonly actions: readonly string[] = ['retrieve'];
 }
 
 export interface UpdateMixin<K extends KeyType, T> {
-  update(pk: K, data: T): Promise<T>;
-  partialUpdate(pk: K, data: Partial<T>): Promise<T>;
+  update(pk: K, data: T): ViewSetActionCall<T>;
+  partialUpdate(pk: K, data: Partial<T>): ViewSetActionCall<T>;
 }
 export class UpdateMixin<K extends KeyType, T> {
   static readonly actions: readonly string[] = ['update', 'partialUpdate'];
 }
 
 export interface BulkOnlyUpdateMixin<K extends KeyType, T> {
-  bulkUpdate(records: Record<K, T>): Promise<T[]>;
-  bulkPartialUpdate(records: Record<K, Partial<T>>): Promise<T[]>;
+  bulkUpdate(records: Record<K, T>): ViewSetActionCall<T[]>;
+  bulkPartialUpdate(records: Record<K, Partial<T>>): ViewSetActionCall<T[]>;
 }
 export class BulkOnlyUpdateMixin<K extends KeyType, T> {
   static readonly actions: readonly string[] = ['bulkUpdate', 'bulkPartialUpdate'];
@@ -179,14 +181,14 @@ export class BulkUpdateMixin<K extends KeyType, T> extends UpdateMixin<K, T> {
 }
 
 export interface DestroyMixin<K extends KeyType> {
-  destroy(pk: K): Promise<DestroyReturnData>;
+  destroy(pk: K): ViewSetActionCall<DestroyReturnData>;
 }
 export class DestroyMixin<K extends KeyType> {
   static readonly actions: readonly string[] = ['destroy'];
 }
 
 export interface BulkOnlyDestroyMixin<K extends KeyType> {
-  bulkDestroy(pks: K[]): Promise<DestroyReturnData[]>;
+  bulkDestroy(pks: K[]): ViewSetActionCall<DestroyReturnData[]>;
 }
 export class BulkOnlyDestroyMixin<K extends KeyType> {
   static readonly actions: readonly string[] = ['bulkDestroy'];
@@ -198,7 +200,7 @@ export class BulkDestroyMixin<K extends KeyType> extends DestroyMixin<K> {
 }
 
 export interface LookupMixin {
-  lookup(): Promise<LookupItem[]>;
+  lookup(): ViewSetActionCall<LookupItem[]>;
 }
 export class LookupMixin {
   static readonly actions: readonly string[] = ['lookup'];

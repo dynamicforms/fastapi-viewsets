@@ -14,8 +14,12 @@
  *       return this.request<number>('GET', '/count');
  *     }
  *   }
+ *
+ * Every call carries an `Idempotency-Key` and is repeated with it when an attempt ends without an
+ * answer; see call.ts.
  */
 
+import { bindCallKeys, type RepeatOptions, type ViewSetActionCall, type ViewSetCall } from './call';
 import type {
   ActionName,
   BulkViewSetMixin,
@@ -42,6 +46,13 @@ export interface RequestOptions {
   body?: unknown;
   /** Headers for this call only; on muxws they override the proxy's own `headers`. */
   headers?: Record<string, string>;
+  /**
+   * The `Idempotency-Key` of this call. Defaults to a new UUID. An application that repeats a call
+   * itself passes the `key` of the first one. It overrides an `Idempotency-Key` in `headers`.
+   */
+  key?: string;
+  /** Overrides the proxy's `repeat` for this call. */
+  repeat?: RepeatOptions;
 }
 
 /** The response shapes of `GET {basePath}`, as the BE names them in `X-List-Shape`. */
@@ -214,6 +225,8 @@ export interface ProxyBaseOptions {
    * never reach the object being checked.
    */
   declares?: readonly ViewSetMixinDeclaration[];
+  /** When the proxy repeats a call whose attempt ended without an answer. See `RepeatOptions`. */
+  repeat?: RepeatOptions;
 }
 
 /**
@@ -233,7 +246,9 @@ export abstract class ViewSetInternals {
   }
 
   /**
-   * Sends one request and returns the decoded response body.
+   * Sends one call and returns the decoded response body, on a `ViewSetCall` carrying the call's
+   * `Idempotency-Key`. The request of the first attempt is issued synchronously, so a method that
+   * returns this promise before its first `await` returns a promise with the same key.
    *
    * `path` is relative to `basePath` — '' for the collection, '/1' for a record, '/bulk', and so
    * on. Implementations must throw on a status of 400 or above, with `response.status` readable on
@@ -248,7 +263,7 @@ export abstract class ViewSetInternals {
    * underneath it implements.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the signature is the point; the body cannot run
-  protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): Promise<R> {
+  protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R> {
     throw new Error('ViewSetInternals.request: no transport');
   }
 }
@@ -281,11 +296,21 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
 
   private readonly declaredMixins?: readonly ViewSetMixinDeclaration[];
 
+  /** `ProxyBaseOptions.repeat`, for the transport's `request()`. */
+  protected readonly repeatOptions?: RepeatOptions;
+
+  /**
+   * Binds every method of the class chain to set the `key` of the call it issues on the promise it
+   * returns (see call.ts's `bindCallKeys`). The methods are bound per instance, here, so a subclass's
+   * own methods are bound as well.
+   */
   protected constructor(options: ProxyBaseOptions) {
     super(options.basePath);
     this.pkFieldName = options.pkFieldName;
     this.schemaValidationEnabled = options.validateSchema !== false;
     this.declaredMixins = options.declares;
+    this.repeatOptions = options.repeat;
+    bindCallKeys(this, Object.prototype);
   }
 
   /**
@@ -299,7 +324,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   }
 
   /** Abstract here, where a transport is actually held to it. See ViewSetInternals.request. */
-  protected abstract override request<R>(method: HttpMethod, path: string, options?: RequestOptions): Promise<R>;
+  protected abstract override request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>;
 
   /**
    * Fetches the BE schema and compares it against what this ViewSet declared.
@@ -323,7 +348,9 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     if (declared === null) return;
 
     try {
-      const schema = await this.request<{ paths?: Record<string, Record<string, unknown>> }>('GET', '/schema');
+      const schema = await this.request<{ paths?: Record<string, Record<string, unknown>> }>('GET', '/schema', {
+        repeat: { withinMs: 0 },
+      });
       const paths = schema?.paths ?? {};
 
       const beActions = new Set<string>();
@@ -398,11 +425,11 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     }
   }
 
-  async create(data: Omit<T, PK>): Promise<T> {
+  create(data: Omit<T, PK>): ViewSetActionCall<T> {
     return this.request<T>('POST', '', { body: data });
   }
 
-  async bulkCreate(data: Omit<T, PK>[]): Promise<T[]> {
+  bulkCreate(data: Omit<T, PK>[]): ViewSetActionCall<T[]> {
     return this.request<T[]>('POST', '/bulk', { body: data });
   }
 
@@ -417,7 +444,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     return body as R;
   }
 
-  async list(params?: ListParams): Promise<T[]> {
+  list(params?: ListParams): ViewSetActionCall<T[]> {
     return this.requestList<T[]>('plain', params);
   }
 
@@ -428,8 +455,8 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    * Follow `next` to walk forward. Unlike offset paging, a row inserted or removed behind you
    * cannot make the next page repeat or skip anything.
    */
-  async listCursor(params?: CursorParams): Promise<CursorPage<T>> {
-    const page = await this.requestList<{
+  listCursor(params?: CursorParams): ViewSetActionCall<CursorPage<T>> {
+    return this.requestList<{
       results: T[];
       limit: number;
       has_more: boolean;
@@ -438,8 +465,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
       previous: string | null;
       first: string | null;
       last: string | null;
-    }>('cursor', params);
-    return {
+    }>('cursor', params).then((page) => ({
       results: page.results,
       limit: page.limit,
       hasMore: page.has_more,
@@ -448,7 +474,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
       previous: page.previous,
       first: page.first,
       last: page.last,
-    };
+    }));
   }
 
   /**
@@ -459,54 +485,53 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    * declares, so only the envelope's own fields are renamed here. The records inside are passed
    * through untouched.
    */
-  async listPage(params?: PageParams): Promise<PaginatedList<T>> {
-    const page = await this.requestList<{
+  listPage(params?: PageParams): ViewSetActionCall<PaginatedList<T>> {
+    return this.requestList<{
       results: T[];
       offset: number;
       limit: number | null;
       count: number | null;
       has_more: boolean;
       has_previous: boolean;
-    }>('paginated', params);
-    return {
+    }>('paginated', params).then((page) => ({
       results: page.results,
       offset: page.offset,
       limit: page.limit,
       count: page.count,
       hasMore: page.has_more,
       hasPrevious: page.has_previous,
-    };
+    }));
   }
 
-  async retrieve(pk: K): Promise<T> {
+  retrieve(pk: K): ViewSetActionCall<T> {
     return this.request<T>('GET', `/${pk}`);
   }
 
-  async update(pk: K, data: T): Promise<T> {
+  update(pk: K, data: T): ViewSetActionCall<T> {
     return this.request<T>('PUT', `/${pk}`, { body: data });
   }
 
-  async partialUpdate(pk: K, data: Partial<T>): Promise<T> {
+  partialUpdate(pk: K, data: Partial<T>): ViewSetActionCall<T> {
     return this.request<T>('PATCH', `/${pk}`, { body: data });
   }
 
-  async bulkUpdate(records: Record<K, T>): Promise<T[]> {
+  bulkUpdate(records: Record<K, T>): ViewSetActionCall<T[]> {
     return this.request<T[]>('PUT', '/bulk', { body: records });
   }
 
-  async bulkPartialUpdate(records: Record<K, Partial<T>>): Promise<T[]> {
+  bulkPartialUpdate(records: Record<K, Partial<T>>): ViewSetActionCall<T[]> {
     return this.request<T[]>('PATCH', '/bulk', { body: records });
   }
 
-  async destroy(pk: K): Promise<DestroyReturnData> {
+  destroy(pk: K): ViewSetActionCall<DestroyReturnData> {
     return this.request<DestroyReturnData>('DELETE', `/${pk}`);
   }
 
-  async bulkDestroy(pks: K[]): Promise<DestroyReturnData[]> {
+  bulkDestroy(pks: K[]): ViewSetActionCall<DestroyReturnData[]> {
     return this.request<DestroyReturnData[]>('DELETE', '/bulk', { body: pks });
   }
 
-  async lookup(): Promise<LookupItem[]> {
+  lookup(): ViewSetActionCall<LookupItem[]> {
     return this.request<LookupItem[]>('GET', '/lookup');
   }
 }

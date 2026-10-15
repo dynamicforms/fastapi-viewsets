@@ -58,3 +58,73 @@ A [`Middleware`](../guide/command-middleware#class-based-middleware-middleware).
 | `IdempotencyKeyReusedError(key)` | 422 | `idempotency_key_reused` | `{key}` |
 
 Both are `DfViewSetError`s; see [Error Codes](../guide/error-codes).
+
+## Frontend
+
+```ts
+import {
+  IDEMPOTENCY_KEY_HEADER,
+  idempotencyKeyHeader,
+  issueCall,
+  newCallKey,
+  type RepeatOptions,
+  type ViewSetActionCall,
+  type ViewSetCall,
+  type ViewSetCalls,
+} from '@dynamicforms/fastapi-viewsets';
+```
+
+The behaviour is described in [Idempotent Calls → Frontend](../guide/idempotency#frontend).
+
+### Types
+
+```ts
+/** The promise a call returns, with the call's Idempotency-Key. */
+type ViewSetCall<R> = Promise<R> & { readonly key: string };
+
+/** What a declared action returns in a ViewSet's type; `key` is optional so an override may return a Promise. */
+type ViewSetActionCall<R> = Promise<R> & { readonly key?: string };
+
+/** `M` with every method that returns `Promise<R>` returning `ViewSetCall<R>`; other members unchanged. */
+type ViewSetCalls<M> = {
+  [P in keyof M]: M[P] extends (...args: infer A) => Promise<infer R> ? (...args: A) => ViewSetCall<R> : M[P];
+};
+```
+
+| Where | Return type |
+|-------|-------------|
+| `request()` (protected) | `ViewSetCall<R>` |
+| the actions of the mixin interfaces, `ViewSetProxyBase`, `RestProxyImpl`, `MuxwsProxyImpl` and factory-built ViewSets | `ViewSetActionCall<R>` |
+| `route_rest<M>()`, `route_muxws<M>()` | `ViewSetCalls<M>` |
+| a ViewSet's own method | as declared; `key` is set at run time when the method issues a request before its first `await` |
+
+### RepeatOptions
+
+```ts
+interface RepeatOptions {
+  withinMs?: number;
+  delayMs?: number;
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `withinMs` | `600000` | Milliseconds after the first attempt within which a repeat may be sent; past it the call rejects with the error of its last attempt. `0` turns repeating off |
+| `delayMs` | `1000` | Milliseconds before a repeat after a lost connection or a gateway status, doubled after each such repeat, at most `30000`. A repeat after an attempt's own timeout is sent without a delay |
+
+`repeat?: RepeatOptions` is an option of `route_rest`, `route_muxws`, `restViewSet` and
+`muxwsViewSet` ViewSets and of `RequestOptions`, where it overrides the proxy's for one call.
+`attemptTimeoutMs?: number` (default `30000`, `0` for none) is a REST option: the axios `timeout` of
+one attempt.
+
+`RequestOptions.key` and `RequestOptions.repeat` are listed with
+[`RequestOptions`](./vue-mixins#requests-and-actions).
+
+### Functions
+
+| Name | Description |
+|------|-------------|
+| `IDEMPOTENCY_KEY_HEADER` | `'Idempotency-Key'` |
+| `newCallKey(): string` | A version 4 UUID: `crypto.randomUUID()`, or built from `crypto.getRandomValues()` where `randomUUID` is absent (an insecure context) |
+| `idempotencyKeyHeader(key: string): string` | `key` as a Structured Field string: quoted, `"` and `\` escaped. Throws `TypeError` for an empty key or one with a character outside printable ASCII |
+| `issueCall<R>(promise: Promise<R>, key: string): ViewSetCall<R>` | Sets `key` on `promise` and returns it. Called synchronously from a transport's `request()`, it also gives `key` to the promise of the proxy method running around it |

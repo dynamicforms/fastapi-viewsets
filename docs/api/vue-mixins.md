@@ -10,6 +10,8 @@ declaration lists the mixin classes themselves: the list types the ViewSet's pub
 check compares against the BE.
 
 The members are methods, not function-valued properties, so a ViewSet may override an action with a method of its own.
+An action returns a [`ViewSetActionCall<R>`](./idempotency#frontend): a `Promise<R>` whose `key` is
+optional in the type, so an override may return a plain `Promise<R>`.
 
 ## Types
 
@@ -74,6 +76,10 @@ interface RequestOptions {
   body?: unknown;
   /** Headers for this call only; on muxws they override the proxy's own `headers`. */
   headers?: Record<string, string>;
+  /** The Idempotency-Key of this call; a new UUID when absent. Overrides an Idempotency-Key in `headers`. */
+  key?: string;
+  /** Overrides the proxy's `repeat` for this call. */
+  repeat?: RepeatOptions;
 }
 
 /** The response shapes of `GET {basePath}`, as the BE names them in `X-List-Shape`. */
@@ -103,8 +109,9 @@ type ActionSurface<K extends KeyType, T, PK extends keyof T, A> = ('create' exte
   ('lookup' extends A ? LookupMixin : unknown);
 ```
 
-`request<R>(method: HttpMethod, path: string, options?: RequestOptions): Promise<R>` is the one call
-a transport implements; see [custom endpoints](../guide/vue-custom-endpoints#this-request).
+`request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>` is the one
+call a transport implements; see [custom endpoints](../guide/vue-custom-endpoints#this-request).
+`ViewSetCall`, `ViewSetActionCall` and `RepeatOptions` are in [Idempotency](./idempotency#frontend).
 
 ## Errors
 
@@ -178,13 +185,13 @@ What each conversion produces is in [Error codes → Frontend](../guide/error-co
 ### CreateMixin `<T, PK extends keyof T>`
 
 ```ts
-create(data: Omit<T, PK>): Promise<T>;
+create(data: Omit<T, PK>): ViewSetActionCall<T>;
 ```
 
 ### BulkOnlyCreateMixin `<T, PK extends keyof T>`
 
 ```ts
-bulkCreate(data: Omit<T, PK>[]): Promise<T[]>;
+bulkCreate(data: Omit<T, PK>[]): ViewSetActionCall<T[]>;
 ```
 
 ### BulkCreateMixin `<T, PK extends keyof T>`
@@ -194,19 +201,19 @@ Interface extends `CreateMixin<T, PK>` and `BulkOnlyCreateMixin<T, PK>`; `action
 ### ListMixin `<T>`
 
 ```ts
-list(params?: ListParams): Promise<T[]>;
+list(params?: ListParams): ViewSetActionCall<T[]>;
 ```
 
 ### PaginatedListMixin `<T>`
 
 ```ts
-listPage(params?: PageParams): Promise<PaginatedList<T>>;
+listPage(params?: PageParams): ViewSetActionCall<PaginatedList<T>>;
 ```
 
 ### CursorListMixin `<T>`
 
 ```ts
-listCursor(params?: CursorParams): Promise<CursorPage<T>>;
+listCursor(params?: CursorParams): ViewSetActionCall<CursorPage<T>>;
 ```
 
 The three methods read the same `GET {basePath}`. Each sends `X-List-Shape` with its own shape - `plain`, `paginated`,
@@ -218,21 +225,21 @@ through `list_shape` and `list_shapes`. A shape the BE viewset's `list_shapes` l
 ### RetrieveMixin `<K extends KeyType, T>`
 
 ```ts
-retrieve(pk: K): Promise<T>;
+retrieve(pk: K): ViewSetActionCall<T>;
 ```
 
 ### UpdateMixin `<K extends KeyType, T>`
 
 ```ts
-update(pk: K, data: T): Promise<T>;
-partialUpdate(pk: K, data: Partial<T>): Promise<T>;
+update(pk: K, data: T): ViewSetActionCall<T>;
+partialUpdate(pk: K, data: Partial<T>): ViewSetActionCall<T>;
 ```
 
 ### BulkOnlyUpdateMixin `<K extends KeyType, T>`
 
 ```ts
-bulkUpdate(records: Record<K, T>): Promise<T[]>;
-bulkPartialUpdate(records: Record<K, Partial<T>>): Promise<T[]>;
+bulkUpdate(records: Record<K, T>): ViewSetActionCall<T[]>;
+bulkPartialUpdate(records: Record<K, Partial<T>>): ViewSetActionCall<T[]>;
 ```
 
 ### BulkUpdateMixin `<K extends KeyType, T>`
@@ -242,13 +249,13 @@ Interface extends `UpdateMixin<K, T>` and `BulkOnlyUpdateMixin<K, T>`; `actions`
 ### DestroyMixin `<K extends KeyType>`
 
 ```ts
-destroy(pk: K): Promise<DestroyReturnData>;
+destroy(pk: K): ViewSetActionCall<DestroyReturnData>;
 ```
 
 ### BulkOnlyDestroyMixin `<K extends KeyType>`
 
 ```ts
-bulkDestroy(pks: K[]): Promise<DestroyReturnData[]>;
+bulkDestroy(pks: K[]): ViewSetActionCall<DestroyReturnData[]>;
 ```
 
 ### BulkDestroyMixin `<K extends KeyType>`
@@ -258,7 +265,7 @@ Interface extends `DestroyMixin<K>` and `BulkOnlyDestroyMixin<K>`; `actions` spr
 ### LookupMixin
 
 ```ts
-lookup(): Promise<LookupItem[]>;
+lookup(): ViewSetActionCall<LookupItem[]>;
 ```
 
 ## Combined viewset mixins

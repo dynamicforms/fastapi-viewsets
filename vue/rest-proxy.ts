@@ -8,12 +8,26 @@
  *   const items = await restItems.list();
  *   const item  = await restItems.retrieve(1);
  *
+ * Every call carries an `Idempotency-Key` and is repeated with it after a network error, an attempt
+ * timeout or a gateway status; see call.ts.
+ *
  * Everything except the sending lives in ViewSetProxyBase, which MuxwsProxyImpl shares — see
  * proxy-base.ts.
  */
 
-import axios, { type AxiosInstance } from 'axios';
+import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 
+import {
+  type AttemptFailure,
+  type CallAttempt,
+  IDEMPOTENCY_KEY_HEADER,
+  idempotencyKeyHeader,
+  issueCall,
+  newCallKey,
+  runCall,
+  type ViewSetCall,
+  type ViewSetCalls,
+} from './call';
 import type { KeyType } from './mixins';
 import {
   FACTORY_BUILT,
@@ -57,15 +71,21 @@ type FactoryBuiltClass = (abstract new (...args: any[]) => any) & {
 declare const FACTORY_BUILT_REJECTION: 'route_rest cannot take a factory-built class - extend it directly instead';
 
 /**
- * The REST proxy type is simply the mixin interface `M` the caller declares.
- * Because TypeScript cannot inspect Python class hierarchies at runtime, the
- * caller provides the explicit type via the generic parameter `M` (see route_rest).
+ * The REST proxy type is the mixin interface `M` the caller declares, with every method returning a
+ * `ViewSetCall`. Because TypeScript cannot inspect Python class hierarchies at runtime, the caller
+ * provides the explicit type via the generic parameter `M` (see route_rest).
  */
-export type RestProxy<M> = M;
+export type RestProxy<M> = ViewSetCalls<M>;
 
 export interface RestProxyOptions extends ProxyBaseOptions {
   /** Optional: existing axios instance. Defaults to the global axios. */
   axiosInstance?: AxiosInstance;
+  /**
+   * The timeout of one attempt, in milliseconds, passed to axios as `timeout`. An attempt that
+   * reaches it is repeated at once (see `ProxyBaseOptions.repeat`). `0` means no timeout. Default
+   * 30000.
+   */
+  attemptTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,62 +95,99 @@ export interface RestProxyOptions extends ProxyBaseOptions {
 export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends ViewSetProxyBase<K, T, PK> {
   protected readonly http: AxiosInstance;
 
+  private readonly attemptTimeoutMs: number;
+
   constructor(options: RestProxyOptions) {
     super(options);
     this.http = options.axiosInstance ?? axios;
+    this.attemptTimeoutMs = options.attemptTimeoutMs ?? DEFAULT_ATTEMPT_TIMEOUT_MS;
     this.initSchemaValidation();
   }
 
   /**
-   * Dispatches to axios' per-verb methods rather than to `http.request()`: those are what
-   * application interceptors and test doubles are written against — routing everything through
-   * `request()` would be invisible on the wire but would break every one of them.
+   * Sends the call with its `Idempotency-Key` and repeats it with the same key while an attempt ends
+   * without an answer: an axios error without `response`, or a 502, 503 or 504. A repeated attempt is
+   * aborted through its `AbortSignal`.
    *
    * axios throws its own AxiosError on a non-2xx, which already carries `response.status` — the
    * shape ViewSetRequestError mirrors for the muxws side. Nothing to translate here.
    */
-  protected async request<R>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<R> {
-    const url = `${this.basePath}${path}`;
-    const hasQuery = options.query !== undefined && Object.keys(options.query).length > 0;
-    const hasHeaders = options.headers !== undefined && Object.keys(options.headers).length > 0;
-    const config =
-      hasQuery || hasHeaders
-        ? { ...(hasQuery ? { params: options.query } : {}), ...(hasHeaders ? { headers: options.headers } : {}) }
-        : undefined;
-
-    switch (method) {
-      case 'GET': {
-        const res = config ? await this.http.get<R>(url, config) : await this.http.get<R>(url);
-        return res.data;
-      }
-      // The config argument is omitted rather than passed as undefined: axios treats the two
-      // identically, but a spy does not, and the call shape is part of what this proxy promises.
-      case 'POST': {
-        const res = config
-          ? await this.http.post<R>(url, options.body, config)
-          : await this.http.post<R>(url, options.body);
-        return res.data;
-      }
-      case 'PUT': {
-        const res = config
-          ? await this.http.put<R>(url, options.body, config)
-          : await this.http.put<R>(url, options.body);
-        return res.data;
-      }
-      case 'PATCH': {
-        const res = config
-          ? await this.http.patch<R>(url, options.body, config)
-          : await this.http.patch<R>(url, options.body);
-        return res.data;
-      }
-      case 'DELETE': {
-        // A DELETE body has to go through the config object; axios has no positional slot for it.
-        const deleteConfig = options.body === undefined ? config : { ...(config ?? {}), data: options.body };
-        const res = deleteConfig ? await this.http.delete<R>(url, deleteConfig) : await this.http.delete<R>(url);
-        return res.data;
-      }
+  protected request<R>(method: HttpMethod, path: string, options: RequestOptions = {}): ViewSetCall<R> {
+    const key = options.key ?? newCallKey();
+    let call: Promise<R>;
+    try {
+      const url = `${this.basePath}${path}`;
+      const headers = { ...options.headers, [IDEMPOTENCY_KEY_HEADER]: idempotencyKeyHeader(key) };
+      call = runCall(
+        () => this.attempt<R>(method, url, options, headers),
+        restAttemptFailure,
+        options.repeat ?? this.repeatOptions,
+      );
+    } catch (error) {
+      call = Promise.reject(error);
     }
+    return issueCall(call, key);
   }
+
+  /**
+   * One attempt. Dispatches to axios' per-verb methods rather than to `http.request()`: those are what
+   * application interceptors and test doubles are written against — routing everything through
+   * `request()` would be invisible on the wire but would break every one of them.
+   */
+  private attempt<R>(
+    method: HttpMethod,
+    url: string,
+    options: RequestOptions,
+    headers: Record<string, string>,
+  ): CallAttempt<R> {
+    const controller = new AbortController();
+    const config: AxiosRequestConfig = {
+      ...(options.query !== undefined && Object.keys(options.query).length > 0 ? { params: options.query } : {}),
+      headers,
+      timeout: this.attemptTimeoutMs,
+      signal: controller.signal,
+    };
+
+    let response: Promise<AxiosResponse<R>>;
+    switch (method) {
+      case 'GET':
+        response = this.http.get<R>(url, config);
+        break;
+      case 'POST':
+        response = this.http.post<R>(url, options.body, config);
+        break;
+      case 'PUT':
+        response = this.http.put<R>(url, options.body, config);
+        break;
+      case 'PATCH':
+        response = this.http.patch<R>(url, options.body, config);
+        break;
+      case 'DELETE':
+        // A DELETE body has to go through the config object; axios has no positional slot for it.
+        response = this.http.delete<R>(url, options.body === undefined ? config : { ...config, data: options.body });
+        break;
+    }
+    return { result: Promise.resolve(response).then((res) => res.data), abandon: () => controller.abort() };
+  }
+}
+
+/** The default of `RestProxyOptions.attemptTimeoutMs`. */
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 30_000;
+
+/** The statuses a gateway answers when the application behind it did not. */
+const GATEWAY_STATUSES = new Set([502, 503, 504]);
+
+/**
+ * An axios error without `response` is an attempt that got no answer: `'timeout'` for the attempt's
+ * own timeout (`ECONNABORTED`, `ETIMEDOUT`), `'lost'` otherwise. A cancellation the application
+ * requested is an answer. A gateway status is `'lost'`.
+ */
+function restAttemptFailure(error: unknown): AttemptFailure {
+  if (!axios.isAxiosError(error) || axios.isCancel(error)) return null;
+  if (error.response === undefined) {
+    return error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT' ? 'timeout' : 'lost';
+  }
+  return GATEWAY_STATUSES.has(error.response.status) ? 'lost' : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +247,7 @@ function route_rest<M>(
   basePathOrOptions: string | RestProxyOptions,
   pkFieldName?: string,
   axiosInstance?: AxiosInstance,
-): RestProxy<M> {
+): RestProxy<M> | typeof FACTORY_BUILT_REJECTION {
   const options: RestProxyOptions =
     typeof basePathOrOptions === 'string'
       ? {

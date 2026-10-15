@@ -113,6 +113,86 @@ With `redis_client`:
   sets the `:attached` key, subscribes to the channel, reads the record again (an outcome stored
   before the subscription) and waits for the message or for the running record to expire.
 
+## Frontend
+
+The npm proxies send an `Idempotency-Key` with every call, over REST and over muxws, and repeat a
+call with the same key when an attempt ends without an answer from the application.
+
+### The key
+
+Every call gets a new key, a version 4 UUID (`crypto.randomUUID()`, or the same value built from
+`crypto.getRandomValues()` outside a secure context). The promise a proxy method returns is a
+`ViewSetCall<R>`: a `Promise<R>` with a read-only `key`, readable before the call settles.
+
+```ts
+const call = items.create({ name: 'x' });
+call.key;                  // '8e03978e-40d5-43e8-bc93-6894a57f9324'
+const item = await call;
+```
+
+`key` is set on the promise of every public method of a proxy, the built-in actions and the
+ViewSet's own methods alike. A method gets the key of the first request it issues before its first
+`await`; `async count() { return this.request(...) }` has it, a method that awaits something before
+its first request returns a promise without `key`. The declared actions of a ViewSet are typed
+`ViewSetActionCall<R>`, in which `key` is optional, so that an override may return a plain
+`Promise<R>`. `route_rest` and `route_muxws` type every method as returning `ViewSetCall<R>`.
+
+`RequestOptions.key` sets the key of one call. An application that repeats a call itself passes the
+`key` of the first one:
+
+```ts
+class ItemApi extends restViewSet<Item>()('id', [ViewSetMixin]) {
+  async approve(pk: number, key?: string): Promise<Item> {
+    return this.request<Item>('POST', `/${pk}/approve`, { key });
+  }
+}
+```
+
+A key that is empty or holds a character outside printable ASCII rejects the call with a
+`TypeError` before anything is sent.
+
+### Repeats
+
+| Transport | An attempt that ended without an answer | Repeated |
+|-----------|-----------------------------------------|----------|
+| REST | an axios error without `response`, other than a cancellation | at once after the attempt's timeout (`ECONNABORTED`, `ETIMEDOUT`), after the delay otherwise |
+| REST | `502`, `503` or `504` | after the delay |
+| muxws | the stream failed with `StreamTimeout` | at once |
+| muxws | the stream failed with `ConnectionLost` or `StreamRefused`, or `open()` threw `ConnectionClosed` while the peer was between sockets | after the delay, and once the peer has reconnected |
+
+Any other outcome settles the call. A repeated attempt is abandoned first: its axios request is
+aborted through its `AbortSignal`, its muxws stream is cancelled. Only the last attempt settles the
+promise, and `key` stays the same across attempts.
+
+```ts
+const items = new ItemApi({
+  basePath: '/items',
+  attemptTimeoutMs: 30_000,
+  repeat: { withinMs: 600_000, delayMs: 1000 },
+});
+```
+
+| Option | Default | Effect |
+|--------|---------|--------|
+| `attemptTimeoutMs` | `30000` | REST only: the timeout of one attempt, passed to axios as `timeout`; `0` sets none. Over muxws, `timeoutMs` is the timeout of one attempt |
+| `repeat.withinMs` | `600000` | A repeat is sent only this long after the first attempt; past it the call rejects with the error of its last attempt. `0` turns repeating off |
+| `repeat.delayMs` | `1000` | The delay before a repeat after a lost connection or a gateway status, doubled after each, at most 30000 |
+
+`repeat` is an option of every proxy and of `RequestOptions`, where it applies to one call. The
+default `withinMs` equals the default `viewsets_idempotency_lock_ttl`. The startup schema check is
+not repeated.
+
+A repeat over muxws waits for `peer.onReconnect`, at most until `withinMs` has elapsed. A peer that
+closes for good (`onClose` with `willRetry` false) ends the wait, and the call rejects with the
+`ConnectionClosed` its next `open()` throws.
+
+Without `Idempotency` on the backend, a repeat runs the action again. A deployment whose backend does
+not use it sets `repeat: { withinMs: 0 }` on its proxies.
+
+`Idempotency-Key` is not a CORS-safelisted header: a REST backend on another origin lists it in
+`Access-Control-Allow-Headers` (`CORSMiddleware(allow_headers=[..., "Idempotency-Key"])`), and every
+call to it, `GET` included, is preflighted.
+
 ## Known limitations
 
 - Records are not scoped to a caller: a key is identified by its value alone. Two callers that send
