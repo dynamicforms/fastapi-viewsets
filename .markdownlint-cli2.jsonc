@@ -1,0 +1,22 @@
+{
+  "config": {
+    "MD013": { "line_length": 120, "tables": false, "code_blocks": false },
+    // Keep a Changelog repeats Added / Changed / Fixed under every version
+    "MD024": { "siblings_only": true },
+    // VitePress builds heading anchors differently from markdownlint's GitHub slugs (`viewset/method` -> `viewset-method`)
+    "MD051": false
+  },
+  "ignores": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "docs/.vitepress/cache/**",
+    "coverage/**",
+    "demo/test-results/**",
+    "build/**",
+    "**/*.egg-info/**",
+    "**/.venv/**",
+    "**/.pytest_cache/**",
+    "**/.ruff_cache/**",
+    "**/__pycache__/**"
+  ]
+}

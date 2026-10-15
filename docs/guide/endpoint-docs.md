@@ -68,7 +68,8 @@ Keys are action names: the mixin action (`list_items`, `bulk_create`, `partial_u
 custom endpoint's own method name — the same names `@action_configuration` uses. A name that
 matches no endpoint raises.
 
-Each entry is an `EndpointDoc` (a `TypedDict`, `fastapi_viewsets.endpoint_docs`); every field is optional and anything omitted is left alone:
+Each entry is an `EndpointDoc` (a `TypedDict`, `fastapi_viewsets.endpoint_docs`); every field is optional and anything
+omitted is left alone:
 
 | field | |
 |---|---|

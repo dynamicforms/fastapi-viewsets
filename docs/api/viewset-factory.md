@@ -25,7 +25,8 @@ await api.count();
 await api.create({ name: 'x' }); // TS2339: create was not declared
 ```
 
-The mixin list is written once, as values, and does three jobs: it decides which actions the class exposes to callers, it types them, and it is handed to the proxy so the startup schema check can compare it against the BE.
+The mixin list is written once, as values, and does three jobs: it decides which actions the class exposes to callers,
+it types them, and it is handed to the proxy so the startup schema check can compare it against the BE.
 
 ## Signatures
 
@@ -74,7 +75,10 @@ type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTO
 
 ## Why the call is curried
 
-The empty `()` in `restViewSet<Item>()('id', [...])` is required. TypeScript has no partial type-argument inference: in a single call, the model cannot be given explicitly while the pk field and the mixin list are inferred from arguments. Naming only `T` on a three-parameter signature is `TS2558: Expected 3 type arguments, but got 1`. Two calls is the only way to have both.
+The empty `()` in `restViewSet<Item>()('id', [...])` is required. TypeScript has no partial type-argument inference: in
+a single call, the model cannot be given explicitly while the pk field and the mixin list are inferred from arguments.
+Naming only `T` on a three-parameter signature is `TS2558: Expected 3 type arguments, but got 1`. Two calls is the only
+way to have both.
 
 ## Parameters
 
@@ -84,7 +88,9 @@ The empty `()` in `restViewSet<Item>()('id', [...])` is required. TypeScript has
 | `pkFieldName` | `PkFieldName<T> & keyof T` | Name of the PK field on the model, e.g. `'id'`. An argument, not a type argument: it is checked against the model's fields, and the pk *type* is read off `T[PK]`. |
 | `declares` | `readonly ViewSetMixinClass[]` | The mixin classes themselves, as values. |
 
-`retrieve`, `update`, `destroy` and the bulk actions take a pk of the type the model gives it — with `Item['id']: number`, `api.retrieve('1')` is `TS2345: Argument of type 'string' is not assignable to parameter of type 'number'`.
+`retrieve`, `update`, `destroy` and the bulk actions take a pk of the type the model gives it — with
+`Item['id']: number`, `api.retrieve('1')` is
+`TS2345: Argument of type 'string' is not assignable to parameter of type 'number'`.
 
 ## Constructor options
 
@@ -126,11 +132,15 @@ protected readonly basePath: string;
 protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): Promise<R>;
 ```
 
-`path` is relative to `basePath` — `''` for the collection, `/1` for a record. Writing a custom endpoint against `request()` rather than against a transport is what lets the same method body serve a REST and a muxws ViewSet.
+`path` is relative to `basePath` — `''` for the collection, `/1` for a record. Writing a custom endpoint against
+`request()` rather than against a transport is what lets the same method body serve a REST and a muxws ViewSet.
 
-Both members are `protected`, so a caller cannot touch them: `api.basePath` outside the class is `TS2445: Property 'basePath' is protected and only accessible within class 'ViewSetInternals' and its subclasses`.
+Both members are `protected`, so a caller cannot touch them: `api.basePath` outside the class is
+`TS2445: Property 'basePath' is protected and only accessible within class 'ViewSetInternals' and its subclasses`.
 
-`this.http` is **not** available on a factory-built class — the factory types its result as `ViewSetInternals` plus the declared actions, and the axios instance is not part of that. A method that needs axios directly extends `RestProxyImpl` instead:
+`this.http` is **not** available on a factory-built class — the factory types its result as `ViewSetInternals` plus the
+declared actions, and the axios instance is not part of that. A method that needs axios directly extends `RestProxyImpl`
+instead:
 
 ```ts
 import { RestProxyImpl } from '@dynamicforms/fastapi-viewsets';
@@ -184,10 +194,21 @@ class ItemDbApi extends restViewSet<Item>()('id', [CursorListMixin, RetrieveMixi
 
 ## Schema check
 
-On construction, unless `validateSchema: false`, the ViewSet fetches `GET {basePath}/schema` over its own transport and compares the declaration against it, `console.warn`-ing any disagreement: an action declared that the BE does not serve, an endpoint served that the ViewSet declares no action for, and a custom BE endpoint the ViewSet has no method for — the BE method's name (`x-viewset-action`) in camelCase, or the name itself. It is advisory — failures to fetch or parse are ignored.
+On construction, unless `validateSchema: false`, the ViewSet fetches `GET {basePath}/schema` over its own transport and
+compares the declaration against it, `console.warn`-ing any disagreement: an action declared that the BE does not serve,
+an endpoint served that the ViewSet declares no action for, and a custom BE endpoint the ViewSet has no method for — the
+BE method's name (`x-viewset-action`) in camelCase, or the name itself. It is advisory — failures to fetch or parse are
+ignored.
 
 ## Relation to route_rest / route_muxws
 
-[`route_rest`](/api/route-rest) and `route_muxws` are the other form. They return a bare `RestProxyImpl` / `MuxwsProxyImpl` cast to the mixin interface `M`, so the object is not the consumer's own class: a custom endpoint named in `M` type-checks and is `undefined` when called. A factory-built ViewSet is the consumer's class, so its own methods exist.
+[`route_rest`](/api/route-rest) and `route_muxws` are the other form. They return a bare `RestProxyImpl` /
+`MuxwsProxyImpl` cast to the mixin interface `M`, so the object is not the consumer's own class: a custom endpoint named
+in `M` type-checks and is `undefined` when called. A factory-built ViewSet is the consumer's class, so its own methods
+exist.
 
-Passing a factory-built class to either fails to compile rather than silently building an object missing that class's own methods: the overload that matches a factory-built class returns a self-describing string type instead of a usable proxy, so the error surfaces as `TS2339` on the first property or method accessed on the result (`Property 'list' does not exist on type '"route_rest cannot take a factory-built class - extend it directly instead"'`), not on the `route_rest`/`route_muxws` call itself.
+Passing a factory-built class to either fails to compile rather than silently building an object missing that class's
+own methods: the overload that matches a factory-built class returns a self-describing string type instead of a usable
+proxy, so the error surfaces as `TS2339` on the first property or method accessed on the result
+(`Property 'list' does not exist on type '"route_rest cannot take a factory-built class - extend it directly instead"'`),
+not on the `route_rest`/`route_muxws` call itself.

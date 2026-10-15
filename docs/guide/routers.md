@@ -5,7 +5,8 @@ Two decorators connect your viewset classes to the outside world:
 - **`route_viewset`** — registers a viewset on a FastAPI router (HTTP endpoints)
 - **`celery_viewset`** — moves a viewset's execution to a Celery worker (transparent task delegation)
 
-Both decorators follow the same class-decoration pattern and can be combined: the same viewset class is decorated with `celery_viewset` in the worker process and with `route_viewset` in the FastAPI process.
+Both decorators follow the same class-decoration pattern and can be combined: the same viewset class is decorated with
+`celery_viewset` in the worker process and with `route_viewset` in the FastAPI process.
 
 ---
 
@@ -113,9 +114,11 @@ A validator of the primary key runs as follows:
 
 ## `celery_viewset`
 
-Moves a viewset's execution to a Celery worker. The decorator auto-detects the execution context and applies the correct mode:
+Moves a viewset's execution to a Celery worker. The decorator auto-detects the execution context and applies the correct
+mode:
 
-- **FastAPI process (client mode)** — replaces viewset methods with async wrappers that send Celery tasks and await results via a Redis result queue.
+- **FastAPI process (client mode)** — replaces viewset methods with async wrappers that send Celery tasks and await
+  results via a Redis result queue.
 - **Celery worker process (server mode)** — registers each viewset method as a named Celery task that runs the actual implementation.
 
 The same decorator call works in both processes — no conditional code needed in your application.
@@ -144,7 +147,8 @@ def celery_viewset(
 
 ### Usage
 
-The same class definition is used in both processes. The decorator is typically applied in `viewsets.py` and imported by both `main.py` (FastAPI) and `celery_worker.py`:
+The same class definition is used in both processes. The decorator is typically applied in `viewsets.py` and imported by
+both `main.py` (FastAPI) and `celery_worker.py`:
 
 ```python
 # viewsets.py
@@ -215,7 +219,8 @@ name, which is the method's name unless the route states one:
 
 ### Result passing
 
-Results are passed from the worker back to FastAPI via a Redis list (not via the Celery result backend). Each call is correlated with a UUID so that concurrent requests are handled correctly.
+Results are passed from the worker back to FastAPI via a Redis list (not via the Celery result backend). Each call is
+correlated with a UUID so that concurrent requests are handled correctly.
 
 Each FastAPI process receives its results on its own list, `{queue_key}:{host name}:{process id}`
 (`get_process_queue_key(queue_key)`): the task carries the list of the process that dispatched it,
@@ -236,7 +241,11 @@ A model argument crosses to the worker dumped by field name and is validated as 
 create body crosses without its primary key, and the action receives the model as it does in the
 FastAPI process. A model argument that fails validation on the worker fails the call.
 
-A result reader background task must be started in the FastAPI lifespan for each `queue_key` (i.e. each distinct `task_prefix` used by a `celery_viewset`-decorated class) — `start_result_reader` keeps one reader task per `queue_key`, so calling it once per prefix is required and sufficient. Every `celery_viewset_client` decorator registers its own `queue_key` at import time (before `lifespan` ever runs), so instead of maintaining your own list of prefixes, iterate `get_registered_queue_keys()` — it can't drift out of sync with your actual viewsets:
+A result reader background task must be started in the FastAPI lifespan for each `queue_key` (i.e. each distinct
+`task_prefix` used by a `celery_viewset`-decorated class) — `start_result_reader` keeps one reader task per `queue_key`,
+so calling it once per prefix is required and sufficient. Every `celery_viewset_client` decorator registers its own
+`queue_key` at import time (before `lifespan` ever runs), so instead of maintaining your own list of prefixes, iterate
+`get_registered_queue_keys()` — it can't drift out of sync with your actual viewsets:
 
 ```python
 from fastapi_viewsets.decorators.celery_viewset import (
@@ -345,7 +354,7 @@ not.
 `celery_viewset` decorates a base class in `viewsets.py` (shared by both processes), and
 `route_viewset` decorates a subclass in `main.py` (FastAPI only):
 
-```
+```text
 viewsets.py          ← @celery_viewset  (shared by FastAPI and worker)
 main.py              ← @route_viewset   (FastAPI only, wraps the viewset)
 celery_worker.py     ← imports viewsets (tasks registered on import)

@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath'); rel=${f#\"$CLAUDE_PROJECT_DIR\"/}; case \"$f\" in \"$CLAUDE_PROJECT_DIR\"/*.md) cd \"$CLAUDE_PROJECT_DIR\" && out=$(npx --no-install markdownlint-cli2 \":$rel\" 2>&1) || { echo \"$out\" >&2; exit 2; } ;; esac",
+            "timeout": 60,
+            "statusMessage": "Linting markdown"
+          }
+        ]
+      }
+    ]
+  }
+}

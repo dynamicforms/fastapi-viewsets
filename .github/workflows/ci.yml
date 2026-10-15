@@ -29,10 +29,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci
-      # `lint:ci`, not `lint`: the developer script carries `--fix`, which rewrites the violation
-      # and exits 0. In CI that rewrite is discarded with the runner, so an auto-fixable violation
-      # would be reported by nothing and reach main unnoticed.
-      - run: npm run lint:ci
+      - run: npm run lint
       - run: npm test
       - run: npm run build
       - run: npm run docs:build
@@ -70,8 +67,8 @@ jobs:
           coverage-files: |
             coverage.json
             coverage/clover.xml
-          # docs/ is the VitePress site and demo.py/demo/ the sample app - neither is library code,
-          # and neither is covered by pytest or vitest, whose coverage is scoped to
+          # docs/ is the VitePress site, scripts/ the lint runner and demo.py/demo/ the sample app -
+          # none is library code, and none is covered by pytest or vitest, whose coverage is scoped to
           # fastapi_viewsets/ and vue/ respectively (pyproject.toml's own [tool.coverage.run] omits
           # the same paths). vue/index.ts is a re-export barrel excluded from vitest's own coverage
           # config for the same reason.
@@ -79,6 +76,7 @@ jobs:
             docs/**
             demo.py
             demo/**
+            scripts/**
             vue/index.ts
           github-token: ${{ secrets.GITHUB_TOKEN }}
         if: github.event_name == 'pull_request'

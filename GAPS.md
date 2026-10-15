@@ -97,83 +97,180 @@ change it. None is settled.
 
 ### The ViewSet factory is curried, and the first mistake everyone makes has a bad message
 
-`restViewSet<Item>()('id', [ReadOnlyViewSetMixin])` has an empty call in the middle of it because TypeScript has no partial type-argument inference: the model must be stated and the pk field and the mixin list must be inferred, and one call cannot do both (TS2558). Currying is the only shape that delivers the requested syntax.
+`restViewSet<Item>()('id', [ReadOnlyViewSetMixin])` has an empty call in the middle of it because TypeScript has no
+partial type-argument inference: the model must be stated and the pk field and the mixin list must be inferred, and one
+call cannot do both (TS2558). Currying is the only shape that delivers the requested syntax.
 
-The cost is the diagnostic when the `()` is dropped, which I measured rather than guessed: `TS2507: Type '<PK extends "name" | "id", D extends …>(pkFieldName: PK, declares: D) => ViewSetClass<…>' is not a constructor function type` followed by `TS2554: Expected 0 arguments, but got 2` — the second says the thing takes no arguments at the exact moment the reader is passing its two real ones. Nothing in the type system improves this; every example in the docs shows the `()` with the reason inline, and that is the whole mitigation.
+<!-- markdownlint-disable MD013 -->
 
-What would change it: an API that takes the model as a value instead of a type argument (`restViewSet(modelOf<Item>(), 'id', [...])`) would uncurry it at the cost of a fake runtime value, and I judged that a worse trade. If TypeScript ever ships partial inference, the `()` goes away without breaking a single call site.
+The cost is the diagnostic when the `()` is dropped, which I measured rather than guessed:
+`TS2507: Type '<PK extends "name" | "id", D extends …>(pkFieldName: PK, declares: D) => ViewSetClass<…>' is not a constructor function type`
+followed by `TS2554: Expected 0 arguments, but got 2` — the second says the thing takes no arguments at the exact moment
+the reader is passing its two real ones. Nothing in the type system improves this; every example in the docs shows the
+`()` with the reason inline, and that is the whole mitigation.
+
+<!-- markdownlint-enable MD013 -->
+
+What would change it: an API that takes the model as a value instead of a type argument
+(`restViewSet(modelOf<Item>(), 'id', [...])`) would uncurry it at the cost of a fake runtime value, and I judged that a
+worse trade. If TypeScript ever ships partial inference, the `()` goes away without breaking a single call site.
 
 ### The action surface is a conditional intersection, not `Pick<>` of a table
 
-`ActionSurface` is eleven `('list' extends A ? ListMixin<T> : unknown) &` conditionals rather than the obvious `Pick<ActionSignatures<K,T,PK>, A>`. The obvious version does not work: `Pick` is a mapped type, a mapped type re-emits methods as function-valued properties, and a subclass then cannot override an action with a method — `TS2425: … defines instance member property 'list', but extended class defines it as instance member function`. That is not a spelling problem; I rewrote the table in method syntax and re-picked, and the error is identical. Overriding `list()` to add caching is a documented pattern on `RestProxyImpl` today (docs/api/route-rest.md, 'RestProxyImpl') and it survives on the factory path only because of this choice.
+`ActionSurface` is eleven `('list' extends A ? ListMixin<T> : unknown) &` conditionals rather than the obvious
+`Pick<ActionSignatures<K,T,PK>, A>`. The obvious version does not work: `Pick` is a mapped type, a mapped type re-emits
+methods as function-valued properties, and a subclass then cannot override an action with a method —
+`TS2425: … defines instance member property 'list', but extended class defines it as instance member function`. That is
+not a spelling problem; I rewrote the table in method syntax and re-picked, and the error is identical. Overriding
+`list()` to add caching is a documented pattern on `RestProxyImpl` today (docs/api/route-rest.md, 'RestProxyImpl') and
+it survives on the factory path only because of this choice.
 
-The price is that the eleven mixin names are written once more, in one place, and a fourteenth action means editing `ActionSurface` as well as adding a mixin. Forgetting is safe but silent: the action would simply never appear on a factory-built ViewSet.
+The price is that the eleven mixin names are written once more, in one place, and a fourteenth action means editing
+`ActionSurface` as well as adding a mixin. Forgetting is safe but silent: the action would simply never appear on a
+factory-built ViewSet.
 
-What would change it: if overriding an action were judged worthless on factory-built classes, `Pick` is shorter and the eleven conditionals collapse to one line. I would want to see that argued explicitly, because the capability is quiet — nobody notices losing it until they need it.
+What would change it: if overriding an action were judged worthless on factory-built classes, `Pick` is shorter and the
+eleven conditionals collapse to one line. I would want to see that argued explicitly, because the capability is quiet —
+nobody notices losing it until they need it.
 
 ### Mixin members move into a merged interface and become methods
 
-Each mixin is now an interface merged into a same-named class: the interface holds the members in method syntax, the class holds `static actions`. Two reasons. The factory needs method syntax (see the `Pick` entry), and `declare list(): Promise<T[]>` is illegal in a class body (TS1031), so the members had to move somewhere. And once they moved, the six composites could stop restating the thirteen members they inherit by hand — which is where `destroy` had already drifted into two different return types (`DestroyMixin` said `DestroyReturnData`, `ViewSetMixin` said `Record<string, unknown>`) without `implements` or the project typecheck noticing.
+Each mixin is now an interface merged into a same-named class: the interface holds the members in method syntax, the
+class holds `static actions`. Two reasons. The factory needs method syntax (see the `Pick` entry), and
+`declare list(): Promise<T[]>` is illegal in a class body (TS1031), so the members had to move somewhere. And once they
+moved, the six composites could stop restating the thirteen members they inherit by hand — which is where `destroy` had
+already drifted into two different return types (`DestroyMixin` said `DestroyReturnData`, `ViewSetMixin` said
+`Record<string, unknown>`) without `implements` or the project typecheck noticing.
 
-The published `.d.ts` changes shape: members appear as methods rather than function-valued properties. Assignability is preserved in every direction that matters — all 24 mixin-as-type sites in the repo compile untouched, including the five base-class usages, the `implements` clause on ViewSetProxyBase and both route_rest overloads — and method parameters are bivariant where property ones were contravariant, so the change only loosens. It is still a visible change to a published type.
+The published `.d.ts` changes shape: members appear as methods rather than function-valued properties. Assignability is
+preserved in every direction that matters — all 24 mixin-as-type sites in the repo compile untouched, including the five
+base-class usages, the `implements` clause on ViewSetProxyBase and both route_rest overloads — and method parameters are
+bivariant where property ones were contravariant, so the change only loosens. It is still a visible change to a
+published type.
 
-What would change it: keeping mixins.ts byte-for-byte was tempting and I nearly took it. It costs a second copy of all thirteen signatures inside the factory, and leaves the drifted `destroy` in the file. If you would rather not touch the most-referenced file in the package right now, the fallback is exactly that: a private `ActionSignatures` table in viewset.ts, mixins.ts untouched, and the duplication accepted.
+What would change it: keeping mixins.ts byte-for-byte was tempting and I nearly took it. It costs a second copy of all
+thirteen signatures inside the factory, and leaves the drifted `destroy` in the file. If you would rather not touch the
+most-referenced file in the package right now, the fallback is exactly that: a private `ActionSignatures` table in
+viewset.ts, mixins.ts untouched, and the duplication accepted.
 
 ### Action names come from `keyof InstanceType<typeof Mixin>`, not from the `actions` tuple
 
-The tuple route — `M['actions'][number]` — needs `as const` on every mixin's `static actions`, and `as const` is irreconcilable with the six mixin-to-mixin `extends` links: a two-element tuple is not assignable to a one-element tuple, so TS2417 fires on the static side and no annotation rescues it. Reading the names off the instance type instead means `static readonly actions: readonly string[]` stays exactly as written, the `extends` chain stays, the published `actions` type does not widen, and a shared `declares` array needs no `as const` at the call site — which is what lets the demo's REST and muxws twins pass the same constant.
+The tuple route — `M['actions'][number]` — needs `as const` on every mixin's `static actions`, and `as const` is
+irreconcilable with the six mixin-to-mixin `extends` links: a two-element tuple is not assignable to a one-element
+tuple, so TS2417 fires on the static side and no annotation rescues it. Reading the names off the instance type instead
+means `static readonly actions: readonly string[]` stays exactly as written, the `extends` chain stays, the published
+`actions` type does not widen, and a shared `declares` array needs no `as const` at the call site — which is what lets
+the demo's REST and muxws twins pass the same constant.
 
-What this rests on: a mixin's public instance members are its actions, and its `actions` list says the same thing. Nothing enforces the agreement. The merged form keeps it structurally honest — a composite's interface extends precisely the mixins its `actions` spread names — but a hand-written mixin could still declare a member it does not list, or list an action it does not declare. `Extract<…, ActionName>` means the failure direction is a missing action rather than a wrong one, so it fails closed.
+What this rests on: a mixin's public instance members are its actions, and its `actions` list says the same thing.
+Nothing enforces the agreement. The merged form keeps it structurally honest — a composite's interface extends precisely
+the mixins its `actions` spread names — but a hand-written mixin could still declare a member it does not list, or list
+an action it does not declare. `Extract<…, ActionName>` means the failure direction is a missing action rather than a
+wrong one, so it fails closed.
 
-What would change it: a mixin that ever needs a non-action public member. Today none has one, and the invariant is now stated in the mixins.ts header where its neighbours already live.
+What would change it: a mixin that ever needs a non-action public member. Today none has one, and the invariant is now
+stated in the mixins.ts header where its neighbours already live.
 
 ### `ViewSetInternals.request` is a concrete method whose body cannot run
 
-`ViewSetInternals` is a real class — `basePath` plus `request` — that `ViewSetProxyBase` now extends, so `protected` stays nominally correct through the factory's returned type. Its `request` is concrete, with a `throw` that is never reached, and `ViewSetProxyBase` immediately re-declares it `protected abstract`. That looks backwards until you hit the reason: TypeScript propagates an abstract member through a constructor type, so with `request` abstract on the internals every consumer class fails `TS2515: Non-abstract class 'ItemApi' does not implement inherited abstract member request` — for a method the transport underneath it has always implemented. Re-abstracting one level down puts the obligation back where a transport actually is.
+`ViewSetInternals` is a real class — `basePath` plus `request` — that `ViewSetProxyBase` now extends, so `protected`
+stays nominally correct through the factory's returned type. Its `request` is concrete, with a `throw` that is never
+reached, and `ViewSetProxyBase` immediately re-declares it `protected abstract`. That looks backwards until you hit the
+reason: TypeScript propagates an abstract member through a constructor type, so with `request` abstract on the internals
+every consumer class fails `TS2515: Non-abstract class 'ItemApi' does not implement inherited abstract member request` —
+for a method the transport underneath it has always implemented. Re-abstracting one level down puts the obligation back
+where a transport actually is.
 
-The alternatives were worse. A `protected declare request: (…) => …` property collides with the transports' methods (TS2425). An ambient `export declare abstract class` emits no runtime binding and breaks the barrel export at build time with `[MISSING_EXPORT]` — which vue/index.ts:1-2 explicitly warns against solving with `export type`.
+The alternatives were worse. A `protected declare request: (…) => …` property collides with the transports' methods
+(TS2425). An ambient `export declare abstract class` emits no runtime binding and breaks the barrel export at build time
+with `[MISSING_EXPORT]` — which vue/index.ts:1-2 explicitly warns against solving with `export type`.
 
-What would change it: if TypeScript stopped propagating abstractness through construct signatures, the throw goes away and `request` becomes abstract in one place.
+What would change it: if TypeScript stopped propagating abstractness through construct signatures, the throw goes away
+and `request` becomes abstract in one place.
 
 ### `this.http` is not on a factory-built ViewSet
 
-The factory's returned type intersects `ViewSetInternals`, which is `basePath` and `request()` and nothing else. A custom endpoint on a factory-built class therefore cannot reach axios directly, and what docs/guide/vue-custom-endpoints.md says about `this.http` now applies only to the `extends RestProxyImpl` form.
+The factory's returned type intersects `ViewSetInternals`, which is `basePath` and `request()` and nothing else. A
+custom endpoint on a factory-built class therefore cannot reach axios directly, and what
+docs/guide/vue-custom-endpoints.md says about `this.http` now applies only to the `extends RestProxyImpl` form.
 
-Deliberate: `http` is the one member that ties a method body to HTTP, and the whole point of the factory is that one body serves both transports — the demo's `count()` is exactly that. Exposing it would need a second internals class per transport, and the split between `ViewSetInternals` and a REST-flavoured one cannot be expressed in a single inheritance chain without RestProxyImpl inheriting the actions we are trying to hide.
+Deliberate: `http` is the one member that ties a method body to HTTP, and the whole point of the factory is that one
+body serves both transports — the demo's `count()` is exactly that. Exposing it would need a second internals class per
+transport, and the split between `ViewSetInternals` and a REST-flavoured one cannot be expressed in a single inheritance
+chain without RestProxyImpl inheriting the actions we are trying to hide.
 
-What would change it: a real need that `request()` cannot express — a blob response, a progress callback, an interceptor-specific config. The escape hatch today is to keep extending RestProxyImpl, which is fully supported and unchanged. If that turns out to be common, the answer is to widen `request()`'s options, not to put axios back on the surface.
+What would change it: a real need that `request()` cannot express — a blob response, a progress callback, an
+interceptor-specific config. The escape hatch today is to keep extending RestProxyImpl, which is fully supported and
+unchanged. If that turns out to be common, the answer is to widen `request()`'s options, not to put axios back on the
+surface.
 
-Confirmed as the standing decision: no such need has surfaced in the demo or anywhere else in the repo, so `request()` stays the only surface and this entry stays open rather than settled — it is reopened the day a concrete case for widening `request()` shows up, not preemptively.
+Confirmed as the standing decision: no such need has surfaced in the demo or anywhere else in the repo, so `request()`
+stays the only surface and this entry stays open rather than settled — it is reopened the day a concrete case for
+widening `request()` shows up, not preemptively.
 
 ### An empty or annotated `declares` list is an error whose type is the message
 
-`restViewSet<Item>()('id', [])`, and any list annotated `ViewSetMixinClass[]` (which erases which mixins are in it), yield no action names. Left alone that produces a ViewSet with an empty surface and no complaint at the declaration — the failure only shows up later as TS2339 on every call. So `ViewSetClass` returns a string literal type in that case, and TS2507 prints it: `Type '"declares must name at least one action: pass the mixin classes themselves, unannotated"' is not a constructor function type`.
+<!-- markdownlint-disable MD013 -->
 
-Using a type as an error message is a trick, and tricks age badly. It earns its place here because the alternative failure is silent and the honest ones (a non-empty tuple constraint) would force `as const` on every shared list — the thing the whole name-derivation approach was chosen to avoid.
+`restViewSet<Item>()('id', [])`, and any list annotated `ViewSetMixinClass[]` (which erases which mixins are in it),
+yield no action names. Left alone that produces a ViewSet with an empty surface and no complaint at the declaration —
+the failure only shows up later as TS2339 on every call. So `ViewSetClass` returns a string literal type in that case,
+and TS2507 prints it:
+`Type '"declares must name at least one action: pass the mixin classes themselves, unannotated"' is not a constructor function type`.
 
-What would change it: TypeScript gaining real custom diagnostics, or a decision that the silent empty surface is acceptable because nobody writes an empty list twice.
+<!-- markdownlint-enable MD013 -->
+
+Using a type as an error message is a trick, and tricks age badly. It earns its place here because the alternative
+failure is silent and the honest ones (a non-empty tuple constraint) would force `as const` on every shared list — the
+thing the whole name-derivation approach was chosen to avoid.
+
+What would change it: TypeScript gaining real custom diagnostics, or a decision that the silent empty surface is
+acceptable because nobody writes an empty list twice.
 
 ### The pk field is constrained, and K is derived from it
 
-`PkFieldName<T>` restricts the pk argument to the fields of T whose type can be a key, and `K` becomes `NonNullable<T[PK]> & KeyType`. Three statements of the same fact — the `K` type argument, the `PK` type argument and the `pkFieldName` string, which nothing tied together in the demo's old declarations — collapse into one token.
+`PkFieldName<T>` restricts the pk argument to the fields of T whose type can be a key, and `K` becomes
+`NonNullable<T[PK]> & KeyType`. Three statements of the same fact — the `K` type argument, the `PK` type argument and
+the `pkFieldName` string, which nothing tied together in the demo's old declarations — collapse into one token.
 
-Two deliberate details. The constraint is on the parameter, so a bad pk errors at the factory call (`Argument of type '"id"' is not assignable to parameter of type '"name"'`) rather than at every later call site as 'not assignable to never' — which is what the conditional-type version of this does, and it was the single worst diagnostic in any of the three proposals. And `NonNullable` is what makes an optional pk (`id?: number`, an extremely ordinary model) work at all; without it the same model collapses K to never.
+Two deliberate details. The constraint is on the parameter, so a bad pk errors at the factory call
+(`Argument of type '"id"' is not assignable to parameter of type '"name"'`) rather than at every later call site as 'not
+assignable to never' — which is what the conditional-type version of this does, and it was the single worst diagnostic
+in any of the three proposals. And `NonNullable` is what makes an optional pk (`id?: number`, an extremely ordinary
+model) work at all; without it the same model collapses K to never.
 
-What would change it: a backend whose pk field name is not a property of the FE model at all. Today `pkFieldName` is typed `string` on ProxyBaseOptions and that is expressible; on the factory it is not. Nothing in the repo does it, and the factory is not the only way in — but it is a real narrowing of what can be said.
+What would change it: a backend whose pk field name is not a property of the FE model at all. Today `pkFieldName` is
+typed `string` on ProxyBaseOptions and that is expressible; on the factory it is not. Nothing in the repo does it, and
+the factory is not the only way in — but it is a real narrowing of what can be said.
 
 ### Two factories, not one
 
-`restViewSet` and `muxwsViewSet` are separate because their options genuinely differ: muxws requires `peer`, REST accepts an optional `axiosInstance`. A single factory parameterised by transport would have to make `peer` optional and fail at runtime instead of at the call, which is the wrong trade for a library whose selling point is catching this class of thing at compile time.
+`restViewSet` and `muxwsViewSet` are separate because their options genuinely differ: muxws requires `peer`, REST
+accepts an optional `axiosInstance`. A single factory parameterised by transport would have to make `peer` optional and
+fail at runtime instead of at the call, which is the wrong trade for a library whose selling point is catching this
+class of thing at compile time.
 
-The duplication is six lines. What would change it: a third transport, at which point the shape to reach for is probably a transport descriptor passed to one factory rather than a third sibling — the same argument the BE `route_viewset` entry in this file makes about `register_rest`/`register_muxws`.
+The duplication is six lines. What would change it: a third transport, at which point the shape to reach for is probably
+a transport descriptor passed to one factory rather than a third sibling — the same argument the BE `route_viewset`
+entry in this file makes about `register_rest`/`register_muxws`.
 
 ### The cross-transport custom endpoint needs a class-expression mixin, and the library does not ship one
 
-Sharing one method body across the REST and muxws twins requires a mixin function over the factory's returned class — `WithCount(restViewSet<T>()(...))`. The demo's previous trick, a free function with a structural `this: { request(...) }` assigned as a field, could not have worked: `request` is protected, so calling it is TS2684. It survived only because nothing called `count()`. The demo now uses the class-expression mixin.
+Sharing one method body across the REST and muxws twins requires a mixin function over the factory's returned class —
+`WithCount(restViewSet<T>()(...))`. The demo's previous trick, a free function with a structural
+`this: { request(...) }` assigned as a field, could not have worked: `request` is protected, so calling it is TS2684. It
+survived only because nothing called `count()`. The demo now uses the class-expression mixin.
 
-Two things a reader must be told, both measured. The helper's return type must be annotated `TBase & (abstract new (...args: any[]) => Counts)` — an inferred return fails declaration emit with `TS4094: Property 'basePath' of exported anonymous class type may not be private or protected`, on the helper and on every class built from it. And the helper's body reaches only `ViewSetInternals`, so it can call `request()` but not `list()`; sharing a method that composes a declared action needs a wider constraint that restates the model and the action subset.
+Two things a reader must be told, both measured. The helper's return type must be annotated
+`TBase & (abstract new (...args: any[]) => Counts)` — an inferred return fails declaration emit with
+`TS4094: Property 'basePath' of exported anonymous class type may not be private or protected`, on the helper and on
+every class built from it. And the helper's body reaches only `ViewSetInternals`, so it can call `request()` but not
+`list()`; sharing a method that composes a declared action needs a wider constraint that restates the model and the
+action subset.
 
-The library does not ship the helper. It is four lines, it is standard TypeScript, and a wrapper would have to guess at the constraint. What would change it: if every consumer ends up writing the same wrapper, exporting a typed one is a small addition — but I would rather see the copies first.
+The library does not ship the helper. It is four lines, it is standard TypeScript, and a wrapper would have to guess at
+the constraint. What would change it: if every consumer ends up writing the same wrapper, exporting a typed one is a
+small addition — but I would rather see the copies first.
 
 ## Settled, kept for the reasoning
 

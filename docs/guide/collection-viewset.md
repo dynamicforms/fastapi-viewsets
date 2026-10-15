@@ -1,6 +1,7 @@
 # CollectionViewSet
 
-`CollectionViewSet` is a ready-made `ImplMixin` implementation that stores data in any Python in-memory collection. It is ideal for prototyping, demos, and tests — no database required.
+`CollectionViewSet` is a ready-made `ImplMixin` implementation that stores data in any Python in-memory collection. It
+is ideal for prototyping, demos, and tests — no database required.
 
 ## Supported container types
 
@@ -55,7 +56,8 @@ CollectionViewSet(container, pk_field="id")
 
 ## Auto-increment PK
 
-If your Pydantic model has a field annotated with `json_schema_extra={"autoinc_int": True}`, `CollectionViewSet` will automatically assign the next integer value when creating a new record and the field is `None` or `0`.
+If your Pydantic model has a field annotated with `json_schema_extra={"autoinc_int": True}`, `CollectionViewSet` will
+automatically assign the next integer value when creating a new record and the field is `None` or `0`.
 
 ```python
 class Item(BaseModel):
