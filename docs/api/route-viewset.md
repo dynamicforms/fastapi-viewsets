@@ -65,6 +65,8 @@ the class gained. Applied as `@route_viewset(...)` on the class or called as
 - Adds each endpoint to `router` once, as a route that matches only the transports it is published on (see
   [muxws](../guide/muxws#choosing-which-viewsets-are-published)); a route not published on REST is left out of the
   application's OpenAPI document. Records the endpoints published on muxws in the muxws registry.
+- Enters the [execution hook](../guide/routers#execution-hook), when one is set, around the call of the viewset
+  method, inside the command middleware chain.
 - Stores metadata on the class as `cls.__viewset_metadata__`.
 
 ## Lifecycle modes

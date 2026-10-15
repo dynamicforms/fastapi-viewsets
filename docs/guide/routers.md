@@ -341,6 +341,55 @@ def kwargs_hook(run, kwargs):
 set_celery_kwargs_hook(kwargs_hook)
 ```
 
+### Execution hook
+
+`set_execution_hook` (in `fastapi_viewsets.decorators`) registers a callable that receives an
+`ActionExecution` and returns an async context manager. `lifecycle_runner` enters it right before
+the viewset method executes and exits it when the method has returned or raised; `None` removes it.
+It runs where the action executes:
+
+| Action | Where the hook runs |
+|--------|---------------------|
+| in-process (`route_viewset` only) | the FastAPI process, inside the command middleware chain |
+| `celery_viewset` | the Celery worker, in `celery_viewset_server`; not in the FastAPI process, whose method only dispatches the call |
+
+`ActionExecution` is a frozen dataclass:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `viewset_class` | `type` | The viewset class |
+| `action` | `str` | The name of the viewset method, e.g. `"create"` |
+| `context` | `Context \| None` | The call's `Context`; `None` in a Celery worker for an action that does not declare a `context` parameter |
+| `request` | `Request \| None` | The live request; `None` in a Celery worker |
+
+```python
+from contextlib import asynccontextmanager
+
+from fastapi_viewsets.decorators import set_execution_hook
+
+@asynccontextmanager
+async def execution_hook(execution):
+    await mark_running(execution.action)
+    try:
+        yield
+    except Exception:
+        await mark_failed(execution.action)
+        raise
+    await mark_done(execution.action)
+
+set_execution_hook(execution_hook)
+```
+
+The methods `celery_viewset_client` installs carry the attribute named by
+`fastapi_viewsets.decorators.lifecycle_runner.CELERY_DISPATCH_ATTRIBUTE` (`"__celery_viewset_dispatch__"`),
+and `lifecycle_runner` does not enter the hook around them. A FastAPI-side subclass that overrides
+such a method and calls it through `super()` is an in-process method: the hook runs for it in the
+FastAPI process, and again in the worker.
+
+An exception the method raises reaches the context manager's `__aexit__` and propagates after it. An
+exception raised on entry keeps the method from running; one raised on exit propagates in place of
+the method's outcome.
+
 ---
 
 ## Combining both decorators

@@ -12,6 +12,7 @@ from fastapi_viewsets.context import SerializableObject
 from fastapi_viewsets.decorators import (
     celery_viewset_client,
 )
+from fastapi_viewsets.decorators.lifecycle_runner import CELERY_DISPATCH_ATTRIBUTE
 from fastapi_viewsets.exceptions import ResultReaderStoppedError, ResultTimeoutError
 from fastapi_viewsets.mixins import ListMixin
 
@@ -44,6 +45,7 @@ def test_celery_viewset_client_patches_methods():
 
     instance = ItemViewSet()
     assert asyncio.iscoroutinefunction(instance.list_items)
+    assert getattr(instance.list_items, CELERY_DISPATCH_ATTRIBUTE) is True
 
 
 def test_celery_viewset_client_sends_task():

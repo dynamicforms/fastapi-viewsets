@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from ...context import Context, SerializableObject, serialize_context, to_jsonable
 from ...exceptions import ResultTimeoutError
 from ..build_schema import build_schema
+from ..lifecycle_runner import CELERY_DISPATCH_ATTRIBUTE
 from ..primary_key_model_helper import PARTIAL_UPDATE_ACTIONS
 from . import result_reader
 from .result_reader import get_process_queue_key, get_result_queue_key
@@ -156,4 +157,5 @@ def _patch_method(
         finally:
             result_reader.unregister_future(correlation_id)
 
+    setattr(async_client_wrapper, CELERY_DISPATCH_ATTRIBUTE, True)
     setattr(cls, method_name, async_client_wrapper)
