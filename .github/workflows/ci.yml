@@ -29,10 +29,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci
-      # `lint:ci`, not `lint`: the developer script carries `--fix`, which rewrites the violation
-      # and exits 0. In CI that rewrite is discarded with the runner, so an auto-fixable violation
-      # would be reported by nothing and reach main unnoticed.
-      - run: npm run lint:ci
+      - run: npm run lint
       - run: npm test
       - run: npm run build
       - run: npm run docs:build
