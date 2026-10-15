@@ -5,6 +5,17 @@ releases at once, work from the bottom of the page upwards.
 
 <!-- New releases go directly below this comment, above the previous one, as `## Upgrading to vX.Y.Z (from vA.B.x)`. -->
 
+## Upgrading to v0.9.0 (from v0.8.x)
+
+- [ ] muxws: cancelling a stream, or losing the socket, no longer cancels the request it carries; the
+      request runs to completion and its answer is discarded. An application that relied on
+      cancelling the stream to stop an action stops it through the application instead.
+- [ ] To make calls repeatable, add `Idempotency()` (with `redis_client=` for more than one process)
+      as the first entry of `settings.viewsets_command_middleware`; see
+      [Idempotent Calls](./idempotency). Add the codes `idempotency_key_invalid` and
+      `idempotency_key_reused` to the application's error translations; see
+      [Error codes](./error-codes#codes).
+
 ## Upgrading to v0.8.0 (from v0.7.x)
 
 The npm package no longer translates errors and no longer depends on `@dynamicforms/translatable`.

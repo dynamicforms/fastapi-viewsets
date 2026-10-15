@@ -6,6 +6,34 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - Unreleased
+
+### Added
+
+- `fastapi_viewsets.middleware.idempotency.Idempotency(redis_client=None, key_prefix="idempotency:")`:
+  a command middleware that answers a call repeated with the same `Idempotency-Key` (a Structured
+  Field string, `draft-ietf-httpapi-idempotency-key-header-07`) with the outcome of the first call.
+  A repeat of a running call attaches to it. Records live in the instance, or in Redis with
+  `redis_client`. `GET` and `HEAD` outcomes are stored only when a repeat attached; an outcome that
+  sets a cookie is never stored.
+- `parse_idempotency_key`, `read_idempotency_key`, `request_fingerprint` and
+  `IDEMPOTENCY_KEY_HEADER` in `fastapi_viewsets.middleware.idempotency`.
+- `settings.viewsets_idempotency_ttl` (seconds, default 86400) and
+  `settings.viewsets_idempotency_lock_ttl` (seconds, default 600).
+- `IdempotencyKeyInvalidError` (400, `idempotency_key_invalid`) and `IdempotencyKeyReusedError`
+  (422, `idempotency_key_reused`, param `key`).
+- `set_execution_hook(hook)` and `ActionExecution` in `fastapi_viewsets.decorators`: an async context
+  manager entered around the execution of a viewset method, in the FastAPI process for an in-process
+  action and in the Celery worker for a `celery_viewset` action.
+- `CELERY_DISPATCH_ATTRIBUTE` in `fastapi_viewsets.decorators.lifecycle_runner`, set on the methods
+  `celery_viewset_client` installs.
+
+### Changed
+
+- **Breaking (muxws):** `process_command` runs the request as a task of its own. When the stream
+  ends before the answer (the peer cancels it or the socket is lost), the request runs to completion
+  and its answer is discarded; cancelling the stream no longer cancels the request.
+
 ## [0.8.0] - Unreleased
 
 ### Added
