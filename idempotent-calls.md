@@ -40,21 +40,26 @@ Progress reporting is not part of this API. taskwire uses the key as the token o
 
 1. **The key identifies one call.** The frontend generates a new key for every call and sends the
    same key only when it repeats that call.
-2. **Unsafe methods are deduplicated.** For `POST`, `PUT`, `PATCH` and `DELETE` the server keeps a
-   record per key. For `GET` and `HEAD` it keeps none: a repeated `GET` runs again, which is its
-   correct answer.
+2. **Every method is deduplicated while it runs.** A call with a key has a running record whatever
+   its method, so a repeat of a running `GET` answers `409` instead of starting the action a second
+   time. The outcome is stored for `POST`, `PUT`, `PATCH` and `DELETE`, and for `GET` and `HEAD`
+   only when the call answered `202`. A repeat of a finished `GET` whose outcome was not stored runs
+   again.
 3. **A record exists from the moment the action starts.** A call rejected before the action
    (authentication, a `depends()` rejection, a `422` from request validation, rate limiting) leaves
    no record, and its repeat is a new call.
 4. **A repeat of a finished call answers with the stored outcome.** Status, headers and body are
    those of the first answer. Error outcomes are stored too: an action that ran and failed has run.
+   An outcome with a `set-cookie` header is not stored: its record is deleted when the action
+   completes, and a repeat runs the action again.
 5. **A repeat of a running call answers `409`** (draft). The frontend repeats again
    after a delay.
 6. **A key reused with a different fingerprint answers `422`** (draft).
-7. **A record expires `ttl` after the outcome is stored.** A repeat after that is a new call.
-8. **A running record expires `lock_ttl` after it was written** unless the action finishes first.
-   A process that dies mid-action leaves a running record; once it expires, a repeat runs the
-   action again.
+7. **A record expires `settings.viewsets_idempotency_ttl` after the outcome is stored.** A repeat
+   after that is a new call.
+8. **A running record expires `settings.viewsets_idempotency_lock_ttl` after it was written**
+   unless the action finishes first. A process that dies mid-action leaves a running record; once
+   it expires, a repeat runs the action again.
 9. **`Prefer: respond-async, wait=N` lets the server answer `202` after `N` seconds.** An action
    that completes within `N` seconds answers normally. One that does not answers `202` with
    `Preference-Applied: respond-async`, continues, and stores its outcome under the key. Without the
@@ -67,10 +72,9 @@ Progress reporting is not part of this API. taskwire uses the key as the token o
 ```python
 from fastapi_viewsets.middleware.idempotency import Idempotency
 
-settings.viewsets_command_middleware = [
-    Idempotency(redis_client=redis, ttl=24 * 3600, lock_ttl=600),
-    ...
-]
+settings.viewsets_command_middleware = [Idempotency(redis_client=redis), ...]
+settings.viewsets_idempotency_ttl = 24 * 3600        # seconds; the default
+settings.viewsets_idempotency_lock_ttl = 600         # seconds; the default
 ```
 
 `Idempotency` is a command middleware, so it runs on REST and muxws alike. It is placed first in
@@ -80,8 +84,8 @@ Redis, which a repeat landing on another process needs.
 
 | Call | Record for the key | Answer |
 |---|---|---|
-| no `Idempotency-Key`, or a safe method | — | the action runs; nothing is stored |
-| key | none | the record is written as running (atomic `SET NX`), the action runs, the outcome is stored |
+| no `Idempotency-Key` | — | the action runs; nothing is stored |
+| key | none | the record is written as running (atomic `SET NX`), the action runs, the outcome is stored or the record deleted (rules 2 and 4) |
 | key, same fingerprint | running | `409`, `detail_code` `idempotency_in_progress` |
 | key, same fingerprint | outcome | the stored outcome |
 | key, different fingerprint | any | `422`, `detail_code` `idempotency_key_reused` |
@@ -90,8 +94,8 @@ Redis, which a repeat landing on another process needs.
 The errors are `DfViewSetError`s, with `detail_code` and `detail_params` like every other error of
 the library (see [Error codes](docs/guide/error-codes.md)).
 
-The stored outcome is the `ViewSetResult` of the chain below the middleware: body, status code,
-headers and cookies. A repeat returns it as its own `ViewSetResult`, so FastAPI serialises it
+The stored outcome is the `ViewSetResult` of the chain below the middleware: body, status code and
+headers. A repeat returns it as its own `ViewSetResult`, so FastAPI serialises it
 through the same response model as the first answer.
 
 ### Answering before the action completes
@@ -194,8 +198,3 @@ These parts are specified in taskwire, not here.
   all, given the two things that have ended when `202` is answered; or allowed only for
   `per-request` viewsets; or run under a `lifecycle_runner` that defers `save_state()` to the end of
   the action.
-- Whether the proxy sends the key on `GET` and `HEAD`. The server ignores it there (rule 2); sending
-  it gives taskwire a token for a slow `GET` without a second header.
-- The default `ttl`. The draft leaves it to the server and asks that it be documented.
-- Whether a stored outcome keeps `set-cookie`. Repeating it sets the same cookie again, which is what
-  the first answer did.
