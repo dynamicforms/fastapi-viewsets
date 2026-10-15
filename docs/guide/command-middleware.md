@@ -273,6 +273,18 @@ chain run once (before dispatch and once the result is back, respectively) in th
 `depends()` in particular means an action never even reaches the worker if it was going to be
 rejected anyway.
 
+Code that has to run where the action executes, in the worker for a `celery_viewset` action,
+registers an [execution hook](./routers#execution-hook) instead.
+
+## Built-in middleware
+
+| Middleware | Description |
+|------------|-------------|
+| [`Session`](./authentication#rejecting-unauthenticated-requests-session) | Rejects a call without a user |
+| [`Authorization`](./authorization) | Checks the action's authorization configuration |
+| [`RateLimiter`](./rate-limiter) | Fixed-window request counting |
+| [`Idempotency`](./idempotency) | Answers a repeated call with the outcome of the first one; placed first in the list |
+
 ## Known limitations
 
 - `depends()` (see above) runs before `load_state()` for `per-request`/`instance-key` lifecycles;

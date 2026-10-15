@@ -45,6 +45,8 @@ The handler is registered on the application, so it shapes a `DfViewSetError` ov
 | `SessionExpiredError()` | 401 | `session_expired` | — |
 | `NotAuthorizedError()` | 403 | `not_authorized` | — |
 | `RateLimitedError()` | 429 | `rate_limited` | — |
+| `IdempotencyKeyInvalidError()` | 400 | `idempotency_key_invalid` | — |
+| `IdempotencyKeyReusedError(key)` | 422 | `idempotency_key_reused` | `{key}` |
 | `ResultTimeoutError(task, timeout)` | 504 | `result_timeout` | `{task, timeout}` |
 | `ResultReaderStoppedError(queue_key)` | 503 | `result_reader_stopped` | `{queue_key}` |
 | `UnsupportedListShapeError(shape, allowed)` | 422 | `unsupported_list_shape` | `{shape, allowed}` |
@@ -226,6 +228,8 @@ The codes this package raises, with their English `detail`:
 | `session_expired` | `Session expired or invalid` | — |
 | `not_authorized` | `Not authorized to perform this action` | — |
 | `rate_limited` | `Rate limit exceeded` | — |
+| `idempotency_key_invalid` | `Idempotency-Key must be a non-empty Structured Field string` | — |
+| `idempotency_key_reused` | `Idempotency key {key} was used for a different request` | `key` |
 | `unsupported_list_shape` | `unsupported list shape "{shape}"; this endpoint offers {allowed}` | `shape`, `allowed` |
 | `cursor_unreadable` | `cursor is not readable: {error}` | `error` |
 | `cursor_missing_position` | `cursor is not readable: no position in it` | — |

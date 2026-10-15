@@ -13,6 +13,8 @@ attributes once, before any viewset class is decorated with `route_viewset`.
 | `viewsets_context_json_encoder` | `type[json.JSONEncoder] \| None` | `None` | Encodes context values that cross the Celery boundary |
 | `viewsets_context_json_decoder` | `type[json.JSONDecoder] \| None` | `None` | Decodes them on the worker |
 | `viewsets_command_middleware` | `list[CommandMiddleware]` | `[]` | Wraps every request-facing execution; see [Command Middleware](../guide/command-middleware) |
+| `viewsets_idempotency_ttl` | `float` | `86400` | Seconds an outcome recorded by `Idempotency` is kept; see [Idempotent Calls](../guide/idempotency) |
+| `viewsets_idempotency_lock_ttl` | `float` | `600` | Seconds a running record of `Idempotency` is kept unless the action finishes first |
 | `viewsets_auth_processors` | `list[AuthBackend]` | `[]` | Tried in order to resolve `context.user`; see [Authentication](../guide/authentication) |
 | `default_action_configuration` | `dict[Any, Any]` | `{}` | The configuration every action starts from; see [Action Configuration](../guide/action-configuration) |
 | `default_list_shape` | `str` | `"plain"` | The list shape of a viewset that states none: `"plain"`, `"paginated"` or `"cursor"` |
@@ -24,8 +26,8 @@ take a `config` keyword, see [Action Configuration](../guide/action-configuratio
 
 `viewsets_register_muxws` and `viewsets_security_scheme` are read when a viewset is decorated, and
 so is whether an entry of `viewsets_command_middleware` declares `modifies_response_shape`: changed
-later, they do not reach viewsets already decorated. The middleware list itself, the processors and
-the auth backends are read on every request.
+later, they do not reach viewsets already decorated. The middleware list itself, the processors,
+the auth backends and the idempotency TTLs are read on every request.
 
 ## Other public classes
 

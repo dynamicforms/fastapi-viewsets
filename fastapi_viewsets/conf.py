@@ -30,6 +30,16 @@ class Settings:
         self.viewsets_context_json_encoder: type[json.JSONEncoder] | None = None
         self.viewsets_context_json_decoder: type[json.JSONDecoder] | None = None
         self.viewsets_command_middleware: list[CommandMiddleware] = []
+        self.viewsets_idempotency_ttl: float = 86400
+        """
+        Seconds an outcome recorded by `fastapi_viewsets.middleware.idempotency.Idempotency` is kept
+        after it was stored. A repeat after that runs the action again.
+        """
+        self.viewsets_idempotency_lock_ttl: float = 600
+        """
+        Seconds a running record of `Idempotency` is kept after it was written, unless the action
+        finishes first. Once it expires, a repeat runs the action again.
+        """
         self.viewsets_auth_processors: list[AuthBackend] = []
         self.default_action_configuration: dict[Any, Any] = {}
         self.default_list_shape: str = "plain"
