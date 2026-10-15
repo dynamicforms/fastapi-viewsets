@@ -15,7 +15,6 @@ from fastapi import FastAPI
 
 from .asgi import call_asgi, payload_to_body
 from .protocol import build_response_meta, EnvelopeError, is_command, merge_headers, parse_request
-from .registry import get_dispatch_app
 
 if TYPE_CHECKING:
     from muxws import Stream
@@ -24,16 +23,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+_CONNECTION_ONLY = frozenset({"connection", "upgrade", "accept-encoding"})
+
+
 def connection_headers(connection: "WebSocket | None") -> dict[str, str]:
     """
     The handshake's own headers, used as the baseline every command inherits.
 
     Cookies are already present in the raw `cookie` header, so they need no separate handling -
     the auth backends that read `request.cookies` parse them back out of it themselves.
+
+    The headers that describe the WebSocket upgrade (`connection`, `upgrade`, `sec-websocket-*`)
+    are left out, and so is `accept-encoding`: a reply travels as a decoded muxws payload, so a
+    compression middleware must not compress it.
     """
     if connection is None:
         return {}
-    return {key.lower(): value for key, value in connection.headers.items()}
+    return {
+        key: value
+        for key, value in ((key.lower(), value) for key, value in connection.headers.items())
+        if key not in _CONNECTION_ONLY and not key.startswith("sec-websocket-")
+    }
 
 
 async def process_command(
@@ -45,7 +55,7 @@ async def process_command(
     app: FastAPI | None = None,
 ) -> bool:
     """
-    Serves one viewset command and answers on `stream`.
+    Serves one viewset command through the application and answers on `stream`.
 
     Returns True when the stream was a viewset command and has been answered, False when it was
     not addressed to a viewset at all - in which case nothing has been sent and the caller is free
@@ -63,15 +73,26 @@ async def process_command(
             peer.on_stream(on_stream)
             await peer.serve()
 
-    `connection` supplies the handshake headers as a baseline; `base_headers` overrides or extends
-    them for callers that resolve their session some other way. Headers stated on the stream
-    itself win over both. `connection` also supplies the request's client and server address
-    (`request.client`, which `RateLimiter` keys on by default); without it every call has the
-    client address `("muxws", 0)`.
+    The command goes through the application that serves the WebSocket endpoint
+    (`connection.scope["app"]`), or through `app` where given: its middleware, its exception
+    handlers, its router and the dependencies on it, as an HTTP request to the same path would.
+    `:path` is the path the application routes, `include_router` prefixes included. Without
+    `connection` or `app` a command raises `ValueError`.
+
+    `connection` supplies the handshake headers as a baseline (see `connection_headers`);
+    `base_headers` overrides or extends them for callers that resolve their session some other
+    way. Headers stated on the stream itself win over both. `connection` also supplies the
+    request's client and server address (`request.client`, which `RateLimiter` keys on by
+    default), without which every call has the client address `("muxws", 0)`, and the lifespan
+    state (`request.state`), copied for each command as an HTTP server copies it for each request.
     """
     headers = getattr(stream, "headers", None) or {}
     if not is_command(headers):
         return False
+
+    target = app if app is not None else (connection.scope.get("app") if connection is not None else None)
+    if target is None:
+        raise ValueError("process_command needs connection= (a WebSocket of the application) or app=")
 
     try:
         method, path, query_string, call_headers = parse_request(headers)
@@ -89,7 +110,6 @@ async def process_command(
         effective["content-type"] = "application/json"
     effective["content-length"] = str(len(body))
 
-    target = app or get_dispatch_app()
     try:
         response = await call_asgi(
             target,
@@ -100,13 +120,12 @@ async def process_command(
             body=body,
             client=connection.scope.get("client") if connection is not None else None,
             server=connection.scope.get("server") if connection is not None else None,
+            state=connection.scope.get("state") if connection is not None else None,
         )
     except Exception:
-        # The app has already produced a 500 for this by the time it re-raises, and an HTTP client
-        # would simply have received it. Resetting the stream instead would turn "the handler
-        # crashed" into "the transport failed", which is a different and less useful thing to
-        # report - so the status is delivered normally and the traceback goes to the log, where it
-        # would have gone anyway.
+        # The app raised before it started a response. Resetting the stream would turn "the
+        # handler crashed" into "the transport failed", which is a different and less useful thing
+        # to report - so a 500 is delivered normally and the traceback goes to the log.
         logger.exception("muxws command %s %s failed", method, path)
         await stream.reply(None, headers=build_response_meta(500, {}))
         return True

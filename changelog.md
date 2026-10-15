@@ -41,6 +41,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (muxws):** a command goes through the application that serves the WebSocket endpoint
+  (`connection.scope["app"]`, or `app=`), as an HTTP request to the same path does: its middleware,
+  exception handlers (`df_viewset_exception_handler` included), router dependencies, `app.state`,
+  lifespan state and `dependency_overrides` apply to both transports. The library no longer builds
+  an app of its own for muxws; `get_dispatch_app` is removed. `process_command` without
+  `connection` or `app` raises `ValueError`.
+- **Breaking (muxws):** a command's `:path` is the path the application routes, `include_router`
+  prefixes included, so a client uses one `basePath` for both transports.
+- **Breaking (muxws):** each viewset endpoint is one route on the router given to `route_viewset`,
+  matching only the transports it is published on (`fastapi_viewsets.routing.TransportRoute`); the
+  request's transport is `scope["fastapi_viewsets.transport"]`. The router also holds the routes
+  published on muxws only; those are left out of the application's OpenAPI document.
+- A muxws command does not inherit the handshake's `connection`, `upgrade`, `sec-websocket-*` and
+  `accept-encoding` headers, so a compression middleware leaves the reply uncompressed.
+- An exception the application raises after it has started its response is logged, and over muxws
+  the reply is that response (the application's own 500 handler included), as an HTTP client
+  receives it.
 - **Breaking:** requires Pydantic 2.11 or later.
 - The body of `PATCH {pk}` and `PATCH bulk` is a partial model: every field optional, the primary
   key left out, a stated field validated by its annotation, its constraints and the model's
@@ -66,6 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `GET {base_path}/schema` over REST lists only the endpoints published on REST; it listed the
+  endpoints published on muxws only as well.
 - muxws commands carry the WebSocket connection's client and server address (`request.client`)
   when `process_command` is given `connection=`. Every command had the client `("muxws", 0)`, so
   `RateLimiter`'s default key counted all muxws callers of a viewset as one.

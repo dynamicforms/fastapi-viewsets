@@ -31,7 +31,7 @@ def route_viewset(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `router` | `APIRouter` | — | The FastAPI router to register routes on |
+| `router` | `APIRouter` | — | The FastAPI router to register routes on, for REST and muxws alike; include it in the application |
 | `base_path` | `str` | — | URL prefix for all endpoints, e.g. `"/items"` |
 | `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle — see [ViewSet Lifecycle](./lifecycle) |
 | `pk_field_name` | `str \| None` | `None` | Name of the PK field; when set, a `POST` request body does not carry it — see below |

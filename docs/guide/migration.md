@@ -34,6 +34,17 @@ It converts an error body into an `ErrorDescription`, and the application transl
 - [ ] Remove reads of `translatableStrings`. The English text of each code is the body's `detail`.
 - [ ] `params` holds the values as the server sent them. `allowed` and `missing` are arrays; format
       them in `errorText` where the translation shows them.
+- [ ] muxws: a command goes through the application that serves the WebSocket endpoint, with its
+      middleware, exception handlers and router dependencies. Check what of these now applies to
+      muxws as well: a dependency on the `APIRouter` handed to `route_viewset` now guards muxws
+      commands, and an HTTP middleware now sees them.
+- [ ] muxws: a command's `:path` includes the prefix of `app.include_router(router, prefix=...)`.
+      Give a muxws ViewSet the same `basePath` as its REST counterpart.
+- [ ] muxws: pass `connection=websocket` (or `app=`) to every `process_command` call; a call with
+      neither raises `ValueError`. Remove uses of `get_dispatch_app()`; a test that sent commands
+      into it passes its application as `app=`.
+- [ ] Code that reads `router.routes` after `route_viewset` finds the routes published on muxws
+      only there as well; a route's `transports` says which transports it answers.
 - [ ] Deploy the FastAPI process and the Celery workers together when the application uses
       `JWTAuthBackend` with `celery_viewset`: the user crosses to the worker as the token and the
       position of its backend in `settings.viewsets_auth_processors`, which the worker reads from

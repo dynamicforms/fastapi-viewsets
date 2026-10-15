@@ -2,20 +2,24 @@
 Runs one request through a FastAPI app without a socket underneath it.
 
 The muxws transport deliberately does not re-implement parameter binding, validation, dependency
-resolution or response-model serialisation - it hands the request to a FastAPI app carrying the
-route kwargs `route_viewset` built, the same ones the REST router is given, so the two transports
-cannot drift apart on anything a route declares. Which app that is, and what it therefore does not
-carry, is in `fastapi_viewsets.mux_ws`.
+resolution or response-model serialisation - it hands the request to the application, the same one
+an HTTP server hands a request to, so the two transports cannot drift apart on anything the
+application declares. The scope marks the request as a muxws one (`fastapi_viewsets.routing`).
 
 What that costs is one synthetic ASGI round trip per call, which is still nothing next to an
 actual HTTP request: no connection setup, no header parsing, no socket at all.
 """
 
 import json
+import logging
 
 from typing import Any
 
-from fastapi import FastAPI
+from starlette.types import ASGIApp
+
+from ..routing import MUXWS, TRANSPORT_SCOPE_KEY
+
+logger = logging.getLogger(__name__)
 
 
 class AsgiResponse:
@@ -45,7 +49,7 @@ class AsgiResponse:
 
 
 async def call_asgi(
-    app: FastAPI,
+    app: ASGIApp,
     *,
     method: str,
     path: str,
@@ -54,10 +58,17 @@ async def call_asgi(
     body: bytes = b"",
     client: tuple[str, int] | None = None,
     server: tuple[str, int] | None = None,
+    state: dict[str, Any] | None = None,
 ) -> AsgiResponse:
     """
     `client` and `server` become the request's `scope["client"]` and `scope["server"]`. Without
-    them both are `("muxws", 0)`, and every call carries the same client address.
+    them both are `("muxws", 0)`, and every call carries the same client address. `state` is the
+    application's lifespan state; the request gets a shallow copy of it, as from an HTTP server.
+
+    An exception the app raises after it has started its response (Starlette's
+    `ServerErrorMiddleware` sends the 500, through the application's own handler where it has one,
+    and re-raises) is logged, and the response is returned: it is what an HTTP client receives. An
+    exception raised before any response propagates.
     """
     scope = {
         "type": "http",
@@ -72,7 +83,8 @@ async def call_asgi(
         "headers": [(key.lower().encode(), str(value).encode()) for key, value in (headers or {}).items()],
         "client": client or ("muxws", 0),
         "server": server or ("muxws", 0),
-        "state": {},
+        "state": dict(state or {}),
+        TRANSPORT_SCOPE_KEY: MUXWS,
     }
 
     request_sent = False
@@ -87,19 +99,26 @@ async def call_asgi(
         return {"type": "http.request", "body": body, "more_body": False}
 
     status = 500
+    started = False
     response_headers: dict[str, str] = {}
     chunks: list[bytes] = []
 
     async def send(message: dict[str, Any]) -> None:
-        nonlocal status
+        nonlocal status, started
         if message["type"] == "http.response.start":
+            started = True
             status = message["status"]
             for raw_key, raw_value in message.get("headers", []):
                 response_headers[raw_key.decode("latin-1").lower()] = raw_value.decode("latin-1")
         elif message["type"] == "http.response.body":
             chunks.append(message.get("body", b""))
 
-    await app(scope, receive, send)
+    try:
+        await app(scope, receive, send)
+    except Exception:
+        if not started:
+            raise
+        logger.exception("muxws command %s %s failed", method, path)
     return AsgiResponse(status, response_headers, b"".join(chunks))
 
 

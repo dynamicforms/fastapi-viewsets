@@ -17,12 +17,9 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
   extra).
 - **Bulk operations** — first-class support for bulk create, update, partial update and destroy.
 - **muxws transport** — reach the same viewsets over a single WebSocket instead of one HTTP request
-  per call. A command is dispatched into an app built from the endpoints published on muxws, each
-  carrying the route kwargs REST is given, so validation, dependencies, response models and the
-  command middleware from `settings.viewsets_command_middleware` behave identically; that app is the
-  library's own, so what you attached anywhere but the endpoint itself sees a command only if you
-  pass your app to `process_command`. In the demo, a burst of 100 requests takes 156 ms over REST
-  and 37 ms over muxws.
+  per call. A command goes through your application as an HTTP request does - its middleware,
+  exception handlers, router dependencies and state - so both transports behave identically. In the
+  demo, a burst of 100 requests takes 156 ms over REST and 37 ms over muxws.
 - **Three list shapes** — a bare array, offset paging, or cursor paging. A viewset declares which,
   and may let a client pick per request with an `X-List-Shape` header.
 - **Declarative filters** — declare which fields accept which operators and get query parameters,

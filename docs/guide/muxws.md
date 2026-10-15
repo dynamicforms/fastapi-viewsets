@@ -4,35 +4,19 @@ A viewset registered with `route_viewset` can also be reached over a single WebS
 [muxws](https://docs.velis.si/muxws) — a library that gives HTTP/2 stream semantics over one
 WebSocket connection.
 
-There is no second implementation to keep in step: a command is dispatched into a FastAPI app built
-from the endpoints published on muxws, each registered with the route kwargs `route_viewset` built
-for it — the same ones the REST router is given for an endpoint published on both. Validation,
-dependencies, command middleware, context processors and response models therefore behave
-identically.
+There is no second implementation to keep in step: a command goes through the application that
+serves the WebSocket endpoint, as an HTTP request does. Its middleware, its exception handlers, its
+router and the dependencies declared on it, `app.state`, the lifespan state and
+`app.dependency_overrides` apply to both transports, and so does everything a route declares —
+validation, dependencies, command middleware, context processors and response models. An endpoint
+does not know which transport a request arrived over.
 
-That app is the library's own, rebuilt whenever a viewset registers, and not the application object
-you created. What travels with a command is the route kwargs `route_viewset` built for the endpoint
-itself; what you attached anywhere else does not. So a command reached over muxws does not see:
+muxws is a transport only: it turns a stream into an ASGI request, passes it to the application and
+sends the response back as the reply. See [What the transport does](#what-the-transport-does).
 
-- middleware installed on your app — `@app.middleware("http")`, or any ASGI middleware;
-- exception handlers registered with `@app.exception_handler(...)`. What answers instead depends on
-  the type: the dispatch app is a plain `FastAPI`, so it carries the framework's own handlers for
-  `HTTPException` and `RequestValidationError` and answers those with the default response, while an
-  exception of a type only your handler knows escapes the endpoint and is logged and answered 500;
-- dependencies declared on the `APIRouter` you hand to `route_viewset`
-  (`APIRouter(dependencies=[Depends(...)])`). The muxws routes are taken from the viewset's own
-  router, before FastAPI folds yours in, so a gate declared there guards REST and not muxws — put it
-  on the endpoint, or in command middleware;
-- `app.state`. `request.app` in the endpoint is the dispatch app, so `request.app.state` is that
-  app's own, empty state — what your lifespan or startup handler put on your app is not there, and
-  the dispatch app runs no lifespan of its own;
-- `app.dependency_overrides`, which is why a test that overrides a dependency has to drive the same
-  route over REST or hand its app to `process_command`.
-
-Cross-cutting concerns therefore belong on the route: in `settings.viewsets_command_middleware` —
-both its `depends()` phase and its onion chain — or in a route's own `dependencies=[Depends(...)]`.
-When a command genuinely has to go through your application, its middleware stack and exception
-handlers included, pass `app=your_app` to `process_command`.
+Each viewset endpoint is one route on the router you hand to `route_viewset`, whichever transports
+publish it. A route that is not published on a request's transport does not match it, and routing
+carries on as if the route were not there (see [Choosing which viewsets are published](#choosing-which-viewsets-are-published)).
 
 ## Installation
 
@@ -74,6 +58,45 @@ async def on_stream(payload, stream: Stream) -> None:
         return
     await my_own_dispatch(payload, stream)
 ```
+
+`process_command` passes a command to the application that serves the WebSocket endpoint,
+`connection.scope["app"]`. `app=` passes it to another application instead, which a test without a
+WebSocket uses; a command with neither `connection` nor `app` raises `ValueError`.
+
+A command's `:path` is the path the application routes, as for an HTTP request to it: a router
+included with `app.include_router(router, prefix="/api")` serves `/api/music`, over REST and over
+muxws alike. A client therefore uses one `basePath` for both transports.
+
+## What the transport does
+
+The transport builds an ASGI `http` request from a command and sends the application's response
+back as the reply:
+
+| Request | Built from |
+|---------|------------|
+| method, path, query string | `:method`, `:path`, `:query` |
+| headers | the WebSocket handshake's headers, then `base_headers`, then the headers stated on the stream; see [Authentication](#authentication) |
+| body | the stream's payload, re-encoded as JSON |
+| `request.client`, `request.server` | the WebSocket's addresses |
+| `request.state` | a shallow copy of the lifespan state, as an HTTP server makes for each request |
+| `scope["fastapi_viewsets.transport"]` | `"muxws"`; a request without it is a REST request |
+
+The reply carries the response's status and headers, without the headers that describe an HTTP
+message (`content-length`, `transfer-encoding`, `connection`, `keep-alive`), and the body decoded
+from JSON.
+
+An exception the application raises after it has started its response — Starlette's
+`ServerErrorMiddleware` answers it with a 500, through the application's own handler for
+`Exception` where there is one, and re-raises — is logged, and that response is the reply. An
+exception raised before any response is logged and answered with a 500 without a body.
+
+Two behaviours of HTTP middleware have no counterpart on a WebSocket:
+
+- **Compression.** The handshake's `accept-encoding` is not passed on, so a compression middleware
+  (`GZipMiddleware`) leaves the reply uncompressed; muxws carries it as a decoded payload. A
+  command that states `accept-encoding` itself receives a compressed body.
+- **Cookies.** A `set-cookie` header reaches the client in the reply headers, but a browser does not
+  set a cookie from a WebSocket message. A cookie the browser has to store is set over HTTP.
 
 ## Client
 
@@ -205,6 +228,11 @@ tri-state so that marking one endpoint does not silently opt its whole viewset i
 
 The global setting is read at decoration time, so set it before any viewset class is decorated.
 
+Every endpoint is one route on `router`, whatever the answer: a route matches only requests arriving
+over the transports it is published on, and a request over any other transport goes on to the next
+route. A muxws-only `GET /music/live` therefore does not stand in the way of a REST
+`GET /music/{pk}`. A route not published on REST is left out of the application's OpenAPI document.
+
 ## Schema
 
 `GET /{base_path}/schema` answers over both transports, and each reports the endpoints reachable
@@ -217,7 +245,6 @@ schemas differ.
 
 | Name | Description |
 |------|-------------|
-| `get_dispatch_app()` | The FastAPI app every muxws command is dispatched into, built from the current registrations; `process_command` uses it unless given `app` |
 | `schema_for(base_path)` | The OpenAPI document of the viewset registered at `base_path` as reachable over muxws, or `None` |
 | `registered_viewsets()` | The registered viewset classes mapped to their base paths |
 | `is_registered(cls)` | Whether `cls` is registered on muxws |
@@ -226,6 +253,16 @@ schemas differ.
 | `resolve_register_muxws(endpoint, viewset_level)` | Whether an endpoint is on muxws: the endpoint's `@transports`, else `viewset_level`, else `settings.viewsets_register_muxws` |
 | `resolve_register_rest(endpoint, viewset_level=None)` | Whether an endpoint is on REST: the endpoint's `@transports`, else `viewset_level`, else `True` |
 | `METHOD_KEY`, `PATH_KEY`, `QUERY_KEY`, `STATUS_KEY` | `":method"`, `":path"`, `":query"`, `":status"` |
+
+`fastapi_viewsets.routing` holds the routing both transports share:
+
+| Name | Description |
+|------|-------------|
+| `TransportRoute` | An `APIRoute` that matches only requests arriving over one of its `transports` (a `frozenset` of `"rest"`, `"muxws"`) |
+| `transport_route_class(base, transports)` | The route class `route_viewset` registers an endpoint with: the router's `route_class` restricted to `transports` |
+| `request_transport(scope)` | The transport a request arrived over: `scope["fastapi_viewsets.transport"]`, or `"rest"` without it |
+| `TRANSPORT_SCOPE_KEY`, `REST`, `MUXWS` | `"fastapi_viewsets.transport"`, `"rest"`, `"muxws"` |
+| `openapi_endpoint(route_kwargs)` | A `/schema` endpoint answering with the OpenAPI document of the routes listed in `add_api_route` form |
 
 ## The wire format
 
@@ -277,7 +314,8 @@ muxws unchanged. See [handling a failed call](./vue-mixins#handling-a-failed-cal
 
 ## Authentication
 
-The WebSocket handshake's headers are the baseline every command inherits. A ViewSet's own
+The WebSocket handshake's headers are the baseline every command inherits, without those that
+describe the upgrade (`connection`, `upgrade`, `sec-websocket-*`) and without `accept-encoding`. A ViewSet's own
 `headers` replace the handshake's value on every call it makes — the client sets them once, per
 proxy, not per call:
 
@@ -304,7 +342,7 @@ to refresh state when the socket comes back.
 
 ## Performance
 
-Dispatch builds a synthetic ASGI request and calls the dispatch app. It costs one JSON
+Dispatch builds a synthetic ASGI request and calls the application. It costs one JSON
 decode/re-encode per call: about 15% of a read, a third of a large write.
 
 The demo — 5000 records, localhost, Python client, so no browser connection limit in play:
