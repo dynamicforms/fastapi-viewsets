@@ -343,8 +343,15 @@ set_celery_kwargs_hook(kwargs_hook)
 
 ### Execution hook
 
-`set_execution_hook` (in `fastapi_viewsets.decorators`) registers a callable that receives an
-`ActionExecution` and returns an async context manager. `lifecycle_runner` enters it right before
+```python
+ExecutionHook = Callable[[ActionExecution], AbstractAsyncContextManager[Any]]
+
+def set_execution_hook(hook: ExecutionHook | None) -> None: ...
+```
+
+`set_execution_hook` (in `fastapi_viewsets.decorators`, with `ActionExecution` and
+`ExecutionHook`) registers a callable that receives an `ActionExecution` and returns an async
+context manager. `lifecycle_runner` enters it right before
 the viewset method executes and exits it when the method has returned or raised; `None` removes it.
 It runs where the action executes:
 

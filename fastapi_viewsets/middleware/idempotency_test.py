@@ -6,7 +6,7 @@ import pytest
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..conf import settings
 from ..context import Context
@@ -19,7 +19,7 @@ from ..exceptions import (
     NotFoundError,
 )
 from . import ViewSetResult
-from .idempotency import Idempotency, parse_idempotency_key, request_fingerprint
+from .idempotency import _ATTACH_SCRIPT, Idempotency, parse_idempotency_key, request_fingerprint
 
 KEY = '"8e03978e-40d5-43e8-bc93-6894a57f9324"'
 
@@ -320,7 +320,14 @@ class FakeRedis:
             return -2
         return int((self.values[key][1] - time.monotonic()) * 1000)
 
-    async def eval(self, _script: str, _numkeys: int, key: str, attached: str, running, done, ttl_ms, mode, local):
+    async def eval(self, script: str, _numkeys: int, key: str, attached: str, *args):
+        if script == _ATTACH_SCRIPT:
+            (running,) = args
+            if self._live(key) != running.decode():
+                return 0
+            self.values[attached] = ("1", self.values[key][1])
+            return 1
+        running, done, ttl_ms, mode, local = args
         if self._live(key) != running:
             return 0
         store = mode == "always" or (mode == "attached" and (local == "1" or self._live(attached) is not None))
@@ -445,3 +452,41 @@ async def test_redis_an_error_outcome_crosses_processes():
     with pytest.raises(DfViewSetError) as exc_info:
         await call(Idempotency(redis_client=redis), chain)
     assert (exc_info.value.status_code, exc_info.value.code, exc_info.value.params) == (404, "not_found", {"pk": 3})
+
+
+class Aliased(BaseModel):
+    id: int
+    user_name: str = Field(alias="userName")
+
+
+def test_redis_a_repeat_of_a_response_model_with_aliases_answers_like_the_first():
+    settings.viewsets_command_middleware = [Idempotency(redis_client=FakeRedis())]
+    router = APIRouter()
+
+    @route_viewset(router, "/aliased")
+    class AliasedViewSet:
+        __router = APIRouter()
+
+        @__router.post("", status_code=201)
+        async def create(self, item: Aliased) -> Aliased:
+            return item
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    responses = [
+        client.post("/aliased", json={"id": 1, "userName": "a"}, headers={"Idempotency-Key": KEY}) for _ in range(2)
+    ]
+    answers = [(response.status_code, response.json()) for response in responses]
+    assert answers == [(201, {"id": 1, "userName": "a"})] * 2
+
+
+@pytest.mark.asyncio
+async def test_redis_an_outcome_that_cannot_be_encoded_is_not_stored_and_releases_the_repeats():
+    redis = FakeRedis()
+    chain = Counter(delay=0.05, result=ViewSetResult(body=object()))
+    started = time.monotonic()
+    await asyncio.gather(call(Idempotency(redis_client=redis), chain), call(Idempotency(redis_client=redis), chain))
+    assert chain.calls == 2
+    assert time.monotonic() - started < 1
+    assert redis.values == {}
