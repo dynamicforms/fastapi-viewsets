@@ -117,6 +117,5 @@ classes that declare `__slots__`: it JSON-dumps/loads exactly those slots, optio
 ## Known limitations
 
 - `load_state`/`save_state` are a separate mechanism from [Context Processors](./context-processors)
-  and [Command Middleware](./command-middleware) - neither of those replace it, and there's
-  currently no plan to fold them together (see the "why two separate mechanisms" reasoning in
-  [Architecture](./architecture#why-two-separate-mechanisms-not-one), which applies here too).
+  and [Command Middleware](./command-middleware); neither replaces it (see
+  [Architecture](./architecture#context-processors-and-command-middleware)).

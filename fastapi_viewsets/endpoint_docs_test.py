@@ -63,8 +63,8 @@ def test_an_undocumented_action_keeps_the_mixin_wording():
 
 def test_the_user_facing_router_is_documented_as_well_as_the_schema_one():
     """
-    Two routers are built from one declaration - the app's and the one /schema reports on - and a
-    fix applied to only one of them is the bug this test exists for.
+    Two routers are built from one declaration - the app's and the one /schema reports on - and
+    both carry the endpoint docs.
     """
     app, router = FastAPI(), APIRouter()
 

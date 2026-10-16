@@ -458,10 +458,9 @@ def tagged_rows():
 @pytest.mark.asyncio
 async def test_the_in_memory_fallback_sees_response_models_not_raw_rows(tagged_rows):  # noqa: ARG001
     """
-    Regression: a filter declaration names the *response* model's fields, but the source yields
-    whatever the backend stores. This viewset keeps a list as a comma-joined string, and before
-    land() converted first, `overlaps` compared a set of characters against a set of words and
-    matched nothing at all while looking like it had worked.
+    A filter declaration names the *response* model's fields, while the source yields what the
+    backend stores. This viewset stores a list as a comma-joined string; the in-memory fallback
+    filters on the response-model value (a list of words), not on the stored string.
     """
     query = ListQuery(fltr=TaggedFilter(tags__overlaps="jazz"), limit=10)
     page = await TaggedViewSet().get_list(None, query)

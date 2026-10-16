@@ -21,13 +21,13 @@ class ItemViewSet(CollectionViewSet[int, Item], ViewSetMixin[int, Item]):
 
 That serves `GET /items`, `POST /items`, `GET`/`PUT`/`PATCH`/`DELETE /items/{pk}`. No middleware, no
 lifecycle concerns - `ViewSetMixin` declares the routes, `route_viewset` registers them, and
-`CollectionViewSet` implements every `perform_*` against the in-memory `database` dict. For a lot of viewsets, this is
-the whole story. Now let's add requirements one at a time and see what each one forces us to add.
+`CollectionViewSet` implements every `perform_*` against the in-memory `database` dict. The
+sections below add one requirement each and the mechanism that meets it.
 
-## Problem: "who's calling?"
+## Requirement: the caller's identity
 
-Say `ItemViewSet` needs to know who's making the request - to filter results, to stamp an owner
-field. Every `perform_*` takes a `context` parameter, which carries per-request facts:
+`ItemViewSet` filters results by the caller. Every `perform_*` takes a `context` parameter, which
+carries per-request facts:
 
 ```python
 class ItemViewSet(CollectionViewSet[int, Item]):
@@ -36,8 +36,8 @@ class ItemViewSet(CollectionViewSet[int, Item]):
         return [i for i in database.values() if i.owner == user]
 ```
 
-Something has to populate `context.user` *before* `perform_list` runs, from the live `Request` -
-a **context processor**:
+A **context processor** populates `context.user` from the live `Request` before `perform_list`
+runs:
 
 ```python
 async def whoami_processor(request: Request, viewset) -> dict:
@@ -51,17 +51,12 @@ merging their dicts; the route method (`list_items`) passes it to `perform_list`
 always awaitable, also where the value is a plain string, because a value can be resolved lazily
 (next section). → full depth in [Context Processors](./context-processors).
 
-## Problem: "real auth has more than one way to prove who you are"
+## Requirement: several credential schemes
 
-A single `x-user` header is a toy. A real app might accept an `X-Session-Token` against a fixed,
-ad-hoc list of users in one deployment, and a real Django session in another - or both at once,
-tried in order until one of them recognizes the request. `whoami_processor` above can't grow into
-that cleanly; it would turn into a pile of if/elif branches for every credential scheme the app
-ever wants to support.
-
-Instead, the credential schemes become **backends** - each one a `try_handle(request)` that either
-says "not mine, try the next one" (`None`) or claims the request and returns something that
-resolves to the user later:
+An application may accept an `X-Session-Token` against a fixed list of users, a Django session, or
+both, tried in order until one recognizes the request. Each credential scheme is a **backend**: its
+`try_handle(request)` returns `None` ("not mine, try the next one") or claims the request and
+returns an object that resolves to the user later:
 
 ```python
 class AuthBackend(ABC):
@@ -84,39 +79,29 @@ async def auth_context_processor(request: Request, viewset) -> dict:
 settings.viewsets_context_processors = [auth_context_processor]
 ```
 
-Notice `try_handle` returns a `LazyObject`, not the user itself - resolving a real Django session
-means a DB/cache lookup, which is exactly the kind of work you don't want to pay for on every
-request whether or not `perform_*` actually reads `context.user`. It's also exactly the kind of
-value that can't just be `deepcopy`'d across the Celery/Redis boundary if the action is
-`celery_viewset`-dispatched: the *recipe* (a session key) has to travel, not a live database
-object, so the worker can resolve it again on its own side. `LazyObject` (a `SerializableObject`
-subclass with lazy, memoized resolution) is what makes `context.user` uniformly awaitable *and*
-correctly (de)serializable regardless of which backend produced it. → full depth in
+`try_handle` returns a `LazyObject`, not the user: resolving a Django session is a DB/cache lookup,
+and it runs only when `perform_*` awaits `context.user`. Across the Celery/Redis boundary of a
+`celery_viewset`-dispatched action, the *recipe* (a session key) travels, not a live database
+object, and the worker resolves it on its own side. `LazyObject` (a `SerializableObject` subclass
+with lazy, memoized resolution) makes `context.user` awaitable and (de)serializable regardless of
+which backend produced it. → full depth in
 [Authentication](./authentication) and the `LazyObject`/`SerializableObject` section of
 [Context Processors](./context-processors).
 
-## Problem: "a context processor can't say no"
+## Requirement: rejecting a request
 
-Now suppose an expired or missing session should make the request fail with `401`, before
-`perform_list` ever runs. It's tempting to reach for the same mechanism again - can't
-`auth_context_processor` just... reject the request?
+An expired or missing session fails the request with `401` before `perform_list` runs. Context
+processors cannot do this: they are a **flat list** (Django *template* `context_processors` style).
+Each returns a dict and the dicts are merged; none calls the endpoint, sees its result or stops the
+others.
 
-It can't, and not as an oversight: context processors are a **flat list** (Django *template*
-`context_processors` style). Each one independently returns a dict; the dicts get merged; none of
-them call the endpoint, none of them see what it returns, none of them can stop the others from
-running. That flatness is exactly what makes them simple and safe to add to - but it also means
-there is no hook anywhere in that list for "stop here and produce a `401` instead." Gathering facts
-and deciding what to do about them are different-shaped problems.
+**Command middleware** is an onion chain wrapping the execution, each layer calling `call_next()`
+for the next one. A middleware is any callable with the right signature - a plain function, or a
+class implementing `Middleware.__call__`.
 
-**Command middleware** is the other shape - an onion chain wrapping the actual execution, each
-layer calling `call_next()` for the next one. A middleware is just anything callable with the right
-signature - a plain function, or a class implementing `Middleware.__call__` (useful when, as here,
-the middleware is reusable library code rather than a one-off closure).
-
-For a pure "check and maybe reject" middleware like `Session` - no "after" phase, it never inspects
-what `perform_list` returns - the onion timing isn't even needed: `Middleware` has an optional
-second method, `depends()`, that `route_viewset` bridges onto FastAPI's own native `Depends()`
-mechanism, so it runs *before* FastAPI even parses the request body:
+A check-and-reject middleware such as `Session` has no "after" phase. `Middleware` has an optional
+second method, `depends()`, that `route_viewset` bridges onto FastAPI's `Depends()`, so it runs
+before FastAPI parses the request body:
 
 ```python
 class Session(Middleware):
@@ -130,43 +115,35 @@ class Session(Middleware):
             raise SessionExpiredError()
 
     async def __call__(self, request, viewset, context, call_next):
-        return await call_next()   # depends() already decided everything - nothing left to do here
+        return await call_next()   # depends() makes the decision
 
 settings.viewsets_command_middleware = [Session()]
 ```
 
-"Reject" needs no special mechanism at all here: raising `HTTPException` inside `depends()`
-propagates straight out through FastAPI's own dependency resolution, so nothing further down the
-line - not `perform_list`, not the onion chain, not even FastAPI's own request-body parsing - ever
-runs. (401, not 403: the credential itself no longer establishes who's calling - missing, garbage,
-or expired - which is "unauthorized," not "authorized but forbidden to do this specific thing.") A
-viewset that must stay reachable without a session (a login endpoint, say) opts out with
-`@action_configuration({Session: False})` - `self.config_from(context)` is exactly how `Session`
-reads that. → full depth in [Command Middleware](./command-middleware) and
+An `HTTPException` raised inside `depends()` propagates out through FastAPI's dependency
+resolution; `perform_list`, the onion chain and request-body parsing do not run. The status is 401,
+not 403: a missing, malformed or expired credential does not establish who is calling. A viewset
+that must stay reachable without a session (a login endpoint) opts out with
+`@action_configuration({Session: False})`, which `Session` reads with `self.config_from(context)`.
+→ full depth in [Command Middleware](./command-middleware) and
 [Authentication](./authentication).
 
-This is also the clearest illustration of why the two mechanisms stay separate: the context
-processor only ever *gathered* the fact ("user is `None`"); it's the command middleware that
-*decided* what to do about that fact - whether that decision runs early, via `depends()`, or later,
-in the onion chain, is an implementation detail of *how* command middleware decides, not a third
-mechanism. Neither a context processor nor `perform_list` itself could have made that call.
+The context processor gathers the fact ("user is `None`"); the command middleware decides what to
+do about it. Whether the decision runs early, in `depends()`, or in the onion chain, it is command
+middleware either way.
 
-## Problem: "one boolean per concern doesn't scale"
+## Requirement: per-viewset configuration
 
-`Session`'s opt-out could have been solved with a single bespoke class attribute -
-`requires_auth = False`, read via `getattr(viewset, "requires_auth", True)` - and that's tempting
-for exactly one concern. But suppose a second requirement shows up: some viewsets also need a
-per-viewset rate limit, and the limit itself varies (5/minute here, 100/minute there). Following
-the same pattern means another bespoke attribute (`rate_limit = 5`), read by another middleware via
-another bespoke `getattr(...)` - and a third concern repeats the dance again. Nothing here is
-reusable; every processor/middleware that ever wants per-viewset behaviour would reinvent its own
-attribute-with-a-default convention.
+Middleware and processors need per-viewset settings: `Session`'s opt-out, a rate limit that is
+5/minute on one viewset and 100/minute on another. A bespoke class attribute per concern
+(`requires_auth = False`, `rate_limit = 5`), each read with its own `getattr(...)`, is a separate
+convention for every processor and middleware.
 
-`@action_configuration({...})` is the general mechanism instead of one-boolean-per-concern: a
-decorator (usable on a viewset class or an individual method) carrying a dict keyed by whichever
+`@action_configuration({...})` is one mechanism for all of them: a decorator (usable on a viewset
+class or an individual method) carrying a dict keyed by whichever
 context processor or `Middleware` cares - the value is opaque, interpreted only by that
 identifier's own code. `Session.config_from(context)`, shown above, is shorthand for
-`context.configuration_for(type(self))` - this is what actually resolves the opt-out:
+`context.configuration_for(type(self))`, which resolves the opt-out:
 
 ```python
 from fastapi_viewsets.action_configuration import action_configuration
@@ -178,19 +155,18 @@ class PublicButThrottledViewSet(...): ...
 Configuration merges per identifier across three layers - `settings.default_action_configuration`
 (global fallback) → the viewset class's `@action_configuration` → an individual method's
 `@action_configuration` (highest priority, overriding just its own identifiers - other identifiers
-the method doesn't mention still fall through from the class). A value can even vary by action
-(`ByAction(list_items="read", update="write")`), resolved fresh each time against whichever action
-is actually running. → full depth in [Action Configuration](./action-configuration), and see
+the method doesn't mention still fall through from the class). A value can vary by action
+(`ByAction(list_items="read", update="write")`), resolved against the running action. → full depth
+in [Action Configuration](./action-configuration), and see
 [Rate Limiter](./rate-limiter) and [Authorization](./authorization) for `RateLimiter` and
 `Authorization`, two real middleware shipped with this library that build on it.
 
-## Problem: "my viewset needs to remember something that isn't about who's calling"
+## Requirement: viewset state across requests
 
-A different axis, easy to conflate with the above: what if the *viewset instance itself* needs to
-remember something across requests - a cache, a counter, an open connection - independent of which
-user is calling? That's not context (a per-request fact about the caller) and not command
-middleware (a response-shaping step); it's the viewset's own state, and it's controlled by the
-`lifecycle` parameter plus two optional hooks:
+A viewset instance may keep state across requests - a cache, a counter, an open connection -
+independent of the caller. This is neither context (a per-request fact about the caller) nor
+command middleware (a step around execution); it is controlled by the `lifecycle` parameter and two
+optional hooks:
 
 ```python
 @route_viewset(router, base_path="/session", lifecycle="instance-key")
@@ -202,25 +178,22 @@ class SessionViewSet(ListMixin[str]):
         await redis.rpush("session:items", *self.items)
 ```
 
-`load_state()` runs before context is even built; `save_state()` runs after the command middleware
-chain unwinds, in a `finally` block, so it runs even if something above raised. → full depth in
+`load_state()` runs before the context is built; `save_state()` runs after the command middleware
+chain unwinds, in a `finally` block, so it also runs when something above raised. → full depth in
 [ViewSet Lifecycle](./lifecycle).
 
-## Problem: "this needs to run in the background"
+## Requirement: background execution
 
-Last requirement: `perform_list` turns out to be slow enough that it shouldn't block the request -
-it should run on a Celery worker instead. `celery_viewset` does this transparently: the same
+A slow `perform_list` runs on a Celery worker. `celery_viewset` does this transparently: the same
 `ItemViewSet` class, decorated once more, dispatches its route methods (`list_items`, `create`, …)
 to a worker as Celery tasks and awaits the result over Redis instead of running them in-process; the
 worker runs the route method, which calls `perform_*` there.
 
-The one thing that has to survive that trip is `context` - the worker has no live `Request` to
-build one from. That's exactly what `serialize_context`/`deserialize_context` are for: plain values
-cross as-is, a `SerializableObject` crosses as a tagged JSON payload, and a `LazyObject` (like
-`context.user`, from the auth backends above) crosses as its unresolved *recipe* - the worker reconstructs
-it and can still resolve it lazily, on its own side, only if the worker-side `perform_list`
-actually awaits it. None of the auth code from earlier sections has to know or care that this
-happens. → full depth in [Routers & Decorators](./routers).
+`context` crosses to the worker, which has no live `Request` to build one from.
+`serialize_context`/`deserialize_context` carry it: plain values cross as-is, a `SerializableObject`
+as a tagged JSON payload, and a `LazyObject` (such as `context.user`) as its unresolved *recipe*,
+which the worker resolves only if the worker-side `perform_list` awaits it. The auth backends need
+no Celery-specific code. → full depth in [Routers & Decorators](./routers).
 
 ## The request pipeline
 
@@ -249,8 +222,7 @@ route_viewset-registered endpoint (lifecycle: singleton / per-request / instance
      │
      ▼
 Command middleware chain (settings.viewsets_command_middleware) — before phase, in list order
-     │      (only meaningful for middleware with "after" work left to do - a middleware whose
-     │       entire job lives in depends() is a trivial passthrough here)
+     │      (a middleware whose entire job lives in depends() only calls call_next() here)
      ▼
 Middleware.execute() chain, around the viewset method, then perform_* execution
      │      (optionally delegated: celery_viewset ships `context` to a worker, where the
@@ -295,31 +267,24 @@ viewset instance state).
 | **`@action_configuration`** | Per-viewset/per-action configuration for context processors and command middleware to consult (e.g. `Session`'s opt-out) | [Action Configuration](./action-configuration) |
 | **Lifecycle & `load_state`/`save_state`** | Controls how the viewset *class* becomes a request-handling *instance*, and whether that instance's own state persists across requests - a separate axis from the pipeline above | [ViewSet Lifecycle](./lifecycle) |
 
-## Why two separate mechanisms, not one
-
-You just saw why, concretely, two sections up: the context processor could gather "user is
-`None`," but had no shape for stopping the request or touching the response; command middleware
-could reject with a `401` and did, precisely because it wraps execution instead of just preceding
-it. Stated more generally:
+## Context processors and command middleware
 
 - **Context processors** are a flat list (Django *template* `context_processors` style): each one
   independently returns a dict, and the dicts get merged. No processor calls another, none of them
-  call the endpoint, none of them see a return value. Right shape for "gather some input facts."
+  call the endpoint, none of them see a return value. They gather input facts.
 - **Command middleware** is an onion chain (Django *middleware* style): each one wraps `call_next()`
   and can act *before and after* the actual execution, inspecting and replacing what comes back, or
-  never calling it at all. Right shape for "the execution needs to run **inside** something, and its
-  result (or whether it runs at all) may need to change."
+  never calling it at all. It runs the execution inside itself and may change the result or
+  whether the execution runs.
 
-Trying to force response-shaping or short-circuiting into the flat, request-only shape of context
-processors doesn't work: there's no "after" phase, and no "don't call the next one" phase, to hook
-into. Trying to force simple input gathering into an onion chain works, but adds ordering
-complexity (unwinding phases, `call_next`) for no benefit when nothing needs to happen after the
-endpoint runs, or ever needs to reject anything. Two shapes, two mechanisms.
+A context processor has no "after" phase and cannot stop the chain, so it cannot shape a response
+or reject a request. Input gathering in an onion chain would carry unwinding and `call_next` without
+using them.
 
 ## A note on transports
 
-Both `Context` and `ViewSetResult` are deliberately transport-agnostic types, not HTTP-specific
-ones. `route_viewset` is the HTTP **transport adapter**: it's the only place that knows about a
+`Context` and `ViewSetResult` are transport-agnostic types. `route_viewset` is the HTTP
+**transport adapter**: it is the only place that knows about a
 real `fastapi.Request`/`Response`. The pipeline above - build context, run command middleware,
 execute, unwind - doesn't otherwise care whether "the connection" is a single HTTP request/response
 or one message on a long-lived WebSocket. The [muxws transport](./muxws) hands each command to the

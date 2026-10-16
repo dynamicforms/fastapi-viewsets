@@ -549,10 +549,9 @@ describe('schema validation — validateAgainstSchema()', () => {
   }
 
   it('runs from the constructor, not only when called by hand', async () => {
-    // Regression: the check lives on the shared base class, but it reads `this.http`, which the
-    // subclass constructor assigns after super() returns. Kicking it off from the base
-    // constructor made every call throw on an undefined axios instance — and since the check
-    // swallows its own errors, it went silently dead instead of failing.
+    // The check lives on the shared base class but reads `this.http`, which the subclass
+    // constructor assigns after super() returns, so it runs from the subclass constructor.
+    // It swallows its own errors: started from the base constructor it would do nothing.
     mockSchema(FULL_SCHEMA);
     new (viewSetDeclaring([BulkViewSetMixin, LookupMixin]))({
       basePath: '/items',

@@ -1,17 +1,15 @@
 """
 muxws transport for viewsets.
 
-The module is spelled `mux_ws`, with the underscore, and the underscore is deliberate: `muxws` is
-the WebSocket multiplexing library this builds on (https://docs.velis.si/muxws), and having an
-identically named module inside this package would make every import in this file ambiguous to
-the reader even where it is unambiguous to Python. Nothing here is a typo.
+The module is `mux_ws`; `muxws` is the WebSocket multiplexing library it builds on
+(https://docs.velis.si/muxws).
 
-What this gives you is the same viewsets you already registered over REST, reachable over a
-single WebSocket instead. A command goes through the application that serves the WebSocket
-endpoint, as an HTTP request does: its middleware, exception handlers, router, dependencies and
-state. muxws is a transport only - it turns a stream into an ASGI request and the response back
-into a reply. Each viewset endpoint is one route on the application's router, matching only the
-transports it is published on (`fastapi_viewsets.routing`).
+The viewsets registered over REST are reachable over a single WebSocket as well. A command goes
+through the application that serves the WebSocket endpoint, as an HTTP request does: its
+middleware, exception handlers, router, dependencies and state. muxws is a transport only - it
+turns a stream into an ASGI request and the response back into a reply. Each viewset endpoint is
+one route on the application's router, matching only the transports it is published on
+(`fastapi_viewsets.routing`).
 
 Server side:
 

@@ -79,12 +79,7 @@ def register_viewset(
 
     Two different viewsets sharing one base path are warned about: routing picks the first match,
     so the later one's endpoints are simply unreachable, and neither FastAPI nor this library would
-    otherwise say so. A warning rather than an error, because that is proportionate to how easily
-    it is fixed and to how little else in this area is strict, and an application that registers
-    such a pair still starts.
-
-    It is noisy in a suite that builds a throwaway viewset per test; the suite filters it (see
-    pyproject.toml) rather than the design absorbing the noise.
+    otherwise say so. It is a warning: an application that registers such a pair still starts.
     """
     key = _key(cls)
     for other_key, registration in _registrations.items():

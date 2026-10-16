@@ -19,9 +19,9 @@ class Session(Middleware):
     `context.auth` produced.
 
     The whole check lives in `depends()` - bridged onto FastAPI's own `Depends()` by route_viewset,
-    so an expired/missing session is rejected before FastAPI even parses the request body.
-    `__call__` (the onion command-middleware chain) is therefore a trivial passthrough: if
-    `depends()` would have rejected, `__call__`/the onion chain is never even reached at all.
+    so an expired/missing session is rejected before FastAPI parses the request body.
+    `__call__` (the onion command-middleware chain) only calls `call_next()`: if `depends()`
+    rejects, `__call__` is not reached.
 
     A viewset (or a specific `perform_*` method) opts out - e.g. a login/signup endpoint that must
     be reachable without a session - via `@action_configuration({Session: False})` (see

@@ -1,5 +1,5 @@
 """
-Regression test: route_sort_key must not crash when a viewset has custom action paths of
+route_sort_key does not crash when a viewset has custom action paths of
 different depths that share a common prefix (e.g. "account/register" and
 "account/register/verify/resend") - see route_viewset.py docstring in build_schema.py.
 """

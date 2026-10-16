@@ -133,8 +133,7 @@ def test_isnull_takes_a_bool_whatever_the_field_is():
 
 def test_an_unknown_field_is_refused_at_declaration_time():
     """
-    Silently ignoring it would produce a parameter that never matches anything - the kind of bug
-    found in production by someone wondering why the search box does nothing.
+    Ignoring it would produce a parameter that never matches anything.
     """
     with pytest.raises(FilterError, match="no field 'nope'"):
         make_filter_model(Track, {"nope": ["exact"]})

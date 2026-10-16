@@ -7,7 +7,7 @@ general [Command Middleware](./command-middleware) and [Action Configuration](./
 mechanisms.
 
 ::: tip Where this fits
-See [Architecture](./architecture#problem-one-boolean-per-concern-doesn-t-scale) for why per-viewset
+See [Architecture](./architecture#requirement-per-viewset-configuration) for why per-viewset
 configuration (the `default_limit` override below) needed a general mechanism rather than another
 one-off class attribute.
 :::
@@ -34,10 +34,11 @@ value of `None` (unconfigured) falls back to `default_limit`:
 class ExpensiveViewSet(...): ...
 ```
 
-Exceeding the limit returns `429` (`{"detail": "Rate limit exceeded"}`) - raised from `depends()`
+Exceeding the limit returns `429` with `detail` "Rate limit exceeded" and `detail_code`
+`rate_limited` (see [Error Codes](./error-codes)) - raised from `depends()`
 (bridged onto FastAPI's own native `Depends()` by `route_viewset`, see
 [Command Middleware](./command-middleware#early-rejection-middleware-depends)), so a request over
-the limit is rejected before FastAPI even parses the body, without ever calling `perform_*`.
+the limit is rejected before FastAPI parses the body, without calling `perform_*`.
 
 ## Identity key
 
@@ -46,10 +47,6 @@ context)` (`cls` is the viewset *class*, not an instance - see
 [Command Middleware](./command-middleware#early-rejection-middleware-depends) for why). `key_func`
 may itself be sync or async (checked the same way as `Authorization`'s callable config):
 
-Over [muxws](./muxws) the client IP is the WebSocket connection's address, given that
-`process_command` is called with `connection=`; without it every command has the client
-`("muxws", 0)`, and all muxws callers of a viewset share one count.
-
 ```python
 def per_ip_key(request, cls, context):
     return f"{cls.__name__}:{request.client.host}"
@@ -57,9 +54,13 @@ def per_ip_key(request, cls, context):
 RateLimiter(default_limit=100, key_func=per_ip_key)
 ```
 
+Over [muxws](./muxws) the client IP is the WebSocket connection's address, given that
+`process_command` is called with `connection=`; without it every command has the client
+`("muxws", 0)`, and all muxws callers of a viewset share one count.
+
 The built `Context` is available too, so a key function can rate-limit per authenticated user
-instead of per IP - handy if [Authentication](./authentication) is also wired in, though
-`RateLimiter` doesn't require it (any `context` field, or none at all, works):
+instead of per IP, when [Authentication](./authentication) is configured. `RateLimiter` does not
+require it; any `context` field, or none, works:
 
 ```python
 async def per_user_key(request, cls, context):

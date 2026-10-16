@@ -27,7 +27,7 @@ describe('toErrorDescription', () => {
 
   it('should keep params as the server sent them', () => {
     const error = toErrorDescription({
-      detail: 'unsupported list shape "paged"; this endpoint offers cursor, flat',
+      detail: "unsupported list shape 'paged'; this endpoint offers cursor, flat",
       detail_code: 'unsupported_list_shape',
       detail_params: { shape: 'paged', allowed: ['cursor', 'flat'] },
     });

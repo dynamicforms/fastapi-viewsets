@@ -229,14 +229,17 @@ The codes this package raises, with their English `detail`:
 | `session_expired` | `Session expired or invalid` | — |
 | `not_authorized` | `Not authorized to perform this action` | — |
 | `rate_limited` | `Rate limit exceeded` | — |
+| `result_timeout` | `No result for {task} within {timeout} s` | `task`, `timeout` |
+| `result_reader_stopped` | `The result reader for {queue_key} stopped before the result arrived` | `queue_key` |
+| `action_dispatch_failed` | `{task} could not be handed to its executor` | `task` |
 | `idempotency_key_invalid` | `Idempotency-Key must be a non-empty Structured Field string` | — |
 | `idempotency_key_reused` | `Idempotency key {key} was used for a different request` | `key` |
-| `unsupported_list_shape` | `unsupported list shape "{shape}"; this endpoint offers {allowed}` | `shape`, `allowed` |
+| `unsupported_list_shape` | `unsupported list shape '{shape}'; this endpoint offers {allowed}` | `shape`, `allowed` |
 | `cursor_unreadable` | `cursor is not readable: {error}` | `error` |
 | `cursor_missing_position` | `cursor is not readable: no position in it` | — |
 | `cursor_stale` | `this cursor was issued for a different ordering or filter - start from the first page` | — |
 | `cursor_missing_keys` | `cursor has no value for ordering key(s): {missing}` | `missing` |
-| `cursor_value_mismatch` | `cursor value for "{name}" does not fit the field: {error}` | `name`, `error` |
+| `cursor_value_mismatch` | `cursor value for '{name}' does not fit the field: {error}` | `name`, `error` |
 
 `allowed` and `missing` are arrays. An application's own `DfViewSetError` subclasses add their codes
 to the same translations.

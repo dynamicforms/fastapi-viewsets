@@ -39,8 +39,8 @@ class RateLimiter(Middleware):
         class ExpensiveViewSet(...): ...
 
     The whole check lives in `depends()` - bridged onto FastAPI's own `Depends()` by route_viewset,
-    so an exceeded limit is rejected before FastAPI even parses the request body. `__call__` (the
-    onion command-middleware chain) is therefore a trivial passthrough.
+    so an exceeded limit is rejected before FastAPI parses the request body. `__call__` (the
+    onion command-middleware chain) only calls `call_next()`.
 
     The identity key defaults to `"<ViewSetClassName>:<client IP>"` - override via `key_func` (also
     receives the built `Context`, so e.g. `await context.user` can rate-limit per authenticated

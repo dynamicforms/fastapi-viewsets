@@ -2,11 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { expect, test } from '@playwright/test';
 
 /**
- * The Celery path, which running the demo no longer exercises by itself.
+ * The Celery path, which the demo does not exercise by default.
  *
- * It is off by default because it dominates the latency the benchmark exists to measure - but
- * "off by default" quietly became "never run outside unit tests", and the thing about a worker
- * process is that it fails in ways an in-process test cannot reproduce.
+ * It is off by default because it dominates the latency the benchmark measures. A worker process
+ * fails in ways an in-process unit test cannot reproduce, so this test runs it end to end.
  *
  * Skipped rather than failed when Redis is absent: it is the one piece of infrastructure the demo
  * needs that a checkout does not come with.
