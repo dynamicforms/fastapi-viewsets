@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - npm: `onCallActivity(listener)` reports every call issued through a proxy as `start`, `retry` and
   `settle` events under its key; `RequestOptions.background` marks a call a busy indicator leaves
-  out; `retryNow()` sends every waiting repeat at once. `issueCall()` takes `background` as a third
+  out; `pendingCalls()` and `pendingCallCount()` list and count the calls that have not settled;
+  `retryNow()` sends every waiting repeat at once. `issueCall()` takes `background` as a third
   argument.
 
 ### Changed

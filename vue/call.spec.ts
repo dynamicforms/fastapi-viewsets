@@ -14,6 +14,8 @@ import {
   issueCall,
   newCallKey,
   onCallActivity,
+  pendingCallCount,
+  pendingCalls,
   retryNow,
   runCall,
 } from './call';
@@ -332,5 +334,53 @@ describe('retryNow', () => {
     await vi.advanceTimersByTimeAsync(1000);
     await expect(call).resolves.toBe('ok');
     expect(started.map((at) => at - started[0])).toEqual([0, 1000, 3000, 3500, 4500]);
+  });
+});
+
+describe('pendingCalls', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('lists the unsettled calls oldest first, with their repeats, and counts them', async () => {
+    vi.setSystemTime(1000);
+    let settleFirst!: (value: string) => void;
+    const first = issueCall(new Promise<string>((resolve) => (settleFirst = resolve)), 'p1');
+    vi.setSystemTime(2000);
+    const lost = { kind: 'lost' as const };
+    const errors = [lost];
+    const second = issueCall(
+      runCall(
+        () => ({
+          result: errors.length ? Promise.reject(errors.shift()) : new Promise<string>(() => {}),
+          abandon: () => {},
+        }),
+        (error) => (error as { kind: AttemptFailure }).kind,
+        { delayMs: 10 },
+        undefined,
+        'p2',
+      ),
+      'p2',
+    );
+    issueCall(new Promise<string>(() => {}), 'p3', true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(pendingCalls()).toEqual([
+      { key: 'p1', background: false, startedAt: 1000, unanswered: 0 },
+      { key: 'p2', background: false, startedAt: 2000, unanswered: 1 },
+      { key: 'p3', background: true, startedAt: 2000, unanswered: 0 },
+    ]);
+    expect(pendingCallCount()).toBe(2);
+    expect(pendingCallCount(true)).toBe(3);
+
+    settleFirst('ok');
+    await first;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pendingCalls().map((call) => call.key)).toEqual(['p2', 'p3']);
+    void second;
   });
 });

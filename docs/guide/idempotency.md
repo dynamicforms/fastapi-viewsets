@@ -215,8 +215,10 @@ closes for good (`onClose` with `willRetry` false) ends the wait, and the call r
 when it is issued, `retry` for each repeat, with how the attempt ended and the delay before the
 repeat, and `settle` when its promise settles. Each event carries the call's `key`. A busy indicator
 or a connectivity notice builds on it; `RequestOptions.background: true` marks a call such an
-indicator leaves out, and the startup schema check is sent with it. `retryNow()` sends every waiting
-repeat at once, for a "try again now" button.
+indicator leaves out, and the startup schema check is sent with it. `pendingCalls()` lists the calls
+that have not settled, oldest first, with when each was issued and how many of its attempts went
+unanswered; `pendingCallCount()` counts them, background calls left out. `retryNow()` sends every
+waiting repeat at once, for a "try again now" button.
 
 ```ts
 import { onCallActivity, retryNow } from '@dynamicforms/fastapi-viewsets';

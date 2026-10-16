@@ -226,7 +226,44 @@ export type CallEvent =
     }
   | { readonly type: 'settle'; readonly key: string; readonly ok: boolean };
 
+/** A call issued through a proxy that has not settled, as `pendingCalls()` lists it. */
+export interface PendingCall {
+  readonly key: string;
+  readonly background: boolean;
+  /** `Date.now()` when the call was issued. */
+  readonly startedAt: number;
+  /** The attempts that ended without an answer and were repeated. */
+  readonly unanswered: number;
+}
+
 const listeners = new Set<(event: CallEvent) => void>();
+
+/**
+ * The unsettled calls, in the order they were issued. Two calls may share a key (an application that
+ * repeats a call itself while the first is pending); an event of that key applies to the older one.
+ */
+const pending: PendingCall[] = [];
+
+/** Every call issued through a proxy that has not settled, oldest first. */
+export function pendingCalls(): readonly PendingCall[] {
+  return [...pending];
+}
+
+/** The number of unsettled calls issued through a proxy; background calls only with `includeBackground`. */
+export function pendingCallCount(includeBackground = false): number {
+  return includeBackground ? pending.length : pending.filter((call) => !call.background).length;
+}
+
+function track(event: CallEvent): void {
+  if (event.type === 'start') {
+    pending.push({ key: event.key, background: event.background, startedAt: Date.now(), unanswered: 0 });
+    return;
+  }
+  const index = pending.findIndex((call) => call.key === event.key);
+  if (index < 0) return;
+  if (event.type === 'retry') pending[index] = { ...pending[index], unanswered: pending[index].unanswered + 1 };
+  else pending.splice(index, 1);
+}
 
 /**
  * Calls `listener` for every `CallEvent` of every call issued through a proxy, REST and muxws alike.
@@ -242,6 +279,7 @@ export function onCallActivity(listener: (event: CallEvent) => void): () => void
 }
 
 function emit(event: CallEvent): void {
+  track(event);
   for (const listener of [...listeners]) {
     try {
       listener(event);

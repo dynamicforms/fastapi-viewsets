@@ -69,6 +69,9 @@ import {
   issueCall,
   newCallKey,
   onCallActivity,
+  type PendingCall,
+  pendingCallCount,
+  pendingCalls,
   type RepeatOptions,
   retryNow,
   type ViewSetActionCall,
@@ -136,6 +139,17 @@ type CallEvent =
 | `retry` | An attempt ended without an answer and a repeat will be sent | `failure`: how it ended; `attempt`: the number of the attempt that ended, 1 for the first; `delayMs`: the wait before the repeat |
 | `settle` | The call's promise settled | `ok`: false when it rejected |
 
+### PendingCall
+
+```ts
+interface PendingCall {
+  readonly key: string;
+  readonly background: boolean;
+  readonly startedAt: number; // Date.now() when the call was issued
+  readonly unanswered: number; // attempts that ended without an answer and were repeated
+}
+```
+
 `RequestOptions.key`, `RequestOptions.repeat` and `RequestOptions.background` are listed with
 [`RequestOptions`](./vue-mixins#requests-and-actions).
 
@@ -148,4 +162,6 @@ type CallEvent =
 | `idempotencyKeyHeader(key: string): string` | `key` as a Structured Field string: quoted, `"` and `\` escaped. Throws `TypeError` for an empty key or one with a character outside printable ASCII |
 | `issueCall<R>(promise: Promise<R>, key: string, background = false): ViewSetCall<R>` | Sets `key` on `promise` and returns it. Called synchronously from a transport's `request()`, it also gives `key` to the promise of the proxy method running around it. Reports `start` (with `background`) to the `onCallActivity` listeners at once and `settle` when `promise` settles |
 | `onCallActivity(listener: (event: CallEvent) => void): () => void` | Calls `listener` for every `CallEvent` of every call issued through a proxy, REST and muxws alike; returns the function that removes it. A listener that throws is logged with `console.error` and affects neither the call nor the other listeners |
+| `pendingCalls(): readonly PendingCall[]` | Every call issued through a proxy that has not settled, oldest first; a snapshot |
+| `pendingCallCount(includeBackground = false): number` | The number of unsettled calls issued through a proxy; background calls are counted only with `includeBackground` |
 | `retryNow(): void` | Ends the delay of every call waiting to send a repeat, so each sends it now; the delay of such a call's next repeat starts again from `repeat.delayMs`. A muxws call waiting for its peer to reconnect keeps waiting |
