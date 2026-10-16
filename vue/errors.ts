@@ -70,3 +70,24 @@ export function toFieldErrors(body: FieldErrorsBody): Record<string, ErrorDescri
   }
   return errors;
 }
+
+/**
+ * What a failed call throws over muxws, where there is no axios to raise anything.
+ *
+ * The shape mirrors `AxiosError` — `error.response.status`, `error.response.data` and
+ * `error.response.headers` — so a caller reads the same fields whichever transport the ViewSet
+ * speaks. Over HTTP axios raises its own error, already in that shape, and it is passed through
+ * untouched.
+ *
+ * `response` is always set here, unlike `AxiosError.response`, which is absent when the request
+ * never reached a reply.
+ */
+export class ViewSetRequestError extends Error {
+  readonly response: { status: number; data: unknown; headers: Record<string, string> };
+
+  constructor(status: number, data: unknown, headers: Record<string, string> = {}) {
+    super(`Request failed with status code ${status}`);
+    this.name = 'ViewSetRequestError';
+    this.response = { status, data, headers };
+  }
+}

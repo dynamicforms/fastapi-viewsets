@@ -106,6 +106,7 @@ the constructor options.
 | `basePath` | both | Base path to the resource, e.g. `'/items'` |
 | `validateSchema` | both | Set `false` to skip the startup schema check |
 | `repeat` | both | [`RepeatOptions`](../api/idempotency#repeatoptions) of a call whose attempt ended without an answer; default `{ withinMs: 600000, delayMs: 1000 }` |
+| `events` | both | The event client [`watch()`](#following-changes-watch) subscribes on; without it, a `muxwsViewSet` uses the client registered for its peer and a `restViewSet` throws from `watch()` |
 | `axiosInstance` | `restViewSet` | Custom axios instance; defaults to the global one |
 | `attemptTimeoutMs` | `restViewSet` | Timeout of one attempt in milliseconds; default `30000`, `0` for none |
 | `peer` | `muxwsViewSet` | The muxws peer, or a function returning one (required) |
@@ -120,6 +121,26 @@ A ViewSet's own methods reach `this.request(method, path, options?)` and `this.b
 `protected`, so a caller touching them is TS2445. `this.http` is not among them — a method that needs
 axios directly extends [`RestProxyImpl`](./vue-custom-endpoints) instead, at the cost of working on
 one transport only.
+
+### Following changes: watch()
+
+Every ViewSet has `watch(options)` besides its declared actions, whichever mixins it declares. It
+subscribes the ViewSet's `basePath` to the backend's `records_changed` event and calls `onChange`
+once per create, update or destroy action on that viewset:
+
+```ts
+const watching = api.watch({
+  fetch: true,
+  onChange(change) { rows.value = applyChanges(rows.value, change, api.pkFieldName); },
+  onResync() { void reload(); },
+});
+onUnmounted(() => watching.unsubscribe());
+```
+
+A `restViewSet` needs an event client in its options, `new ItemApi({ basePath: '/items', events })`;
+a `muxwsViewSet` uses the one created for its peer. The event client, the options and complete
+grid examples are in [Events (Vue)](./vue-events#watch-on-a-viewset); the reference is
+[`watch()`](../api/vue-mixins#watch).
 
 ### Overriding a declared action
 

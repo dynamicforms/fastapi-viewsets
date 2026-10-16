@@ -113,6 +113,78 @@ type ActionSurface<K extends KeyType, T, PK extends keyof T, A> = ('create' exte
 call a transport implements; see [custom endpoints](../guide/vue-custom-endpoints#this-request).
 `ViewSetCall`, `ViewSetActionCall` and `RepeatOptions` are in [Idempotency](./idempotency#frontend).
 
+## watch()
+
+Every ViewSet has `watch()`, whichever mixins it declares: a factory-built one, a `route_rest` or
+`route_muxws` proxy, and a class extending `RestProxyImpl` or `MuxwsProxyImpl`. The type of a
+`route_rest` proxy built from positional arguments, which take no `events`, carries no `watch()`.
+
+```ts
+interface ViewSetWatch<T, K extends KeyType = KeyType> {
+  watch(options: WatchOptions<T, K>): EventSubscription;
+}
+
+interface WatchOptions<T, K extends KeyType = KeyType> {
+  onChange: (change: RecordsChanged<T, K>, meta: EventMeta) => void;
+  onResync: () => void;
+  fetch?: boolean;
+  onError?: (error: unknown) => void;
+}
+
+/** The record type a mixin interface `M` names, read off its actions; `Record<string, unknown>` for none. */
+type RecordOf<M> = M extends { retrieve(...args: any[]): Promise<infer T> }
+  ? T
+  : M extends { list(...args: any[]): Promise<(infer T)[]> }
+    ? T
+    : M extends { create(...args: any[]): Promise<infer T> }
+      ? T
+      : M extends { listPage(...args: any[]): Promise<PaginatedList<infer T>> }
+        ? T
+        : M extends { listCursor(...args: any[]): Promise<CursorPage<infer T>> }
+          ? T
+          : Record<string, unknown>;
+
+/** The pk type a mixin interface `M` names, read off its actions; `KeyType` for none. */
+type KeyOf<M> = M extends { retrieve(pk: infer K): any }
+  ? K & KeyType
+  : M extends { destroy(pk: infer K): any }
+    ? K & KeyType
+    : M extends { update(pk: infer K, ...args: any[]): any }
+      ? K & KeyType
+      : KeyType;
+```
+
+`watch(options)` subscribes the ViewSet's `basePath` to `records_changed`
+([`RECORDS_CHANGED`](./vue-events#records-changed)) and returns the
+[`EventSubscription`](./vue-events#eventsubscription). The event client is `events` from the
+ViewSet's options; without it, a muxws ViewSet uses `eventsOf(peer)`, and a REST ViewSet throws.
+
+| Option | Meaning |
+|--------|---------|
+| `onChange` | Required. Called once per `records_changed` event of version `1` of the topic, with its [`RecordsChanged`](./vue-events#records-changed) payload and its [`EventMeta`](./vue-events#eventmeta) |
+| `onResync` | Required. Called on a resync of the topic, and for a `records_changed` event whose version is not `1`, with or without `fetch`: the caller re-reads what it displays |
+| `fetch` | `true`: every `created` and `updated` change without `record` is completed with `retrieve(pk)` before `onChange`, and a change whose retrieve answers 404 is dropped. A retrieve that fails with another error is passed to `onError` and the event ends in `onResync` instead of `onChange`. Default `false` |
+| `onError` | Called with the error of a refused `subscribe` or `poll` of the topic, and of a failed `fetch` retrieve |
+
+`onChange` and `onResync` are called in the order their events arrived, also while `fetch` waits for
+a retrieve. With `fetch`, `onChange` is called for an event whose changes were all dropped, with an
+empty `changes`. After `unsubscribe()` of the returned subscription no option is called, also for an
+event that arrived before it and whose retrieve is still in flight.
+
+The callbacks are function-typed properties: a callback whose parameter is typed other than the
+option's, a wider record type included, does not compile. An `onChange` that declares only the
+change parameter compiles.
+
+| Throws `Error` | When |
+|----------------|------|
+| ``[ViewSet {basePath}] watch() needs an event client: pass `events` in the ViewSet's options`` | A REST ViewSet without `events` |
+| `[ViewSet {basePath}] watch() found no event client for the peer: createEventClient({ peer }) registers one` | A muxws ViewSet without `events` whose peer has no client. Before a function `peer` has resolved, `watch()` returns, and once the peer resolves `ready` rejects with the error and `onError` is called with it; without `onError` it is rethrown in a microtask |
+
+`RestProxy<M>` and `MuxwsProxy<M>` carry `watch()` as `ViewSetWatch<RecordOf<M>, KeyOf<M>>`, a
+factory-built ViewSet as `ViewSetWatch<T, PkType<T, PK>>` ([`PkType`](./viewset-factory#signatures)).
+Applying the changes to a list of rows is [`applyChanges`](./vue-events#records-changed); the guide
+is [`watch()` on a ViewSet](../guide/vue-events#watch-on-a-viewset).
+
 ## Errors
 
 ```ts

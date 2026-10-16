@@ -23,7 +23,10 @@ import {
   type ViewSetCalls,
   withKeyHeader,
 } from './call';
+import type { KeyOf, RecordOf, ViewSetWatch } from './changes';
+import { type EventClient, eventsOf } from './events';
 import type { KeyType } from './mixins';
+import { readHeaders, readStatus } from './muxws-reply';
 import {
   FACTORY_BUILT,
   type HttpMethod,
@@ -70,8 +73,11 @@ export interface MuxwsPeerLike {
  */
 export type MuxwsPeerSource = MuxwsPeerLike | (() => MuxwsPeerLike | Promise<MuxwsPeerLike>);
 
-/** The mixin interface `M` with every method returning a `ViewSetCall`; see route_muxws. */
-export type MuxwsProxy<M> = ViewSetCalls<M>;
+/**
+ * The mixin interface `M` with every method returning a `ViewSetCall`, and `watch()`; see
+ * route_muxws.
+ */
+export type MuxwsProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>>;
 
 type ViewSetClass = abstract new (...args: any[]) => any;
 
@@ -132,6 +138,17 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
       this.peerPromise = Promise.resolve(peer).then((resolved) => this.adoptPeer(resolved));
     }
     return this.peerPromise;
+  }
+
+  /**
+   * `ProxyBaseOptions.events`, or the client registered for the peer: synchronously once the peer
+   * has resolved, as a promise before. Throws, or rejects, for a peer without a client.
+   */
+  protected override eventClient(): EventClient | Promise<EventClient> {
+    if (this.eventClientOption) return this.eventClientOption;
+    const peer = this.peer();
+    if (this.resolvedPeer) return clientOf(this.resolvedPeer, this.basePath);
+    return peer.then((resolved) => clientOf(resolved, this.basePath));
   }
 
   private adoptPeer(peer: MuxwsPeerLike): MuxwsPeerLike {
@@ -224,6 +241,16 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
   }
 }
 
+function clientOf(peer: MuxwsPeerLike, basePath: string): EventClient {
+  const client = eventsOf(peer);
+  if (!client) {
+    throw new Error(
+      `[ViewSet ${basePath}] watch() found no event client for the peer: createEventClient({ peer }) registers one`,
+    );
+  }
+  return client;
+}
+
 function isPeer(value: MuxwsPeerLike | Promise<MuxwsPeerLike>): value is MuxwsPeerLike {
   return typeof (value as { then?: unknown }).then !== 'function';
 }
@@ -299,29 +326,6 @@ function cleanQuery(query: QueryParams): Record<string, unknown> {
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined || value === null) continue;
     out[key] = value;
-  }
-  return out;
-}
-
-/**
- * A response with no `:status` is treated as 200. That is what a server which answered normally
- * looks like on a transport that has not been taught to say otherwise, and inventing a failure
- * for it would break every such server.
- */
-function readStatus(replyHeaders: Record<string, unknown> | null | undefined): number {
-  const raw = replyHeaders?.[':status'];
-  if (typeof raw === 'number') return raw;
-  if (typeof raw === 'string') {
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isNaN(parsed)) return parsed;
-  }
-  return 200;
-}
-
-function readHeaders(replyHeaders: Record<string, unknown> | null | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(replyHeaders ?? {})) {
-    if (!key.startsWith(':')) out[key] = String(value);
   }
   return out;
 }

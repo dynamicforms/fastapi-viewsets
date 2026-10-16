@@ -25,8 +25,8 @@ pip install "dynamicforms-fastapi-viewsets[muxws]"
 npm install muxws
 ```
 
-Requires muxws 0.4.0 or later: response headers on data frames, and open interceptors, whose headers a
-repeated call keeps.
+Requires muxws 0.4.0 or later in Python and 0.4.1 or later on npm: response headers on data frames,
+and open interceptors, whose headers a repeated call keeps.
 
 ## Server
 
@@ -152,7 +152,7 @@ given explicitly while the pk field and the mixin list are inferred from argumen
 `'id'` is an argument, not a type argument: it is checked against `Track`'s fields — a name that is
 not a field, or a field that cannot be a key, is TS2345 — and the pk type of `retrieve` and
 `destroy` is read off `Track['id']`. It is not repeated in the constructor options, which are
-`{ basePath, peer, validateSchema?, timeoutMs?, headers?, repeat? }`; `pkFieldName` and `declares`
+`{ basePath, peer, validateSchema?, timeoutMs?, headers?, repeat?, events? }`; `pkFieldName` and `declares`
 are bound by the factory and are TS2353 if passed.
 
 Inside the class body, `this.request(method, path, options?)` and `this.basePath` are reachable.

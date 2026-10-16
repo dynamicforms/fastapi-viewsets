@@ -166,6 +166,7 @@ describe('restViewSet', () => {
         'attemptTimeoutMs',
         'basePath',
         'declaredMixins',
+        'eventClientOption',
         'http',
         'pkFieldName',
         'repeatOptions',

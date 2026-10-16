@@ -84,6 +84,16 @@ register_events(router)
 - Custom events are declared once per name with `source()`; a second declaration of the name fails
   at import.
 
+On the frontend, a ViewSet follows its own topic:
+
+```ts
+const watching = tracks.watch({
+  fetch: true,
+  onChange(change) { rows.value = applyChanges(rows.value, change, tracks.pkFieldName); },
+  onResync() { void reload(); },
+});
+```
+
 The store is the truth and a push is an accelerator. Every event is recorded before it is pushed,
 each carries the `prev` it follows, and a frontend that misses one polls once or re-reads its state.
 A deployment without muxws is complete: its frontends poll.

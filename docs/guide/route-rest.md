@@ -187,6 +187,7 @@ proxy = new RestProxyImpl<number, Item, 'id'>({
 | `axiosInstance` | `AxiosInstance` | Optional custom axios instance (defaults to global axios) |
 | `attemptTimeoutMs` | `number` | Timeout of one attempt in milliseconds, passed to axios as `timeout`; default `30000`, `0` for none |
 | `repeat` | `RepeatOptions` | When a call whose attempt ended without an answer is repeated; default `{ withinMs: 600000, delayMs: 1000 }` |
+| `events` | `EventClient` | The event client [`watch()`](../api/vue-mixins#watch) subscribes on; without it, `watch()` throws |
 
 The difference between the two approaches:
 
@@ -195,7 +196,7 @@ The difference between the two approaches:
 | Typical use | Application code | Tests / advanced use |
 | Type inference | Via generic `M` parameter | Via generic type parameters on class |
 | ViewSet class argument | Required (type token) | Not needed |
-| Result | `RestProxy<M>` (typed as `M`, methods returning `ViewSetCall`) | `RestProxyImpl` instance |
+| Result | `RestProxy<M>` (typed as `M`, methods returning `ViewSetCall`, and `watch()`); `ViewSetCalls<M>`, without `watch()`, from the positional form | `RestProxyImpl` instance |
 
 Both produce the same underlying object — `route_rest` simply wraps `new RestProxyImpl(options)`.
 
@@ -231,6 +232,9 @@ rules and the options are in [Idempotent Calls](./idempotency#frontend).
 | `bulkPartialUpdate(records)` | `PATCH /items/bulk` |
 | `bulkDestroy(pks[])` | `DELETE /items/bulk` |
 | `lookup()` | `GET /items/lookup` |
+
+`watch(options)` sends no request to `/items`: it subscribes the topic `/items` on the proxy's
+`events` client; see [Events (Vue)](./vue-events#watch-on-a-viewset).
 
 ## Schema validation
 

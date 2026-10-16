@@ -687,7 +687,8 @@ the answer.
 
 ## Frontend
 
-The package has no frontend event client. The wire contract is the one on this page: `subscribe`
+The frontend event client and `watch()` on a ViewSet are described in [Events (Vue)](./vue-events).
+They speak the wire contract on this page: `subscribe`
 and `unsubscribe` over muxws, `poll` over either transport, and each push a one-shot stream whose
 headers carry `:event`, `:version`, `:topic`, `:rev` and `:prev` and whose payload is the event's
 payload. A poll entry carries `rev`, `prev`, `event`, `version` and `payload`.
