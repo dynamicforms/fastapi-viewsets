@@ -371,10 +371,10 @@ after the action has returned:
 
 | `execution.action` | `op` | `changes` |
 |---|---|---|
-| `create` | `created` | the returned record |
-| `bulk_create` | `created` | each returned record |
-| `update`, `partial_update` | `updated` | the returned record |
-| `bulk_update`, `bulk_partial_update` | `updated` | each returned record |
+| `create` | `created` | the pk of the returned record |
+| `bulk_create` | `created` | the pk of each returned record |
+| `update`, `partial_update` | `updated` | the pk of the returned record |
+| `bulk_update`, `bulk_partial_update` | `updated` | the pk of each returned record |
 | `destroy` | `deleted` | `kwargs["pk"]` |
 | `bulk_destroy` | `deleted` | each pk of `kwargs["pk"]` |
 
@@ -383,7 +383,6 @@ Any other action publishes nothing. An action that raises publishes nothing.
 ```python
 class Change(BaseModel):
     pk: Any
-    record: dict[str, Any] | None = None
 
 
 class RecordsChanged(Event):
@@ -393,7 +392,8 @@ class RecordsChanged(Event):
     changes: list[Change]
 ```
 
-One event per action, however many records it touched.
+One event per action, however many records it touched. A change carries the pk only; a frontend
+reads the changed record through the viewset's own `retrieve`.
 
 The topic is the routed base path: the request's path with as many trailing segments removed as the
 action's relative path (`cls.__viewset_metadata__["paths"][action]`) has, so that path parameters
@@ -415,14 +415,8 @@ the first execution raises `TypeError` naming the viewset.
 | Where | Value | Effect |
 |---|---|---|
 | `@action_configuration({ChangeEvents: False})` on a class or a `perform_*` method | | No event for that viewset or action |
-| `@action_configuration({ChangeEvents: {"record": True}})` | `bool`, default `False` | `created` and `updated` changes carry `record`, the returned record as `model_dump(mode="json")` |
 | `@action_configuration({ChangeEvents: {"topic": "..."}})` | `str` or `Callable[[ActionExecution], str]` | The topic to publish to, instead of the routed base path |
 | `@action_configuration({ChangeEvents(): {...}})` | a fresh instance as the key | The plugin on this viewset only; a global `ChangeEvents` publishes nothing for it |
-
-`record` carries the same bytes to every subscriber of the topic. A viewset whose `get_queryset`
-narrows rows per caller keeps the default: the frontend retrieves the pk and a 404 ends the matter
-for a row the caller may not see. `record: True` suits a viewset every subscriber reads in full, a
-code table.
 
 Subclass hooks, for what the configuration does not express:
 
@@ -564,14 +558,19 @@ client. A REST ViewSet constructed without `events` throws from `watch()`.
 |---|---|
 | `onChange(change: RecordsChanged<T, K>)` | Required. Called once per event |
 | `onResync()` | Required. Called on a resync of the topic |
-| `fetch` | `true`: every `created` and `updated` change without `record` is completed with `retrieve(pk)` before `onChange`; a change whose retrieve answers 404 is dropped. Default `false` |
+| `fetch` | `true`: before `onChange`, every `created` and `updated` change gets `record`, the record `retrieve(pk)` answers; a change whose retrieve answers 404 is dropped. Default `false` |
 | `onError(error)` | A refused subscribe or poll of the topic |
 
+`RecordsChanged<T, K>`, the argument of `onChange`, is
+`{ op: 'created' | 'updated' | 'deleted'; changes: { pk: K; record?: T }[] }`.
+The backend sends `pk` only; `record` is set by `watch({ fetch: true })` from `retrieve(pk)`, so a
+change has no `record` when `fetch` is `false`.
+
 `applyChanges(rows, change, pkFieldName)` returns a new array: `deleted` removes the rows with the
-changed pks; `created` and `updated` replace the row with the same pk, or append the record when
-there is none, and skip a change without `record`. A grid that holds the whole data set and sorts
-and filters locally needs nothing else; one that pages on the server re-reads its page in
-`onResync` and `onChange` alike.
+changed pks; `created` and `updated` replace the row with the same pk by `record`, or append
+`record` when there is none, and skip a change without `record`, which is every such change when
+`fetch` is `false`. A grid that holds the whole data set and sorts and filters locally needs
+nothing else; one that pages on the server re-reads its page in `onResync` and `onChange` alike.
 
 ## Changes to existing code
 
@@ -639,10 +638,14 @@ only module of the package that imports `redis`.
 - **Two topic syntaxes.** A path is a viewset, a name is a declared source, and the two cannot
   name the same thing. A name is declared once per process, so two modules cannot publish under one
   name without one of them failing at import.
-- **`record` is opt-in.** A payload reaches every subscriber of a topic with the same bytes, and
-  `ViewsetTopics` admits a caller the viewset's `list_items` admits; row-level narrowing in
-  `get_queryset` is invisible to both. A pk is safe for every subscriber; a record is safe only
-  where every subscriber may read every row.
+- **A change carries pks only.** The record an action returns is its return value, built in the
+  writer's context and not yet serialized; the viewset's `retrieve` answers through the endpoint's
+  `response_model` with its aliases, after command middleware that may reshape the body, and in the
+  reader's context. A frontend reads a record with its normal code only in the second form. A
+  payload also reaches every subscriber of a topic with the same bytes, and `ViewsetTopics` admits
+  a caller the viewset's `list_items` admits; row-level narrowing in `get_queryset` is invisible to
+  both. A pk is safe for every subscriber, and `retrieve` answers 404 for a row the reader may not
+  read.
 - **No authorizer, no subscription.** A topic is a string any connected client can name. Admission
   is declared, `allow_all` included, never assumed.
 - **The general layer lives here, not in taskwire.** taskwire depends on this package in both

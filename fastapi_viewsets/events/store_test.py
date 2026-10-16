@@ -192,7 +192,7 @@ async def test_drop_removes_the_counter_and_the_log(store, clock):
 
 @pytest.mark.asyncio
 async def test_payloads_round_trip_as_json_values(store):
-    payload = {"op": "created", "changes": [{"pk": 1, "record": None}], "text": 'čšž "quoted"'}
+    payload = {"op": "created", "changes": [{"pk": 1}], "text": 'čšž "quoted"'}
     await store.append("t", "records_changed", payload, 1)
     assert await store.since("t", 0) == [LoggedEvent(NOW, 0, "records_changed", payload, 1)]
 

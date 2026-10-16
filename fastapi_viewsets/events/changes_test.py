@@ -57,8 +57,8 @@ def logged(topic: str) -> list[tuple[str, Any]]:
     return [(entry.name, entry.payload) for entry in entries]
 
 
-def changes(*pks, records=None) -> list[dict]:
-    return [{"pk": pk, "record": None if records is None else records[i]} for i, pk in enumerate(pks)]
+def changes(*pks) -> list[dict]:
+    return [{"pk": pk} for pk in pks]
 
 
 def app_for(router: APIRouter, prefix: str = "") -> FastAPI:
@@ -228,20 +228,6 @@ def test_false_on_a_perform_method_disables_its_action_only():
     assert logged("/tracks") == [("records_changed", {"op": "deleted", "changes": changes(2)})]
 
 
-def test_record_true_carries_the_returned_record_on_created_and_updated():
-    router = APIRouter()
-    collection_viewset(router, decorators=[action_configuration({ChangeEvents: {"record": True}})])
-    client = TestClient(app_for(router))
-    client.post("/tracks/bulk", json=[{"title": "Three"}, {"title": "Four"}])
-    client.patch("/tracks/1", json={"title": "Uno"})
-    client.delete("/tracks/2")
-    assert [payload for _, payload in logged("/tracks")] == [
-        {"op": "created", "changes": changes(3, 4, records=[{"id": 3, "title": "Three"}, {"id": 4, "title": "Four"}])},
-        {"op": "updated", "changes": changes(1, records=[{"id": 1, "title": "Uno"}])},
-        {"op": "deleted", "changes": changes(2)},
-    ]
-
-
 def test_a_configured_topic_replaces_the_routed_base_path():
     router = APIRouter()
     collection_viewset(router, decorators=[action_configuration({ChangeEvents: {"topic": "catalog:7"}})])
@@ -278,6 +264,12 @@ def test_a_value_of_another_shape_raises_type_error(config):
     events = ChangeEvents()
     with pytest.raises(TypeError, match="ChangeEvents is configured with"):
         events.options_for(Context({}, action_configuration={ChangeEvents: config}))
+
+
+def test_a_record_option_raises_type_error():
+    events = ChangeEvents()
+    with pytest.raises(TypeError, match="unknown option\\(s\\) 'record'"):
+        events.options_for(Context({}, action_configuration={ChangeEvents: {"record": True}}))
 
 
 def test_true_and_no_value_are_the_defaults():
@@ -401,7 +393,7 @@ def test_an_execution_outside_any_call_publishes_to_the_base_path():
 def test_an_injected_instance_publishes_for_its_viewset_alone(monkeypatch):
     monkeypatch.setattr(settings, "viewsets_command_middleware", [])
     router = APIRouter()
-    collection_viewset(router, decorators=[action_configuration({ChangeEvents(): {"record": True}})])
+    collection_viewset(router, decorators=[action_configuration({ChangeEvents(): True})])
     other = APIRouter()
 
     @route_viewset(other, "/others", pk_field_name="id")
@@ -414,15 +406,13 @@ def test_an_injected_instance_publishes_for_its_viewset_alone(monkeypatch):
     client = TestClient(app)
     client.patch("/tracks/1", json={"title": "Uno"})
     client.patch("/others/1", json={"title": "Uno"})
-    assert logged("/tracks") == [
-        ("records_changed", {"op": "updated", "changes": changes(1, records=[{"id": 1, "title": "Uno"}])})
-    ]
+    assert logged("/tracks") == [("records_changed", {"op": "updated", "changes": changes(1)})]
     assert logged("/others") == []
 
 
 def test_an_injected_instance_replaces_the_global_one_for_its_viewset():
     router = APIRouter()
-    collection_viewset(router, decorators=[action_configuration({ChangeEvents(): {"record": True}})])
+    collection_viewset(router, decorators=[action_configuration({ChangeEvents(): {"topic": "/tracks:injected"}})])
     other = APIRouter()
 
     @route_viewset(other, "/others", pk_field_name="id")
@@ -435,9 +425,8 @@ def test_an_injected_instance_replaces_the_global_one_for_its_viewset():
     client = TestClient(app)
     client.patch("/tracks/1", json={"title": "Uno"})
     client.patch("/others/1", json={"title": "Uno"})
-    assert logged("/tracks") == [
-        ("records_changed", {"op": "updated", "changes": changes(1, records=[{"id": 1, "title": "Uno"}])})
-    ]
+    assert logged("/tracks:injected") == [("records_changed", {"op": "updated", "changes": changes(1)})]
+    assert logged("/tracks") == []
     assert logged("/others") == [("records_changed", {"op": "updated", "changes": changes(1)})]
 
 
@@ -465,7 +454,7 @@ def test_a_class_key_without_a_global_instance_raises_value_error_at_request_tim
     monkeypatch.setattr(settings, "viewsets_command_middleware", [])
     container = [Track(id=1, title="One")]
     router = APIRouter()
-    collection_viewset(router, container, decorators=[action_configuration({ChangeEvents: {"record": True}})])
+    collection_viewset(router, container, decorators=[action_configuration({ChangeEvents: {"topic": "codes"}})])
     client = TestClient(app_for(router), raise_server_exceptions=True)
     with pytest.raises(ValueError, match="ChangeEvents is configured via @action_configuration"):
         client.delete("/tracks/1")
@@ -625,8 +614,8 @@ def test_records_changed_is_an_event_named_records_changed_of_version_1():
     assert issubclass(RecordsChanged, Event)
     assert RecordsChanged.event_name == "records_changed"
     assert RecordsChanged.event_version == 1
-    event = RecordsChanged(op="created", changes=[Change(pk=1, record={"id": 1})])
-    assert event.model_dump(mode="json") == {"op": "created", "changes": [{"pk": 1, "record": {"id": 1}}]}
+    event = RecordsChanged(op="created", changes=[Change(pk=1)])
+    assert event.model_dump(mode="json") == {"op": "created", "changes": [{"pk": 1}]}
 
 
 # a celery_viewset action

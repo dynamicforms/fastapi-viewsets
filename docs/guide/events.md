@@ -332,8 +332,8 @@ nor authorizes the topic.
     "/api/music": {
       "rev": 19,
       "events": [
-        {"rev": 18, "prev": 17, "event": "records_changed", "version": 1, "payload": {"op": "updated", "changes": [{"pk": 3, "record": null}]}},
-        {"rev": 19, "prev": 18, "event": "records_changed", "version": 1, "payload": {"op": "deleted", "changes": [{"pk": 4, "record": null}]}}
+        {"rev": 18, "prev": 17, "event": "records_changed", "version": 1, "payload": {"op": "updated", "changes": [{"pk": 3}]}},
+        {"rev": 19, "prev": 18, "event": "records_changed", "version": 1, "payload": {"op": "deleted", "changes": [{"pk": 4}]}}
       ]
     },
     "imports:7": {"rev": 3, "events": []},
@@ -525,17 +525,16 @@ after each of its write actions:
 
 | `execution.action` | `op` | `changes` |
 |--------------------|------|-----------|
-| `create` | `created` | the returned record |
-| `bulk_create` | `created` | each returned record |
-| `update`, `partial_update` | `updated` | the returned record |
-| `bulk_update`, `bulk_partial_update` | `updated` | each returned record |
+| `create` | `created` | the pk of the returned record |
+| `bulk_create` | `created` | the pk of each returned record |
+| `update`, `partial_update` | `updated` | the pk of the returned record |
+| `bulk_update`, `bulk_partial_update` | `updated` | the pk of each returned record |
 | `destroy` | `deleted` | the `pk` argument |
 | `bulk_destroy` | `deleted` | each pk of the `pk` argument |
 
 ```python
 class Change(BaseModel):
     pk: Any
-    record: dict[str, Any] | None = None
 
 
 class RecordsChanged(Event):
@@ -548,6 +547,12 @@ class RecordsChanged(Event):
 One event per action, however many records it touched. Any other action publishes nothing; an
 action that raises publishes nothing. A `ViewSetResult` returned by the action contributes its
 `body`.
+
+A change carries the pk only. A frontend reads a changed record through the viewset's own
+`retrieve`, which answers in the endpoint's format (its `response_model`, aliases and command
+middleware applied) and in the reader's context: a `get_queryset` that narrows rows per caller
+answers 404 for a row the reader may not read. The record an action returns has neither: it is
+built in the writer's context, before the response is serialized.
 
 The pk of a returned record, a model or a dict, is read from the field named by
 `__viewset_metadata__["pk_field_name"]` (the `pk_field_name` argument of `route_viewset`); without
@@ -592,22 +597,16 @@ does not run.
 |-----|-------|--------|
 | `ChangeEvents` | `False` | No event for that viewset or action |
 | `ChangeEvents` | `True` or absent | The defaults |
-| `ChangeEvents` | `{"record": True}` | `created` and `updated` changes carry `record`, the returned record as `model_dump(mode="json")`; default `False` |
 | `ChangeEvents` | `{"topic": "..."}` | A `str`, or a `Callable[[ActionExecution], str]`, the topic to publish to instead of the routed base path |
 | `ChangeEvents()` | `None`, `True` or a dict as above | Injects an instance for that viewset or action only; the instance reads the value under its own key, else under its class |
 
-Any other value, or a dict with a key other than `record` and `topic`, raises `TypeError`. A class
+Any other value, or a dict with a key other than `topic`, raises `TypeError`. A class
 key requires a `ChangeEvents` instance in `settings.viewsets_command_middleware`; without one it
 raises `ValueError` at request time (see
 [Configuring an existing middleware](./action-configuration#configuring-an-existing-middleware)).
 An injected instance replaces the `ChangeEvents` of the global list for its viewset or action: while
 the action configuration has a `ChangeEvents` instance as a key, a `ChangeEvents` that is not one
 of its keys publishes nothing, so the action publishes one event.
-
-`record` carries the same payload to every subscriber of the topic. A viewset whose `get_queryset`
-narrows rows per caller keeps the default: the frontend retrieves each pk, and the retrieve answers
-404 for a row the caller may not read. `record: True` suits a viewset every subscriber reads in
-full, such as a code table.
 
 ### Subclass hooks
 

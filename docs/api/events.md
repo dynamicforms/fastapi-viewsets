@@ -297,10 +297,10 @@ is `False`.
 | `async execute(execution, call_next) -> Any` | For the eight write actions, unless disabled or `replaced_for(execution)`: resolves and validates the topic and, for `created` and `updated`, the pk field, then runs `call_next()` and publishes one `RecordsChanged`. Returns the action's result. An exception of the publish, `store.append`'s included, propagates after the action has run. Any other action, a disabled one and a replaced one pass through |
 | `replaced_for(execution) -> bool` | Whether the execution's action configuration has `ChangeEvents` instances as keys and this instance is not one of them |
 | `config_from(context) -> Any` | The value configured under this instance as the key, else under its class |
-| `options_for(context) -> dict[str, Any] \| None` | `{}` for `None` and `True`, `None` for `False`, the dict for a dict of `record` and `topic`. Raises `TypeError` for any other value or key |
+| `options_for(context) -> dict[str, Any] \| None` | `{}` for `None` and `True`, `None` for `False`, the dict for a dict with no key other than `topic`. Raises `TypeError` for any other value or key |
 | `topic_for(execution) -> str` | The configured `topic` (a callable is called with `execution`); else, when `execution.parent` is `None`, `context["fastapi_viewsets.events.topic"]`; else `__viewset_metadata__["base_path"]`. Raises `TypeError` with none of the three |
 | `pk_field_for(execution) -> str` | `__viewset_metadata__["pk_field_name"]`, else the viewset's `pk_field_name`, else its `pk_field`. Raises `TypeError` naming the viewset with none of the three |
-| `changes_for(execution, op: str, result: Any) -> list[Change]` | For `deleted`, one `Change` per pk of the `pk` argument (keyword or positional); otherwise one per returned record, its pk read from the `pk_field_for` field, with `record` when the options set `record`. A `ViewSetResult` contributes its `body`. A record without the pk field raises `TypeError` |
+| `changes_for(execution, op: str, result: Any) -> list[Change]` | For `deleted`, one `Change` per pk of the `pk` argument (keyword or positional); otherwise one per returned record, its pk read from the `pk_field_for` field. A `ViewSetResult` contributes its `body`. A record without the pk field raises `TypeError` |
 
 | `execution.action` | `op` |
 |--------------------|------|
@@ -314,7 +314,6 @@ Configuration, read with `config_from`:
 |-------|--------|
 | `None`, `True` | Defaults |
 | `False` | No event |
-| `{"record": bool}` | `created` and `updated` changes carry the record as `model_dump(mode="json")` (a record that is not a model: `pydantic_core.to_jsonable_python`); default `False` |
 | `{"topic": str \| Callable[[ActionExecution], str]}` | The topic to publish to |
 
 A `ChangeEvents` instance as a key injects that instance for the viewset or action; it reads the
@@ -325,7 +324,7 @@ value under its own key, else under its class, and the `ChangeEvents` of
 
 | Name | Description |
 |------|-------------|
-| `Change` | `BaseModel`: `pk: Any`, `record: dict[str, Any] \| None = None` |
+| `Change` | `BaseModel`: `pk: Any`. A frontend reads the changed record through the viewset's `retrieve`, which answers in the endpoint's format and in the reader's context |
 | `RecordsChanged` | `Event` with `event_name = "records_changed"` and `event_version = 1`: `op: Literal["created", "updated", "deleted"]`, `changes: list[Change]` |
 | `TOPIC_CONTEXT_KEY` | `"fastapi_viewsets.events.topic"` |
 | `routed_base_path(request: Request) -> str \| None` | The `include_router` prefixes followed by `base_path` of the viewset whose endpoint the request was routed to, with the values of the request's path parameters: the request's path relative to `root_path`, with as many trailing segments removed as `__viewset_metadata__["paths"][action]` has. `None` when the matched endpoint is not one `route_viewset` registered |
