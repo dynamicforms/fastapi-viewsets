@@ -49,6 +49,8 @@ dev = [
     "asgiref",
     "PyJWT",
     "muxws[starlette,websockets]>=0.4.1",
+    "ruff",
+    "uvicorn",
 ]
 
 [project.urls]
