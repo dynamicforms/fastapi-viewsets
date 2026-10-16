@@ -346,10 +346,14 @@ never assumed.
 
 ### The general layer lives here, not in taskwire
 
-taskwire depends on this package in both languages (`taskwire[viewsets]`, `taskwire[muxws]`,
-`taskwire/muxws` on npm), so the shared mechanism can only sit below it. taskwire imports its polling
-ladder from here; taskwire's push path may later publish its envelopes through
-this store, with a delivery filter carrying its per-connection decisions, which is what
+taskwire's connectors for this package (`taskwire[viewsets]`, `taskwire[muxws]`, `taskwire/muxws` on
+npm) depend on it, so the shared mechanism can only sit below taskwire. taskwire itself lives
+without this package: it keeps its own copy of the polling ladder this package has in
+`vue/poll.ts`, a pure function of about a hundred lines, rather than making this package a required
+peer of its core.
+`taskwire/muxws` composes `handleEventStream()` into the peer's stream handler, so one socket
+carries both. taskwire's push path may later publish its envelopes through this store, with a
+delivery filter carrying its per-connection decisions, which is what
 `viewsets_event_delivery_filters` is for.
 
 ## Settled, kept for the reasoning
