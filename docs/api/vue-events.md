@@ -126,7 +126,7 @@ interface EventMeta {
 |-------|-------|
 | `topic` | The topic the event was published to. |
 | `rev` | The event's rev on its topic. |
-| `prev` | The rev of the event before it on its topic. |
+| `prev` | The rev the client held for the topic before it applied the event: the push's `:prev`, or the poll answer entry's `prev`, which chains the events of the answer. |
 | `version` | The backend event's `event_version`, an integer of at least 1: the push's `:version` header, or the poll answer entry's `version`. |
 
 One frozen object per applied event, passed to every subscription the event is dispatched to.
@@ -206,7 +206,7 @@ Per topic the client holds `rev`, the rev of the last event it applied or of the
 | push | `rev` above the held rev, any other `prev` | one `poll` of that topic from the held rev |
 | push | the topic holds no rev yet | held, and replayed by these rules once the first answer sets the rev |
 | subscribe or poll answer | the topic holds no rev yet | the held rev becomes the answer's `rev`; `ready` resolves |
-| poll answer | `events` is an array | each event as above |
+| poll answer | `events` is an array | each event as above; an event whose `prev` is below the held rev and whose `rev` is above it is applied as one whose `prev` equals the held rev. After the events, the held rev becomes the answer's `rev` when that is larger: the answer leaves out the events the BE's delivery filters refuse, and its `rev` covers them |
 | poll answer | `events: null` | `onResync` on every subscription of the topic; the held rev becomes the answer's `rev` |
 | poll answer | `rev` below the cursor the poll carried | `onResync`; the held rev becomes the answer's `rev` |
 | poll answer | an event in `events` that is malformed (without a `rev` or `prev` that is a number or a string of one, a string `event`, or a `version` that is an integer of at least 1 or a string of one), or is neither applied nor ignored | `onResync`; the held rev becomes the answer's `rev` |

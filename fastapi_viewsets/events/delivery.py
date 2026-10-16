@@ -24,20 +24,26 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, eq=False)
 class Subscription:
-    """One socket following one topic."""
+    """
+    One socket following one topic, or, for the delivery filters of a poll, the poll of one topic.
+    """
 
-    peer: Any
-    """The muxws peer of the socket."""
+    peer: Any | None
+    """The muxws peer of the socket. On a poll, the peer the poll arrived on; None for a poll over
+    REST."""
     context: Context
-    """The context of the `subscribe` call that made the subscription."""
+    """The context of the `subscribe` call that made the subscription; on a poll, the context of the
+    poll call."""
     topic: str
 
 
 DeliveryFilter = Callable[[Subscription, str, int, str, Any, int], "bool | Awaitable[bool]"]
 """
 `filter(subscription, topic, rev, event_name, payload, version)`, sync or async; `version` is the
-event's `event_version`. False skips the push to that subscription's socket; an exception counts as
-True.
+event's `event_version`. The filters run on every push and on every event a poll answers. False
+skips the push to that subscription's socket, or leaves the event out of the poll answer; an
+exception counts as True. On a poll, `subscription` is built from the poll call and its `peer` is
+None for a poll over REST.
 """
 
 # topic -> id(peer) -> Subscription
@@ -187,7 +193,13 @@ def _is_connection_lost(error: BaseException) -> bool:
     return any(cls.__name__ == "ConnectionLost" for cls in type(error).__mro__)
 
 
-async def _admitted(subscription: Subscription, topic: str, rev: int, name: str, payload: Any, version: int) -> bool:
+async def passes_filters(
+    subscription: Subscription, topic: str, rev: int, name: str, payload: Any, version: int
+) -> bool:
+    """
+    Runs `settings.viewsets_event_delivery_filters` in order and answers False when one of them
+    answers False. A filter that raises counts as True; the exception is logged at debug level.
+    """
     for delivery_filter in settings.viewsets_event_delivery_filters:
         try:
             result = delivery_filter(subscription, topic, rev, name, payload, version)
@@ -207,7 +219,7 @@ async def _push(
     subscription: Subscription, topic: str, rev: int, prev: int, name: str, payload: Any, version: int
 ) -> None:
     async def push() -> None:
-        if await _admitted(subscription, topic, rev, name, payload, version):
+        if await passes_filters(subscription, topic, rev, name, payload, version):
             headers = {":event": name, ":version": version, ":topic": topic, ":rev": rev, ":prev": prev}
             await subscription.peer.notify(payload, headers=headers)
 

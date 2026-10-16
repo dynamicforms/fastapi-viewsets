@@ -130,7 +130,7 @@ the handler does not know reaches it like any other.
 |-------|-------|
 | `topic` | The topic of the event |
 | `rev` | The event's rev |
-| `prev` | The rev of the event before it on the topic |
+| `prev` | The rev the client held for the topic before it applied the event |
 | `version` | The event's version: the push's `:version` header, or the poll answer entry's `version` |
 
 A push without a usable `:version`, an integer of at least 1 or a string of one, is ignored, as a
@@ -139,15 +139,22 @@ push without a usable rev is. A poll answer entry without one is malformed, and 
 ## Push, gap, poll and resync
 
 Per topic the client holds the rev of the last event it applied. Every event carries its own `rev`
-and `prev`, the rev of the event before it on that topic:
+and `prev`: on a push, the rev of the event before it on that topic; in a poll answer, the rev of the
+event before it in the answer, the cursor for the first:
 
 | Arrival | Action |
 |---------|--------|
 | `prev` equals the held rev | applied: `onEvent`, and the held rev becomes the event's `rev` |
 | `rev` at most the held rev | ignored |
 | a push with a larger `rev` and another `prev` | a gap: one `poll` of the topic from the held rev |
-| a poll answer with `events` | each event by the rules above |
+| a poll answer with `events` | each event by the rules above; an event whose `prev` is below the held rev and whose `rev` is above it is applied too. Then the held rev becomes the answer's `rev` when that is larger |
 | a poll answer with `events: null`, or with a `rev` below the cursor the poll carried | a resync: `onResync` on every subscription of the topic, and the held rev becomes the answer's |
+
+The backend's [delivery filters](./events#delivery-filters) run on pushes and polls alike. An event
+they refuse is neither pushed nor polled; the next push names it as its `prev`, which the client
+answers with one gap poll. The poll answer leaves the refused event out, its events chain from the
+cursor, and its `rev` covers the refused event, so the topic moves on without a resync and without
+another poll.
 
 The backend keeps the last events of each topic in a [log](./events#the-log-and-the-counter) that expires
 `settings.viewsets_event_log_ttl` seconds after the topic's last event. A gap of
