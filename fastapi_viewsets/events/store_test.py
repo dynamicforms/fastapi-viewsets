@@ -52,41 +52,41 @@ def clock(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_the_first_event_of_a_topic_has_rev_now_and_prev_0(store):
-    assert await store.append("/api/music", "records_changed", {"a": 1}) == (NOW, 0)
+    assert await store.append("/api/music", "records_changed", {"a": 1}, 1) == (NOW, 0)
 
 
 @pytest.mark.asyncio
 async def test_two_events_in_one_millisecond_receive_consecutive_revs(store):
-    first = await store.append("t", "e", 1)
-    second = await store.append("t", "e", 2)
-    third = await store.append("t", "e", 3)
+    first = await store.append("t", "e", 1, 1)
+    second = await store.append("t", "e", 2, 1)
+    third = await store.append("t", "e", 3, 1)
     assert (first, second, third) == ((NOW, 0), (NOW + 1, NOW), (NOW + 2, NOW + 1))
 
 
 @pytest.mark.asyncio
 async def test_the_rev_follows_the_clock_once_the_clock_is_ahead(store, clock):
-    await store.append("t", "e", 1)
+    await store.append("t", "e", 1, 1)
     clock.now = NOW + 500
-    assert await store.append("t", "e", 2) == (NOW + 500, NOW)
+    assert await store.append("t", "e", 2, 1) == (NOW + 500, NOW)
 
 
 @pytest.mark.asyncio
 async def test_a_clock_behind_the_counter_does_not_lower_the_rev(store, clock):
-    await store.append("t", "e", 1)
+    await store.append("t", "e", 1, 1)
     clock.now = NOW - 10_000
-    assert await store.append("t", "e", 2) == (NOW + 1, NOW)
+    assert await store.append("t", "e", 2, 1) == (NOW + 1, NOW)
 
 
 @pytest.mark.asyncio
 async def test_topics_have_independent_revs(store):
-    await store.append("a", "e", 1)
-    await store.append("a", "e", 2)
-    assert await store.append("b", "e", 1) == (NOW, 0)
+    await store.append("a", "e", 1, 1)
+    await store.append("a", "e", 2, 1)
+    assert await store.append("b", "e", 1, 1) == (NOW, 0)
 
 
 @pytest.mark.asyncio
 async def test_concurrent_appends_receive_distinct_ordered_revs(store):
-    results = await asyncio.gather(*(store.append("t", "e", index) for index in range(20)))
+    results = await asyncio.gather(*(store.append("t", "e", index, 1) for index in range(20)))
     revs = sorted(rev for rev, _prev in results)
     assert revs == list(range(NOW, NOW + 20))
     chain = {prev: rev for rev, prev in results}
@@ -99,18 +99,18 @@ async def test_concurrent_appends_receive_distinct_ordered_revs(store):
 @pytest.mark.asyncio
 async def test_append_raises_overflow_error_at_2_53_and_changes_nothing(store, clock):
     clock.now = MAX_REV - 1
-    assert await store.append("t", "e", 1) == (MAX_REV - 1, 0)
+    assert await store.append("t", "e", 1, 1) == (MAX_REV - 1, 0)
     with pytest.raises(OverflowError):
-        await store.append("t", "e", 2)
+        await store.append("t", "e", 2, 1)
     assert await store.revs(["t"]) == {"t": MAX_REV - 1}
-    assert await store.since("t", 0) == [LoggedEvent(MAX_REV - 1, 0, "e", 1)]
+    assert await store.since("t", 0) == [LoggedEvent(MAX_REV - 1, 0, "e", 1, 1)]
 
 
 @pytest.mark.asyncio
 async def test_revs_reads_every_topic_and_an_unknown_one_is_0(store):
-    await store.append("a", "e", 1)
-    await store.append("a", "e", 2)
-    await store.append("/b", "e", 1)
+    await store.append("a", "e", 1, 1)
+    await store.append("a", "e", 2, 1)
+    await store.append("/b", "e", 1, 1)
     assert await store.revs(["a", "/b", "c"]) == {"a": NOW + 1, "/b": NOW, "c": 0}
     assert await store.revs([]) == {}
 
@@ -118,17 +118,17 @@ async def test_revs_reads_every_topic_and_an_unknown_one_is_0(store):
 @pytest.mark.asyncio
 async def test_since_the_current_rev_is_empty(store):
     assert await store.since("t", 0) == []
-    await store.append("t", "e", 1)
+    await store.append("t", "e", 1, 1)
     assert await store.since("t", NOW) == []
 
 
 @pytest.mark.asyncio
 async def test_since_answers_the_chain_from_the_cursor(store):
     for index in range(4):
-        await store.append("t", "records_changed", {"index": index})
+        await store.append("t", "records_changed", {"index": index}, 1)
     assert await store.since("t", NOW + 1) == [
-        LoggedEvent(NOW + 2, NOW + 1, "records_changed", {"index": 2}),
-        LoggedEvent(NOW + 3, NOW + 2, "records_changed", {"index": 3}),
+        LoggedEvent(NOW + 2, NOW + 1, "records_changed", {"index": 2}, 1),
+        LoggedEvent(NOW + 3, NOW + 2, "records_changed", {"index": 3}, 1),
     ]
     assert [event.rev for event in await store.since("t", 0)] == [NOW, NOW + 1, NOW + 2, NOW + 3]
 
@@ -137,10 +137,10 @@ async def test_since_answers_the_chain_from_the_cursor(store):
 async def test_since_a_cursor_no_kept_event_follows_is_none(store):
     settings.viewsets_event_log_size = 2
     for index in range(4):
-        await store.append("t", "e", index)
+        await store.append("t", "e", index, 1)
     assert await store.since("t", NOW + 1) == [
-        LoggedEvent(NOW + 2, NOW + 1, "e", 2),
-        LoggedEvent(NOW + 3, NOW + 2, "e", 3),
+        LoggedEvent(NOW + 2, NOW + 1, "e", 2, 1),
+        LoggedEvent(NOW + 3, NOW + 2, "e", 3, 1),
     ]
     assert await store.since("t", NOW) is None
     assert await store.since("t", 0) is None
@@ -149,7 +149,7 @@ async def test_since_a_cursor_no_kept_event_follows_is_none(store):
 
 @pytest.mark.asyncio
 async def test_since_a_cursor_ahead_of_the_rev_is_none(store):
-    await store.append("t", "e", 1)
+    await store.append("t", "e", 1, 1)
     assert await store.since("t", NOW + 100) is None
     assert await store.since("unknown", NOW) is None
 
@@ -157,8 +157,8 @@ async def test_since_a_cursor_ahead_of_the_rev_is_none(store):
 @pytest.mark.asyncio
 async def test_with_log_size_0_every_cursor_behind_is_none(store):
     settings.viewsets_event_log_size = 0
-    await store.append("t", "e", 1)
-    await store.append("t", "e", 2)
+    await store.append("t", "e", 1, 1)
+    await store.append("t", "e", 2, 1)
     assert await store.since("t", NOW) is None
     assert await store.since("t", NOW + 1) == []
     assert await store.revs(["t"]) == {"t": NOW + 1}
@@ -167,34 +167,45 @@ async def test_with_log_size_0_every_cursor_behind_is_none(store):
 @pytest.mark.asyncio
 async def test_the_log_expires_and_the_counter_does_not(store, clock):
     settings.viewsets_event_log_ttl = 0.05
-    await store.append("t", "e", 1)
-    await store.append("t", "e", 2)
-    assert await store.since("t", NOW) == [LoggedEvent(NOW + 1, NOW, "e", 2)]
+    await store.append("t", "e", 1, 1)
+    await store.append("t", "e", 2, 1)
+    assert await store.since("t", NOW) == [LoggedEvent(NOW + 1, NOW, "e", 2, 1)]
     await asyncio.sleep(0.12)
     clock.now = NOW + 120
     assert await store.since("t", NOW) is None
     assert await store.since("t", NOW + 1) == []
     assert await store.revs(["t"]) == {"t": NOW + 1}
-    assert await store.append("t", "e", 3) == (NOW + 120, NOW + 1)
-    assert await store.since("t", NOW + 1) == [LoggedEvent(NOW + 120, NOW + 1, "e", 3)]
+    assert await store.append("t", "e", 3, 1) == (NOW + 120, NOW + 1)
+    assert await store.since("t", NOW + 1) == [LoggedEvent(NOW + 120, NOW + 1, "e", 3, 1)]
 
 
 @pytest.mark.asyncio
 async def test_drop_removes_the_counter_and_the_log(store, clock):
-    await store.append("t:1", "e", 1)
-    await store.append("t:1", "e", 2)
+    await store.append("t:1", "e", 1, 1)
+    await store.append("t:1", "e", 2, 1)
     await store.drop("t:1")
     assert await store.revs(["t:1"]) == {"t:1": 0}
     assert await store.since("t:1", NOW) is None
     clock.now = NOW + 50
-    assert await store.append("t:1", "e", 3) == (NOW + 50, 0)
+    assert await store.append("t:1", "e", 3, 1) == (NOW + 50, 0)
 
 
 @pytest.mark.asyncio
 async def test_payloads_round_trip_as_json_values(store):
     payload = {"op": "created", "changes": [{"pk": 1, "record": None}], "text": 'čšž "quoted"'}
-    await store.append("t", "records_changed", payload)
-    assert await store.since("t", 0) == [LoggedEvent(NOW, 0, "records_changed", payload)]
+    await store.append("t", "records_changed", payload, 1)
+    assert await store.since("t", 0) == [LoggedEvent(NOW, 0, "records_changed", payload, 1)]
+
+
+@pytest.mark.asyncio
+async def test_each_logged_event_keeps_its_version(store):
+    await store.append("t", "import_finished", {"rows": 1}, 1)
+    await store.append("t", "import_finished", {"rows": 2, "skipped": 0}, 3)
+    assert await store.since("t", 0) == [
+        LoggedEvent(NOW, 0, "import_finished", {"rows": 1}, 1),
+        LoggedEvent(NOW + 1, NOW, "import_finished", {"rows": 2, "skipped": 0}, 3),
+    ]
+    assert [event.version for event in await store.since("t", 0)] == [1, 3]
 
 
 def test_without_a_configured_store_every_call_gets_one_memory_store():

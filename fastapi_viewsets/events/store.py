@@ -24,6 +24,8 @@ class LoggedEvent(NamedTuple):
     """The topic's rev before this event, 0 for a topic without one."""
     name: str
     payload: Any
+    version: int
+    """The event's `event_version`."""
 
 
 @runtime_checkable
@@ -34,10 +36,10 @@ class EventStore(Protocol):
     async def stop(self) -> None:
         """Stops what `start` started."""
 
-    async def append(self, topic: str, name: str, payload: Any) -> tuple[int, int]:
-        """Sets the topic's rev to `max(rev + 1, now in milliseconds)`, keeps the event in the topic's
-        log and returns `(rev, prev)`. Atomic; raises `OverflowError` when the rev would reach
-        `MAX_REV`."""
+    async def append(self, topic: str, name: str, payload: Any, version: int) -> tuple[int, int]:
+        """Sets the topic's rev to `max(rev + 1, now in milliseconds)`, keeps the event's name,
+        payload and version in the topic's log and returns `(rev, prev)`. Atomic; raises
+        `OverflowError` when the rev would reach `MAX_REV`."""
 
     async def revs(self, topics: list[str]) -> dict[str, int]:
         """The current rev of each topic, 0 for a topic without one."""
@@ -46,8 +48,9 @@ class EventStore(Protocol):
         """`[]` when the topic's rev is `after`; otherwise the kept event whose `prev` is `after` and
         every newer one, oldest first; None when no kept event has that `prev`."""
 
-    async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any) -> None:
-        """Carries the event to `deliver()` in every process that watches the topic."""
+    async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None:
+        """Carries the event to `deliver(topic, rev, prev, name, payload, version)` in every process
+        that watches the topic."""
 
     async def drop(self, topic: str) -> None:
         """Removes the topic's rev and log."""
@@ -103,7 +106,7 @@ class MemoryEventStore:
             state.log.clear()
         return state.log
 
-    async def append(self, topic: str, name: str, payload: Any) -> tuple[int, int]:
+    async def append(self, topic: str, name: str, payload: Any, version: int) -> tuple[int, int]:
         now_ms = _now_ms()
         state = self._topics.get(topic)
         prev = state.rev if state is not None else 0
@@ -112,7 +115,7 @@ class MemoryEventStore:
             state = self._topics[topic] = _Topic()
         state.rev = rev
         log = self._log(state, now_ms)
-        log.append(LoggedEvent(rev, prev, name, payload))
+        log.append(LoggedEvent(rev, prev, name, payload, version))
         while len(log) > max(settings.viewsets_event_log_size, 0):
             log.popleft()
         state.log_expires_ms = now_ms + int(settings.viewsets_event_log_ttl * 1000)
@@ -136,10 +139,10 @@ class MemoryEventStore:
                 return chain
         return None
 
-    async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any) -> None:
+    async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None:
         from .delivery import deliver
 
-        await deliver(topic, rev, prev, name, payload)
+        await deliver(topic, rev, prev, name, payload, version)
 
     async def drop(self, topic: str) -> None:
         self._topics.pop(topic, None)

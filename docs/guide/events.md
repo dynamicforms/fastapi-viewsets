@@ -36,9 +36,11 @@ The store assigns every event of a topic two integers:
 | `rev` | `max(the topic's previous rev + 1, now in milliseconds)`. Strictly increasing per topic, and larger than every rev issued before the topic's counter was lost or dropped |
 | `prev` | The topic's rev before the event; `0` for a topic without one |
 
-A push and a poll answer carry the same `rev` and `prev` for an event. A client that holds the rev
-`r` of a topic applies an event whose `prev` is `r`. An event with a larger `rev` and another `prev`
-means the client missed events; one `poll` from `r` returns them, or `events: null` when the log no
+Each event also carries its [`event_version`](#event-versions), the version of its payload's shape.
+
+A push and a poll answer carry the same `rev`, `prev` and version for an event. A client that holds
+the rev `r` of a topic applies an event whose `prev` is `r`. An event with a larger `rev` and another
+`prev` means the client missed events; one `poll` from `r` returns them, or `events: null` when the log no
 longer holds them, in which case the client re-reads the state it displays. An event whose `rev` is
 at most `r` is already applied.
 
@@ -107,18 +109,43 @@ modules cannot publish under one name. `authorizer` is consulted by
 
 ## Events and `publish()`
 
-`Event` is a pydantic `BaseModel` with a class-level `event_name: ClassVar[str]`. A subclass without
-a non-empty string `event_name` raises `TypeError` when the class is created. The payload is
-`event.model_dump(mode="json")`.
+`Event` is a pydantic `BaseModel` with a class-level `event_name: ClassVar[str]` and
+`event_version: ClassVar[int] = 1`. A subclass without a non-empty string `event_name`, or with an
+`event_version` that is not an `int` of at least `1` (a `bool` is not), raises `TypeError` when the
+class is created. Both are class attributes, set by plain assignment or as a `ClassVar`: a subclass
+that annotates either one as a field (`event_version: int = 2`) makes it part of the payload, and
+raises `TypeError` when the class is created. The payload is `event.model_dump(mode="json")`.
+
+### Event versions
+
+`event_version` is the version of the payload's shape. Every push and every poll entry carries it
+next to the event name, so a consumer tells the shapes of one event's payload apart and handles
+several versions side by side: it dispatches on the event name and the version, and reads a topic,
+or a stored series of its events, in which payloads of several versions occur.
+
+```python
+class ImportFinished(Event):
+    event_name = "import_finished"
+    event_version = 2
+
+    file: str
+    rows: int
+    skipped: int
+```
+
+An event that does not set `event_version` has version `1`; a subclass inherits its parent's.
+`RecordsChanged` is version `1`.
+
+### `publish()`
 
 `await publish(topic, event)`:
 
 1. raises `ValueError` for a topic of neither form, and `TypeError` for an `event` that is not an
    `Event`; the topic's form is all that is checked;
-2. `rev, prev = await store.append(topic, event.event_name, payload)`;
-3. `await store.publish(topic, rev, prev, event.event_name, payload)`, which reaches `deliver()` in
-   every process that watches the topic. An exception of this step is logged at warning level and
-   not raised: the event is recorded and is answered by the next poll;
+2. `rev, prev = await store.append(topic, event.event_name, payload, event.event_version)`;
+3. `await store.publish(topic, rev, prev, event.event_name, payload, event.event_version)`, which
+   reaches `deliver()` in every process that watches the topic. An exception of this step is logged
+   at warning level and not raised: the event is recorded and is answered by the next poll;
 4. returns `(rev, prev)`.
 
 `publish()` publishes at once. An event that describes a database change is published after the
@@ -305,8 +332,8 @@ nor authorizes the topic.
     "/api/music": {
       "rev": 19,
       "events": [
-        {"rev": 18, "prev": 17, "event": "records_changed", "payload": {"op": "updated", "changes": [{"pk": 3, "record": null}]}},
-        {"rev": 19, "prev": 18, "event": "records_changed", "payload": {"op": "deleted", "changes": [{"pk": 4, "record": null}]}}
+        {"rev": 18, "prev": 17, "event": "records_changed", "version": 1, "payload": {"op": "updated", "changes": [{"pk": 3, "record": null}]}},
+        {"rev": 19, "prev": 18, "event": "records_changed", "version": 1, "payload": {"op": "deleted", "changes": [{"pk": 4, "record": null}]}}
       ]
     },
     "imports:7": {"rev": 3, "events": []},
@@ -424,16 +451,20 @@ settings.viewsets_event_authorizers = [ViewsetTopics(), allow_authenticated]
 
 ## Delivery
 
-`deliver(topic, rev, prev, name, payload)` is the entry point into a process's subscriptions; both
-stores call it. For each subscription of the topic in the process it starts one task and returns
-without waiting for them, so a slow delivery filter for one socket does not delay the others. A
+`deliver(topic, rev, prev, name, payload, version)` is the entry point into a process's
+subscriptions; both stores call it. For each subscription of the topic in the process it starts one
+task and returns without waiting for them, so a slow delivery filter for one socket does not delay
+the others. A
 task:
 
 1. runs the delivery filters; a `False` skips the socket;
 2. sends one push, a one-shot stream (one `open` frame with `end` set), which is not answered:
 
    ```python
-   await peer.notify(payload, headers={":event": name, ":topic": topic, ":rev": rev, ":prev": prev})
+   await peer.notify(
+       payload,
+       headers={":event": name, ":version": version, ":topic": topic, ":rev": rev, ":prev": prev},
+   )
    ```
 
 Both steps together are bounded by `settings.viewsets_event_push_timeout` seconds (default `2.0`).
@@ -454,16 +485,19 @@ from typing import Any
 from fastapi_viewsets.events import Subscription
 
 
-def skip_empty_imports(subscription: Subscription, topic: str, rev: int, name: str, payload: Any) -> bool:
+def skip_empty_imports(
+    subscription: Subscription, topic: str, rev: int, name: str, payload: Any, version: int
+) -> bool:
     return name != "import_finished" or payload["rows"] > 0
 
 
 settings.viewsets_event_delivery_filters = [skip_empty_imports]
 ```
 
-`DeliveryFilter` is `filter(subscription, topic, rev, event_name, payload) -> bool`, sync or async.
-`subscription` carries `peer`, `context` (the context of the `subscribe` call) and `topic`. The
-filters run in list order for each push:
+`DeliveryFilter` is `filter(subscription, topic, rev, event_name, payload, version) -> bool`, sync
+or async; `version` is the event's `event_version` and comes last. `subscription` carries `peer`,
+`context` (the context of the `subscribe` call) and `topic`. The filters run in list order for each
+push:
 
 - a result that `is False` skips the socket, and the filters after it do not run;
 - any other result, `None` included, passes to the next filter;
@@ -656,4 +690,5 @@ the answer.
 
 The package has no frontend event client. The wire contract is the one on this page: `subscribe`
 and `unsubscribe` over muxws, `poll` over either transport, and each push a one-shot stream whose
-headers carry `:event`, `:topic`, `:rev` and `:prev` and whose payload is the event's payload.
+headers carry `:event`, `:version`, `:topic`, `:rev` and `:prev` and whose payload is the event's
+payload. A poll entry carries `rev`, `prev`, `event`, `version` and `payload`.

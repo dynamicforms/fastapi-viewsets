@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `fastapi_viewsets.events`: the backend publishes an event to a topic, and every frontend following
   the topic receives it as a push over its muxws socket or on its next poll. `Event` (a pydantic
-  model with a class-level `event_name`), `publish(topic, event)`, which returns `(rev, prev)`, and
+  model with a class-level `event_name` and `event_version`, `1` by default, the version of the
+  payload's shape that every push and poll entry carries), `publish(topic, event)`, which returns `(rev, prev)`, and
   `source(name, authorizer=None)` / `Source` (`topic(key)`, `publish(event, key=None)`, `drop(key)`)
   for custom topics `name` and `name:key`. A viewset's topic is its routed base path (`/api/music`),
   with the values of its path parameters (`/clubs/7/tracks` for `/clubs/{club_id}/tracks`).
@@ -20,19 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process) and `fastapi_viewsets.events.redis.RedisEventStore(redis_client, key_prefix="events:")`,
   shared by every process that reaches the Redis. Each event of a topic gets a `rev`,
   `max(previous + 1, now in milliseconds)`, below `2**53`, and the `prev` it follows. The topic's
-  last events are kept in a log for `poll`; the rev counter has no expiry. `start_events()`,
-  `stop_events()` and `check_events()` for the application's lifespan.
+  last events, each with its name, payload and version, are kept in a log for `poll`; the rev
+  counter has no expiry. `start_events()`, `stop_events()` and `check_events()` for the
+  application's lifespan.
 - `register_events(router, base_path="/events")` mounts `EventsViewSet`: `POST subscribe` and
   `POST unsubscribe` over muxws, `POST poll` over REST and muxws. A socket's subscriptions are held
   by the process that holds the socket and dropped when it closes; `deliver()` pushes each event to
-  them with `peer.notify()`, bounded by `settings.viewsets_event_push_timeout`.
+  them with `peer.notify()` and the headers `:event`, `:version`, `:topic`, `:rev` and `:prev`,
+  bounded by `settings.viewsets_event_push_timeout`. A poll entry carries `rev`, `prev`, `event`,
+  `version` and `payload`.
 - Event authorizers (`EventAuthorizer`): `ViewsetTopics()` admits a viewset's topic to a caller the
   viewset's `list_items` (or `retrieve`) admits, by running the route's `dependencies` (those of the
   application, `include_router`, the `APIRouter` and the route) and `depends()` of its command middleware
   against the calling request, which carries the topic's path parameters; `match_viewset()`,
   `ViewsetMatch` and `find_viewset()` find the viewset of a topic. `DeclaredSources()` asks the
-  source's `authorizer`; `allow_all` and `allow_authenticated`. Delivery filters (`DeliveryFilter`)
-  decide per socket and per event whether a push is sent.
+  source's `authorizer`; `allow_all` and `allow_authenticated`. Delivery filters (`DeliveryFilter`,
+  `filter(subscription, topic, rev, event_name, payload, version)`) decide per socket and per event
+  whether a push is sent.
 - `ChangeEvents`: a command middleware that publishes `RecordsChanged` (`op`, `changes: list[Change]`)
   to the viewset's topic after each create, update and destroy action, from `execute()`, so in the
   Celery worker for a `celery_viewset` action. Configured per viewset or per `perform_*` method with

@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from pydantic import (
     BaseModel,
+    Field,
     GetJsonSchemaHandler,
     model_serializer,
     SerializationInfo,
@@ -56,6 +57,7 @@ class PolledEvent(BaseModel):
     prev: int
     event: str
     """The event's `event_name`."""
+    version: int = Field(ge=1, description="The event's `event_version`: the version of the payload's shape.")
     payload: Any = None
 
 
@@ -190,7 +192,9 @@ class EventsViewSet:
             if logged is None:
                 answers[topic] = TopicAnswer(rev=rev, events=None)
                 continue
-            events = [PolledEvent(rev=e.rev, prev=e.prev, event=e.name, payload=e.payload) for e in logged]
+            events = [
+                PolledEvent(rev=e.rev, prev=e.prev, event=e.name, version=e.version, payload=e.payload) for e in logged
+            ]
             # an event appended between `revs` and `since` is in the chain; the answer's rev covers it
             answers[topic] = TopicAnswer(rev=max([rev, *(e.rev for e in events)]), events=events)
 

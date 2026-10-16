@@ -33,17 +33,24 @@ The behaviour is described in [Events](../guide/events).
 ```python
 class Event(BaseModel):
     event_name: ClassVar[str]
+    event_version: ClassVar[int] = 1
 ```
 
-The base of every event. A subclass sets `event_name` and declares the payload as pydantic fields;
-a subclass without a non-empty string `event_name` raises `TypeError` when the class is created. The
-payload is `model_dump(mode="json")`.
+The base of every event. A subclass sets `event_name` and declares the payload as pydantic fields.
+`event_version` is the version of the payload's shape: `1` unless the subclass sets a larger `int`,
+inherited by a subclass. It travels with every push and every poll entry, so a consumer tells the
+shapes of one event's payload apart and handles several versions side by side. A subclass without a
+non-empty string `event_name`, or with an `event_version` that is not an `int` of at least `1` (a
+`bool` is not), raises `TypeError` when the class is created. Both are class attributes, set by plain
+assignment or as a `ClassVar`; a subclass that annotates either one as a field
+(`event_version: int = 2`) raises `TypeError` when the class is created. The payload is
+`model_dump(mode="json")`.
 
 ### Functions
 
 | Name | Description |
 |------|-------------|
-| `async publish(topic: str, event: Event) -> tuple[int, int]` | Validates `topic`, records the event with `store.append`, carries it to the watching processes with `store.publish`, and returns `(rev, prev)`. Raises `ValueError` for a topic of neither form and `TypeError` for an `event` that is not an `Event`; an exception of `store.publish` is logged at warning level and not raised. `OverflowError` of `store.append` propagates |
+| `async publish(topic: str, event: Event) -> tuple[int, int]` | Validates `topic`, records the event's `event_name`, payload and `event_version` with `store.append`, carries it to the watching processes with `store.publish`, and returns `(rev, prev)`. Raises `ValueError` for a topic of neither form and `TypeError` for an `event` that is not an `Event`; an exception of `store.publish` is logged at warning level and not raised. `OverflowError` of `store.append` propagates |
 | `source(name: str, authorizer: EventAuthorizer \| None = None) -> Source` | `Source(name, authorizer)` |
 | `declared_source(name: str) -> Source \| None` | The source declared as `name` in this process |
 | `reset_sources() -> None` | Forgets every declared source; for tests |
@@ -85,10 +92,10 @@ process; a name that does not match `[a-z0-9_.-]+`, or one already declared, rai
 class EventStore(Protocol):
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
-    async def append(self, topic: str, name: str, payload: Any) -> tuple[int, int]: ...
+    async def append(self, topic: str, name: str, payload: Any, version: int) -> tuple[int, int]: ...
     async def revs(self, topics: list[str]) -> dict[str, int]: ...
     async def since(self, topic: str, after: int) -> list[LoggedEvent] | None: ...
-    async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any) -> None: ...
+    async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None: ...
     async def drop(self, topic: str) -> None: ...
     async def watch(self, topic: str) -> None: ...
     async def unwatch(self, topic: str) -> None: ...
@@ -98,10 +105,10 @@ class EventStore(Protocol):
 |--------|----------|
 | `start()` | Starts what the store needs to carry events to this process |
 | `stop()` | Stops what `start()` started |
-| `append(topic, name, payload)` | Sets the topic's rev to `max(rev + 1, now in milliseconds)`, keeps the event in the topic's log and returns `(rev, prev)`. Atomic; raises `OverflowError` when the rev would reach `MAX_REV` |
+| `append(topic, name, payload, version)` | Sets the topic's rev to `max(rev + 1, now in milliseconds)`, keeps the event's name, payload and version in the topic's log and returns `(rev, prev)`. Atomic; raises `OverflowError` when the rev would reach `MAX_REV` |
 | `revs(topics)` | The current rev of each topic, `0` for a topic without one |
 | `since(topic, after)` | `[]` when the topic's rev is `after`; otherwise the kept event whose `prev` is `after` and every newer one, oldest first; `None` when no kept event has that `prev` |
-| `publish(topic, rev, prev, name, payload)` | Carries the event to `deliver()` in every process that watches the topic |
+| `publish(topic, rev, prev, name, payload, version)` | Carries the event to `deliver(topic, rev, prev, name, payload, version)` in every process that watches the topic |
 | `drop(topic)` | Removes the topic's rev and log |
 | `watch(topic)` / `unwatch(topic)` | Starts / stops carrying the topic's events to this process |
 
@@ -113,9 +120,11 @@ class LoggedEvent(NamedTuple):
     prev: int
     name: str
     payload: Any
+    version: int
 ```
 
-One event of a topic's log. `prev` is the topic's rev before the event, `0` for a topic without one.
+One event of a topic's log. `prev` is the topic's rev before the event, `0` for a topic without one;
+`version` is the event's `event_version`.
 
 ### MemoryEventStore
 
@@ -150,15 +159,15 @@ the only module of the package that uses `redis`; `fastapi_viewsets.events` does
 | Member | Description |
 |--------|-------------|
 | `rev_key(topic) -> str` | `{prefix}rev:{topic}`: the topic's rev, a decimal string without expiry |
-| `log_key(topic) -> str` | `{prefix}log:{topic}`: the topic's log, a list of JSON entries `{"rev", "prev", "event": {"name", "payload"}}`, newest first, at most `viewsets_event_log_size` long, expiring `viewsets_event_log_ttl` seconds after the topic's last event (`PEXPIRE`, at least 1 ms). A log size of `0` deletes the log |
-| `channel(topic) -> str` | `{prefix}ch:{topic}`: the channel `publish` publishes the JSON object `{"topic", "rev", "prev", "name", "payload"}` on |
+| `log_key(topic) -> str` | `{prefix}log:{topic}`: the topic's log, a list of JSON entries `{"rev", "prev", "event": {"name", "payload", "version"}}`, newest first, at most `viewsets_event_log_size` long, expiring `viewsets_event_log_ttl` seconds after the topic's last event (`PEXPIRE`, at least 1 ms). A log size of `0` deletes the log |
+| `channel(topic) -> str` | `{prefix}ch:{topic}`: the channel `publish` publishes the JSON object `{"topic", "rev", "prev", "name", "payload", "version"}` on |
 | `reader_running: bool` | Whether the reader task runs |
 | `async start()` | Opens the reader: one task on one pub/sub connection, subscribed to the channel of every watched topic, which calls `deliver()` for each message. A store whose reader runs returns at once |
 | `async stop()` | Cancels the reader and closes its connection. The watched topics are kept, and `start()` subscribes them again |
-| `async append(topic, name, payload)` | One Lua script: the rev with `GET` and `SET`, the log with `LPUSH`, `LTRIM` and `PEXPIRE`. Raises `OverflowError` at `MAX_REV`, changing nothing |
+| `async append(topic, name, payload, version)` | One Lua script: the rev with `GET` and `SET`, the log with `LPUSH`, `LTRIM` and `PEXPIRE`. Raises `OverflowError` at `MAX_REV`, changing nothing |
 | `async revs(topics)` | `MGET`; an absent key is `0` |
 | `async since(topic, after)` | `GET` of the rev, then `LRANGE` of the log |
-| `async publish(topic, rev, prev, name, payload)` | `PUBLISH` on `channel(topic)` |
+| `async publish(topic, rev, prev, name, payload, version)` | `PUBLISH` on `channel(topic)` |
 | `async drop(topic)` | `DEL` of the rev and the log |
 | `async watch(topic)` | Records the topic for `start()`. While the reader runs, `SUBSCRIBE` on the reader's connection, unless the channel is subscribed, and returns once the reader has read Redis's confirmation of that `SUBSCRIBE`, or of the one still unconfirmed. Raises `asyncio.TimeoutError` when no confirmation arrives within 5 seconds, and `ConnectionError` when the reader stops first |
 | `async unwatch(topic)` | `UNSUBSCRIBE` on the reader's connection while the reader runs; forgets the topic for `start()` |
@@ -200,10 +209,11 @@ One socket following one topic. `peer` is the muxws peer of the socket, `context
 ### DeliveryFilter
 
 ```python
-DeliveryFilter = Callable[[Subscription, str, int, str, Any], bool | Awaitable[bool]]
+DeliveryFilter = Callable[[Subscription, str, int, str, Any, int], bool | Awaitable[bool]]
 ```
 
-`filter(subscription, topic, rev, event_name, payload)`, sync or async. A result that `is False`
+`filter(subscription, topic, rev, event_name, payload, version)`, sync or async; `version` is the
+event's `event_version`. A result that `is False`
 skips the push to the subscription's socket; any other result passes; an exception counts as `True`
 and is logged at debug level.
 
@@ -211,7 +221,7 @@ and is logged at debug level.
 
 | Name | Description |
 |------|-------------|
-| `async deliver(topic: str, rev: int, prev: int, name: str, payload: Any) -> None` | Starts one task per subscription of `topic` in this process and returns without waiting. A task runs the delivery filters, then `peer.notify(payload, headers={":event": name, ":topic": topic, ":rev": rev, ":prev": prev})`, together bounded by `settings.viewsets_event_push_timeout` seconds; muxws's `notify()` queues the push and does not wait for the socket. A `ConnectionLost` (matched by class name) drops every subscription of its socket; any other failure is logged at debug level |
+| `async deliver(topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None` | Starts one task per subscription of `topic` in this process and returns without waiting. A task runs the delivery filters, then `peer.notify(payload, headers={":event": name, ":version": version, ":topic": topic, ":rev": rev, ":prev": prev})`, together bounded by `settings.viewsets_event_push_timeout` seconds; muxws's `notify()` queues the push and does not wait for the socket. A `ConnectionLost` (matched by class name) drops every subscription of its socket; any other failure is logged at debug level |
 | `async subscribe(peer: Any, context: Context, topic: str) -> Subscription` | Subscribes the socket to `topic` and returns once the store watches the topic; a topic the socket holds is subscribed again with `context` and counts once. Raises `EventSubscriptionsExceededError` when the socket already holds `settings.viewsets_event_max_subscriptions` other topics. The first subscription of a topic calls `store.watch(topic)`; when that raises, the subscription is removed and the exception propagates. A call made while the topic's `watch` or `unwatch` runs waits for it to end and then calls `store.watch(topic)` itself when the topic is not watched. The first subscription of a socket installs one `peer.on_close` handler, which calls `drop_peer(peer)`. For a socket whose `is_open` is false it returns the subscription without entering it in the table or calling the store |
 | `async unsubscribe(peer: Any, topic: str) -> None` | Removes the socket's subscription to `topic`, if it holds one. The last subscription of a topic calls `store.unwatch(topic)`; an exception it raises is logged |
 | `drop_peer(peer: Any) -> None` | Removes every subscription of the socket; the topics left without subscriptions are unwatched in a background task |
@@ -268,7 +278,7 @@ The models, in `fastapi_viewsets.events.viewset`:
 | `TopicRequest` | `topic: str` |
 | `SubscribeAnswer` | `rev: int`, the topic's current rev, `0` for a topic without events |
 | `PollRequest` | `cursors: dict[str, int \| None]`, each topic mapped to the rev the caller holds, `None` to start from the current rev |
-| `PolledEvent` | `rev: int`, `prev: int`, `event: str` (the `event_name`), `payload: Any = None` |
+| `PolledEvent` | `rev: int`, `prev: int`, `event: str` (the `event_name`), `version: int` (the `event_version`, at least `1`), `payload: Any = None` |
 | `TopicAnswer` | `rev: int \| None`, `events: list[PolledEvent] \| None`, `error: str \| None = None`; `error` is left out of the serialized answer when it is `None` |
 | `PollAnswer` | `topics: dict[str, TopicAnswer]`, one per cursor in the request's order; `poll_after_ms: int`, `settings.viewsets_event_poll_after_ms` |
 
@@ -316,7 +326,7 @@ value under its own key, else under its class, and the `ChangeEvents` of
 | Name | Description |
 |------|-------------|
 | `Change` | `BaseModel`: `pk: Any`, `record: dict[str, Any] \| None = None` |
-| `RecordsChanged` | `Event` with `event_name = "records_changed"`: `op: Literal["created", "updated", "deleted"]`, `changes: list[Change]` |
+| `RecordsChanged` | `Event` with `event_name = "records_changed"` and `event_version = 1`: `op: Literal["created", "updated", "deleted"]`, `changes: list[Change]` |
 | `TOPIC_CONTEXT_KEY` | `"fastapi_viewsets.events.topic"` |
 | `routed_base_path(request: Request) -> str \| None` | The `include_router` prefixes followed by `base_path` of the viewset whose endpoint the request was routed to, with the values of the request's path parameters: the request's path relative to `root_path`, with as many trailing segments removed as `__viewset_metadata__["paths"][action]` has. `None` when the matched endpoint is not one `route_viewset` registered |
 

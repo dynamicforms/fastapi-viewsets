@@ -41,6 +41,14 @@ class TrackAdded(Event):
     title: str
 
 
+class TrackAddedV2(Event):
+    event_name = "track_added"
+    event_version = 2
+
+    title: str
+    seconds: int
+
+
 class FakeStream:
     """The part of a muxws Stream `process_command` uses: `headers` and one `reply`."""
 
@@ -222,7 +230,10 @@ async def test_an_event_reaches_the_subscribed_socket(application):
     rev, prev = await publish("/api/music", TrackAdded(title="Giant Steps"))
     await wait_for_pushes()
     assert peer.pushes == [
-        ({"title": "Giant Steps"}, {":event": "track_added", ":topic": "/api/music", ":rev": rev, ":prev": prev})
+        (
+            {"title": "Giant Steps"},
+            {":event": "track_added", ":version": 1, ":topic": "/api/music", ":rev": rev, ":prev": prev},
+        )
     ]
     assert bystander.pushes == []
 
@@ -309,7 +320,7 @@ async def test_poll_answers_every_cursor(application, transport):
     source("clubs")
     first, _ = await publish("/api/music", TrackAdded(title="Blue Train"))
     second, _ = await publish("/api/music", TrackAdded(title="Giant Steps"))
-    third, _ = await publish("/api/music", TrackAdded(title="Naima"))
+    third, _ = await publish("/api/music", TrackAddedV2(title="Naima", seconds=261))
     imported, _ = await publish("imports:7", TrackAdded(title="Moment's Notice"))
 
     body = {
@@ -335,8 +346,20 @@ async def test_poll_answers_every_cursor(application, transport):
             "/api/music": {
                 "rev": third,
                 "events": [
-                    {"rev": second, "prev": first, "event": "track_added", "payload": {"title": "Giant Steps"}},
-                    {"rev": third, "prev": second, "event": "track_added", "payload": {"title": "Naima"}},
+                    {
+                        "rev": second,
+                        "prev": first,
+                        "event": "track_added",
+                        "version": 1,
+                        "payload": {"title": "Giant Steps"},
+                    },
+                    {
+                        "rev": third,
+                        "prev": second,
+                        "event": "track_added",
+                        "version": 2,
+                        "payload": {"title": "Naima", "seconds": 261},
+                    },
                 ],
             },
             "imports:7": {"rev": imported, "events": []},
@@ -459,6 +482,12 @@ async def test_the_events_viewset_has_a_schema_on_each_transport(application):
     answer = document["components"]["schemas"]["TopicAnswer"]
     assert set(answer["properties"]) == {"rev", "events", "error"}
     assert answer["required"] == ["rev", "events"]
+    polled = document["components"]["schemas"]["PolledEvent"]
+    assert set(polled["properties"]) == {"rev", "prev", "event", "version", "payload"}
+    assert polled["properties"]["version"]["type"] == "integer"
+    assert polled["properties"]["version"]["minimum"] == 1
+    assert "event_version" in polled["properties"]["version"]["description"]
+    assert polled["required"] == ["rev", "prev", "event", "version"]
 
 
 @pytest.mark.asyncio

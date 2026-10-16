@@ -33,10 +33,11 @@ class Subscription:
     topic: str
 
 
-DeliveryFilter = Callable[[Subscription, str, int, str, Any], "bool | Awaitable[bool]"]
+DeliveryFilter = Callable[[Subscription, str, int, str, Any, int], "bool | Awaitable[bool]"]
 """
-`filter(subscription, topic, rev, event_name, payload)`, sync or async. False skips the push to
-that subscription's socket; an exception counts as True.
+`filter(subscription, topic, rev, event_name, payload, version)`, sync or async; `version` is the
+event's `event_version`. False skips the push to that subscription's socket; an exception counts as
+True.
 """
 
 # topic -> id(peer) -> Subscription
@@ -186,10 +187,10 @@ def _is_connection_lost(error: BaseException) -> bool:
     return any(cls.__name__ == "ConnectionLost" for cls in type(error).__mro__)
 
 
-async def _admitted(subscription: Subscription, topic: str, rev: int, name: str, payload: Any) -> bool:
+async def _admitted(subscription: Subscription, topic: str, rev: int, name: str, payload: Any, version: int) -> bool:
     for delivery_filter in settings.viewsets_event_delivery_filters:
         try:
-            result = delivery_filter(subscription, topic, rev, name, payload)
+            result = delivery_filter(subscription, topic, rev, name, payload, version)
             if inspect.isawaitable(result):
                 result = await result
         except Exception:
@@ -202,10 +203,12 @@ async def _admitted(subscription: Subscription, topic: str, rev: int, name: str,
     return True
 
 
-async def _push(subscription: Subscription, topic: str, rev: int, prev: int, name: str, payload: Any) -> None:
+async def _push(
+    subscription: Subscription, topic: str, rev: int, prev: int, name: str, payload: Any, version: int
+) -> None:
     async def push() -> None:
-        if await _admitted(subscription, topic, rev, name, payload):
-            headers = {":event": name, ":topic": topic, ":rev": rev, ":prev": prev}
+        if await _admitted(subscription, topic, rev, name, payload, version):
+            headers = {":event": name, ":version": version, ":topic": topic, ":rev": rev, ":prev": prev}
             await subscription.peer.notify(payload, headers=headers)
 
     try:
@@ -217,17 +220,17 @@ async def _push(subscription: Subscription, topic: str, rev: int, prev: int, nam
             logger.debug("events: the push of topic %s rev %s to a socket failed", topic, rev, exc_info=True)
 
 
-async def deliver(topic: str, rev: int, prev: int, name: str, payload: Any) -> None:
+async def deliver(topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None:
     """
     Pushes one event to every subscription of `topic` in this process, each push in a task of its
     own, and returns without waiting for them. A push runs the delivery filters and then
-    `peer.notify(payload, headers={":event": name, ":topic": topic, ":rev": rev, ":prev": prev})`,
-    together bounded by `settings.viewsets_event_push_timeout` seconds. A push that raises a
-    `ConnectionLost` drops every subscription of its socket; any other failure is logged at debug
-    level.
+    `peer.notify(payload, headers={":event": name, ":version": version, ":topic": topic, ":rev": rev,
+    ":prev": prev})`, together bounded by `settings.viewsets_event_push_timeout` seconds. A push that
+    raises a `ConnectionLost` drops every subscription of its socket; any other failure is logged at
+    debug level.
     """
     for subscription in subscriptions(topic):
-        _spawn(_push(subscription, topic, rev, prev, name, payload))
+        _spawn(_push(subscription, topic, rev, prev, name, payload, version))
 
 
 async def wait_for_pushes() -> None:

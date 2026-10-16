@@ -30,7 +30,8 @@ is the application's.
 
 | Term | Meaning |
 |---|---|
-| **event** | A pydantic model with a class-level `event_name`. The name and the fields are the same on both sides. |
+| **event** | A pydantic model with a class-level `event_name` and `event_version`. The name, the version and the fields are the same on both sides. |
+| **version** | An event's `event_version`, the version of its payload's shape: `1` unless the event class sets a larger int. Carried by every push and every polled event, so a consumer tells the shapes of one event's payload apart and handles several versions side by side. |
 | **topic** | A string that names a stream of events. Either a viewset's routed base path (`/api/music`) or a declared source's name with an optional key (`imports`, `imports:7`). Matching is exact. |
 | **source** | A declared owner of custom topics. Declared once per name; a second declaration raises. |
 | **rev** | The integer the store assigns to each event of a topic: `max(previous rev + 1, now in milliseconds)`. Strictly increasing per topic, and larger than every rev issued before the counter was lost or dropped. |
@@ -44,7 +45,7 @@ is the application's.
 
 1. **An event is published to one topic.** `publish()` with an invalid topic raises `ValueError`.
 2. **The store is written before anything is pushed.** `rev` and `prev` are assigned by the store;
-   the push and the poll answer carry the same pair.
+   the push and the poll answer carry the same pair, and the same version.
 3. **A topic is admitted by the authorizers.** Each answers `True`, `False` or `None`; the first
    `True` or `False` decides; no decision refuses. The authorizers run on every `subscribe` and on
    every `poll`, per topic.
@@ -108,15 +109,30 @@ event name). `records_changed` is the library's event on viewset topics.
 ### Events
 
 `Event` is a pydantic `BaseModel`. `event_name` is a `ClassVar[str]`; a subclass that does not set
-it raises `TypeError` when the class is created. The payload on the wire is `model_dump(mode="json")`.
+it raises `TypeError` when the class is created. `event_version` is a `ClassVar[int]`, `1` on
+`Event`; a subclass whose payload changes shape sets a larger int, and a value that is not an int
+of at least `1` (a `bool` is not) raises `TypeError` when the class is created. Both are class
+attributes, set by plain assignment or as a `ClassVar`; a subclass that annotates either one as a
+field (`event_version: int = 2`) raises `TypeError` when the class is created. The payload on the
+wire is `model_dump(mode="json")`.
+
+```python
+class ImportFinished(Event):
+    event_name = "import_finished"
+    event_version = 2
+
+    file: str
+    rows: int
+    skipped: int
+```
 
 `publish(topic, event)`:
 
 1. validates `topic`;
-2. `rev, prev = await store.append(topic, event.event_name, payload)`, which assigns the pair and
-   keeps the event in the topic's log;
-3. `await store.publish(topic, rev, prev, event.event_name, payload)`, which reaches `deliver()` in
-   every process that watches the topic.
+2. `rev, prev = await store.append(topic, event.event_name, payload, event.event_version)`, which
+   assigns the pair and keeps the event, its version included, in the topic's log;
+3. `await store.publish(topic, rev, prev, event.event_name, payload, event.event_version)`, which
+   reaches `deliver()` in every process that watches the topic.
 
 It publishes immediately. An event that describes a database change is published after the
 transaction commits, otherwise a frontend reacting to it reads the state from before the change.
@@ -129,10 +145,10 @@ management command.
 class EventStore(Protocol):
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
-    async def append(self, topic: str, name: str, payload: Any) -> tuple[int, int]: ...
+    async def append(self, topic: str, name: str, payload: Any, version: int) -> tuple[int, int]: ...
     async def revs(self, topics: list[str]) -> dict[str, int]: ...
     async def since(self, topic: str, after: int) -> list[LoggedEvent] | None: ...
-    async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any) -> None: ...
+    async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None: ...
     async def drop(self, topic: str) -> None: ...
     async def watch(self, topic: str) -> None: ...
     async def unwatch(self, topic: str) -> None: ...
@@ -148,7 +164,9 @@ class EventStore(Protocol):
 | `watch` / `unwatch` | no-op | `SUBSCRIBE` / `UNSUBSCRIBE` on the reader connection |
 | `start` / `stop` | no-op | opens and closes the reader task |
 
-`LoggedEvent` is `(rev, prev, name, payload)`. With `viewsets_event_log_size = 0` the log is empty
+`LoggedEvent` is `(rev, prev, name, payload, version)`. A Redis log entry is
+`{"rev", "prev", "event": {"name", "payload", "version"}}`, and the channel message
+`{"topic", "rev", "prev", "name", "payload", "version"}`. With `viewsets_event_log_size = 0` the log is empty
 and every `since` behind the current rev answers `None`.
 
 The log expires, the counter does not. The log lives `viewsets_event_log_ttl` seconds after the
@@ -183,7 +201,7 @@ way: with `MemoryEventStore` in a worker, `publish()` records the event and deli
 and a frontend learns of it on its next poll of that process's store, which is a different store.
 A multi-process deployment configures `RedisEventStore` everywhere.
 
-`deliver(topic, rev, prev, name, payload)` is the one entry point into a process's subscriptions.
+`deliver(topic, rev, prev, name, payload, version)` is the one entry point into a process's subscriptions.
 Both stores call it; nothing else does.
 
 ### Subscribing and polling
@@ -229,7 +247,7 @@ topics; one more is refused with 409.
 ```json
 {
   "topics": {
-    "/api/music": {"rev": 19, "events": [{"rev": 18, "prev": 17, "event": "records_changed", "payload": {}}, {"rev": 19, "prev": 18, "event": "records_changed", "payload": {}}]},
+    "/api/music": {"rev": 19, "events": [{"rev": 18, "prev": 17, "event": "records_changed", "version": 1, "payload": {}}, {"rev": 19, "prev": 18, "event": "records_changed", "version": 1, "payload": {}}]},
     "imports:7": {"rev": 3, "events": []},
     "club:9": {"rev": null, "events": null, "error": "event_topic_refused"}
   },
@@ -295,7 +313,7 @@ For each subscription of the topic in this process, `deliver()` runs the deliver
 one one-shot push:
 
 ```python
-await peer.notify(payload, headers={":event": name, ":topic": topic, ":rev": rev, ":prev": prev})
+await peer.notify(payload, headers={":event": name, ":version": version, ":topic": topic, ":rev": rev, ":prev": prev})
 ```
 
 bounded by `settings.viewsets_event_push_timeout` seconds. `ConnectionLost` drops the socket's
@@ -303,13 +321,14 @@ subscriptions; any other exception is logged at debug level. Each push is its ow
 socket does not delay the others.
 
 ```python
-DeliveryFilter = Callable[[Subscription, str, int, str, Any], bool | Awaitable[bool]]
+DeliveryFilter = Callable[[Subscription, str, int, str, Any, int], bool | Awaitable[bool]]
 ```
 
 `settings.viewsets_event_delivery_filters` is a list; a filter receives the subscription (`peer`,
-`context`, `topic`), the topic, the rev, the event name and the payload, and a `False` skips that
-socket. A filter that raises is `True`: the filter is a display decision after the authorizers
-have decided access, and a broken one degrades to sending more. The list is empty by default.
+`context`, `topic`), the topic, the rev, the event name, the payload and the version, in that
+order, and a `False` skips that socket. A filter that raises is `True`: the filter is a display
+decision after the authorizers have decided access, and a broken one degrades to sending more. The
+list is empty by default.
 
 An event stream is never answered. On the wire it is one `open` frame with `end` set, which is what
 `notify()` sends.
@@ -447,10 +466,13 @@ const peer = await connect('wss://example.test/ws');
 attachEvents(peer);                                                      // the peer's onStream handler
 const events = createEventClient({ basePath: '/events', peer, axios });  // one per application
 
-const ImportFinished = defineEvent<{ file: string; rows: number }>('import_finished');
+const ImportFinished = defineEvent<{ file: string; rows: number; skipped?: number }>('import_finished');
 
 const subscription = events.subscribe('imports:7', ImportFinished, {
-  onEvent(payload) { notify(`${payload.file}: ${payload.rows} rows`); },
+  onEvent(payload, { version }) {
+    const skipped = version >= 2 ? `, ${payload.skipped} skipped` : '';
+    notify(`${payload.file}: ${payload.rows} rows${skipped}`);
+  },
   onResync() { reloadImports(); },
 });
 await subscription.ready;
@@ -476,7 +498,12 @@ peer throws.
   `ViewSetRequestError` when the topic was refused, with the subscription removed. `unsubscribe()`
   of the last subscription on a topic sends `unsubscribe` over the socket, or stops polling it.
 - An arriving event is dispatched by topic and event name to every subscription of that topic with
-  that event name. An event of a topic the client does not follow is ignored.
+  that event name, whatever its version. An event of a topic the client does not follow is ignored.
+- `onEvent(payload, meta)` receives the payload and an `EventMeta`, `{ topic, rev, prev, version }`.
+  `version` is the push's `:version` header or the polled entry's `version`. A subscription receives
+  every version of its event name and branches on `meta.version`; the type parameter of
+  `defineEvent` describes the payloads of every version the subscription handles. A version the
+  handler does not know reaches it like any other, and what it does with one is the handler's.
 - `onEvent` and `onResync` are required. A subscription that cannot say what it does on resync is
   one that silently stops matching the server after a gap.
 
@@ -557,7 +584,7 @@ and filters locally needs nothing else; one that pages on the server re-reads it
 | `vue/poll.ts` | the polling ladder, moved from taskwire |
 | `vue/events.ts` | the event client |
 | `vue/proxy-base.ts`, `rest-proxy.ts`, `muxws-proxy.ts` | `watch()`, the `events` option |
-| `vue/index.ts` | `attachEvents`, `handleEventStream`, `createEventClient`, `eventsOf`, `defineEvent`, `applyChanges`, the ladder, the `RecordsChanged`, `EventClient` and `EventSubscription` types |
+| `vue/index.ts` | `attachEvents`, `handleEventStream`, `createEventClient`, `eventsOf`, `defineEvent`, `applyChanges`, the ladder, the `RecordsChanged`, `EventClient`, `EventSubscription` and `EventMeta` types |
 | `pyproject.toml` | muxws floor `0.4.1`; no new extra: `RedisEventStore` takes a client the application constructs, as `Idempotency` does |
 | `package.json` | muxws peer floor `^0.4.1` |
 | docs | a guide page and an API page for events, the `ChangeEvents` row in the built-in middleware table, the muxws page's server example with `peer=` |
@@ -598,6 +625,11 @@ only module of the package that imports `redis`.
   for it would be stale data delivered late. The counter outlives the log so that a reader that is
   present applies a sparse topic's next event as a delta, without the reload that a restarted
   counter would force on it. A keyed topic that is finished is dropped by its source.
+- **Every event carries a version.** An event's payload changes shape as the application evolves,
+  and the producers and consumers of one topic are not deployed at once: a frontend still loaded in
+  a tab, a worker on the previous release, a consumer that reads a stored series of events. The
+  version names the shape of each payload, so a consumer handles several versions side by side
+  instead of inferring the shape from the fields present.
 - **Subscribe and poll are viewset commands.** They pass through the application's command
   middleware, context processors, rate limiting and `/schema` like any other call. The only
   transport-specific piece is the socket in the request scope.
@@ -649,8 +681,8 @@ and its changelog entry; the version becomes 0.9.1 with the first.
 1. `vue/poll.ts`: `PollSettings`, `DEFAULT_POLL_SETTINGS`, `PollLadderState`, `ladderInterval`,
    `jitterMultiplier`, `nextDelay`, `PollLadder`, with taskwire's tests for them.
 2. `vue/events.ts`: `EventClient`, `createEventClient`, `eventsOf`, `attachEvents`,
-   `handleEventStream`, `defineEvent`, `EventSubscription`, the cursor table, the push/gap/poll/
-   resync rules, the reconnect sequence.
+   `handleEventStream`, `defineEvent`, `EventSubscription`, `EventMeta`, the cursor table, the
+   push/gap/poll/resync rules, the reconnect sequence.
 3. `watch()` and the `events` option on both proxies; `applyChanges`; the exports.
 4. Tests: the rules of "Push, gap, poll and resync" one by one against a fake peer and a fake
    axios, the reconnect sequence, the real-muxws spec extended with one subscribe and one push,

@@ -1,5 +1,7 @@
 import logging
 
+from typing import ClassVar
+
 import pytest
 
 from ..conf import settings
@@ -16,6 +18,15 @@ class ImportFinished(Event):
 
     file: str
     rows: int
+
+
+class ImportFinishedV2(Event):
+    event_name = "import_finished"
+    event_version = 2
+
+    file: str
+    rows: int
+    skipped: int
 
 
 def test_an_event_without_event_name_raises_type_error():
@@ -45,6 +56,58 @@ def test_a_subclass_of_an_event_inherits_its_event_name():
     assert Partial.event_name == "import_finished"
 
 
+def test_an_event_has_version_1_unless_it_sets_a_larger_one():
+    assert ImportFinished.event_version == 1
+    assert ImportFinishedV2.event_version == 2
+    assert "event_version" not in ImportFinishedV2.model_fields
+    assert ImportFinishedV2(file="a.csv", rows=1, skipped=0).model_dump(mode="json") == {
+        "file": "a.csv",
+        "rows": 1,
+        "skipped": 0,
+    }
+
+
+def test_a_subclass_of_an_event_inherits_its_event_version():
+    class Partial(ImportFinishedV2):
+        partial: bool = True
+
+    assert Partial.event_version == 2
+
+
+@pytest.mark.parametrize("version", [0, -1, True, False, 1.0, "2", None])
+def test_an_event_version_other_than_an_int_of_at_least_1_raises_type_error(version):
+    with pytest.raises(TypeError, match="Misversioned sets event_version to"):
+
+        class Misversioned(Event):
+            event_name = "misversioned"
+            event_version = version
+
+
+def test_an_event_that_declares_event_name_as_a_field_raises_type_error():
+    with pytest.raises(TypeError, match="AnnotatedName declares event_name as a field"):
+
+        class AnnotatedName(Event):
+            event_name: str = "annotated"
+
+
+@pytest.mark.filterwarnings("ignore:Field name .* shadows an attribute in parent")
+def test_an_event_that_declares_event_version_as_a_field_raises_type_error():
+    with pytest.raises(TypeError, match="AnnotatedVersion declares event_version as a field"):
+
+        class AnnotatedVersion(Event):
+            event_name = "annotated"
+            event_version: int = 2
+
+
+def test_an_event_with_a_class_var_event_version_is_accepted():
+    class Annotated(Event):
+        event_name: ClassVar[str] = "annotated"
+        event_version: ClassVar[int] = 2
+
+    assert Annotated.event_version == 2
+    assert Annotated.model_fields == {}
+
+
 @pytest.mark.asyncio
 async def test_publish_records_the_event_and_returns_rev_and_prev():
     store = MemoryEventStore()
@@ -54,8 +117,20 @@ async def test_publish_records_the_event_and_returns_rev_and_prev():
     assert first[1] == 0
     assert second[1] == first[0]
     assert await store.since("imports:7", 0) == [
-        LoggedEvent(first[0], 0, "import_finished", {"file": "a.csv", "rows": 1}),
-        LoggedEvent(second[0], first[0], "import_finished", {"file": "b.csv", "rows": 2}),
+        LoggedEvent(first[0], 0, "import_finished", {"file": "a.csv", "rows": 1}, 1),
+        LoggedEvent(second[0], first[0], "import_finished", {"file": "b.csv", "rows": 2}, 1),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_publish_records_the_events_version():
+    store = MemoryEventStore()
+    settings.viewsets_event_store = store
+    first, _ = await publish("imports", ImportFinished(file="a.csv", rows=1))
+    second, _ = await publish("imports", ImportFinishedV2(file="b.csv", rows=2, skipped=1))
+    assert await store.since("imports", 0) == [
+        LoggedEvent(first, 0, "import_finished", {"file": "a.csv", "rows": 1}, 1),
+        LoggedEvent(second, first, "import_finished", {"file": "b.csv", "rows": 2, "skipped": 1}, 2),
     ]
 
 
@@ -81,7 +156,7 @@ async def test_publish_pushes_to_the_subscribed_sockets_of_this_process():
     assert peer.pushes == [
         (
             {"file": "a.csv", "rows": 3},
-            {":event": "import_finished", ":topic": "imports", ":rev": rev, ":prev": prev},
+            {":event": "import_finished", ":version": 1, ":topic": "imports", ":rev": rev, ":prev": prev},
         )
     ]
 

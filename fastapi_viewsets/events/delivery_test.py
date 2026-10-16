@@ -38,8 +38,8 @@ def store():
     return store
 
 
-async def deliver_and_wait(topic="/api/music", rev=2, prev=1, name="records_changed", payload=None):
-    await deliver(topic, rev, prev, name, {"op": "created"} if payload is None else payload)
+async def deliver_and_wait(topic="/api/music", rev=2, prev=1, name="records_changed", payload=None, version=1):
+    await deliver(topic, rev, prev, name, {"op": "created"} if payload is None else payload, version)
     await wait_for_pushes()
 
 
@@ -258,10 +258,25 @@ async def test_deliver_pushes_one_notify_to_every_subscribed_socket():
     await subscribe(second, Context({}), "/api/music")
     await subscribe(other, Context({}), "/api/other")
     await deliver_and_wait(rev=18, prev=17)
-    expected = [({"op": "created"}, {":event": "records_changed", ":topic": "/api/music", ":rev": 18, ":prev": 17})]
+    expected = [
+        (
+            {"op": "created"},
+            {":event": "records_changed", ":version": 1, ":topic": "/api/music", ":rev": 18, ":prev": 17},
+        )
+    ]
     assert first.pushes == expected
     assert second.pushes == expected
     assert other.pushes == []
+
+
+@pytest.mark.asyncio
+async def test_the_push_carries_the_events_version():
+    peer = FakePeer()
+    await subscribe(peer, Context({}), "imports")
+    await deliver_and_wait(topic="imports", rev=5, prev=4, name="import_finished", payload={"rows": 2}, version=3)
+    assert peer.pushes == [
+        ({"rows": 2}, {":event": "import_finished", ":version": 3, ":topic": "imports", ":rev": 5, ":prev": 4})
+    ]
 
 
 @pytest.mark.asyncio
@@ -286,7 +301,7 @@ async def test_deliver_returns_before_a_slow_push_completes():
     await subscribe(slow, Context({}), "/a")
     await subscribe(fast, Context({}), "/a")
     settings.viewsets_event_delivery_filters = [slow_for(slow, 0.2)]
-    await deliver("/a", 2, 1, "e", {})
+    await deliver("/a", 2, 1, "e", {}, 1)
     await asyncio.sleep(0.02)
     assert len(fast.pushes) == 1
     assert slow.pushes == []
@@ -329,12 +344,13 @@ async def test_a_push_to_a_real_muxws_peer_reaches_the_other_end_and_a_lost_sock
     serving = [asyncio.ensure_future(server.serve()), asyncio.ensure_future(client.serve())]
     try:
         await subscribe(server, Context({}), "/api/music")
-        await deliver_and_wait(topic="/api/music", rev=18, prev=17, payload={"op": "deleted"})
+        await deliver_and_wait(topic="/api/music", rev=18, prev=17, payload={"op": "deleted"}, version=2)
         await asyncio.wait_for(arrived.wait(), 2.0)
         [(payload, headers)] = received
         assert payload == {"op": "deleted"}
-        assert {key: headers[key] for key in (":event", ":topic", ":rev", ":prev")} == {
+        assert {key: headers[key] for key in (":event", ":version", ":topic", ":rev", ":prev")} == {
             ":event": "records_changed",
+            ":version": 2,
             ":topic": "/api/music",
             ":rev": 18,
             ":prev": 17,
@@ -398,15 +414,15 @@ async def test_a_delivery_filter_that_answers_false_skips_the_socket():
     await subscribe(sent, Context({"user": "sent"}), "/a")
     seen = []
 
-    def by_user(subscription, topic, rev, name, payload):
-        seen.append((subscription.topic, topic, rev, name, payload))
+    def by_user(subscription, topic, rev, name, payload, version):
+        seen.append((subscription.topic, topic, rev, name, payload, version))
         return subscription.context.raw()["user"] != "skipped"
 
     settings.viewsets_event_delivery_filters = [by_user]
-    await deliver_and_wait(topic="/a", rev=5, prev=4, name="e", payload={"x": 1})
+    await deliver_and_wait(topic="/a", rev=5, prev=4, name="e", payload={"x": 1}, version=2)
     assert skipped.pushes == []
     assert len(sent.pushes) == 1
-    assert sorted(seen) == [("/a", "/a", 5, "e", {"x": 1})] * 2
+    assert sorted(seen) == [("/a", "/a", 5, "e", {"x": 1}, 2)] * 2
 
 
 @pytest.mark.asyncio

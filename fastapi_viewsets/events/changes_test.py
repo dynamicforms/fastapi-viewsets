@@ -621,9 +621,10 @@ def test_a_subclass_replaces_the_topic_and_the_changes(monkeypatch):
     assert logged("/tracks:all") == [("records_changed", {"op": "deleted", "changes": changes(10)})]
 
 
-def test_records_changed_is_an_event_named_records_changed():
+def test_records_changed_is_an_event_named_records_changed_of_version_1():
     assert issubclass(RecordsChanged, Event)
     assert RecordsChanged.event_name == "records_changed"
+    assert RecordsChanged.event_version == 1
     event = RecordsChanged(op="created", changes=[Change(pk=1, record={"id": 1})])
     assert event.model_dump(mode="json") == {"op": "created", "changes": [{"pk": 1, "record": {"id": 1}}]}
 

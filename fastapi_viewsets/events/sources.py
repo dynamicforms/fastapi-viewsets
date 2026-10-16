@@ -19,19 +19,20 @@ async def publish(topic: str, event: Event) -> tuple[int, int]:
     Publishes `event` to `topic` and returns the `(rev, prev)` the store assigned to it.
 
     Raises `ValueError` for a topic of neither form; the form is all that is checked. Records the
-    event with `store.append`, then carries it to every process that watches the topic with
-    `store.publish`. An exception of `store.publish` is logged and not raised: the event is
-    recorded, and a frontend learns of it on its next poll.
+    event's `event_name`, payload and `event_version` with `store.append`, then carries them to
+    every process that watches the topic with `store.publish`. An exception of `store.publish` is
+    logged and not raised: the event is recorded, and a frontend learns of it on its next poll.
     """
     validate_topic(topic)
     if not isinstance(event, Event):
         raise TypeError(f"publish() takes an Event, not {type(event).__name__}")
-    name = event.event_name
+    name = type(event).event_name
+    version = type(event).event_version
     payload = event.model_dump(mode="json")
     store = get_store()
-    rev, prev = await store.append(topic, name, payload)
+    rev, prev = await store.append(topic, name, payload, version)
     try:
-        await store.publish(topic, rev, prev, name, payload)
+        await store.publish(topic, rev, prev, name, payload, version)
     except Exception:
         logger.warning(
             "events: carrying %s rev %s of topic %s to the watching processes failed", name, rev, topic, exc_info=True

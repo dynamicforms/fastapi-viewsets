@@ -23,10 +23,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # KEYS[1] the topic's rev counter, KEYS[2] the topic's log. ARGV[1] now in milliseconds, ARGV[2] the
-# event as the JSON object {"name": ..., "payload": ...}, ARGV[3] the log size, ARGV[4] the log's
-# expiry in milliseconds. Sets the counter, without expiry, to max(counter + 1, now) and pushes
-# {"rev": ..., "prev": ..., "event": ARGV[2]} to the head of the log, which keeps ARGV[3] entries.
-# Returns {rev, prev} as decimal strings, or nil, changing nothing, when rev would reach 2^53.
+# event as the JSON object {"name": ..., "payload": ..., "version": ...}, ARGV[3] the log size,
+# ARGV[4] the log's expiry in milliseconds. Sets the counter, without expiry, to max(counter + 1, now)
+# and pushes {"rev": ..., "prev": ..., "event": ARGV[2]} to the head of the log, which keeps ARGV[3]
+# entries. Returns {rev, prev} as decimal strings, or nil, changing nothing, when rev would reach 2^53.
 _APPEND_SCRIPT = """
 local prev = tonumber(redis.call('GET', KEYS[1]) or '0')
 local rev = math.max(prev + 1, tonumber(ARGV[1]))
@@ -63,7 +63,7 @@ class RedisEventStore:
       `settings.viewsets_event_log_size` entries, expiring `settings.viewsets_event_log_ttl` seconds
       after the topic's last event;
     - `{prefix}ch:{topic}`, the channel `publish` publishes the event on, as the JSON object
-      `{"topic", "rev", "prev", "name", "payload"}`.
+      `{"topic", "rev", "prev", "name", "payload", "version"}`.
 
     `append` is one Lua script. `start()` opens the reader, a task on one pub/sub connection that
     subscribes to the channel of every topic `watch` names and calls `deliver()` for each message;
@@ -132,14 +132,14 @@ class RedisEventStore:
             except Exception:
                 logger.debug("events: closing the reader connection failed", exc_info=True)
 
-    async def append(self, topic: str, name: str, payload: Any) -> tuple[int, int]:
+    async def append(self, topic: str, name: str, payload: Any, version: int) -> tuple[int, int]:
         result = await self.redis_client.eval(
             _APPEND_SCRIPT,
             2,
             self.rev_key(topic),
             self.log_key(topic),
             _store._now_ms(),
-            json.dumps({"name": name, "payload": payload}),
+            json.dumps({"name": name, "payload": payload, "version": version}),
             max(settings.viewsets_event_log_size, 0),
             max(1, int(settings.viewsets_event_log_ttl * 1000)),
         )
@@ -166,14 +166,16 @@ class RedisEventStore:
         for raw in await self.redis_client.lrange(self.log_key(topic), 0, -1):
             entry = json.loads(raw)
             event = entry["event"]
-            chain.append(LoggedEvent(entry["rev"], entry["prev"], event["name"], event["payload"]))
+            chain.append(LoggedEvent(entry["rev"], entry["prev"], event["name"], event["payload"], event["version"]))
             if entry["prev"] == after:
                 chain.reverse()
                 return chain
         return None
 
-    async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any) -> None:
-        message = json.dumps({"topic": topic, "rev": rev, "prev": prev, "name": name, "payload": payload})
+    async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None:
+        message = json.dumps(
+            {"topic": topic, "rev": rev, "prev": prev, "name": name, "payload": payload, "version": version}
+        )
         await self.redis_client.publish(self.channel(topic), message)
 
     async def drop(self, topic: str) -> None:
@@ -252,6 +254,6 @@ class RedisEventStore:
                 continue
             try:
                 data = json.loads(message["data"])
-                await deliver(data["topic"], data["rev"], data["prev"], data["name"], data["payload"])
+                await deliver(data["topic"], data["rev"], data["prev"], data["name"], data["payload"], data["version"])
             except Exception:
                 logger.exception("events: a message on %s could not be delivered", message.get("channel"))

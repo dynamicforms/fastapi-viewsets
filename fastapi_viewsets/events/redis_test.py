@@ -22,6 +22,14 @@ class Ping(Event):
     n: int
 
 
+class PingV2(Event):
+    event_name = "ping"
+    event_version = 2
+
+    n: int
+    unit: str
+
+
 async def settle() -> None:
     """Lets the reader take the messages queued on the fake channels, then waits for the pushes."""
     await asyncio.sleep(0.02)
@@ -32,13 +40,13 @@ async def settle() -> None:
 async def test_the_keys_and_the_channel_are_under_the_prefix():
     redis = FakeRedis()
     store = RedisEventStore(redis, key_prefix="ev:")
-    rev, prev = await store.append("imports:7", "ping", {"n": 1})
+    rev, prev = await store.append("imports:7", "ping", {"n": 1}, 2)
     assert set(redis.strings) == {"ev:rev:imports:7"}
     assert set(redis.lists) == {"ev:log:imports:7"}
     assert json.loads(redis.lists["ev:log:imports:7"][0]) == {
         "rev": rev,
         "prev": prev,
-        "event": {"name": "ping", "payload": {"n": 1}},
+        "event": {"name": "ping", "payload": {"n": 1}, "version": 2},
     }
     assert store.channel("imports:7") == "ev:ch:imports:7"
 
@@ -48,7 +56,7 @@ async def test_the_counter_has_no_expiry_and_the_log_has_the_log_ttl():
     settings.viewsets_event_log_ttl = 30
     redis = FakeRedis()
     store = RedisEventStore(redis)
-    await store.append("t", "ping", {})
+    await store.append("t", "ping", {}, 1)
     assert await redis.pttl("events:rev:t") == -1
     assert 29_000 < await redis.pttl("events:log:t") <= 30_000
 
@@ -57,7 +65,7 @@ async def test_the_counter_has_no_expiry_and_the_log_has_the_log_ttl():
 async def test_append_is_one_script_and_revs_one_mget():
     redis = FakeRedis()
     store = RedisEventStore(redis)
-    await store.append("t", "ping", {})
+    await store.append("t", "ping", {}, 1)
     await store.revs(["t", "u"])
     assert redis.commands == ["EVAL", "MGET"]
 
@@ -74,7 +82,40 @@ async def test_an_event_published_in_another_process_reaches_this_processs_socke
         settings.viewsets_event_store = worker
         rev, prev = await publish("imports:7", Ping(n=1))
         await settle()
-        assert peer.pushes == [({"n": 1}, {":event": "ping", ":topic": "imports:7", ":rev": rev, ":prev": prev})]
+        assert peer.pushes == [
+            ({"n": 1}, {":event": "ping", ":version": 1, ":topic": "imports:7", ":rev": rev, ":prev": prev})
+        ]
+    finally:
+        await web.stop()
+
+
+@pytest.mark.asyncio
+async def test_the_channel_message_carries_the_version_to_the_other_process():
+    redis = FakeRedis()
+    web, worker = RedisEventStore(redis), RedisEventStore(redis)
+    settings.viewsets_event_store = web
+    await web.start()
+    try:
+        peer = FakePeer()
+        await subscribe(peer, Context({}), "imports:7")
+        sent = []
+        publish_to_redis = redis.publish
+
+        async def recording_publish(channel, message):
+            sent.append(json.loads(message))
+            return await publish_to_redis(channel, message)
+
+        redis.publish = recording_publish
+        settings.viewsets_event_store = worker
+        rev, prev = await publish("imports:7", PingV2(n=1, unit="s"))
+        await settle()
+        payload = {"n": 1, "unit": "s"}
+        assert sent == [
+            {"topic": "imports:7", "rev": rev, "prev": prev, "name": "ping", "payload": payload, "version": 2}
+        ]
+        assert peer.pushes == [
+            (payload, {":event": "ping", ":version": 2, ":topic": "imports:7", ":rev": rev, ":prev": prev})
+        ]
     finally:
         await web.stop()
 
