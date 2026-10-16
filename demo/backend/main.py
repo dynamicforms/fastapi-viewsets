@@ -9,9 +9,17 @@ from muxws import accept, Stream
 
 from demo.backend.django_setup import ensure_database
 from demo.backend.openapi_docs import add_try_links, REDOC_HEAD, SWAGGER_HEAD
-from demo.backend.viewsets import MusicTrackDbViewSet, MusicTrackViewSet, records, USE_CELERY
+from demo.backend.viewsets import (
+    DB_TASK_PREFIX,
+    MEMORY_TASK_PREFIX,
+    MusicTrackDbViewSet,
+    MusicTrackViewSet,
+    records,
+    USE_CELERY,
+)
 from fastapi_viewsets.decorators.route_viewset import route_viewset
 from fastapi_viewsets.endpoint_docs import apply_viewset_tags
+from fastapi_viewsets.events import check_events, register_events, start_events, stop_events
 from fastapi_viewsets.mux_ws import process_command
 
 
@@ -22,21 +30,28 @@ async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAP
     # depended on the app being imported before the loop started, which is true for
     # `uvicorn.run(app)` and false for `uvicorn.run("demo.backend.main:app")`.
     await sync_to_async(ensure_database, thread_sensitive=False)(records)
+    await start_events()
+    check_events()
 
     if not USE_CELERY:
         yield
+        await stop_events()
         return
 
     from demo.backend.celery_app import redis_async
     from fastapi_viewsets.decorators.celery_viewset import (
+        check_result_readers,
         get_result_queue_key,
         start_result_reader,
         stop_result_reader,
     )
 
-    await start_result_reader(redis_async, get_result_queue_key("music"))
+    for task_prefix in (MEMORY_TASK_PREFIX, DB_TASK_PREFIX):
+        await start_result_reader(redis_async, get_result_queue_key(task_prefix))
+    check_result_readers()
     yield
     await stop_result_reader()
+    await stop_events()
 
 
 # Both doc pages are served by hand: FastAPI's built-ins have no hook for the extra <head> the
@@ -80,6 +95,8 @@ route_viewset(router, base_path="/music", pk_field_name="id")(MusicTrackViewSet)
 # The same API over SQLite via the Django ORM, so the two backends can be compared
 # side by side on the same data - see MusicTrackDbViewSet.
 route_viewset(router, base_path="/music-db", pk_field_name="id")(MusicTrackDbViewSet)
+# subscribe, unsubscribe and poll of the viewsets' topics, under /events
+register_events(router, base_path="/events")
 
 app.include_router(router)
 
@@ -100,7 +117,8 @@ async def muxws_endpoint(websocket: WebSocket) -> None:
     peer = await accept(websocket)
 
     async def on_stream(payload, stream: Stream) -> None:
-        if await process_command(payload, stream, connection=websocket):
+        # peer= names the socket a `subscribe` holds its subscription on, and the pushes go to it.
+        if await process_command(payload, stream, connection=websocket, peer=peer):
             return
         # Not a viewset command. A real application would dispatch its own protocol here; this
         # demo has none, so saying so is more useful than silence.

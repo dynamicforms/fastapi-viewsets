@@ -9,10 +9,19 @@ from demo.backend.data_generator import generate_music_library
 from demo.backend.django_setup import MusicTrackRow
 from fastapi_viewsets.backends.django_orm import DjangoORMViewSet
 from fastapi_viewsets.collection_viewset import CollectionViewSet
+from fastapi_viewsets.conf import settings
 from fastapi_viewsets.context import Context
 from fastapi_viewsets.endpoint_docs import endpoint_docs
+from fastapi_viewsets.events import ChangeEvents, MemoryEventStore, ViewsetTopics
 from fastapi_viewsets.filters import make_filter_model
-from fastapi_viewsets.mixins import BulkViewSetMixin, CursorListMixin, LookupItem, LookupMixin, RetrieveMixin
+from fastapi_viewsets.mixins import (
+    BulkViewSetMixin,
+    CursorListMixin,
+    LookupItem,
+    LookupMixin,
+    RetrieveMixin,
+    UpdateMixin,
+)
 
 USE_CELERY = os.environ.get("DEMO_CELERY", "").lower() in ("1", "true", "yes")
 """
@@ -22,6 +31,28 @@ With Celery, every call queues a task through Redis and waits for a worker; that
 dominates the difference between HTTP and WebSocket transport that the benchmark measures.
 Set DEMO_CELERY=1 (and run the worker) to exercise the Celery path.
 """
+
+# Every create, update and destroy of a viewset publishes `records_changed` to the viewset's topic,
+# its routed base path (`/music`, `/music-db`). Set here, before any viewset is decorated, and in
+# both processes: with Celery, the worker runs the action and publishes the event.
+settings.viewsets_command_middleware = [ChangeEvents()]
+# A caller may follow a viewset's topic when it may call the viewset. The demo has no
+# authentication, so every caller may follow both.
+settings.viewsets_event_authorizers = [ViewsetTopics()]
+
+if USE_CELERY:
+    from demo.backend.celery_app import redis_async
+    from fastapi_viewsets.events.redis import RedisEventStore
+
+    # The worker publishes into the same Redis the web process polls and reads pushes from.
+    settings.viewsets_event_store = RedisEventStore(redis_async)
+else:
+    settings.viewsets_event_store = MemoryEventStore()
+
+MEMORY_TASK_PREFIX = "music"
+"""The Celery task names of `MusicTrackViewSet` under DEMO_CELERY: `music.<action>`."""
+DB_TASK_PREFIX = "music_db"
+"""The Celery task names of `MusicTrackDbViewSet` under DEMO_CELERY: `music_db.<action>`."""
 
 LIBRARY_SIZE = int(os.environ.get("DEMO_LIBRARY_SIZE", "5000"))
 """Large enough that paging is the only sane way to read it - which is the point of the demo."""
@@ -67,6 +98,9 @@ records = generate_music_library(LIBRARY_SIZE)
 database: dict[int, MusicTrack] = {record["id"]: MusicTrack(**record) for record in records}
 """
 The in-memory library. Pure Python, so building it at import time costs nothing but CPU.
+
+Every process that imports this module holds its own dict, so `demo.py --celery` runs the worker as
+one process. `MusicTrackDbViewSet` keeps its rows in the SQLite file, which every process shares.
 
 The SQLite copy is *not* seeded here: `ensure_database` talks to the database, and uvicorn imports
 the app inside its own event loop when it is given `"module:app"` as a string - where Django
@@ -141,14 +175,15 @@ class MusicTrackDbViewSet(
     DjangoORMViewSet[int, MusicTrack],
     CursorListMixin[MusicTrack, MusicTrackFilter],
     RetrieveMixin[int, MusicTrack],
+    UpdateMixin[int, MusicTrack],
 ):
     """
     The same music library, over SQLite through the Django ORM.
 
-    Lists and reads one record - the two the transport benchmark exercises - over the same records
-    as **Music Track**, on a backend that can answer part of the query itself: exact filters become
-    `WHERE` clauses, ascending sorts become `ORDER BY`, and the page becomes `LIMIT`/`OFFSET` - each
-    reported back so the in-memory pipeline does not redo it.
+    Lists, retrieves and updates the same records as **Music Track**, on a backend that can answer
+    part of a list query itself: exact filters become `WHERE` clauses, ascending sorts become
+    `ORDER BY`, and the page becomes `LIMIT`/`OFFSET` - each reported back so the in-memory pipeline
+    does not redo it.
     Anything it cannot translate falls back rather than failing, which is the contract.
 
     Worth watching while scrolling: the in-memory one walks the collection to find each page
@@ -183,5 +218,8 @@ if USE_CELERY:
     from fastapi_viewsets.decorators.celery_viewset import celery_viewset
 
     MusicTrackViewSet = celery_viewset(  # noqa: F811 - same viewset, wrapped for the Celery path
-        celery_app=celery_app, task_prefix="music", redis_client=redis_sync
+        celery_app=celery_app, task_prefix=MEMORY_TASK_PREFIX, redis_client=redis_sync
     )(MusicTrackViewSet)
+    MusicTrackDbViewSet = celery_viewset(  # noqa: F811 - same viewset, wrapped for the Celery path
+        celery_app=celery_app, task_prefix=DB_TASK_PREFIX, redis_client=redis_sync
+    )(MusicTrackDbViewSet)

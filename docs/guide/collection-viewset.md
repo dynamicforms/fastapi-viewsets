@@ -18,6 +18,18 @@ A partial update (`PATCH`) writes the fields the request stated onto the stored 
 as attributes of any other object. An item of a set is hashable and is replaced by a copy holding
 the new values, so a set holds pydantic models (frozen), named tuples or dataclasses (frozen).
 
+## One copy per process
+
+The container lives in the memory of the process that holds the viewset. Every process that imports
+the viewset's module has its own container: each worker process of the ASGI server, and each process
+of a Celery worker pool that runs a [`celery_viewset`](./routers#celery-viewset). A write changes the
+container of the process that served it; a call served by another process reads its own container
+and does not see the write.
+
+With more than one process the application keeps the data consistent itself: it runs one process,
+or it keeps the data outside the processes, in a database (`DjangoORMViewSet`) or in a shared store
+such as Redis or Valkey behind a container of its own.
+
 ## Basic usage
 
 ```python

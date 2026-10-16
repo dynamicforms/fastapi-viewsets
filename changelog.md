@@ -90,6 +90,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `eventsOf(peer)`.
 - npm: `RecordsChanged`, `Change`, `RECORDS_CHANGED`, `applyChanges(rows, change, pkFieldName)`,
   `RecordOf` and `KeyOf`.
+- The demo's grid follows its viewset with `watch({ fetch: true })` and `applyChanges` over both
+  transports: a Favorite toggled in one tab appears in every other tab showing it, on both backends,
+  and a sorted or filtered grid reloads its list on the change. The demo's SQLite viewset serves
+  `update` and `partial_update`. With `--celery` the worker, one process, runs the calls of both viewsets and
+  publishes the events through a `RedisEventStore`.
 
 ### Changed
 

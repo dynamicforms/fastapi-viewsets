@@ -90,15 +90,9 @@ def main() -> int:
         children.append(
             (
                 "the Celery worker",
+                # One process: the in-memory library is a dict per process (see CollectionViewSet).
                 spawn(
-                    [
-                        "celery",
-                        "-A",
-                        "demo.backend.celery_worker",
-                        "worker",  # noqa: S607
-                        "--loglevel=info",
-                        "--concurrency=4",
-                    ],
+                    ["celery", "-A", "demo.backend.celery_worker", "worker", "--loglevel=info", "--concurrency=1"],  # noqa: S607
                     env,
                 ),
             )

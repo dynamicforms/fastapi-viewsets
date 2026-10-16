@@ -5,7 +5,7 @@ import os
 # viewsets is imported, since the decorator is applied at import time.
 os.environ.setdefault("DEMO_CELERY", "1")
 
-import demo.backend.viewsets  # noqa: E402, F401 — registers MusicTrackViewSet tasks on celery_app
+import demo.backend.viewsets  # noqa: E402, F401 — registers the MusicTrackViewSet and MusicTrackDbViewSet tasks on celery_app
 
 from demo.backend.celery_app import celery_app  # noqa: E402
 
