@@ -36,6 +36,14 @@ at write time:
 
 Both need a counterpart in the Vue mixins (sending the version, handling 409).
 
+## A changed record in a server-paged list
+
+A `created` or `updated` change names a pk, and a frontend that holds the whole data set places the
+record by sorting and filtering locally. A list paged on the server has no such place: inserting the
+record needs an anchor, the row it sorts next to. Fetching a page around the record can return
+another new row, so the neighbour read is not a reliable anchor, and nothing provides one yet. A
+frontend that pages on the server re-reads its page.
+
 ## To assess: worth doing at all?
 
 None of these hurts in normal use. Each needs a decision on whether it is worth the change before

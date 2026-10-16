@@ -272,6 +272,86 @@ The library does not ship the helper. It is four lines, it is standard TypeScrip
 the constraint. What would change it: if every consumer ends up writing the same wrapper, exporting a typed one is a
 small addition — but I would rather see the copies first.
 
+## Events
+
+The reasoning behind `fastapi_viewsets.events` and its frontend client. Settled with the author.
+
+### Change events come from `Middleware.execute()`, not from hooks in each backend
+
+`execute()` runs exactly once per execution, in whichever process the action executes, with the
+viewset, the action, its arguments and its result. It covers every `ImplMixin` backend and every
+application override of a `perform_*` method without a line in any of them, and it is switched per
+viewset and per action by `@action_configuration`, the mechanism every other middleware is
+configured by.
+
+### The store is the truth and the push is an accelerator
+
+A push that is dropped, a socket that is lost and a process that holds no socket all end in the same
+place: the next poll answers from the store, and the worst case is one resync. There are no delivery
+guarantees to engineer on the socket.
+
+### A per-topic rev with a `prev` link instead of a per-document rev
+
+A viewset's data has no single document to carry a rev; the topic carries it. A gap is one
+comparison of `prev` against the held rev, which stays correct when the counter is lost and
+restarts, and a bounded log turns a gap of seconds into a poll rather than a re-read. `log_size = 0`
+is taskwire's model exactly.
+
+### A short log, a permanent counter
+
+A reader absent for a minute re-reads its state; a backlog for it would be stale data delivered
+late. The counter outlives the log so that a reader that is present applies a sparse topic's next
+event as a delta, without the reload that a restarted counter would force on it. A keyed topic that
+is finished is dropped by its source.
+
+### Every event carries a version
+
+An event's payload changes shape as the application evolves, and the producers and consumers of one
+topic are not deployed at once: a frontend still loaded in a tab, a worker on the previous release,
+a consumer that reads a stored series of events. The version names the shape of each payload, so a
+consumer handles several versions side by side instead of inferring the shape from the fields
+present.
+
+### Subscribe and poll are viewset commands
+
+They pass through the application's command middleware, context processors, rate limiting and
+`/schema` like any other call. The only transport-specific piece is the socket in the request scope.
+
+### One push per event, no long-lived stream
+
+`process_command` serves a command as one ASGI request with one buffered response, and a
+subscription held open as a stream would need a second dispatch path beside it. `notify()` leaves
+nothing open on either side.
+
+### Two topic syntaxes
+
+A path is a viewset, a name is a declared source, and the two cannot name the same thing. A name is
+declared once per process, so two modules cannot publish under one name without one of them failing
+at import.
+
+### A change carries pks only
+
+The record an action returns is its return value, built in the writer's context and not yet
+serialized; the viewset's `retrieve` answers through the endpoint's `response_model` with its
+aliases, after command middleware that may reshape the body, and in the reader's context. A frontend
+reads a record with its normal code only in the second form. A payload also reaches every subscriber
+of a topic with the same bytes, and `ViewsetTopics` admits a caller the viewset's `list_items`
+admits; row-level narrowing in `get_queryset` is invisible to both. A pk is safe for every
+subscriber, and `retrieve` answers 404 for a row the reader may not read.
+
+### No authorizer, no subscription
+
+A topic is a string any connected client can name. Admission is declared, `allow_all` included,
+never assumed.
+
+### The general layer lives here, not in taskwire
+
+taskwire depends on this package in both languages (`taskwire[viewsets]`, `taskwire[muxws]`,
+`taskwire/muxws` on npm), so the shared mechanism can only sit below it. taskwire imports its polling
+ladder from here; taskwire's push path may later publish its envelopes through
+this store, with a delivery filter carrying its per-connection decisions, which is what
+`viewsets_event_delivery_filters` is for.
+
 ## Settled, kept for the reasoning
 
 ### An unhandled exception answers 500 rather than resetting the stream

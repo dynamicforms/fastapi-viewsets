@@ -52,7 +52,7 @@ CollectionViewSet(container, pk_field="id")
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `container` | collection | — | The backing Python collection |
-| `pk_field` | `str` | `"id"` | Name of the primary key attribute/key on each item |
+| `pk_field` | `str` | `"id"` | Name of the primary key attribute/key on each item; also the viewset's `pk_field_name`, which the cursor list shape and `ChangeEvents` read |
 
 ## Auto-increment PK
 

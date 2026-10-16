@@ -65,6 +65,7 @@ async def process_command(
     connection: "WebSocket | None" = None,
     base_headers: dict[str, str] | None = None,
     app: FastAPI | None = None,
+    peer: Any = None,
 ) -> bool:
     """
     Serves one viewset command through the application and answers on `stream`.
@@ -78,7 +79,7 @@ async def process_command(
             peer = await accept(websocket)
 
             async def on_stream(payload, stream):
-                if await process_command(payload, stream, connection=websocket):
+                if await process_command(payload, stream, connection=websocket, peer=peer):
                     return
                 await my_own_dispatch(payload, stream)
 
@@ -97,6 +98,10 @@ async def process_command(
     request's client and server address (`request.client`, which `RateLimiter` keys on by
     default), without which every call has the client address `("muxws", 0)`, and the lifespan
     state (`request.state`), copied for each command as an HTTP server copies it for each request.
+
+    `peer` is the muxws peer of the socket the stream arrived on. The request carries it as
+    `request.scope["fastapi_viewsets.peer"]` (`routing.PEER_SCOPE_KEY`), None without it; the events
+    viewset's `subscribe` and `unsubscribe` read the socket from there and need it.
 
     The request runs as a task of its own. When the stream ends before the answer (the peer cancels
     it or the socket is lost, and muxws cancels this handler), the request runs to completion and its
@@ -138,6 +143,7 @@ async def process_command(
             client=connection.scope.get("client") if connection is not None else None,
             server=connection.scope.get("server") if connection is not None else None,
             state=connection.scope.get("state") if connection is not None else None,
+            peer=peer,
         )
     )
     try:

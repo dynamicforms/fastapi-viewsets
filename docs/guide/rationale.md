@@ -63,6 +63,31 @@ class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item], Loo
 
 The same class, the same code — the decorator decides where it runs.
 
+### Changes reach the frontend without a reload
+
+A viewset answers when the frontend asks; [events](./events) carry the other direction. One command
+middleware publishes a `RecordsChanged` event after every create, update and destroy of every
+viewset, and a socket-holding frontend receives it as a push:
+
+```python
+settings.viewsets_command_middleware = [ChangeEvents(), ...]
+settings.viewsets_event_authorizers = [ViewsetTopics()]
+register_events(router)
+```
+
+- The topic of a viewset is its routed base path, so the frontend ViewSet that reads `/api/music`
+  follows `/api/music`, with no second name to keep in step.
+- `ViewsetTopics()` admits a follower the viewset itself would admit: it runs the viewset's route
+  dependencies and middleware checks for the topic.
+- `ChangeEvents` runs where the action executes, in the Celery worker for a `celery_viewset` action,
+  and is switched off or configured per viewset or per action with `@action_configuration`.
+- Custom events are declared once per name with `source()`; a second declaration of the name fails
+  at import.
+
+The store is the truth and a push is an accelerator. Every event is recorded before it is pushed,
+each carries the `prev` it follows, and a frontend that misses one polls once or re-reads its state.
+A deployment without muxws is complete: its frontends poll.
+
 ### Mix-and-match capabilities
 
 Every HTTP operation is an independent mixin. Combine only what you need:

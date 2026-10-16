@@ -23,7 +23,9 @@ Server side:
         # Do not call websocket.accept() yourself - muxws performs the upgrade, because only it
         # knows which muxws.v1.<codec> subprotocol to select.
         peer = await accept(websocket)
-        peer.on_stream(lambda payload, stream: process_command(payload, stream, connection=websocket))
+        peer.on_stream(
+            lambda payload, stream: process_command(payload, stream, connection=websocket, peer=peer)
+        )
         await peer.serve()
 
 Which viewsets get registered is decided at three levels, each able to defer to the next:

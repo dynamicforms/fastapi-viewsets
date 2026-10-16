@@ -346,6 +346,7 @@ A call that cannot be handed to the worker raises `ActionDispatchError` (503,
 | [`Authorization`](./authorization) | Checks the action's authorization configuration |
 | [`RateLimiter`](./rate-limiter) | Fixed-window request counting |
 | [`Idempotency`](./idempotency) | Answers a repeated call with the outcome of the first one; placed first in the list |
+| [`ChangeEvents`](./events#changeevents) | Publishes one `RecordsChanged` event to the viewset's topic after each create, update and destroy action, from `execute()` |
 
 ## Known limitations
 

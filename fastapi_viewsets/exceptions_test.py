@@ -5,6 +5,10 @@ from fastapi_viewsets.exceptions import (
     CursorRequestError,
     df_viewset_exception_handler,
     DfViewSetError,
+    EventCursorsExceededError,
+    EventSubscriptionsExceededError,
+    EventTopicInvalidError,
+    EventTopicRefusedError,
     IdempotencyKeyInvalidError,
     IdempotencyKeyReusedError,
     NotAuthorizedError,
@@ -140,3 +144,31 @@ def test_with_the_handler_registered_detail_code_and_params_are_additive():
         "detail_code": "not_found",
         "detail_params": {"pk": 5},
     }
+
+
+def test_event_topic_invalid_error_carries_the_topic():
+    error = EventTopicInvalidError("Not A Topic")
+    assert (error.status_code, error.code, error.params) == (422, "event_topic_invalid", {"topic": "Not A Topic"})
+    assert error.detail == "Topic Not A Topic is neither a path starting with / nor a source name with an optional key"
+
+
+def test_event_topic_refused_error_carries_the_topic():
+    error = EventTopicRefusedError("club:9")
+    assert (error.status_code, error.code, error.params) == (403, "event_topic_refused", {"topic": "club:9"})
+    assert error.detail == "Topic club:9 is not admitted"
+
+
+def test_event_subscriptions_exceeded_error_carries_the_limit():
+    error = EventSubscriptionsExceededError(256)
+    assert (error.status_code, error.code, error.params) == (409, "event_subscriptions_exceeded", {"limit": 256})
+    assert error.detail == "This socket already holds 256 topics"
+
+
+def test_event_cursors_exceeded_error_carries_the_count_and_the_limit():
+    error = EventCursorsExceededError(300, 256)
+    assert (error.status_code, error.code, error.params) == (
+        422,
+        "event_cursors_exceeded",
+        {"count": 300, "limit": 256},
+    )
+    assert error.detail == "A poll carries at most 256 cursors, this one carries 300"

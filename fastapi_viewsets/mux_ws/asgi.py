@@ -17,7 +17,7 @@ from typing import Any
 
 from starlette.types import ASGIApp
 
-from ..routing import MUXWS, TRANSPORT_SCOPE_KEY
+from ..routing import MUXWS, PEER_SCOPE_KEY, TRANSPORT_SCOPE_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +59,13 @@ async def call_asgi(
     client: tuple[str, int] | None = None,
     server: tuple[str, int] | None = None,
     state: dict[str, Any] | None = None,
+    peer: Any = None,
 ) -> AsgiResponse:
     """
     `client` and `server` become the request's `scope["client"]` and `scope["server"]`. Without
     them both are `("muxws", 0)`, and every call carries the same client address. `state` is the
     application's lifespan state; the request gets a shallow copy of it, as from an HTTP server.
+    `peer` becomes `scope["fastapi_viewsets.peer"]` (`routing.PEER_SCOPE_KEY`), None without it.
 
     An exception the app raises after it has started its response (Starlette's
     `ServerErrorMiddleware` sends the 500, through the application's own handler where it has one,
@@ -85,6 +87,7 @@ async def call_asgi(
         "server": server or ("muxws", 0),
         "state": dict(state or {}),
         TRANSPORT_SCOPE_KEY: MUXWS,
+        PEER_SCOPE_KEY: peer,
     }
 
     request_sent = False

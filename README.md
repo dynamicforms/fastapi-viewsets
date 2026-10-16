@@ -20,6 +20,10 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
   per call. A command goes through your application as an HTTP request does - its middleware,
   exception handlers, router dependencies and state - so both transports behave identically. In the
   demo, a burst of 100 requests takes 156 ms over REST and 37 ms over muxws.
+- **Events** — publish an event to a topic and every frontend following it learns of it, as a muxws
+  push or on its next poll. `ChangeEvents` publishes every create, update and destroy of a viewset to
+  its routed base path; custom events are declared with `source()`. Every event is recorded before it
+  is pushed, so a dropped push costs latency, not an event.
 - **Three list shapes** — a bare array, offset paging, or cursor paging. A viewset declares which,
   and may let a client pick per request with an `X-List-Shape` header.
 - **Declarative filters** — declare which fields accept which operators and get query parameters,

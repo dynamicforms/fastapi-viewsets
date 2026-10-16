@@ -106,6 +106,37 @@ class CursorRequestError(DfViewSetError):
         super().__init__(400, str(error), error.code, error.params)
 
 
+class EventTopicInvalidError(DfViewSetError):
+    """A topic that is neither a viewset's routed base path nor a source name with an optional key."""
+
+    def __init__(self, topic: str):
+        message = f"Topic {topic} is neither a path starting with / nor a source name with an optional key"
+        super().__init__(422, message, "event_topic_invalid", {"topic": topic})
+
+
+class EventTopicRefusedError(DfViewSetError):
+    """A topic no event authorizer admitted to the caller."""
+
+    def __init__(self, topic: str):
+        super().__init__(403, f"Topic {topic} is not admitted", "event_topic_refused", {"topic": topic})
+
+
+class EventSubscriptionsExceededError(DfViewSetError):
+    """A subscription on a socket that already holds `settings.viewsets_event_max_subscriptions` topics."""
+
+    def __init__(self, limit: int):
+        message = f"This socket already holds {limit} topics"
+        super().__init__(409, message, "event_subscriptions_exceeded", {"limit": limit})
+
+
+class EventCursorsExceededError(DfViewSetError):
+    """A poll that carries more cursors than `settings.viewsets_event_max_subscriptions`."""
+
+    def __init__(self, count: int, limit: int):
+        message = f"A poll carries at most {limit} cursors, this one carries {count}"
+        super().__init__(422, message, "event_cursors_exceeded", {"count": count, "limit": limit})
+
+
 async def df_viewset_exception_handler(_request: Request, exc: DfViewSetError) -> JSONResponse:
     """
     Adds `detail_code` and `detail_params` alongside `detail` in the response body.
