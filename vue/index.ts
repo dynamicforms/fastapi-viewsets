@@ -56,9 +56,6 @@ export { route_rest, RestProxyImpl } from './rest-proxy';
 export type { MuxwsPeerLike, MuxwsPeerSource, MuxwsProxy, MuxwsProxyOptions, MuxwsStreamLike } from './muxws-proxy';
 export { route_muxws, MuxwsProxyImpl } from './muxws-proxy';
 
-export type { Draw, PollLadderState, PollSettings } from './poll';
-export { DEFAULT_POLL_SETTINGS, jitterMultiplier, ladderInterval, nextDelay, PollLadder } from './poll';
-
 export type { ApiErrorBody, ErrorDescription, FieldErrorEntry, FieldErrorsBody } from './errors';
 export { toErrorDescription, toFieldErrors } from './errors';
 
@@ -76,5 +73,8 @@ export type {
 } from './events';
 export { attachEvents, createEventClient, defineEvent, eventsOf, handleEventStream } from './events';
 
-export type { Change, KeyOf, RecordOf, RecordsChanged, ViewSetWatch, WatchOptions } from './changes';
-export { applyChanges, RECORDS_CHANGED } from './changes';
+export type { Change, KeyOf, RecordOf, RecordsChanged, ViewSetWatch, WatchOptions } from './events';
+export { applyChanges, RECORDS_CHANGED } from './events';
+
+export type { Draw, PollLadderState, PollSettings } from './events';
+export { DEFAULT_POLL_SETTINGS, jitterMultiplier, ladderInterval, nextDelay, PollLadder } from './events';

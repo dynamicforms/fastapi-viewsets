@@ -27,7 +27,7 @@ import {
   type ViewSetCalls,
   withKeyHeader,
 } from './call';
-import type { KeyOf, RecordOf, ViewSetWatch } from './changes';
+import type { KeyOf, RecordOf, ViewSetWatch } from './events/changes';
 import type { KeyType } from './mixins';
 import {
   FACTORY_BUILT,

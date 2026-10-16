@@ -1,7 +1,7 @@
 import { JsonCodec, memoryPair, Peer, ResetCode, type Stream } from 'muxws';
 import { expect, it } from 'vitest';
 
-import { attachEvents, createEventClient, defineEvent } from './events';
+import { attachEvents, createEventClient, defineEvent } from './events/client';
 import { MuxwsProxyImpl } from './muxws-proxy';
 
 interface Item {

@@ -8,7 +8,8 @@
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ViewSetRequestError } from './errors';
+import { ViewSetRequestError } from '../errors';
+
 import {
   attachEvents,
   createEventClient,
@@ -21,7 +22,7 @@ import {
   type EventStreamHandler,
   eventsOf,
   handleEventStream,
-} from './events';
+} from './client';
 
 interface SentCall {
   via: 'peer' | 'axios';

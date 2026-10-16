@@ -23,8 +23,8 @@ import {
   type ViewSetCalls,
   withKeyHeader,
 } from './call';
-import type { KeyOf, RecordOf, ViewSetWatch } from './changes';
-import { type EventClient, eventsOf } from './events';
+import type { KeyOf, RecordOf, ViewSetWatch } from './events/changes';
+import { type EventClient, eventsOf } from './events/client';
 import type { KeyType } from './mixins';
 import { readHeaders, readStatus } from './muxws-reply';
 import {

@@ -6,19 +6,20 @@
 import type { AxiosInstance } from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { ViewSetRequestError } from '../errors';
+import { ReadOnlyViewSetMixin, RetrieveMixin } from '../mixins';
+import { type MuxwsPeerLike, MuxwsProxyImpl, route_muxws } from '../muxws-proxy';
+import { RestProxyImpl, route_rest } from '../rest-proxy';
+import { restViewSet } from '../viewset';
+
 import { applyChanges, RECORDS_CHANGED, type RecordsChanged } from './changes';
-import { ViewSetRequestError } from './errors';
 import {
   createEventClient,
   type EventClient,
   type EventHandlers,
   type EventMeta,
   type EventSubscription,
-} from './events';
-import { ReadOnlyViewSetMixin, RetrieveMixin } from './mixins';
-import { type MuxwsPeerLike, MuxwsProxyImpl, route_muxws } from './muxws-proxy';
-import { RestProxyImpl, route_rest } from './rest-proxy';
-import { restViewSet } from './viewset';
+} from './client';
 
 interface Item {
   id: number;

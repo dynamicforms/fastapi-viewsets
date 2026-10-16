@@ -349,7 +349,7 @@ never assumed.
 taskwire's connectors for this package (`taskwire[viewsets]`, `taskwire[muxws]`, `taskwire/muxws` on
 npm) depend on it, so the shared mechanism can only sit below taskwire. taskwire itself lives
 without this package: it keeps its own copy of the polling ladder this package has in
-`vue/poll.ts`, a pure function of about a hundred lines, rather than making this package a required
+`vue/events/poll.ts`, a pure function of about a hundred lines, rather than making this package a required
 peer of its core.
 `taskwire/muxws` composes `handleEventStream()` into the peer's stream handler, so one socket
 carries both. taskwire's push path may later publish its envelopes through this store, with a

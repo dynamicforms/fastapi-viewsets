@@ -20,8 +20,8 @@
  */
 
 import { bindCallKeys, type RepeatOptions, type ViewSetActionCall, type ViewSetCall } from './call';
-import { type ViewSetWatch, watchRecords, type WatchOptions } from './changes';
-import type { EventClient, EventSubscription } from './events';
+import { type ViewSetWatch, watchRecords, type WatchOptions } from './events/changes';
+import type { EventClient, EventSubscription } from './events/client';
 import type {
   ActionName,
   BulkViewSetMixin,

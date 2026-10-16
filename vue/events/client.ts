@@ -30,9 +30,10 @@
  * outcome would not subscribe the socket the repeat travelled on.
  */
 
-import { ViewSetRequestError } from './errors';
-import type { MuxwsPeerLike } from './muxws-proxy';
-import { readHeaders, readStatus } from './muxws-reply';
+import { ViewSetRequestError } from '../errors';
+import type { MuxwsPeerLike } from '../muxws-proxy';
+import { readHeaders, readStatus } from '../muxws-reply';
+
 import { DEFAULT_POLL_SETTINGS, type Draw, PollLadder, type PollSettings } from './poll';
 
 // ---------------------------------------------------------------------------

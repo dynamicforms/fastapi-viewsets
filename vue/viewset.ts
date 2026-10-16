@@ -18,7 +18,7 @@
  * methods exist.
  */
 
-import type { ViewSetWatch } from './changes';
+import type { ViewSetWatch } from './events/changes';
 import type { ActionName, ActionSurface, KeyType } from './mixins';
 import { MuxwsProxyImpl, type MuxwsProxyOptions } from './muxws-proxy';
 import { FACTORY_BUILT, type ProxyBaseOptions, ViewSetInternals, type ViewSetMixinDeclaration } from './proxy-base';

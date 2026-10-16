@@ -3,6 +3,8 @@
  * create, update and destroy action, and what a ViewSet does with it: `watch()` and `applyChanges()`.
  */
 
+import type { CursorPage, KeyType, PaginatedList } from '../mixins';
+
 import {
   defineEvent,
   deferSubscription,
@@ -10,8 +12,7 @@ import {
   type EventMeta,
   type EventSubscription,
   rethrowLater,
-} from './events';
-import type { CursorPage, KeyType, PaginatedList } from './mixins';
+} from './client';
 
 /** One changed record: its pk, and the record `watch({ fetch: true })` retrieved for it. */
 export interface Change<T, K extends KeyType = KeyType> {
