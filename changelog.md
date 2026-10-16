@@ -66,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"id"`; the cursor list shape orders by it.
 - The `muxws` extra requires `muxws>=0.4.1`, and the npm peer dependency is `muxws ^0.4.1`.
 
-## [0.9.0] - Unreleased
+## [0.9.0] - 2026-10-16
 
 ### Added
 
@@ -147,7 +147,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - npm: `ViewSetProxyBase`'s constructor binds every method of the instance's class chain as an own,
   non-enumerable property, which sets `key` on the method's promise.
 
-## [0.8.0] - Unreleased
+## [0.8.0] - 2026-10-13
 
 ### Added
 

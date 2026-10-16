@@ -347,8 +347,8 @@ never assumed.
 ### The general layer lives here, not in taskwire
 
 taskwire depends on this package in both languages (`taskwire[viewsets]`, `taskwire[muxws]`,
-`taskwire/muxws` on npm), so the shared mechanism can only sit below it. taskwire's polling ladder
-moves here and taskwire imports it; taskwire's push path may later publish its envelopes through
+`taskwire/muxws` on npm), so the shared mechanism can only sit below it. taskwire imports its polling
+ladder from here; taskwire's push path may later publish its envelopes through
 this store, with a delivery filter carrying its per-connection decisions, which is what
 `viewsets_event_delivery_filters` is for.
 
