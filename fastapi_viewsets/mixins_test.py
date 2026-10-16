@@ -404,7 +404,7 @@ async def test_list_items_no_filter_fltr_none():
 @pytest.mark.asyncio
 async def test_list_items_no_filter_via_http():
     """Simulate a Swagger GET /items request without any filter query params."""
-    from httpx import ASGITransport, AsyncClient
+    from httpx2 import ASGITransport, AsyncClient
 
     router = APIRouter()
     route_viewset(router, base_path="/items")(FilterableItemViewSet)
@@ -744,7 +744,7 @@ async def test_sort_by_score_then_name():
 
 @pytest.mark.asyncio
 async def test_sort_via_http():
-    from httpx import ASGITransport, AsyncClient
+    from httpx2 import ASGITransport, AsyncClient
 
     router = APIRouter()
     route_viewset(router, base_path="/items")(SortableItemViewSet)
