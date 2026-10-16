@@ -5,6 +5,19 @@ releases at once, work from the bottom of the page upwards.
 
 <!-- New releases go directly below this comment, above the previous one, as `## Upgrading to vX.Y.Z (from vA.B.x)`. -->
 
+## Upgrading to v0.10.0 (from v0.9.x)
+
+- [ ] Deploy every process with a `RedisEventStore`, web processes and workers, together:
+      `publish` publishes on `{prefix}events` instead of `{prefix}ch:{topic}`, and a reader of one
+      version does not receive the events a process of the other version publishes.
+- [ ] A custom `EventStore` drops `watch` and `unwatch`; nothing calls them. Its `publish` carries
+      every event to `deliver()` in every process whose store is started, and `deliver()` leaves out
+      a topic without a subscription in the process.
+- [ ] Code that called `RedisEventStore.channel(topic)` reads `RedisEventStore.channel`, the name of
+      the one channel.
+- [ ] `start_events()` raises `asyncio.TimeoutError` when Redis does not confirm the SUBSCRIBE
+      within 5 seconds; the lifespan that calls it fails the application's startup.
+
 ## Upgrading to v0.9.0 (from v0.8.x)
 
 - [ ] `set_celery_dispatch_hook` and `set_celery_kwargs_hook` are removed. Code that carried data to

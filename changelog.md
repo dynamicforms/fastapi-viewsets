@@ -6,7 +6,7 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.2] - 2026-10-16
+## [0.10.0] - 2026-10-16
 
 ### Added
 
@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking.** Events: `RedisEventStore` publishes every event on one channel, `{prefix}events`,
+  which `start()` subscribes once and returns after Redis has confirmed; `deliver()` pushes an event
+  to the sockets of the process that hold its topic. `EventStore.watch` and `EventStore.unwatch` are
+  removed, as are `RedisEventStore.watch`, `unwatch` and `channel(topic)`; `RedisEventStore.channel`
+  is the channel's name. `subscribe` no longer calls the store, and a failed or slow Redis
+  `SUBSCRIBE` no longer fails a subscribe or leaves a channel subscribed. `start()` raises
+  `asyncio.TimeoutError` when Redis does not confirm the SUBSCRIBE within 5 seconds.
 - npm: `watch({ fetch: true })` passes the changes whose `retrieve` answers 404 to a second
   `onChange` with `op: 'deleted'`, after the event's other changes, instead of dropping them, so a
   displayed record that is gone or no longer visible to the reader is removed.
@@ -41,9 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - npm: the event client applies a polled event whose `prev` is below the held rev and whose rev is
   above it, and moves the held rev to a poll answer's `rev` after its events, so a poll answer that
   leaves out filtered events neither resyncs the topic nor polls it again.
-- Events: a `store.watch` that raises, such as a Redis SUBSCRIBE whose confirmation does not arrive
-  in time, is followed by `store.unwatch`, so a failed `subscribe` leaves no channel subscribed in
-  the process. `EventStore.unwatch` stops what a `watch` that raised may have started.
 
 ## [0.9.1] - 2026-10-16
 

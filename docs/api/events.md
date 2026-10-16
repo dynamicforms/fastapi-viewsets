@@ -50,7 +50,7 @@ assignment or as a `ClassVar`; a subclass that annotates either one as a field
 
 | Name | Description |
 |------|-------------|
-| `async publish(topic: str, event: Event) -> tuple[int, int]` | Validates `topic`, records the event's `event_name`, payload and `event_version` with `store.append`, carries it to the watching processes with `store.publish`, and returns `(rev, prev)`. Raises `ValueError` for a topic of neither form and `TypeError` for an `event` that is not an `Event`; an exception of `store.publish` is logged at warning level and not raised. `OverflowError` of `store.append` propagates |
+| `async publish(topic: str, event: Event) -> tuple[int, int]` | Validates `topic`, records the event's `event_name`, payload and `event_version` with `store.append`, carries it to every process with `store.publish`, and returns `(rev, prev)`. Raises `ValueError` for a topic of neither form and `TypeError` for an `event` that is not an `Event`; an exception of `store.publish` is logged at warning level and not raised. `OverflowError` of `store.append` propagates |
 | `source(name: str, authorizer: EventAuthorizer \| None = None) -> Source` | `Source(name, authorizer)` |
 | `declared_source(name: str) -> Source \| None` | The source declared as `name` in this process |
 | `reset_sources() -> None` | Forgets every declared source; for tests |
@@ -97,8 +97,6 @@ class EventStore(Protocol):
     async def since(self, topic: str, after: int) -> list[LoggedEvent] | None: ...
     async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None: ...
     async def drop(self, topic: str) -> None: ...
-    async def watch(self, topic: str) -> None: ...
-    async def unwatch(self, topic: str) -> None: ...
 ```
 
 | Method | Contract |
@@ -108,9 +106,8 @@ class EventStore(Protocol):
 | `append(topic, name, payload, version)` | Sets the topic's rev to `max(rev + 1, now in milliseconds)`, keeps the event's name, payload and version in the topic's log and returns `(rev, prev)`. Atomic; raises `OverflowError` when the rev would reach `MAX_REV` |
 | `revs(topics)` | The current rev of each topic, `0` for a topic without one |
 | `since(topic, after)` | `[]` when the topic's rev is `after`; otherwise the kept event whose `prev` is `after` and every newer one, oldest first; `None` when no kept event has that `prev` |
-| `publish(topic, rev, prev, name, payload, version)` | Carries the event to `deliver(topic, rev, prev, name, payload, version)` in every process that watches the topic |
+| `publish(topic, rev, prev, name, payload, version)` | Carries the event to `deliver(topic, rev, prev, name, payload, version)` in every process whose store is started; `deliver()` pushes it to the topic's subscriptions there |
 | `drop(topic)` | Removes the topic's rev and log |
-| `watch(topic)` / `unwatch(topic)` | Starts / stops carrying the topic's events to this process |
 
 ### LoggedEvent
 
@@ -136,8 +133,8 @@ class MemoryEventStore:
 The event store of one process. `publish` calls `deliver()` in this process only. A topic's log holds
 its last `settings.viewsets_event_log_size` events and is emptied when it is read or appended to more
 than `settings.viewsets_event_log_ttl` seconds after the topic's last event. A topic's rev is kept
-until `drop`. `append` reads and writes the rev without an `await` in between. `start`, `stop`,
-`watch` and `unwatch` do nothing.
+until `drop`. `append` reads and writes the rev without an `await` in between. `start` and `stop`
+do nothing.
 
 ### RedisEventStore
 
@@ -154,26 +151,28 @@ the only module of the package that uses `redis`; `fastapi_viewsets.events` does
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `redis_client` | `redis.asyncio.Redis` | — | The client the application constructs |
-| `key_prefix` | `str` | `"events:"` | The prefix of the keys and channels |
+| `key_prefix` | `str` | `"events:"` | The prefix of the keys and the channel |
 
 | Member | Description |
 |--------|-------------|
 | `rev_key(topic) -> str` | `{prefix}rev:{topic}`: the topic's rev, a decimal string without expiry |
 | `log_key(topic) -> str` | `{prefix}log:{topic}`: the topic's log, a list of JSON entries `{"rev", "prev", "event": {"name", "payload", "version"}}`, newest first, at most `viewsets_event_log_size` long, expiring `viewsets_event_log_ttl` seconds after the topic's last event (`PEXPIRE`, at least 1 ms). A log size of `0` deletes the log |
-| `channel(topic) -> str` | `{prefix}ch:{topic}`: the channel `publish` publishes the JSON object `{"topic", "rev", "prev", "name", "payload", "version"}` on |
+| `channel: str` | `{prefix}events`: the one channel `publish` publishes every event on, as the JSON object `{"topic", "rev", "prev", "name", "payload", "version"}` |
 | `reader_running: bool` | Whether the reader task runs |
-| `async start()` | Opens the reader: one task on one pub/sub connection, subscribed to the channel of every watched topic, which calls `deliver()` for each message. A store whose reader runs returns at once |
-| `async stop()` | Cancels the reader and closes its connection. The watched topics are kept, and `start()` subscribes them again |
+| `async start()` | `SUBSCRIBE` of `channel` on one pub/sub connection; once the reader has read Redis's confirmation, starts the reader, one task that calls `deliver()` for each message. Raises `asyncio.TimeoutError` when the confirmation does not arrive within 5 seconds, and the connection's error when it fails; the connection is then closed and the store not started. A store whose reader runs returns at once |
+| `async stop()` | Cancels the reader and closes its connection |
 | `async append(topic, name, payload, version)` | One Lua script: the rev with `GET` and `SET`, the log with `LPUSH`, `LTRIM` and `PEXPIRE`. Raises `OverflowError` at `MAX_REV`, changing nothing |
 | `async revs(topics)` | `MGET`; an absent key is `0` |
 | `async since(topic, after)` | `GET` of the rev, then `LRANGE` of the log |
-| `async publish(topic, rev, prev, name, payload, version)` | `PUBLISH` on `channel(topic)` |
+| `async publish(topic, rev, prev, name, payload, version)` | `PUBLISH` on `channel` |
 | `async drop(topic)` | `DEL` of the rev and the log |
-| `async watch(topic)` | Records the topic for `start()`. While the reader runs, `SUBSCRIBE` on the reader's connection, unless the channel is subscribed, and returns once the reader has read Redis's confirmation of that `SUBSCRIBE`, or of the one still unconfirmed. Raises `asyncio.TimeoutError` when no confirmation arrives within 5 seconds, and `ConnectionError` when the reader stops first |
-| `async unwatch(topic)` | `UNSUBSCRIBE` on the reader's connection while the reader runs; forgets the topic for `start()` |
 
-The reader logs a failed read and retries after one second, and logs and skips a message that
-cannot be delivered.
+Every process whose store is started receives every event, and `deliver()` leaves out a topic
+without a subscription in the process; no event reaches a socket that does not hold its topic. The
+reader logs a failed read and retries after one second, and logs and skips a message that cannot be
+delivered. When redis-py reconnects the pub/sub connection it subscribes `channel` again; an event
+published while the connection is down does not reach the process, and the event client finds it
+by poll, on the topic's next push or its check poll.
 
 ### Functions and constants
 
@@ -226,13 +225,13 @@ debug level. On a `poll` over REST, `subscription.peer` is `None`.
 |------|-------------|
 | `async deliver(topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None` | Starts one task per subscription of `topic` in this process and returns without waiting. A task runs the delivery filters, then `peer.notify(payload, headers={":event": name, ":version": version, ":topic": topic, ":rev": rev, ":prev": prev})`, together bounded by `settings.viewsets_event_push_timeout` seconds; muxws's `notify()` queues the push and does not wait for the socket. A `ConnectionLost` (matched by class name) drops every subscription of its socket; any other failure is logged at debug level |
 | `async passes_filters(subscription: Subscription, topic: str, rev: int, name: str, payload: Any, version: int) -> bool` | Runs `settings.viewsets_event_delivery_filters` in order and returns `False` once one of them returns a result that `is False`; a filter that raises counts as `True` and is logged at debug level. `deliver` and `poll` call it |
-| `async subscribe(peer: Any, context: Context, topic: str) -> Subscription` | Subscribes the socket to `topic` and returns once the store watches the topic; a topic the socket holds is subscribed again with `context` and counts once. Raises `EventSubscriptionsExceededError` when the socket already holds `settings.viewsets_event_max_subscriptions` other topics. The first subscription of a topic calls `store.watch(topic)`; when that raises, the subscription is removed and the exception propagates. A call made while the topic's `watch` or `unwatch` runs waits for it to end and then calls `store.watch(topic)` itself when the topic is not watched. The first subscription of a socket installs one `peer.on_close` handler, which calls `drop_peer(peer)`. For a socket whose `is_open` is false it returns the subscription without entering it in the table or calling the store |
-| `async unsubscribe(peer: Any, topic: str) -> None` | Removes the socket's subscription to `topic`, if it holds one. The last subscription of a topic calls `store.unwatch(topic)`; an exception it raises is logged |
-| `drop_peer(peer: Any) -> None` | Removes every subscription of the socket; the topics left without subscriptions are unwatched in a background task |
+| `async subscribe(peer: Any, context: Context, topic: str) -> Subscription` | Subscribes the socket to `topic` and returns the subscription; `deliver()` pushes the topic's events to the socket from then on. A topic the socket holds is subscribed again with `context` and counts once. Raises `EventSubscriptionsExceededError` when the socket already holds `settings.viewsets_event_max_subscriptions` other topics. The first subscription of a socket installs one `peer.on_close` handler, which calls `drop_peer(peer)`. For a socket whose `is_open` is false it returns the subscription without entering it in the table |
+| `async unsubscribe(peer: Any, topic: str) -> None` | Removes the socket's subscription to `topic`, if it holds one |
+| `drop_peer(peer: Any) -> None` | Removes every subscription of the socket |
 | `subscriptions(topic: str) -> list[Subscription]` | The subscriptions of `topic` in this process |
 | `topics_of(peer: Any) -> list[str]` | The topics the socket holds |
-| `async wait_for_pushes() -> None` | Waits until the background tasks of the delivery module (pushes, unwatches) running now and started meanwhile are done |
-| `reset_subscriptions() -> None` | Forgets every subscription and watch of this process without calling the store; for tests |
+| `async wait_for_pushes() -> None` | Waits until the background tasks of the delivery module (pushes) running now and started meanwhile are done |
+| `reset_subscriptions() -> None` | Forgets every subscription of this process; for tests |
 
 ## Authorization
 

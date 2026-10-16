@@ -16,24 +16,9 @@ from .delivery import deliver, drop_peer, subscribe, subscriptions, topics_of, u
 from .store import MemoryEventStore
 
 
-class RecordingStore(MemoryEventStore):
-    def __init__(self, watch_error: BaseException | None = None):
-        super().__init__()
-        self.calls: list[tuple[str, str]] = []
-        self.watch_error = watch_error
-
-    async def watch(self, topic):
-        self.calls.append(("watch", topic))
-        if self.watch_error is not None:
-            raise self.watch_error
-
-    async def unwatch(self, topic):
-        self.calls.append(("unwatch", topic))
-
-
 @pytest.fixture(autouse=True)
 def store():
-    store = RecordingStore()
+    store = MemoryEventStore()
     settings.viewsets_event_store = store
     return store
 
@@ -47,15 +32,13 @@ async def deliver_and_wait(topic="/api/music", rev=2, prev=1, name="records_chan
 
 
 @pytest.mark.asyncio
-async def test_the_first_subscription_of_a_topic_watches_it_and_the_last_unsubscribe_unwatches_it(store):
+async def test_unsubscribe_removes_the_sockets_subscription_and_keeps_the_others():
     first, second = FakePeer(), FakePeer()
     await subscribe(first, Context({}), "/api/music")
     await subscribe(second, Context({}), "/api/music")
-    assert store.calls == [("watch", "/api/music")]
     await unsubscribe(first, "/api/music")
-    assert store.calls == [("watch", "/api/music")]
+    assert [subscription.peer for subscription in subscriptions("/api/music")] == [second]
     await unsubscribe(second, "/api/music")
-    assert store.calls == [("watch", "/api/music"), ("unwatch", "/api/music")]
     assert subscriptions("/api/music") == []
 
 
@@ -69,23 +52,21 @@ async def test_a_subscription_holds_the_peer_the_context_and_the_topic():
 
 
 @pytest.mark.asyncio
-async def test_subscribing_a_held_topic_again_replaces_the_context_and_counts_once(store):
+async def test_subscribing_a_held_topic_again_replaces_the_context_and_counts_once():
     peer = FakePeer()
     await subscribe(peer, Context({"n": 1}), "/a")
     again = await subscribe(peer, Context({"n": 2}), "/a")
     assert subscriptions("/a") == [again]
     assert topics_of(peer) == ["/a"]
-    assert store.calls == [("watch", "/a")]
 
 
 @pytest.mark.asyncio
-async def test_unsubscribing_a_topic_the_socket_does_not_hold_does_nothing(store):
+async def test_unsubscribing_a_topic_the_socket_does_not_hold_does_nothing():
     peer = FakePeer()
     await unsubscribe(peer, "/a")
     await subscribe(FakePeer(), Context({}), "/a")
     await unsubscribe(peer, "/a")
     assert len(subscriptions("/a")) == 1
-    assert store.calls == [("watch", "/a")]
 
 
 @pytest.mark.asyncio
@@ -100,7 +81,7 @@ async def test_one_close_handler_is_installed_per_socket():
 
 
 @pytest.mark.asyncio
-async def test_a_lost_socket_drops_every_subscription_it_held(store):
+async def test_a_lost_socket_drops_every_subscription_it_held():
     lost, kept = FakePeer(), FakePeer()
     await subscribe(lost, Context({}), "/a")
     await subscribe(lost, Context({}), "/b")
@@ -109,7 +90,6 @@ async def test_a_lost_socket_drops_every_subscription_it_held(store):
     await wait_for_pushes()
     assert topics_of(lost) == []
     assert [subscription.peer for subscription in subscriptions("/b")] == [kept]
-    assert sorted(store.calls) == [("unwatch", "/a"), ("watch", "/a"), ("watch", "/b")]
 
 
 @pytest.mark.asyncio
@@ -140,109 +120,7 @@ async def test_a_socket_holds_at_most_max_subscriptions_topics():
 
 
 @pytest.mark.asyncio
-async def test_a_failing_watch_removes_the_subscription_unwatches_the_topic_and_raises():
-    store = RecordingStore(watch_error=ConnectionError("redis is gone"))
-    settings.viewsets_event_store = store
-    peer = FakePeer()
-    with pytest.raises(ConnectionError):
-        await subscribe(peer, Context({}), "/a")
-    assert subscriptions("/a") == []
-    assert topics_of(peer) == []
-    assert store.calls == [("watch", "/a"), ("unwatch", "/a")]
-
-
-@pytest.mark.asyncio
-async def test_an_unwatch_that_raises_after_a_failing_watch_is_logged(caplog):
-    store = RecordingStore(watch_error=ConnectionError("redis is gone"))
-
-    async def failing_unwatch(topic):
-        store.calls.append(("unwatch", topic))
-        raise ConnectionError("still gone")
-
-    store.unwatch = failing_unwatch
-    settings.viewsets_event_store = store
-    with caplog.at_level(logging.WARNING), pytest.raises(ConnectionError, match="redis is gone"):
-        await subscribe(FakePeer(), Context({}), "/a")
-    assert store.calls == [("watch", "/a"), ("unwatch", "/a")]
-    assert "after its watch failed" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_a_subscribe_during_an_unwatch_ends_watched(store):
-    release = asyncio.Event()
-
-    async def slow_unwatch(topic):
-        store.calls.append(("unwatch", topic))
-        await release.wait()
-
-    store.unwatch = slow_unwatch
-    first, second = FakePeer(), FakePeer()
-    await subscribe(first, Context({}), "/a")
-    leaving = asyncio.ensure_future(unsubscribe(first, "/a"))
-    await asyncio.sleep(0)
-    joining = asyncio.ensure_future(subscribe(second, Context({}), "/a"))
-    await asyncio.sleep(0.01)
-    assert not joining.done()
-    release.set()
-    await leaving
-    await joining
-    assert store.calls == [("watch", "/a"), ("unwatch", "/a"), ("watch", "/a")]
-
-
-@pytest.mark.asyncio
-async def test_a_subscribe_during_a_watch_returns_once_the_topic_is_watched(store):
-    release = asyncio.Event()
-
-    async def slow_watch(topic):
-        store.calls.append(("watch", topic))
-        await release.wait()
-
-    store.watch = slow_watch
-    first = asyncio.ensure_future(subscribe(FakePeer(), Context({}), "/a"))
-    await asyncio.sleep(0)
-    second = asyncio.ensure_future(subscribe(FakePeer(), Context({}), "/a"))
-    await asyncio.sleep(0.01)
-    assert not first.done()
-    assert not second.done()
-    release.set()
-    await asyncio.gather(first, second)
-    assert store.calls == [("watch", "/a")]
-    assert len(subscriptions("/a")) == 2
-
-
-@pytest.mark.asyncio
-async def test_a_subscribe_during_a_failing_watch_watches_the_topic_itself(store):
-    attempts = []
-
-    async def failing_once(topic):
-        attempts.append(topic)
-        await asyncio.sleep(0.01)
-        if len(attempts) == 1:
-            raise ConnectionError("redis hiccup")
-
-    store.watch = failing_once
-    first, second = FakePeer(), FakePeer()
-    outcomes = await asyncio.gather(
-        subscribe(first, Context({}), "/a"), subscribe(second, Context({}), "/a"), return_exceptions=True
-    )
-    assert isinstance(outcomes[0], ConnectionError)
-    assert outcomes[1].peer is second
-    assert attempts == ["/a", "/a"]
-    assert [subscription.peer for subscription in subscriptions("/a")] == [second]
-    assert topics_of(first) == []
-
-
-@pytest.mark.asyncio
-async def test_concurrent_subscribes_of_a_topic_whose_watch_fails_all_fail():
-    settings.viewsets_event_store = RecordingStore(watch_error=ConnectionError("redis is gone"))
-    peers = [FakePeer(), FakePeer()]
-    outcomes = await asyncio.gather(*(subscribe(peer, Context({}), "/a") for peer in peers), return_exceptions=True)
-    assert all(isinstance(outcome, ConnectionError) for outcome in outcomes)
-    assert subscriptions("/a") == []
-
-
-@pytest.mark.asyncio
-async def test_a_closed_socket_is_not_subscribed(store):
+async def test_a_closed_socket_is_not_subscribed():
     peer = FakePeer()
     await subscribe(peer, Context({}), "/a")
     peer.close()
@@ -252,18 +130,16 @@ async def test_a_closed_socket_is_not_subscribed(store):
     assert subscription.topic == "imports:7"
     assert subscriptions("imports:7") == []
     assert topics_of(peer) == []
-    assert ("watch", "imports:7") not in store.calls
     assert len(peer.close_handlers) == 1
 
 
 @pytest.mark.asyncio
-async def test_the_first_subscribe_of_a_socket_closed_before_it_subscribes_nothing(store):
+async def test_the_first_subscribe_of_a_socket_closed_before_it_subscribes_nothing():
     peer = FakePeer()
     peer.close()
     await subscribe(peer, Context({}), "/a")
     assert subscriptions("/a") == []
     assert peer.close_handlers == []
-    assert store.calls == []
 
 
 # delivery
@@ -343,7 +219,7 @@ async def test_delivery_filters_count_toward_the_push_timeout(caplog):
 
 
 @pytest.mark.asyncio
-async def test_a_push_to_a_real_muxws_peer_reaches_the_other_end_and_a_lost_socket_drops_it(store):
+async def test_a_push_to_a_real_muxws_peer_reaches_the_other_end_and_a_lost_socket_drops_it():
     from muxws import accept, resolve_codec
     from muxws.peer import Peer
     from muxws.transports.memory import memory_pair
@@ -381,7 +257,6 @@ async def test_a_push_to_a_real_muxws_peer_reaches_the_other_end_and_a_lost_sock
             await asyncio.sleep(0.01)
         await wait_for_pushes()
         assert topics_of(server) == []
-        assert ("unwatch", "/api/music") in store.calls
 
         await subscribe(server, Context({}), "/api/other")
         assert subscriptions("/api/other") == []
@@ -402,13 +277,12 @@ async def test_a_failing_push_is_logged_at_debug_and_keeps_the_subscription(capl
 
 
 @pytest.mark.asyncio
-async def test_connection_lost_drops_the_sockets_subscriptions(store):
+async def test_connection_lost_drops_the_sockets_subscriptions():
     lost = FakePeer(error=ConnectionLost("socket died"))
     await subscribe(lost, Context({}), "/a")
     await subscribe(lost, Context({}), "/b")
     await deliver_and_wait(topic="/a")
     assert topics_of(lost) == []
-    assert ("unwatch", "/b") in store.calls
 
 
 @pytest.mark.asyncio

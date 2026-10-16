@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 
 async def start_events() -> None:
-    """Starts the configured store: a `RedisEventStore` starts its reader, which carries the events of
-    the topics this process watches to `deliver()`. Called from the application's lifespan."""
+    """Starts the configured store: a `RedisEventStore` starts its reader, which carries every event
+    to `deliver()`. Called from the application's lifespan."""
     await get_store().start()
 
 

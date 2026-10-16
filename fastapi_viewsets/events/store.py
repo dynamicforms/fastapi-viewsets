@@ -1,6 +1,6 @@
 """
 The event store: it assigns each event of a topic its rev, keeps the topic's log for `poll`, and
-carries a published event to `deliver()` in every process that watches the topic.
+carries a published event to `deliver()` in every process whose store is started.
 """
 
 import time
@@ -50,17 +50,10 @@ class EventStore(Protocol):
 
     async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None:
         """Carries the event to `deliver(topic, rev, prev, name, payload, version)` in every process
-        that watches the topic."""
+        whose store is started; `deliver()` pushes it to the subscriptions of the topic there."""
 
     async def drop(self, topic: str) -> None:
         """Removes the topic's rev and log."""
-
-    async def watch(self, topic: str) -> None:
-        """Starts carrying the topic's events to this process. A watch that raises may have started
-        carrying them; `unwatch(topic)` stops that."""
-
-    async def unwatch(self, topic: str) -> None:
-        """Stops carrying the topic's events to this process, also after a `watch(topic)` that raised."""
 
 
 def _now_ms() -> int:
@@ -147,12 +140,6 @@ class MemoryEventStore:
 
     async def drop(self, topic: str) -> None:
         self._topics.pop(topic, None)
-
-    async def watch(self, topic: str) -> None:
-        pass
-
-    async def unwatch(self, topic: str) -> None:
-        pass
 
 
 _default_store: MemoryEventStore | None = None
