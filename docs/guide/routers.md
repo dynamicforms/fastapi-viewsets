@@ -123,6 +123,9 @@ mode:
 
 The same decorator call works in both processes — no conditional code needed in your application.
 
+A viewset whose data lives in process memory, such as a [`CollectionViewSet`](./collection-viewset#one-copy-per-process),
+has one copy of it per worker process.
+
 ### Signature
 
 ```python

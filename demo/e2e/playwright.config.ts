@@ -5,8 +5,9 @@ const FE_PORT = 15173;
 
 /**
  * End-to-end cover for the demo, which is the only place the whole stack is assembled: the
- * viewsets, both transports, both backends, cursor paging and the grid's incremental loading.
- * Unit tests cover each of those; nothing but this covers them wired together.
+ * viewsets, both transports, both backends, cursor paging, the grid's incremental loading and the
+ * change events that reach a second tab. Unit tests cover each of those; nothing but this covers
+ * them wired together.
  *
  * Its own ports, so a run never depends on - or fights with - a dev server the developer already
  * has up.
