@@ -209,6 +209,25 @@ A repeat over muxws waits for `peer.onReconnect`, at most until `withinMs` has e
 closes for good (`onClose` with `willRetry` false) ends the wait, and the call rejects with the
 `ConnectionClosed` its next `open()` throws.
 
+### Call activity
+
+`onCallActivity(listener)` reports every call issued through a proxy, over REST and muxws: `start`
+when it is issued, `retry` for each repeat, with how the attempt ended and the delay before the
+repeat, and `settle` when its promise settles. Each event carries the call's `key`. A busy indicator
+or a connectivity notice builds on it; `RequestOptions.background: true` marks a call such an
+indicator leaves out, and the startup schema check is sent with it. `retryNow()` sends every waiting
+repeat at once, for a "try again now" button.
+
+```ts
+import { onCallActivity, retryNow } from '@dynamicforms/fastapi-viewsets';
+
+const failures = new Map<string, number>();
+const stop = onCallActivity((event) => {
+  if (event.type === 'retry') failures.set(event.key, event.attempt);
+  if (event.type === 'settle') failures.delete(event.key);
+});
+```
+
 Without `Idempotency` on the backend, a repeat runs the action again. A deployment whose backend does
 not use it sets `repeat: { withinMs: 0 }` on its proxies.
 

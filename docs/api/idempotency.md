@@ -63,11 +63,14 @@ Both are `DfViewSetError`s; see [Error Codes](../guide/error-codes).
 
 ```ts
 import {
+  type CallEvent,
   IDEMPOTENCY_KEY_HEADER,
   idempotencyKeyHeader,
   issueCall,
   newCallKey,
+  onCallActivity,
   type RepeatOptions,
+  retryNow,
   type ViewSetActionCall,
   type ViewSetCall,
   type ViewSetCalls,
@@ -118,7 +121,22 @@ interface RepeatOptions {
 `attemptTimeoutMs?: number` (default `30000`, `0` for none) is a REST option: the axios `timeout` of
 one attempt.
 
-`RequestOptions.key` and `RequestOptions.repeat` are listed with
+### CallEvent
+
+```ts
+type CallEvent =
+  | { readonly type: 'start'; readonly key: string; readonly background: boolean }
+  | { readonly type: 'retry'; readonly key: string; readonly failure: 'timeout' | 'lost'; readonly attempt: number; readonly delayMs: number }
+  | { readonly type: 'settle'; readonly key: string; readonly ok: boolean };
+```
+
+| Event | When | Fields |
+|-------|------|--------|
+| `start` | The call is issued, synchronously in `request()` | `background`: `RequestOptions.background` |
+| `retry` | An attempt ended without an answer and a repeat will be sent | `failure`: how it ended; `attempt`: the number of the attempt that ended, 1 for the first; `delayMs`: the wait before the repeat |
+| `settle` | The call's promise settled | `ok`: false when it rejected |
+
+`RequestOptions.key`, `RequestOptions.repeat` and `RequestOptions.background` are listed with
 [`RequestOptions`](./vue-mixins#requests-and-actions).
 
 ### Functions
@@ -128,4 +146,6 @@ one attempt.
 | `IDEMPOTENCY_KEY_HEADER` | `'Idempotency-Key'` |
 | `newCallKey(): string` | A version 4 UUID: `crypto.randomUUID()`, or built from `crypto.getRandomValues()` where `randomUUID` is absent (an insecure context) |
 | `idempotencyKeyHeader(key: string): string` | `key` as a Structured Field string: quoted, `"` and `\` escaped. Throws `TypeError` for an empty key or one with a character outside printable ASCII |
-| `issueCall<R>(promise: Promise<R>, key: string): ViewSetCall<R>` | Sets `key` on `promise` and returns it. Called synchronously from a transport's `request()`, it also gives `key` to the promise of the proxy method running around it |
+| `issueCall<R>(promise: Promise<R>, key: string, background = false): ViewSetCall<R>` | Sets `key` on `promise` and returns it. Called synchronously from a transport's `request()`, it also gives `key` to the promise of the proxy method running around it. Reports `start` (with `background`) to the `onCallActivity` listeners at once and `settle` when `promise` settles |
+| `onCallActivity(listener: (event: CallEvent) => void): () => void` | Calls `listener` for every `CallEvent` of every call issued through a proxy, REST and muxws alike; returns the function that removes it. A listener that throws is logged with `console.error` and affects neither the call nor the other listeners |
+| `retryNow(): void` | Ends the delay of every call waiting to send a repeat, so each sends it now; the delay of such a call's next repeat starts again from `repeat.delayMs`. A muxws call waiting for its peer to reconnect keeps waiting |

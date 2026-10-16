@@ -34,8 +34,8 @@ export type {
   PaginatedList,
 } from './mixins';
 
-export type { RepeatOptions, ViewSetActionCall, ViewSetCall, ViewSetCalls } from './call';
-export { IDEMPOTENCY_KEY_HEADER, idempotencyKeyHeader, issueCall, newCallKey } from './call';
+export type { CallEvent, RepeatOptions, ViewSetActionCall, ViewSetCall, ViewSetCalls } from './call';
+export { IDEMPOTENCY_KEY_HEADER, idempotencyKeyHeader, issueCall, newCallKey, onCallActivity, retryNow } from './call';
 
 export type {
   HttpMethod,

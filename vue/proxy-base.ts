@@ -57,6 +57,11 @@ export interface RequestOptions {
   key?: string;
   /** Overrides the proxy's `repeat` for this call. */
   repeat?: RepeatOptions;
+  /**
+   * Reported to `onCallActivity` listeners as `background: true`, for a call a busy indicator leaves
+   * out. Default false.
+   */
+  background?: boolean;
 }
 
 /** The response shapes of `GET {basePath}`, as the BE names them in `X-List-Shape`. */
@@ -342,6 +347,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     try {
       const schema = await this.request<{ paths?: Record<string, Record<string, unknown>> }>('GET', '/schema', {
         repeat: { withinMs: 0 },
+        background: true,
       });
       const paths = schema?.paths ?? {};
 
