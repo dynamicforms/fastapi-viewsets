@@ -10,100 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `fastapi_viewsets.events`: the backend publishes an event to a topic, and every frontend following
-  the topic receives it as a push over its muxws socket or on its next poll. `Event` (a pydantic
-  model with a class-level `event_name` and `event_version`, `1` by default, the version of the
-  payload's shape that every push and poll entry carries), `publish(topic, event)`, which returns `(rev, prev)`, and
-  `source(name, authorizer=None)` / `Source` (`topic(key)`, `publish(event, key=None)`, `drop(key)`)
-  for custom topics `name` and `name:key`. A viewset's topic is its routed base path (`/api/music`),
-  with the values of its path parameters (`/clubs/7/tracks` for `/clubs/{club_id}/tracks`).
-- Event stores: the `EventStore` protocol, `LoggedEvent`, `MemoryEventStore` (the default, one per
-  process) and `fastapi_viewsets.events.redis.RedisEventStore(redis_client, key_prefix="events:")`,
-  shared by every process that reaches the Redis. Each event of a topic gets a `rev`,
-  `max(previous + 1, now in milliseconds)`, below `2**53`, and the `prev` it follows. The topic's
-  last events, each with its name, payload and version, are kept in a log for `poll`; the rev
-  counter has no expiry. `start_events()`, `stop_events()` and `check_events()` for the
-  application's lifespan.
-- `register_events(router, base_path="/events")` mounts `EventsViewSet`: `POST subscribe` and
-  `POST unsubscribe` over muxws, `POST poll` over REST and muxws. A socket's subscriptions are held
-  by the process that holds the socket and dropped when it closes; `deliver()` pushes each event to
-  them with `peer.notify()` and the headers `:event`, `:version`, `:topic`, `:rev` and `:prev`,
-  bounded by `settings.viewsets_event_push_timeout`. A poll entry carries `rev`, `prev`, `event`,
-  `version` and `payload`.
-- Event authorizers (`EventAuthorizer`): `ViewsetTopics()` admits a viewset's topic to a caller the
-  viewset's `list_items` (or `retrieve`) admits, by running the route's `dependencies` (those of the
-  application, `include_router`, the `APIRouter` and the route) and `depends()` of its command middleware
-  against the calling request, which carries the topic's path parameters; `match_viewset()`,
-  `ViewsetMatch` and `find_viewset()` find the viewset of a topic. `DeclaredSources()` asks the
-  source's `authorizer`; `allow_all` and `allow_authenticated`. Delivery filters (`DeliveryFilter`,
-  `filter(subscription, topic, rev, event_name, payload, version)`) decide per socket and per event
-  whether a push is sent.
-- `ChangeEvents`: a command middleware that publishes `RecordsChanged` (`op`, `changes: list[Change]`)
-  to the viewset's topic after each create, update and destroy action, from `execute()`, so in the
-  Celery worker for a `celery_viewset` action. Configured per viewset or per `perform_*` method with
-  `@action_configuration({ChangeEvents: ...})`: `False`, `{"topic": ...}`. A `ChangeEvents()`
-  instance as the key replaces the global one for that viewset or action. A change carries the pk
-  only; a frontend reads the changed record through the viewset's `retrieve`.
-- Settings `viewsets_event_store`, `viewsets_event_authorizers`, `viewsets_event_delivery_filters`,
-  `viewsets_event_log_size` (32), `viewsets_event_log_ttl` (seconds, 60.0),
-  `viewsets_event_push_timeout` (seconds, 2.0), `viewsets_event_max_subscriptions` (256) and
-  `viewsets_event_poll_after_ms` (0).
-- `EventTopicInvalidError` (422, `event_topic_invalid`, param `topic`), `EventTopicRefusedError`
-  (403, `event_topic_refused`, param `topic`), `EventSubscriptionsExceededError` (409,
-  `event_subscriptions_exceeded`, param `limit`) and `EventCursorsExceededError` (422,
-  `event_cursors_exceeded`, params `count`, `limit`).
-- `process_command(..., peer=)`: the muxws peer of the socket, carried in the request scope as
-  `scope["fastapi_viewsets.peer"]` (`fastapi_viewsets.routing.PEER_SCOPE_KEY`), `None` without it.
-- `route_viewset` records `pk_field_name` and `paths` (each action name mapped to its route's path
-  relative to `base_path`) in `__viewset_metadata__`, and sets `__viewset_class__` and
-  `__viewset_action__` on every endpoint it adds to the router. The dependency it adds to each route
-  to run `Middleware.depends()` carries `MIDDLEWARE_DEPENDS_ATTRIBUTE`
-  (`fastapi_viewsets.decorators.route_viewset`).
-- npm: the event client. `createEventClient({ basePath, peer?, axios?, pollSettings?, draw? })`
-  follows topics the backend publishes events to: pushes over a muxws peer, `subscribe` and
-  `unsubscribe` over the peer, and `poll` over the peer or over axios. `subscribe(topic, event,
-  handlers)` returns an `EventSubscription` (`ready`, `unsubscribe()`, `onError`); `close()` stops
-  the client. One client per peer; `eventsOf(peer)` returns it.
-- npm: `defineEvent<P>(name)`, `EventDefinition`, `EventHandlers` (`onEvent(payload, meta)`,
-  `onResync`, `onError`), `EventMeta` (`topic`, `rev`, `prev`, `version`), `EventClient`,
-  `EventClientOptions`, `EventPeerLike`, `EventStreamLike`, `EventStreamHandler` and
-  `EventAxiosLike`.
-- npm: event versions. The client reads an event's version from the push's `:version` header and
-  from the poll answer entry's `version`, dispatches by topic and event name whatever the version,
-  and passes it to `onEvent` in `EventMeta`; `P` of `defineEvent<P>` describes the payloads of every
-  version a subscription handles. A push without a usable `:version` is ignored; a poll answer
-  entry without one is malformed and resyncs the topic.
-- npm: `attachEvents(peer, fallback?)`, which installs the peer's `onStream` handler, and
-  `handleEventStream(peer, payload, stream)`, for a handler of one's own.
-- npm: per topic the client applies an event whose `prev` is the rev it holds, answers a gap with
-  one poll and a poll the backend's log cannot answer with `onResync`. Without an open peer it polls
-  every followed topic in one call per rung of the polling ladder; on `onReconnect` it subscribes
-  every topic again.
-- npm: the polling ladder, `PollSettings`, `DEFAULT_POLL_SETTINGS` (400 ms base, ×1.5, 5000 ms
-  ceiling, ±20 % jitter), `PollLadderState`, `Draw`, `ladderInterval`, `jitterMultiplier`,
-  `nextDelay` and `PollLadder`. `poll_after_ms` of a poll answer is a floor on the delay.
-- npm: `watch(options)` on every ViewSet (`ViewSetWatch`, `WatchOptions`): subscribes the ViewSet's
-  `basePath` to `records_changed` and calls `onChange` with the `RecordsChanged` payload and the
-  `EventMeta` of a version-1 event, and `onResync` for an event of any other version; `fetch: true`
-  completes a change without `record` with `retrieve(pk)`. The `events`
-  option on every ViewSet and proxy names the client; a muxws ViewSet without it uses
-  `eventsOf(peer)`.
-- npm: `RecordsChanged`, `Change`, `RECORDS_CHANGED`, `applyChanges(rows, change, pkFieldName)`,
-  `RecordOf` and `KeyOf`.
-- The demo's grid follows its viewset with `watch({ fetch: true })` and `applyChanges` over both
-  transports: a Favorite toggled in one tab appears in every other tab showing it, on both backends,
-  and a sorted or filtered grid reloads its list on the change. The demo's SQLite viewset serves
-  `update` and `partial_update`. With `--celery` the worker, one process, runs the calls of both viewsets and
-  publishes the events through a `RedisEventStore`.
+- Events, `fastapi_viewsets.events` and the npm event client: the backend publishes an event to a
+  topic, and every frontend following the topic receives it as a muxws push or on its next poll.
+  - A viewset's topic is its routed base path; custom topics are declared with `source()`.
+  - Every event is written to a store before it is pushed: `MemoryEventStore` for one process,
+    `RedisEventStore` for several. Each event carries a `rev`, the `prev` it follows and an
+    `event_version`; a frontend that misses events polls the short log or re-reads its state.
+  - `register_events()` serves `subscribe`, `unsubscribe` and `poll`. Authorizers admit topics
+    (`ViewsetTopics()` applies the viewset's own checks); delivery filters decide per socket.
+  - `ChangeEvents`, a command middleware, publishes the pks of every create, update and destroy of
+    a viewset, globally or per viewset, also from a Celery worker.
+  - npm: `createEventClient()`, `defineEvent()`, `watch()` on every ViewSet with `applyChanges()`,
+    and the polling ladder the client polls with.
+  - See [Events](https://docs.velis.si/dynamicforms/fastapi-viewsets/guide/events) and
+    [Events (Vue)](https://docs.velis.si/dynamicforms/fastapi-viewsets/guide/vue-events).
+- `process_command(..., peer=)` puts the socket in the request scope.
+- The demo's grid follows its viewset in every open tab.
 
 ### Changed
 
-- `CollectionViewSet.pk_field_name` is the viewset's `pk_field`, ahead of `ListMixin`'s default
-  `"id"`; the cursor list shape orders by it.
-- The `muxws` extra requires `muxws>=0.4.1`, and the npm peer dependency is `muxws ^0.4.1`.
-- npm: `RestProxy<M>` and `MuxwsProxy<M>` carry `watch()`. The positional form of `route_rest`,
-  which takes no `events`, returns `ViewSetCalls<M>`, without `watch()`; a variable typed
-  `RestProxy<M>` takes the options form only.
+- `CollectionViewSet.pk_field_name` is the viewset's `pk_field`; the cursor list shape orders by it.
+- The `muxws` floor is 0.4.1 on PyPI and npm.
+- npm: the positional form of `route_rest` returns `ViewSetCalls<M>`, without `watch()`.
 
 ## [0.9.0] - 2026-10-16
 
