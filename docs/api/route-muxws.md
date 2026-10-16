@@ -109,6 +109,6 @@ implements `request()`, and calls `initSchemaValidation()` as the last statement
 
 `request()` returns a `ViewSetCall<R>`: it takes the key from `options.key` or `newCallKey()`, sends
 it as `Idempotency-Key: idempotencyKeyHeader(key)`, and returns
-`issueCall(promise, key, options.background)`, called synchronously. `issueCall` is what gives the promise of the method that called `request()` its
-`key`. The constructor of `ViewSetProxyBase` binds every method of the instance's class chain, other
+`issueCall(promise, key, options.background)`, called synchronously. `issueCall` is what gives the
+promise of the method that called `request()` its `key`. The constructor of `ViewSetProxyBase` binds every method of the instance's class chain, other
 than `constructor` and `request`, as an own property that sets that `key`.

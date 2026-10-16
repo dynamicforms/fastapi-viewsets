@@ -10,6 +10,7 @@
 import axios, { AxiosError, AxiosHeaders, CanceledError, type InternalAxiosRequestConfig } from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { type CallEvent, onCallActivity } from './call';
 import {
   BulkViewSetMixin,
   CursorListMixin,
@@ -20,7 +21,6 @@ import {
   RetrieveMixin,
   ViewSetMixin,
 } from './mixins';
-import { type CallEvent, onCallActivity } from './call';
 import { ListShapeMismatchError } from './proxy-base';
 import { RestProxyImpl, route_rest } from './rest-proxy';
 import { restViewSet } from './viewset';
