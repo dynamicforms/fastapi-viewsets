@@ -373,6 +373,93 @@ async def test_poll_answers_every_cursor(application, transport):
     assert list(answer["topics"]) == list(body["cursors"])
 
 
+def refuse_secrets(seen: list | None = None):
+    """A delivery filter that refuses every event whose payload's title is "secret", recording each call."""
+
+    async def refuse(subscription, topic, rev, _name, payload, _version):
+        if seen is not None:
+            seen.append((subscription.peer, await subscription.context.user, subscription.topic, topic, rev))
+        return payload["title"] != "secret"
+
+    return refuse
+
+
+def polled(rev: int, prev: int, title: str) -> dict[str, Any]:
+    return {"rev": rev, "prev": prev, "event": "track_added", "version": 1, "payload": {"title": title}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["rest", "muxws"])
+async def test_poll_leaves_out_the_events_a_delivery_filter_refuses(application, transport):
+    settings.viewsets_event_authorizers = [allow_all]
+    seen: list = []
+    settings.viewsets_event_delivery_filters = [refuse_secrets(seen)]
+    first, _ = await publish("imports", TrackAdded(title="Naima"))
+    second, _ = await publish("imports", TrackAdded(title="secret"))
+    third, _ = await publish("imports", TrackAdded(title="Giant Steps"))
+    fourth, _ = await publish("imports", TrackAdded(title="secret"))
+
+    body = {"cursors": {"imports": first}}
+    if transport == "rest":
+        peer = None
+        answer = (await application.rest("/events/poll", body, **{"x-user": "jure"})).json()
+    else:
+        peer = FakePeer()
+        answer = (await application.command("/events/poll", body, peer, **{"x-user": "jure"})).payload
+
+    assert answer["topics"] == {"imports": {"rev": fourth, "events": [polled(third, first, "Giant Steps")]}}
+    assert seen == [(peer, "jure", "imports", "imports", rev) for rev in (second, third, fourth)]
+
+
+@pytest.mark.asyncio
+async def test_a_push_after_a_refused_one_and_its_gap_poll_do_not_deliver_the_refused_event(application):
+    settings.viewsets_event_authorizers = [allow_all]
+    settings.viewsets_event_delivery_filters = [refuse_secrets()]
+    peer = FakePeer()
+    held = (await application.command("/events/subscribe", {"topic": "imports"}, peer)).payload["rev"]
+
+    secret, _ = await publish("imports", TrackAdded(title="secret"))
+    later, prev = await publish("imports", TrackAdded(title="Naima"))
+    await wait_for_pushes()
+    assert prev == secret
+    assert [(payload, headers[":rev"], headers[":prev"]) for payload, headers in peer.pushes] == [
+        ({"title": "Naima"}, later, secret)
+    ]
+
+    stream = await application.command("/events/poll", {"cursors": {"imports": held}}, peer)
+    assert stream.payload["topics"] == {"imports": {"rev": later, "events": [polled(later, held, "Naima")]}}
+
+
+@pytest.mark.asyncio
+async def test_a_raising_delivery_filter_counts_as_true_on_poll(application):
+    settings.viewsets_event_authorizers = [allow_all]
+
+    def broken(*_):
+        raise RuntimeError("broken")
+
+    settings.viewsets_event_delivery_filters = [broken]
+    first, _ = await publish("imports", TrackAdded(title="Naima"))
+    second, _ = await publish("imports", TrackAdded(title="secret"))
+
+    response = await application.rest("/events/poll", {"cursors": {"imports": 0}})
+    assert response.json()["topics"] == {
+        "imports": {"rev": second, "events": [polled(first, 0, "Naima"), polled(second, first, "secret")]}
+    }
+
+
+@pytest.mark.asyncio
+async def test_poll_without_delivery_filters_answers_every_event_with_its_prev(application):
+    settings.viewsets_event_authorizers = [allow_all]
+    first, _ = await publish("imports", TrackAdded(title="Naima"))
+    second, _ = await publish("imports", TrackAdded(title="secret"))
+    third, _ = await publish("imports", TrackAdded(title="Giant Steps"))
+
+    response = await application.rest("/events/poll", {"cursors": {"imports": first}})
+    assert response.json()["topics"] == {
+        "imports": {"rev": third, "events": [polled(second, first, "secret"), polled(third, second, "Giant Steps")]}
+    }
+
+
 @pytest.mark.asyncio
 async def test_poll_from_the_current_rev_answers_no_events(application):
     settings.viewsets_event_authorizers = [allow_all]

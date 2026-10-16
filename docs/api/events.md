@@ -198,13 +198,15 @@ cannot be delivered.
 ```python
 @dataclass(frozen=True, eq=False)
 class Subscription:
-    peer: Any
+    peer: Any | None
     context: Context
     topic: str
 ```
 
 One socket following one topic. `peer` is the muxws peer of the socket, `context` the context of the
-`subscribe` call that made the subscription.
+`subscribe` call that made the subscription. For the delivery filters of a `poll`, the poll of one
+topic: `peer` is the socket the poll arrived on, `None` for a poll over REST, and `context` the
+context of the `poll` call.
 
 ### DeliveryFilter
 
@@ -213,15 +215,17 @@ DeliveryFilter = Callable[[Subscription, str, int, str, Any, int], bool | Awaita
 ```
 
 `filter(subscription, topic, rev, event_name, payload, version)`, sync or async; `version` is the
-event's `event_version`. A result that `is False`
-skips the push to the subscription's socket; any other result passes; an exception counts as `True`
-and is logged at debug level.
+event's `event_version`. The filters run on every push and on every event a `poll` answers after the
+cursor. A result that `is False` skips the push to the subscription's socket, or leaves the event
+out of the poll answer; any other result passes; an exception counts as `True` and is logged at
+debug level. On a `poll` over REST, `subscription.peer` is `None`.
 
 ### Functions
 
 | Name | Description |
 |------|-------------|
 | `async deliver(topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None` | Starts one task per subscription of `topic` in this process and returns without waiting. A task runs the delivery filters, then `peer.notify(payload, headers={":event": name, ":version": version, ":topic": topic, ":rev": rev, ":prev": prev})`, together bounded by `settings.viewsets_event_push_timeout` seconds; muxws's `notify()` queues the push and does not wait for the socket. A `ConnectionLost` (matched by class name) drops every subscription of its socket; any other failure is logged at debug level |
+| `async passes_filters(subscription: Subscription, topic: str, rev: int, name: str, payload: Any, version: int) -> bool` | Runs `settings.viewsets_event_delivery_filters` in order and returns `False` once one of them returns a result that `is False`; a filter that raises counts as `True` and is logged at debug level. `deliver` and `poll` call it |
 | `async subscribe(peer: Any, context: Context, topic: str) -> Subscription` | Subscribes the socket to `topic` and returns once the store watches the topic; a topic the socket holds is subscribed again with `context` and counts once. Raises `EventSubscriptionsExceededError` when the socket already holds `settings.viewsets_event_max_subscriptions` other topics. The first subscription of a topic calls `store.watch(topic)`; when that raises, the subscription is removed and the exception propagates. A call made while the topic's `watch` or `unwatch` runs waits for it to end and then calls `store.watch(topic)` itself when the topic is not watched. The first subscription of a socket installs one `peer.on_close` handler, which calls `drop_peer(peer)`. For a socket whose `is_open` is false it returns the subscription without entering it in the table or calling the store |
 | `async unsubscribe(peer: Any, topic: str) -> None` | Removes the socket's subscription to `topic`, if it holds one. The last subscription of a topic calls `store.unwatch(topic)`; an exception it raises is logged |
 | `drop_peer(peer: Any) -> None` | Removes every subscription of the socket; the topics left without subscriptions are unwatched in a background task |
@@ -269,7 +273,8 @@ leaves the decision to the next authorizer in `settings.viewsets_event_authorize
 | `poll` — `POST {base_path}/poll` | REST, muxws | `PollRequest` | 200 `PollAnswer` | 422 `event_cursors_exceeded`; a topic's refusal is in its `TopicAnswer.error` |
 
 `subscribe` and `unsubscribe` read the socket from `request.scope["fastapi_viewsets.peer"]`
-(`fastapi_viewsets.routing.PEER_SCOPE_KEY`), set by `process_command(..., peer=peer)`.
+(`fastapi_viewsets.routing.PEER_SCOPE_KEY`), set by `process_command(..., peer=peer)`. `poll` reads
+it from there for the `Subscription` its delivery filters receive, `None` when the scope has none.
 
 The models, in `fastapi_viewsets.events.viewset`:
 
@@ -278,8 +283,8 @@ The models, in `fastapi_viewsets.events.viewset`:
 | `TopicRequest` | `topic: str` |
 | `SubscribeAnswer` | `rev: int`, the topic's current rev, `0` for a topic without events |
 | `PollRequest` | `cursors: dict[str, int \| None]`, each topic mapped to the rev the caller holds, `None` to start from the current rev |
-| `PolledEvent` | `rev: int`, `prev: int`, `event: str` (the `event_name`), `version: int` (the `event_version`, at least `1`), `payload: Any = None` |
-| `TopicAnswer` | `rev: int \| None`, `events: list[PolledEvent] \| None`, `error: str \| None = None`; `error` is left out of the serialized answer when it is `None` |
+| `PolledEvent` | `rev: int`, `prev: int` (the rev of the event before it in the answer, the cursor for the first), `event: str` (the `event_name`), `version: int` (the `event_version`, at least `1`), `payload: Any = None` |
+| `TopicAnswer` | `rev: int \| None`, `events: list[PolledEvent] \| None` (the events after the cursor the delivery filters pass), `error: str \| None = None`; `rev` covers the events the filters left out; `error` is left out of the serialized answer when it is `None` |
 | `PollAnswer` | `topics: dict[str, TopicAnswer]`, one per cursor in the request's order; `poll_after_ms: int`, `settings.viewsets_event_poll_after_ms` |
 
 ## ChangeEvents
@@ -335,7 +340,7 @@ value under its own key, else under its class, and the `ChangeEvents` of
 |-----------|------|---------|-------------|
 | `settings.viewsets_event_store` | `EventStore \| None` | `None` | The store; `None` is one `MemoryEventStore` per process |
 | `settings.viewsets_event_authorizers` | `list[EventAuthorizer]` | `[]` | The authorizers, in order |
-| `settings.viewsets_event_delivery_filters` | `list[DeliveryFilter]` | `[]` | The delivery filters, in order |
+| `settings.viewsets_event_delivery_filters` | `list[DeliveryFilter]` | `[]` | The delivery filters, in order; they run on every push and on every event a poll answers |
 | `settings.viewsets_event_log_size` | `int` | `32` | Events kept per topic for `poll` |
 | `settings.viewsets_event_log_ttl` | `float` | `60.0` | Seconds a topic's log is kept after its last event |
 | `settings.viewsets_event_push_timeout` | `float` | `2.0` | Seconds the delivery filters and `peer.notify()` of one push to one socket may take together |

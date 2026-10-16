@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps its record, and a repeat attaches to it instead of running the action again; the record
   expires only once the process running the call stops extending it.
 
+### Fixed
+
+- Events: `poll` runs `viewsets_event_delivery_filters` on every event it answers, over REST and
+  over muxws, and leaves out the events a filter refuses. Each polled event's `prev` is the rev of
+  the event before it in the answer, the cursor for the first; the answer's `rev` covers the events
+  left out. `Subscription.peer` is the socket a muxws poll arrived on, `None` for a poll over REST.
+  `passes_filters()` runs the filters. An event a filter refused on its push is no longer delivered
+  by the gap poll that the next push triggers, and a REST-only client receives the same events as a
+  subscribed socket.
+- npm: the event client applies a polled event whose `prev` is below the held rev and whose rev is
+  above it, and moves the held rev to a poll answer's `rev` after its events, so a poll answer that
+  leaves out filtered events neither resyncs the topic nor polls it again.
+
 ## [0.9.1] - 2026-10-16
 
 ### Added

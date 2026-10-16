@@ -462,6 +462,60 @@ describe('push, gap, poll and resync', () => {
     expect(h.onEvent).toHaveBeenCalledTimes(2);
   });
 
+  it('applies a gap poll answer that leaves out filtered events, and polls no further', async () => {
+    const t = makeTransport();
+    const { h } = await followed(t);
+    // Rev 11 was refused by a delivery filter: the push of 12 carries prev 11.
+    t.push('a', 12, 11, 'changed', { n: 12 });
+    const [poll] = t.take();
+    expect(poll.body).toEqual({ cursors: { a: 10 } });
+    poll.answer({
+      topics: { a: { rev: 12, events: [{ rev: 12, prev: 10, event: 'changed', version: 1, payload: { n: 12 } }] } },
+    });
+    await flush();
+    expect(payloads(h)).toEqual([{ n: 12 }]);
+    expect(h.onEvent.mock.calls[0][1]).toEqual({ topic: 'a', rev: 12, prev: 10, version: 1 });
+    expect(h.onResync).not.toHaveBeenCalled();
+    expect(t.take()).toEqual([]);
+    t.push('a', 13, 12, 'changed', { n: 13 });
+    expect(payloads(h)).toEqual([{ n: 12 }, { n: 13 }]);
+    expect(t.take()).toEqual([]);
+  });
+
+  it('moves the held rev to the answer rev past the events a poll answer leaves out at its end', async () => {
+    const t = makeTransport();
+    const { h } = await followed(t);
+    t.push('a', 14, 13, 'changed', { n: 14 });
+    t.take()[0].answer({
+      topics: { a: { rev: 14, events: [{ rev: 11, prev: 10, event: 'changed', version: 1, payload: { n: 11 } }] } },
+    });
+    await flush();
+    expect(payloads(h)).toEqual([{ n: 11 }]);
+    expect(h.onResync).not.toHaveBeenCalled();
+    expect(t.take()).toEqual([]);
+    // The held rev is 14: the next push chains on it without a gap poll.
+    t.push('a', 15, 14, 'changed', { n: 15 });
+    expect(payloads(h)).toEqual([{ n: 11 }, { n: 15 }]);
+    expect(t.take()).toEqual([]);
+  });
+
+  it('applies a polled event whose prev is below the held rev and whose rev is above it', async () => {
+    const t = makeTransport();
+    const { h } = await followed(t);
+    t.push('a', 13, 12, 'changed', { n: 13 });
+    const [poll] = t.take();
+    // The push of 11 was admitted; the poll's filters refuse 11 and 12, so its 13 follows the cursor.
+    t.push('a', 11, 10, 'changed', { n: 11 });
+    poll.answer({
+      topics: { a: { rev: 13, events: [{ rev: 13, prev: 10, event: 'changed', version: 1, payload: { n: 13 } }] } },
+    });
+    await flush();
+    expect(payloads(h)).toEqual([{ n: 11 }, { n: 13 }]);
+    expect(h.onEvent.mock.calls[1][1]).toEqual({ topic: 'a', rev: 13, prev: 11, version: 1 });
+    expect(h.onResync).not.toHaveBeenCalled();
+    expect(t.take()).toEqual([]);
+  });
+
   it('dispatches by event name, and ignores an event of a topic the client does not follow', async () => {
     const t = makeTransport();
     const { c, h } = await followed(t);
@@ -675,6 +729,26 @@ describe('polling', () => {
     await flush();
     await vi.advanceTimersByTimeAsync(400);
     expect(t.take().map((call) => call.body)).toEqual([{ cursors: { a: 1, b: 2 } }]);
+  });
+
+  it('polls from the answer rev after an answer whose events were all left out', async () => {
+    const t = makeTransport();
+    const c = axiosClient(t);
+    const h = handlers();
+    c.subscribe('a', Changed, h);
+    await flush();
+    t.take()[0].answer({ topics: { a: { rev: 7, events: [] } }, poll_after_ms: 0 });
+    await flush();
+    await vi.advanceTimersByTimeAsync(400);
+    const [second] = t.take();
+    expect(second.body).toEqual({ cursors: { a: 7 } });
+    second.answer({ topics: { a: { rev: 9, events: [] } }, poll_after_ms: 0 });
+    await flush();
+    // The rev moved, so the ladder stays on its 400 ms base.
+    await vi.advanceTimersByTimeAsync(400);
+    expect(t.take().map((call) => call.body)).toEqual([{ cursors: { a: 9 } }]);
+    expect(h.onEvent).not.toHaveBeenCalled();
+    expect(h.onResync).not.toHaveBeenCalled();
   });
 
   it('climbs ×1.5 from the 400 ms base while no rev moves, and returns to the base when one does', async () => {

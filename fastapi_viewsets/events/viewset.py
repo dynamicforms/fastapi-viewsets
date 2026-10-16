@@ -55,6 +55,7 @@ class PolledEvent(BaseModel):
 
     rev: int
     prev: int
+    """The rev of the event before it in the answer; for the first event, the cursor."""
     event: str
     """The event's `event_name`."""
     version: int = Field(ge=1, description="The event's `event_version`: the version of the payload's shape.")
@@ -161,6 +162,12 @@ class EventsViewSet:
         to it `[]`, and any other cursor the events since it, or `events: null` when the log holds
         no event whose `prev` is the cursor. 422 `event_cursors_exceeded` for more cursors than
         `settings.viewsets_event_max_subscriptions`.
+
+        The delivery filters run on every event since the cursor, with a `Subscription` of the
+        topic whose `peer` is the socket the poll arrived on, None over REST, and whose `context` is
+        the poll call's. An event a filter refuses is left out of `events`, and each event's `prev`
+        is the rev of the event before it in the answer, the cursor for the first. The answer's
+        `rev` covers every event since the cursor, the ones left out included.
         """
         cursors = body.cursors
         limit = settings.viewsets_event_max_subscriptions
@@ -180,6 +187,7 @@ class EventsViewSet:
                 continue
             admitted.append(topic)
 
+        peer = request.scope.get(PEER_SCOPE_KEY)
         store = get_store()
         revs = await store.revs(admitted) if admitted else {}
         for topic in admitted:
@@ -192,11 +200,15 @@ class EventsViewSet:
             if logged is None:
                 answers[topic] = TopicAnswer(rev=rev, events=None)
                 continue
-            events = [
-                PolledEvent(rev=e.rev, prev=e.prev, event=e.name, version=e.version, payload=e.payload) for e in logged
-            ]
+            subscription = delivery.Subscription(peer, context, topic)
+            events: list[PolledEvent] = []
+            prev = cursor
+            for e in logged:
+                if await delivery.passes_filters(subscription, topic, e.rev, e.name, e.payload, e.version):
+                    events.append(PolledEvent(rev=e.rev, prev=prev, event=e.name, version=e.version, payload=e.payload))
+                    prev = e.rev
             # an event appended between `revs` and `since` is in the chain; the answer's rev covers it
-            answers[topic] = TopicAnswer(rev=max([rev, *(e.rev for e in events)]), events=events)
+            answers[topic] = TopicAnswer(rev=max([rev, *(e.rev for e in logged)]), events=events)
 
         return PollAnswer(
             topics={topic: answers[topic] for topic in cursors},

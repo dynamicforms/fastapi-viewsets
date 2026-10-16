@@ -38,7 +38,10 @@ The store assigns every event of a topic two integers:
 
 Each event also carries its [`event_version`](#event-versions), the version of its payload's shape.
 
-A push and a poll answer carry the same `rev`, `prev` and version for an event. A client that holds
+A push and a poll answer carry the same `rev` and version for an event. A push carries the event's
+`prev`; a poll answer chains the events it returns, so an event's `prev` there is the rev of the
+event before it in the answer, the cursor for the first, which differs from the event's own `prev`
+only when the [delivery filters](#delivery-filters) left events out. A client that holds
 the rev `r` of a topic applies an event whose `prev` is `r`. An event with a larger `rev` and another
 `prev` means the client missed events; one `poll` from `r` returns them, or `events: null` when the log no
 longer holds them, in which case the client re-reads the state it displays. An event whose `rev` is
@@ -352,12 +355,14 @@ A poll carrying more than `settings.viewsets_event_max_subscriptions` cursors is
 | refused by the authorizers | `null` | `null` | `event_topic_refused`, or the `code` of the `DfViewSetError` an authorizer raised (`session_expired`, `not_authorized`, `rate_limited`, ...); `event_topic_refused` for an `HTTPException` without a `code` |
 | cursor `null` | the current rev | `[]` | absent |
 | cursor equal to the current rev | the current rev | `[]` | absent |
-| any other cursor | the current rev | `store.since(topic, cursor)`: the events after the cursor, or `null` when the log cannot answer it | absent |
+| any other cursor | the current rev | `store.since(topic, cursor)`: the events after the cursor that the [delivery filters](#delivery-filters) pass, or `null` when the log cannot answer it | absent |
 
 A refused or invalid topic does not affect the other topics. The authorizers run for every topic of
-every poll. `rev` is never lower than the newest rev in `events`, also when an event is appended
-while the poll is answered. `poll_after_ms` is `settings.viewsets_event_poll_after_ms` (default
-`0`): the shortest interval, in milliseconds, at which a client polls.
+every poll. In `events`, each event's `prev` is the rev of the event before it in the answer, the
+cursor for the first. `rev` is never lower than the rev of any event after the cursor, also when an
+event is appended while the poll is answered, and covers the events the delivery filters left out.
+`poll_after_ms` is `settings.viewsets_event_poll_after_ms` (default `0`): the shortest interval, in
+milliseconds, at which a client polls.
 
 The events viewset goes through `settings.viewsets_command_middleware` like any viewset. With
 `Idempotency` in the chain, a `subscribe` repeated with the same `Idempotency-Key` is answered from
@@ -457,7 +462,7 @@ task and returns without waiting for them, so a slow delivery filter for one soc
 the others. A
 task:
 
-1. runs the delivery filters; a `False` skips the socket;
+1. runs the [delivery filters](#delivery-filters); a `False` skips the socket;
 2. sends one push, a one-shot stream (one `open` frame with `end` set), which is not answered:
 
    ```python
@@ -495,16 +500,27 @@ settings.viewsets_event_delivery_filters = [skip_empty_imports]
 ```
 
 `DeliveryFilter` is `filter(subscription, topic, rev, event_name, payload, version) -> bool`, sync
-or async; `version` is the event's `event_version` and comes last. `subscription` carries `peer`,
-`context` (the context of the `subscribe` call) and `topic`. The filters run in list order for each
-push:
+or async; `version` is the event's `event_version` and comes last. The filters run in list order
+for every push and for every event a `poll` answers after the cursor:
 
-- a result that `is False` skips the socket, and the filters after it do not run;
+- a result that `is False` skips the socket, or leaves the event out of the poll answer, and the
+  filters after it do not run;
 - any other result, `None` included, passes to the next filter;
 - a filter that raises counts as `True` and is logged at debug level.
 
-A filter is a display decision taken after the authorizers have admitted the topic. The list is
-empty by default.
+`subscription` carries `peer`, `context` and `topic`:
+
+| Call | `peer` | `context` |
+|------|--------|-----------|
+| push | the socket of the subscription | the context of the `subscribe` call |
+| `poll` over muxws | the socket the poll arrived on | the context of the `poll` call |
+| `poll` over REST | `None` | the context of the `poll` call |
+
+A filter runs after the authorizers have admitted the topic. The name and the payload of an event a
+filter refuses reach neither the socket nor the poll answer. Its rev does: a later push carries it
+as `:prev`, and a poll answer's `rev` covers it. A filter that answers from `context` decides on the
+context of the call it runs for, so a push and a poll decide alike when their contexts carry the
+same identity. The list is empty by default.
 
 ---
 

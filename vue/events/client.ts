@@ -68,7 +68,7 @@ export interface EventMeta {
   readonly topic: string;
   /** The event's rev on its topic. */
   readonly rev: number;
-  /** The rev of the event before it on its topic. */
+  /** The rev the client held for the topic before it applied the event. */
   readonly prev: number;
   /**
    * The BE event's `event_version`, the version of the payload's shape: an integer of at least 1.
@@ -517,9 +517,13 @@ class EventClientImpl implements EventClient {
    * - `events: null` is a resync, unless pushes have moved the held rev since the poll was sent and
    *   the answer's rev is at most the held one: those pushes applied the events the log no longer has.
    * - An answer's rev below the cursor is a resync.
-   * - Otherwise each event is applied or ignored by the rule of a push. A malformed event, one
-   *   without a usable rev, prev, event name or version, and an event that is neither applied nor
-   *   ignored, a gap inside a poll answer, are a resync.
+   * - Otherwise each event is applied or ignored by the rule of a push, except that an event whose
+   *   `prev` is below the held rev and whose rev is above it is applied: the BE chains the events of
+   *   an answer, so a `prev` below the held rev names an event the held rev already covers. A
+   *   malformed event, one without a usable rev, prev, event name or version, and an event that is
+   *   neither applied nor ignored, a gap inside a poll answer, are a resync. After the events the
+   *   held rev becomes the answer's rev when that is larger: the BE leaves out of an answer the
+   *   events its delivery filters refuse, and the answer's rev covers them.
    *
    * Returns `'moved'` when the held rev moved, `'answered'` when the answer answered the topic
    * without moving it, and `'unanswered'` for a transient error and for an answer without a rev.
@@ -554,11 +558,13 @@ class EventClientImpl implements EventClient {
     }
     for (const event of answer.events) {
       const arrival = toArrival(event);
-      if (arrival === null || this.apply(state, arrival) === 'gap') {
+      if (arrival === null || this.apply(state, chained(arrival, state.rev)) === 'gap') {
         this.resync(state, rev);
         return 'moved';
       }
     }
+    // The answer covers every event up to its rev; the ones it leaves out were not for this client.
+    if (rev > state.rev) state.rev = rev;
     return state.rev !== held ? 'moved' : 'answered';
   }
 
@@ -854,6 +860,11 @@ class EventClientImpl implements EventClient {
     for (const state of this.topics.values()) this.sendSubscribe(state);
     this.ensureLoop();
   }
+}
+
+/** `arrival` with its `prev` raised to `held` when its `prev` is below `held` and its rev above it. */
+function chained(arrival: Arrival, held: number): Arrival {
+  return arrival.prev < held && arrival.rev > held ? { ...arrival, prev: held } : arrival;
 }
 
 /** A poll answer entry as an `Arrival`; `null` for an entry without a usable rev, prev, event name or version. */
