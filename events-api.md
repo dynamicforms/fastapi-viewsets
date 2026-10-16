@@ -158,6 +158,13 @@ flushed Redis, a dropped topic, restarts at `now_ms`, which is larger than every
 and the first event after it carries `prev: 0`: no frontend holds `0`, so every one of them polls,
 finds no entry with its `prev`, and resyncs.
 
+Two events in one millisecond receive consecutive revs: the first `now_ms`, the next
+`previous + 1`, so the counter runs ahead of the clock until a pause lets the clock catch up.
+Nothing is aggregated. `append` is atomic: one Lua script in Redis, one synchronous step without
+an `await` in memory, so two processes publishing at once still receive distinct, ordered revs.
+Their pushes may reach a socket out of order; a push whose `prev` is not the held rev polls, and
+the earlier push arriving late is then at most the held rev and ignored.
+
 A rev is below `2^53`, `Number.MAX_SAFE_INTEGER`, and travels as a JSON number on every transport;
 the frontend compares revs and never computes with them. The counter needs no reset: it is a
 millisecond timestamp, about `1.8 * 10^12` today, that advances by at most one per event, and it
