@@ -89,9 +89,10 @@ rejected from `depends()`, before the request body is parsed.
     is deleted when the action completes, and a repeat runs the action again, an attached repeat
     included.
 - **A stored outcome expires** `settings.viewsets_idempotency_ttl` seconds after it was stored.
-- **A running record expires** `settings.viewsets_idempotency_lock_ttl` seconds after it was written,
-  unless the action finishes first. A process that dies mid-action leaves a running record; once it
-  expires, a repeat runs the action again, and so does a repeat attached to it at that moment. The
+- **A running record is extended while the call runs.** The process running the call extends it to
+  `settings.viewsets_idempotency_lock_ttl` seconds every third of that time, so a call that runs
+  longer than the lock TTL keeps its record. A process that dies mid-action stops extending it; once
+  it expires, a repeat runs the action again, and so does a repeat attached to it at that moment. The
   outcome of the first call, when it finishes after that, does not replace the record of the call
   that took the key over.
 - **A cancelled call** (its task is cancelled) leaves no record; a repeat attached to it runs the
@@ -110,7 +111,9 @@ With `redis_client`:
 | `<key_prefix><key>:attached` | Set by a repeat on another process that attached to the running call, with the running record's remaining lifetime; read for a `GET` or `HEAD` |
 | channel `<key_prefix><key>` | A message is published when the call completes |
 
-- The running record is written with `SET NX PX` and the lock TTL in milliseconds.
+- The running record is written with `SET NX PX` and the lock TTL in milliseconds. Every third of the
+  lock TTL a Lua script extends it, and the `:attached` key when it exists, to the lock TTL, provided
+  it is still the record this process wrote.
 - On completion one Lua script replaces the running record with the outcome (with the TTL in
   milliseconds) or deletes it, provided it is still the record this process wrote. The process then
   publishes on the key's channel, also when the script failed, and resolves the futures of the
@@ -200,8 +203,7 @@ const items = new ItemApi({
 | `repeat.delayMs` | `1000` | The delay before a repeat after a lost connection or a gateway status, doubled after each, at most 30000 |
 
 `repeat` is an option of every proxy and of `RequestOptions`, where it applies to one call. The
-default `withinMs` equals the default `viewsets_idempotency_lock_ttl`. The startup schema check is
-not repeated.
+startup schema check is not repeated.
 
 A repeat over muxws waits for `peer.onReconnect`, at most until `withinMs` has elapsed. A peer that
 closes for good (`onClose` with `willRetry` false) ends the wait, and the call rejects with the
@@ -223,10 +225,5 @@ call to it, `GET` included, is preflighted.
 - A repeat of a call that raised an exception other than `HTTPException` or `RequestValidationError`
   answers `{"detail": "Internal Server Error"}` through FastAPI's `HTTPException` handling, not through
   the application's handler for `Exception`.
-- A running record is not extended while the action runs. An action that runs longer than
-  `viewsets_idempotency_lock_ttl` is run again by a repeat that arrives after the lock expired, and by
-  a repeat attached to it at that moment. A `celery_viewset` action can run up to its
-  `result_timeout` (default 3600 s); such an action needs a `viewsets_idempotency_lock_ttl` at least
-  as long.
 - A `celery_viewset` call answered `504 result_timeout` or `503 result_reader_stopped` stores that
   outcome, although the worker may complete the action later; a repeat answers the stored error.
