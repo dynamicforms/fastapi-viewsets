@@ -16,7 +16,7 @@ completely different authentication scheme (a different "dimension" of identity 
 :::
 
 ::: tip Where this fits
-See [Architecture](./architecture#problem-one-boolean-per-concern-doesn-t-scale) for why this and
+See [Architecture](./architecture#requirement-per-viewset-configuration) for why this and
 [Session](./authentication#rejecting-unauthenticated-requests-session)'s opt-out both needed a
 general per-viewset configuration mechanism rather than one-off class attributes.
 :::

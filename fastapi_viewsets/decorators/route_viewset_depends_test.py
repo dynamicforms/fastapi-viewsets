@@ -92,9 +92,8 @@ def test_depends_rejection_precedes_body_validation_422():
 
 
 def test_dependency_overrides_can_bypass_the_middleware_bridge():
-    """app.dependency_overrides works on the bridged dependency - proves the new testability
-    benefit (impossible with the old, purely-internal onion-chain-only mechanism). Overriding it to
-    a no-op lets the (otherwise rejecting) route through, all the way to perform_*."""
+    """app.dependency_overrides works on the bridged dependency: overriding it with a no-op lets
+    the (otherwise rejecting) route through, all the way to perform_*."""
     settings.viewsets_command_middleware = [_RejectingMiddleware()]
 
     router = APIRouter()

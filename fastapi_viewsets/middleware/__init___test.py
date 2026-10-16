@@ -154,8 +154,7 @@ async def test_run_command_chain_middleware_receives_request_viewset_context():
 
 
 # ---------------------------------------------------------------------------
-# route_viewset integration - command middleware sets a real cookie (finalize_response
-# replacement) and reshapes the body, exactly like the old finalize_response hook did.
+# route_viewset integration - command middleware sets a real cookie and reshapes the body.
 # ---------------------------------------------------------------------------
 
 
@@ -282,8 +281,7 @@ def test_command_middleware_default_status_code_leaves_response_untouched():
 
 def test_command_middleware_does_not_run_in_celery_worker_path():
     """Command middleware only runs in the outer, HTTP-facing route_viewset call - never in
-    celery_viewset_server's inner, worker-only lifecycle_runner call (no live Response there),
-    same as finalize_response worked before it."""
+    celery_viewset_server's inner, worker-only lifecycle_runner call (no live Response there)."""
     from unittest.mock import MagicMock
 
     from fastapi_viewsets.decorators.celery_viewset import celery_viewset_server

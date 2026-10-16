@@ -18,10 +18,9 @@ USE_CELERY = os.environ.get("DEMO_CELERY", "").lower() in ("1", "true", "yes")
 """
 Celery is off by default in this demo.
 
-It used to be unconditional, which made the transport benchmark meaningless: every call queued a
-task through Redis and waited for a worker, and that round trip dwarfs the difference between
-sending a request over HTTP and sending it over a WebSocket - which is the thing the benchmark
-exists to show. Set DEMO_CELERY=1 (and run the worker) to exercise the Celery path instead.
+With Celery, every call queues a task through Redis and waits for a worker; that round trip
+dominates the difference between HTTP and WebSocket transport that the benchmark measures.
+Set DEMO_CELERY=1 (and run the worker) to exercise the Celery path.
 """
 
 LIBRARY_SIZE = int(os.environ.get("DEMO_LIBRARY_SIZE", "5000"))

@@ -6,11 +6,10 @@ per concern (which doesn't scale once more than one processor/middleware needs t
 
 ::: tip Where this fits
 [`Session`](./authentication#rejecting-unauthenticated-requests-session) (see
-[Authentication](./authentication)) is the first real user of this mechanism - see
-[Architecture](./architecture#problem-one-boolean-per-concern-doesn-t-scale) for why a one-off
-boolean class attribute per concern wouldn't have scaled, and how `@action_configuration`
-generalizes that into something any context processor or command middleware can use, for any
-concern.
+[Authentication](./authentication)) reads its opt-out through this mechanism - see
+[Architecture](./architecture#requirement-per-viewset-configuration) for why per-viewset settings
+use one mechanism for every context processor and command middleware rather than a class
+attribute per concern.
 :::
 
 ---

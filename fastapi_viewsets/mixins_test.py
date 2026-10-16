@@ -168,7 +168,7 @@ K = TypeVar("K")
 
 
 def test_cannot_instantiate_abstract_mixin():
-    # Action mixins no longer declare perform_xxx as abstractmethods — they can be instantiated standalone.
+    # Action mixins declare no abstract methods; they can be instantiated standalone.
     # The abstract contract lives in ImplMixin; action mixins just provide router methods.
     instance = CreateMixin()
     assert isinstance(instance, CreateMixin)
@@ -195,7 +195,7 @@ def test_can_instantiate_complete_viewset():
 
 
 def test_cannot_instantiate_combined_mixins():
-    # Combined mixins no longer have abstractmethods — they can be instantiated standalone.
+    # Combined mixins declare no abstract methods; they can be instantiated standalone.
     # The abstract contract is enforced only when combined with ImplMixin.
     assert isinstance(ReadOnlyViewSetMixin(), ReadOnlyViewSetMixin)
     assert isinstance(ViewSetMixin(), ViewSetMixin)

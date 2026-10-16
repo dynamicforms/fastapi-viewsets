@@ -152,10 +152,6 @@ def route_viewset(
     True registers, False does not, and None - the default - defers: REST to "yes", muxws to
     `settings.viewsets_register_muxws`. Individual endpoints override either again with
     `@transports(...)`.
-
-    Two parameters rather than one because there are two transports. If a third ever arrives, the
-    replacement is a single mapping - `transports={"rest": False}`, absent key meaning defer -
-    rather than a third `register_*`; see GAPS.md for why a set of flags is the worse shape.
     """
 
     if lifecycle not in get_args(LifecycleType):
@@ -172,8 +168,7 @@ def route_viewset(
             cls_name = cls_name[: -len("ViewSet")]
         default_tags = [cls_name] if cls_name else None
         # The viewset's own docstring becomes the description of the group its endpoints appear
-        # under - the section intro that was otherwise blank however well each endpoint was
-        # documented. See endpoint_docs.apply_viewset_tags.
+        # under. See endpoint_docs.apply_viewset_tags.
         if cls_name:
             register_tag(cls_name, viewset_description(cls))
 

@@ -178,7 +178,7 @@ class Middleware(ABC):
     async def depends(self, _request: "Request", _cls: type, _context: Context) -> None:
         """
         Optional early-gate hook, bridged onto FastAPI's own native Depends() by route_viewset -
-        runs before FastAPI even parses the request body. Raise HTTPException to reject; return
+        runs before FastAPI parses the request body. Raise HTTPException to reject; return
         normally to allow. Default is a no-op: a middleware that doesn't override this only runs in
         the onion chain below, exactly as if this method didn't exist.
 
@@ -194,11 +194,10 @@ class Middleware(ABC):
         `middleware.auth.authorization.Authorization`, which splits across both methods for exactly
         this reason) before body parsing, so that kind of work stays in `__call__` as it does today.
         For middleware whose entire job is reject-or-allow with nothing unconditional (`Session`,
-        `RateLimiter`), `__call__` correctly becomes a trivial `return await call_next()`: `depends()`
-        already made the only decision that matters, and if it rejected, `__call__`/the onion chain
-        is never even reached at all (the exception already propagated out via FastAPI's own
-        `Depends()` resolution, before our wrapper/lifecycle_runner ever starts) - so nothing runs
-        twice.
+        `RateLimiter`), `__call__` is `return await call_next()`: `depends()` makes the only
+        decision, and if it rejects, `__call__`/the onion chain is not reached (the exception
+        propagates out via FastAPI's own `Depends()` resolution, before the wrapper/lifecycle_runner
+        starts) - so nothing runs twice.
         """
         return None
 

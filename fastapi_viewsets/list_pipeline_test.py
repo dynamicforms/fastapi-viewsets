@@ -38,14 +38,14 @@ def client_for(viewset_cls, base_path: str = "/tracks") -> TestClient:
 
 
 # ---------------------------------------------------------------------------
-# perform_list may now be lazy
+# perform_list may be lazy
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_perform_list_may_return_a_generator():
     """
-    The point of the rework: a viewset that cannot cheaply materialise its rows no longer has to.
+    A viewset that cannot cheaply materialise its rows yields them from perform_list.
     """
 
     class GeneratorViewSet(ListMixin[Track, None]):

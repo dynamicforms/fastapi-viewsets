@@ -367,9 +367,8 @@ def nullable_client(**attributes) -> TestClient:
 @pytest.mark.parametrize("direction", ["asc", "desc"])
 def test_a_cursor_walk_over_a_nullable_column_visits_every_row(nulls, direction):
     """
-    Regression: the in-memory sort put NULLs at one end and the cursor's comparison assumed the
-    other, so a walk silently dropped every row with a NULL - four of twelve, with no error
-    anywhere. The two now share one definition of where NULL sits.
+    The in-memory sort and the cursor comparison place NULL at the same end, so a walk visits
+    every row, the ones with a NULL included.
     """
     client = nullable_client(nulls=nulls)
     seen, cursor = [], None

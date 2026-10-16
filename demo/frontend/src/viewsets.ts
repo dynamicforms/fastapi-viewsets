@@ -88,7 +88,7 @@ export function muxwsPeer(): Promise<Peer> {
 }
 
 /**
- * Any of the four. A union rather than an intersection: the db ViewSets are no longer subtypes of
+ * Any of the four. A union rather than an intersection: the db ViewSets are not subtypes of
  * the memory ones, so what callers may rely on is what all four have.
  */
 export type MusicTrackViewSet =

@@ -9,9 +9,9 @@ of a few [built-in middleware/processor implementations](./rate-limiter) this li
 [Authorization](./authorization) is a separate, independent one that happens to pair well with it.
 
 ::: tip Where this fits
-See [Architecture](./architecture#problem-real-auth-has-more-than-one-way-to-prove-who-you-are) for
-why this exists and how it grew out of a single ad-hoc context processor, and
-[Architecture](./architecture#problem-a-context-processor-can-t-say-no) for why rejecting an
+See [Architecture](./architecture#requirement-several-credential-schemes) for
+why this exists, and
+[Architecture](./architecture#requirement-rejecting-a-request) for why rejecting an
 expired session needed command middleware (`Session`, below) rather than the context processor
 itself.
 :::
@@ -178,11 +178,10 @@ settings.viewsets_auth_processors = [StaticUserAuthBackend(...), DjangoSessionAu
 
 ## Rejecting unauthenticated requests: `Session`
 
-A context processor can only ever gather the fact that `context.user` is `None` - it can't reject
-the request or touch the response (see
-[Architecture](./architecture#problem-a-context-processor-can-t-say-no)). That's what this command
-middleware does - it operates purely on the already-resolved `context.user` that
-`auth_context_processor` produced, it doesn't re-derive or re-resolve anything itself:
+A context processor gathers the fact that `context.user` is `None`; it cannot reject the request
+or touch the response (see [Architecture](./architecture#requirement-rejecting-a-request)). This
+command middleware does, from the `context.user` that `auth_context_processor` produced, without
+re-resolving it:
 
 ```python
 from fastapi_viewsets.conf import settings

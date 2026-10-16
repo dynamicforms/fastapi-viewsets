@@ -29,7 +29,7 @@ class _FakeViewset:
 
 @pytest.mark.asyncio
 async def test_call_is_a_trivial_passthrough():
-    """All of RateLimiter's real logic lives in depends() now - __call__ just calls call_next()."""
+    """All of RateLimiter's logic lives in depends(); __call__ only calls call_next()."""
     result = await RateLimiter(default_limit=1)(None, object(), Context({}), _final_ok)
     assert result.body == "ok"
 

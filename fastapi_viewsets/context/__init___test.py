@@ -178,8 +178,7 @@ async def test_lazy_object_sync_resolve_also_works_via_await():
 
 @pytest.mark.asyncio
 async def test_lazy_object_concurrent_await_resolves_exactly_once():
-    """Regression test: concurrent awaiters before resolution must share one Future/Task, not
-    each independently trigger resolve() (a race condition in an earlier hand-rolled version)."""
+    """Concurrent awaiters before resolution share one Future/Task; resolve() runs once."""
     calls = []
 
     class CountingLazy(LazyObject):
@@ -514,7 +513,7 @@ def test_configuration_for_resolves_byaction_against_current_action_name():
 
 @pytest.mark.asyncio
 async def test_clone_for_command_resolves_byaction_fresh_for_a_different_action():
-    """Regression test: the raw (unresolved) action_configuration dict survives clone_for_command
+    """The raw (unresolved) action_configuration dict survives clone_for_command
     unchanged, so a clone representing a *different* action resolves ByAction values against its
     own action_name, rather than reusing whatever the original action resolved to."""
     value = ByAction(list_items="read", update="write", default="none")

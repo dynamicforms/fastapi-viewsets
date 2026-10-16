@@ -26,7 +26,7 @@ def test_session_is_a_middleware():
 
 @pytest.mark.asyncio
 async def test_call_is_a_trivial_passthrough():
-    """All of Session's real logic lives in depends() now - __call__ just calls call_next()."""
+    """All of Session's logic lives in depends(); __call__ only calls call_next()."""
 
     async def final_handler():
         return ViewSetResult(body="ok")
