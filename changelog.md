@@ -15,9 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out; `pendingCalls()` and `pendingCallCount()` list and count the calls that have not settled;
   `retryNow()` sends every waiting repeat at once. `issueCall()` takes `background` as a third
   argument.
+- npm: the event client sends a check poll of every subscribed topic over the open peer once per
+  `checkIntervalMs` (`DEFAULT_CHECK_INTERVAL_MS`, 60 s; `0` sends none) while the ladder is held,
+  so a lost push of a topic's last event is caught without a later event of the topic.
 
 ### Changed
 
+- npm: `watch({ fetch: true })` passes the changes whose `retrieve` answers 404 to a second
+  `onChange` with `op: 'deleted'`, after the event's other changes, instead of dropping them, so a
+  displayed record that is gone or no longer visible to the reader is removed.
 - `Idempotency` extends a running record to `viewsets_idempotency_lock_ttl` every third of the lock
   TTL while the call runs, and the `:attached` key with it. A call that runs longer than the lock TTL
   keeps its record, and a repeat attaches to it instead of running the action again; the record
@@ -35,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - npm: the event client applies a polled event whose `prev` is below the held rev and whose rev is
   above it, and moves the held rev to a poll answer's `rev` after its events, so a poll answer that
   leaves out filtered events neither resyncs the topic nor polls it again.
+- Events: a `store.watch` that raises, such as a Redis SUBSCRIBE whose confirmation does not arrive
+  in time, is followed by `store.unwatch`, so a failed `subscribe` leaves no channel subscribed in
+  the process. `EventStore.unwatch` stops what a `watch` that raised may have started.
 
 ## [0.9.1] - 2026-10-16
 

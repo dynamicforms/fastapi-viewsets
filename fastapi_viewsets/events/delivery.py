@@ -78,7 +78,8 @@ async def _sync_watch(topic: str) -> None:
     `store.unwatch(topic)` when it has none and is watched, until the two agree, and returns when
     they agree. One call per topic runs the store at a time: a call made while another runs waits
     for it to end, whatever its outcome, and then checks again. An exception of a store call this
-    call made propagates.
+    call made propagates. A `store.watch` that raises is followed by `store.unwatch`, whose
+    exception is logged, and the topic counts as not watched.
     """
     while (running := _syncing.get(topic)) is not None:
         await asyncio.shield(running)
@@ -91,7 +92,11 @@ async def _sync_watch(topic: str) -> None:
                 return
             store = get_store()
             if wanted:
-                await store.watch(topic)
+                try:
+                    await store.watch(topic)
+                except BaseException:
+                    await _unwatch_failed(store, topic)
+                    raise
                 _watched.add(topic)
             else:
                 _watched.discard(topic)
@@ -100,6 +105,14 @@ async def _sync_watch(topic: str) -> None:
         if _syncing.get(topic) is done:
             del _syncing[topic]
         done.set_result(None)
+
+
+async def _unwatch_failed(store: Any, topic: str) -> None:
+    """Stops what a failed `store.watch(topic)` may have started; an exception it raises is logged."""
+    try:
+        await store.unwatch(topic)
+    except Exception:
+        logger.warning("events: unwatching topic %s after its watch failed raised", topic, exc_info=True)
 
 
 async def _sync_watch_logged(topic: str) -> None:

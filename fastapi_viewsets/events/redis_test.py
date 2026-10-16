@@ -286,6 +286,32 @@ async def test_watch_raises_when_the_confirmation_does_not_arrive_in_time(monkey
 
 
 @pytest.mark.asyncio
+async def test_a_subscribe_whose_confirmation_does_not_arrive_in_time_leaves_no_channel(monkeypatch):
+    monkeypatch.setattr(redis_module, "_SUBSCRIBE_TIMEOUT", 0.05)
+    redis = FakeRedis()
+    store = RedisEventStore(redis)
+    settings.viewsets_event_store = store
+    await store.start()
+    try:
+        store._pubsub.held = True
+        peer = FakePeer()
+        with pytest.raises(asyncio.TimeoutError):
+            await subscribe(peer, Context({}), "/a")
+        store._pubsub.release()
+        await asyncio.sleep(0.02)
+        assert redis.channels.get(store.channel("/a"), []) == []
+        assert store._listening == set()
+        assert store._watched == set()
+
+        await asyncio.wait_for(subscribe(peer, Context({}), "/a"), 1.0)
+        await publish("/a", Ping(n=1))
+        await settle()
+        assert [payload for payload, _headers in peer.pushes] == [{"n": 1}]
+    finally:
+        await store.stop()
+
+
+@pytest.mark.asyncio
 async def test_watch_raises_when_the_reader_stops_before_the_confirmation():
     store = RedisEventStore(FakeRedis())
     await store.start()

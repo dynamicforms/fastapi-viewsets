@@ -140,13 +140,31 @@ async def test_a_socket_holds_at_most_max_subscriptions_topics():
 
 
 @pytest.mark.asyncio
-async def test_a_failing_watch_removes_the_subscription_and_raises():
-    settings.viewsets_event_store = RecordingStore(watch_error=ConnectionError("redis is gone"))
+async def test_a_failing_watch_removes_the_subscription_unwatches_the_topic_and_raises():
+    store = RecordingStore(watch_error=ConnectionError("redis is gone"))
+    settings.viewsets_event_store = store
     peer = FakePeer()
     with pytest.raises(ConnectionError):
         await subscribe(peer, Context({}), "/a")
     assert subscriptions("/a") == []
     assert topics_of(peer) == []
+    assert store.calls == [("watch", "/a"), ("unwatch", "/a")]
+
+
+@pytest.mark.asyncio
+async def test_an_unwatch_that_raises_after_a_failing_watch_is_logged(caplog):
+    store = RecordingStore(watch_error=ConnectionError("redis is gone"))
+
+    async def failing_unwatch(topic):
+        store.calls.append(("unwatch", topic))
+        raise ConnectionError("still gone")
+
+    store.unwatch = failing_unwatch
+    settings.viewsets_event_store = store
+    with caplog.at_level(logging.WARNING), pytest.raises(ConnectionError, match="redis is gone"):
+        await subscribe(FakePeer(), Context({}), "/a")
+    assert store.calls == [("watch", "/a"), ("unwatch", "/a")]
+    assert "after its watch failed" in caplog.text
 
 
 @pytest.mark.asyncio

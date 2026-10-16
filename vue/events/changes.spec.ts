@@ -311,24 +311,38 @@ describe('watch() on a REST ViewSet', () => {
       );
     });
 
-    it('drops a change whose retrieve answers 404', async () => {
-      const w = build((url) => (url === '/items/4' ? notFound() : Promise.resolve({ data: { id: 6, name: 'six' } })));
-      w.emit({ op: 'updated', changes: [{ pk: 4 }, { pk: 6 }] });
+    it('passes the changes whose retrieve answers 404 as deleted, after the others', async () => {
+      const w = build((url) => (url === '/items/6' ? Promise.resolve({ data: { id: 6, name: 'six' } }) : notFound()));
+      w.emit({ op: 'updated', changes: [{ pk: 4 }, { pk: 6 }, { pk: 7 }] });
       await flush();
-      expect(w.onChange).toHaveBeenCalledWith(
-        { op: 'updated', changes: [{ pk: 6, record: { id: 6, name: 'six' } }] },
-        meta(),
-      );
+      expect(w.onChange.mock.calls).toEqual([
+        [{ op: 'updated', changes: [{ pk: 6, record: { id: 6, name: 'six' } }] }, meta()],
+        [{ op: 'deleted', changes: [{ pk: 4 }, { pk: 7 }] }, meta()],
+      ]);
       expect(w.onError).not.toHaveBeenCalled();
     });
 
-    it('calls onChange with empty changes when every retrieve answers 404', async () => {
+    it('calls onChange once, with deleted, when every retrieve answers 404', async () => {
       const w = build(() => notFound());
       w.emit({ op: 'updated', changes: [{ pk: 4 }] });
       await flush();
-      expect(w.onChange).toHaveBeenCalledWith({ op: 'updated', changes: [] }, meta());
+      expect(w.onChange.mock.calls).toEqual([[{ op: 'deleted', changes: [{ pk: 4 }] }, meta()]]);
       expect(w.onResync).not.toHaveBeenCalled();
       expect(w.onError).not.toHaveBeenCalled();
+    });
+
+    it('removes a displayed record whose retrieve answers 404 with applyChanges', async () => {
+      const w = build(() => notFound());
+      let rows = [
+        { id: 4, name: 'four' },
+        { id: 5, name: 'five' },
+      ];
+      w.onChange.mockImplementation((change: RecordsChanged<{ id: number; name: string }, number>) => {
+        rows = applyChanges(rows, change, 'id');
+      });
+      w.emit({ op: 'updated', changes: [{ pk: 4 }] });
+      await flush();
+      expect(rows).toEqual([{ id: 5, name: 'five' }]);
     });
 
     it('retrieves nothing for a deleted change', async () => {

@@ -26,6 +26,10 @@
  * held. Without an open peer the client polls every topic it follows in one call per rung of the
  * ladder (poll.ts), over axios.
  *
+ * A gap is seen only when a later event of the topic arrives, so a lost push of a topic's last event
+ * is seen by a poll only. While the peer is open and the ladder is held, the client polls every
+ * subscribed topic over the peer once per `checkIntervalMs`.
+ *
  * The client's own calls (`subscribe`, `unsubscribe`, `poll`) carry no `Idempotency-Key` and are
  * never repeated by the proxies' repeat machinery: a repeat of `subscribe` answered from a stored
  * outcome would not subscribe the socket the repeat travelled on.
@@ -35,7 +39,7 @@ import { ViewSetRequestError } from '../errors';
 import type { MuxwsPeerLike } from '../muxws-proxy';
 import { readHeaders, readStatus } from '../muxws-reply';
 
-import { DEFAULT_POLL_SETTINGS, type Draw, PollLadder, type PollSettings } from './poll';
+import { DEFAULT_POLL_SETTINGS, type Draw, jitterMultiplier, PollLadder, type PollSettings } from './poll';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -147,7 +151,16 @@ export interface EventClientOptions {
   pollSettings?: PollSettings;
   /** The ladder's jitter draw. Default `Math.random`. */
   draw?: Draw;
+  /**
+   * Milliseconds between the polls of the subscribed topics while the peer is open and the ladder is
+   * held, jittered by `pollSettings.jitterFraction`. `0`, a negative and a non-finite value send
+   * none. Default `DEFAULT_CHECK_INTERVAL_MS`.
+   */
+  checkIntervalMs?: number;
 }
+
+/** 60 s: the default `EventClientOptions.checkIntervalMs`. */
+export const DEFAULT_CHECK_INTERVAL_MS = 60000;
 
 export interface EventClient {
   readonly basePath: string;
@@ -355,8 +368,8 @@ class TopicState {
   gapRev: number | null = null;
 
   /**
-   * A gap poll of the topic failed without refusing it, or its answer did not answer the topic: the
-   * held rev may be below the BE's. The ladder runs, also over an open peer, until a poll answers
+   * A gap poll or a check poll of the topic failed without refusing it, or its answer did not answer
+   * the topic: the held rev may be below the BE's. The ladder runs, also over an open peer, until a poll answers
    * the topic.
    */
   behind = false;
@@ -385,6 +398,15 @@ class EventClientImpl implements EventClient {
 
   private timer: ReturnType<typeof setTimeout> | null = null;
 
+  private readonly checkIntervalMs: number;
+
+  private readonly pollSettings: PollSettings;
+
+  private readonly draw: Draw;
+
+  /** The timer of the next check poll; see `check`. */
+  private checkTimer: ReturnType<typeof setTimeout> | null = null;
+
   private closed = false;
 
   /** The peer closed while a rung was polling; that rung schedules the base rung next. */
@@ -394,7 +416,10 @@ class EventClientImpl implements EventClient {
     this.basePath = options.basePath.replace(/\/$/, '');
     this.peer = options.peer;
     this.http = options.axios;
-    this.ladder = new PollLadder(options.pollSettings ?? DEFAULT_POLL_SETTINGS, options.draw ?? Math.random);
+    this.pollSettings = options.pollSettings ?? DEFAULT_POLL_SETTINGS;
+    this.draw = options.draw ?? Math.random;
+    this.ladder = new PollLadder(this.pollSettings, this.draw);
+    this.checkIntervalMs = options.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
     this.peer?.onClose?.(() => this.onPeerClose());
     this.peer?.onReconnect?.(() => this.onPeerReconnect());
   }
@@ -413,6 +438,7 @@ class EventClientImpl implements EventClient {
     state.subs.add(sub);
     if (state.rev !== null) sub.resolve();
     this.ensureLoop();
+    this.scheduleCheck();
     return sub;
   }
 
@@ -432,6 +458,7 @@ class EventClientImpl implements EventClient {
     if (this.closed) return;
     this.closed = true;
     this.clearTimer();
+    this.clearCheckTimer();
     this.loop = 'idle';
     // A subscribe in flight sends the unsubscribe when it is answered; see sendSubscribe.
     for (const state of this.topics.values()) {
@@ -761,9 +788,10 @@ class EventClientImpl implements EventClient {
     return !this.peerOpen() && [...this.topics.values()].some((state) => state.rev === null && state.unpolled);
   }
 
-  /** Starts, holds or hurries the ladder to match the state. */
+  /** Starts, holds or hurries the ladder to match the state; stops the check timer without a topic. */
   private ensureLoop(): void {
     if (this.closed) return;
+    if (this.topics.size === 0) this.clearCheckTimer();
     if (!this.shouldPoll()) {
       if (this.loop === 'waiting') {
         this.clearTimer();
@@ -831,6 +859,72 @@ class EventClientImpl implements EventClient {
     // `anyActive: true`: the client cannot tell whether anything on a topic is active.
     else delay = this.ladder.next({ anyActive: true, anyDialogOpen: false, revChanged, pollAfterMs });
     this.schedule(delay);
+  }
+
+  // -- the check poll ----------------------------------------------------------------
+
+  /** Starts the check timer unless it runs, checks are off, or the client has no peer or no topic. */
+  private scheduleCheck(): void {
+    if (this.closed || this.checkTimer !== null || !this.peer) return;
+    if (!Number.isFinite(this.checkIntervalMs) || this.checkIntervalMs <= 0) return;
+    if (this.topics.size === 0) return;
+    const delay = Math.round(this.checkIntervalMs * jitterMultiplier(this.draw, this.pollSettings));
+    this.checkTimer = setTimeout(() => {
+      this.checkTimer = null;
+      void this.check();
+    }, delay);
+  }
+
+  private clearCheckTimer(): void {
+    if (this.checkTimer !== null) {
+      clearTimeout(this.checkTimer);
+      this.checkTimer = null;
+    }
+  }
+
+  /**
+   * One poll over the open peer of every topic that is subscribed on its socket, has a rev, is not
+   * `behind` and has no gap poll in flight, while the ladder is idle; a tick without such a topic, or
+   * with the ladder running or the peer not open, sends nothing. The answer is applied as a rung's.
+   * A topic the answer does not answer, and every topic of a poll that fails without refusing them,
+   * fall behind to the ladder. The next check is scheduled after the answer, while the client
+   * follows a topic.
+   */
+  private async check(): Promise<void> {
+    if (this.closed) return;
+    const sent = [...this.topics.values()]
+      .filter((state) => state.socket === 'subscribed' && state.rev !== null && !state.behind && !state.gapInFlight)
+      .map((state) => ({ state, cursor: state.rev }));
+    if (this.loop !== 'idle' || !this.peerOpen() || sent.length === 0) {
+      this.scheduleCheck();
+      return;
+    }
+    const generation = this.socketGeneration;
+    const cursors: Record<string, number | null> = {};
+    for (const { state, cursor } of sent) cursors[state.topic] = cursor;
+    try {
+      const answer = await this.call<WirePollAnswer>('poll', { cursors });
+      if (this.closed) return;
+      for (const { state, cursor } of sent) {
+        if (this.topics.get(state.topic) !== state) continue;
+        const entry = answer?.topics?.[state.topic];
+        if (!entry || this.applyTopicAnswer(state, cursor, entry) === 'unanswered') this.checkBehind(state, generation);
+      }
+    } catch (error) {
+      if (this.closed) return;
+      for (const { state } of sent) {
+        if (this.topics.get(state.topic) !== state) continue;
+        if (isRefusal(error)) this.refuse(state, error);
+        else this.checkBehind(state, generation);
+      }
+    }
+    this.ensureLoop();
+    this.scheduleCheck();
+  }
+
+  /** Marks `state` `behind` after a check poll, unless the socket it was sent on has been replaced. */
+  private checkBehind(state: TopicState, generation: number): void {
+    if (generation === this.socketGeneration) state.behind = true;
   }
 
   // -- the peer --------------------------------------------------------------------

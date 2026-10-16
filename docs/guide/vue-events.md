@@ -202,7 +202,10 @@ ladder, also over an open peer, until a poll answers the topic.
 
 ## Losing and regaining the socket
 
-While the peer is open and every topic is subscribed on its socket, the client sends no poll. When
+While the peer is open and every topic is subscribed on its socket, the client sends no poll except
+the check poll: once per `checkIntervalMs` (60 s by default) one `poll` of every subscribed topic
+over the peer. A gap shows when the next event of the topic arrives, so a lost push of the last
+event, dropped between the backend's pub/sub and the socket, is caught only by a poll. When
 the peer closes, the backend drops every subscription that socket held; the client resumes the
 ladder on its base rung over `axios`, from the revs it holds, so the events published meanwhile
 arrive by poll. A client without `axios` waits.
@@ -238,8 +241,9 @@ const tracks = new TrackRestViewSet({ basePath: '/api/music', events });
 The payload is `RecordsChanged<T, K>`: `op` is `created`, `updated` or `deleted`, and `changes`
 holds one `{ pk, record? }` per record the action touched. The backend sends the pk only. With
 `fetch: true` every `created` and `updated` change gets `record`, the answer of `retrieve(pk)` in the
-endpoint's format and the reader's context, before `onChange`, and a change
-whose retrieve answers 404, a row the caller may not see, is dropped. `onChange` and `onResync` are
+endpoint's format and the reader's context, before `onChange`. A change whose retrieve answers 404,
+a row that is gone or the caller may no longer see, leaves the event and follows it in a second
+`onChange` with `op: 'deleted'`, so a displayed row is removed. `onChange` and `onResync` are
 called in the order their events arrived, also while `fetch` waits for a retrieve. `onChange`
 receives the event's `EventMeta` as its second argument. `RecordsChanged` is the payload of
 `records_changed` version `1`, and `watch()` handles that version only: an event of any other

@@ -56,10 +56,11 @@ class EventStore(Protocol):
         """Removes the topic's rev and log."""
 
     async def watch(self, topic: str) -> None:
-        """Starts carrying the topic's events to this process."""
+        """Starts carrying the topic's events to this process. A watch that raises may have started
+        carrying them; `unwatch(topic)` stops that."""
 
     async def unwatch(self, topic: str) -> None:
-        """Stops carrying the topic's events to this process."""
+        """Stops carrying the topic's events to this process, also after a `watch(topic)` that raised."""
 
 
 def _now_ms() -> int:

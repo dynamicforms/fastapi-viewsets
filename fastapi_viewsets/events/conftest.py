@@ -3,6 +3,7 @@
 import asyncio
 import time
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -165,9 +166,9 @@ class FakeRedis:
 
 class FakePubSub:
     """
-    A pub/sub connection. `subscribe` sends the command and returns, as redis-py's does; Redis
-    applies it and queues its confirmation at once, or, while `held` is set, when `release()` is
-    called.
+    A pub/sub connection. `subscribe` and `unsubscribe` send the command and return, as redis-py's
+    do; Redis applies it and queues its confirmation at once, or, while `held` is set, when
+    `release()` is called, in the order the commands were sent.
     """
 
     def __init__(self, redis: FakeRedis):
@@ -176,21 +177,24 @@ class FakePubSub:
         self.subscribed: set[str] = set()
         self.closed = False
         self.held = False
-        self._unapplied: list[str] = []
+        self._unapplied: list[tuple[Callable[[str], None], str]] = []
 
     async def subscribe(self, *channels: str) -> None:
         for channel in channels:
-            if self.held:
-                self._unapplied.append(channel)
-            else:
-                self._apply_subscribe(channel)
+            self._send(self._apply_subscribe, channel)
+
+    def _send(self, apply: Callable[[str], None], channel: str) -> None:
+        if self.held or self._unapplied:
+            self._unapplied.append((apply, channel))
+        else:
+            apply(channel)
 
     def release(self) -> None:
-        """Applies and confirms the SUBSCRIBEs sent while `held` was set."""
+        """Applies and confirms the commands sent while `held` was set."""
         self.held = False
         unapplied, self._unapplied = self._unapplied, []
-        for channel in unapplied:
-            self._apply_subscribe(channel)
+        for apply, channel in unapplied:
+            apply(channel)
 
     def _apply_subscribe(self, channel: str) -> None:
         if channel not in self.subscribed:
@@ -200,10 +204,13 @@ class FakePubSub:
 
     async def unsubscribe(self, *channels: str) -> None:
         for channel in channels:
-            if channel in self.subscribed:
-                self.subscribed.discard(channel)
-                self.redis.channels[channel].remove(self)
-            self.queue.put_nowait({"type": "unsubscribe", "channel": channel.encode(), "data": len(self.subscribed)})
+            self._send(self._apply_unsubscribe, channel)
+
+    def _apply_unsubscribe(self, channel: str) -> None:
+        if channel in self.subscribed:
+            self.subscribed.discard(channel)
+            self.redis.channels[channel].remove(self)
+        self.queue.put_nowait({"type": "unsubscribe", "channel": channel.encode(), "data": len(self.subscribed)})
 
     async def get_message(self, ignore_subscribe_messages: bool = False, timeout: float = 0.0):
         try:
