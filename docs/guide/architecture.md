@@ -303,6 +303,7 @@ context.
 - Need to set a cookie, change the status code, or otherwise shape the response? See [Command Middleware](./command-middleware).
 - Need per-viewset/per-action configuration for a processor or middleware (not just one boolean)? See [Action Configuration](./action-configuration).
 - Need your viewset instance to remember something between requests? See [ViewSet Lifecycle](./lifecycle).
+- Need the backend to tell the frontend that something changed? See [Events](./events).
 - Moving execution to a background worker? See the `celery_viewset` section in [Routers & Decorators](./routers).
 - Want to see all built-in middleware/processor implementations this library ships (not just the mechanisms behind
   them)? See [Authentication](./authentication), [Authorization](./authorization), and [Rate Limiter](./rate-limiter).

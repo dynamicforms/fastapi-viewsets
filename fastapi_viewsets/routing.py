@@ -23,6 +23,10 @@ from .endpoint_docs import viewset_tags
 TRANSPORT_SCOPE_KEY = "fastapi_viewsets.transport"
 """The ASGI scope key a transport writes its name under. A request without it is a REST request."""
 
+PEER_SCOPE_KEY = "fastapi_viewsets.peer"
+"""The ASGI scope key `mux_ws.process_command` writes its `peer` argument under: the muxws peer of the
+socket the command arrived on, or None when the caller passed none. Absent from a REST request."""
+
 REST = "rest"
 MUXWS = "muxws"
 

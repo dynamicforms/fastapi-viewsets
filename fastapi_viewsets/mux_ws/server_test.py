@@ -716,3 +716,28 @@ async def test_a_request_whose_stream_ended_runs_to_completion_and_its_answer_is
         await asyncio.sleep(0.01)
     assert finished == ["create"]
     assert stream.replies == 0
+
+
+@pytest.mark.asyncio
+async def test_the_request_scope_carries_the_peer():
+    captured: list[Any] = []
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/peered", pk_field_name="id")
+    class PeeredViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        __router = APIRouter()
+
+        @__router.get("probe", tags=["Peered"])
+        async def probe(self, request: Request) -> int:
+            captured.append(request.scope["fastapi_viewsets.peer"])
+            return 1
+
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+    app = app_of(PeeredViewSet)
+    peer = object()
+    await process_command(ABSENT, FakeStream({":method": "GET", ":path": "/peered/probe"}), app=app, peer=peer)
+    await process_command(ABSENT, FakeStream({":method": "GET", ":path": "/peered/probe"}), app=app)
+    assert captured[0] is peer
+    assert captured[1] is None

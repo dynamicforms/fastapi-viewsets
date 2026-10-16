@@ -71,7 +71,9 @@ Two syntaxes, which cannot collide:
 | custom | `name` or `name:key`; `name` matches `[a-z0-9_.-]+` and is unique in the process | `source(name)` | `imports`, `imports:7` |
 
 A viewset's topic is the path a request to it is routed by, prefix included, which is the
-`basePath` the frontend ViewSet already holds. One viewset mounted twice has two topics.
+`basePath` the frontend ViewSet already holds. A path parameter of the prefix or of the base path
+has its value in the topic: `/clubs/{club_id}/tracks` has the topic `/clubs/7/tracks` for club 7.
+One viewset mounted twice has two topics.
 
 ```python
 from fastapi_viewsets.events import Event, source
@@ -268,8 +270,13 @@ topic's `error` on `poll`.
 - A topic that does not start with `/` gets `None`.
 - The viewset is found on `request.app.routes`: the route whose endpoint carries
   `__viewset_class__` and `__viewset_action__` of `list_items`, or of `retrieve` on a viewset
-  without `list_items`, and whose `path` is the topic followed by that action's relative path from
-  `cls.__viewset_metadata__["paths"]`. No such route gets `None`.
+  without `list_items`, and whose `path` without that action's relative path from
+  `cls.__viewset_metadata__["paths"]` matches the topic as Starlette matches a request path, path
+  parameters included. No such route gets `None`.
+- The checks run against the calling request carrying the topic's path parameters as
+  `path_params`. The route's own `dependencies`, those of the application, of `include_router`, of
+  the `APIRouter` and of the route, run as FastAPI runs them; a parameter that does not validate
+  refuses the topic.
 - For that action the authorizer resolves the viewset's action configuration, rebinds the calling
   context to it, `Context(context.raw(), action_configuration=..., action_name=...)`, and runs
   `depends()` of every effective middleware, as `route_viewset` does before the action. An
@@ -316,7 +323,7 @@ An event stream is never answered. On the wire it is one `open` frame with `end`
 | `viewsets_event_delivery_filters` | `[]` | The delivery filter list |
 | `viewsets_event_log_size` | `32` | Events kept per topic for `poll` |
 | `viewsets_event_log_ttl` | `60.0` | Seconds a topic's log lives after its last event (`RedisEventStore`; `MemoryEventStore` prunes on access) |
-| `viewsets_event_push_timeout` | `2.0` | Seconds one push to one socket may take |
+| `viewsets_event_push_timeout` | `2.0` | Seconds the delivery filters and `notify()` of one push to one socket may take together |
 | `viewsets_event_max_subscriptions` | `256` | Topics one socket may hold, and cursors one poll may carry |
 | `viewsets_event_poll_after_ms` | `0` | The floor advertised to polling clients |
 
@@ -369,11 +376,15 @@ class RecordsChanged(Event):
 
 One event per action, however many records it touched.
 
-The topic is the routed base path: `request.scope["route"].path` with the action's relative path
-(`cls.__viewset_metadata__["paths"][action]`) removed, computed in `__call__` and placed in the
-context under `fastapi_viewsets.events.topic`, so that a `celery_viewset` action's worker, which has
-no route, reads it from the context it was handed. An execution with neither, an action dispatched
-outside any call, publishes to `cls.__viewset_metadata__["base_path"]`.
+The topic is the routed base path: the request's path with as many trailing segments removed as the
+action's relative path (`cls.__viewset_metadata__["paths"][action]`) has, so that path parameters
+keep their values, computed in `__call__` and placed in the context under
+`fastapi_viewsets.events.topic`, so that a `celery_viewset` action's worker, which has no route,
+reads it from the context it was handed. The context's topic applies to the execution a request
+called (`execution.parent` is `None`); an action dispatched in another action's execution carries
+that action's context and topic. An execution without a usable topic in the context, an action
+dispatched outside any call or in another action's execution, publishes to
+`cls.__viewset_metadata__["base_path"]`.
 
 The pk of a returned record is read from the field named in
 `cls.__viewset_metadata__["pk_field_name"]`, which `route_viewset` records from its argument;
@@ -387,7 +398,7 @@ the first execution raises `TypeError` naming the viewset.
 | `@action_configuration({ChangeEvents: False})` on a class or a `perform_*` method | | No event for that viewset or action |
 | `@action_configuration({ChangeEvents: {"record": True}})` | `bool`, default `False` | `created` and `updated` changes carry `record`, the returned record as `model_dump(mode="json")` |
 | `@action_configuration({ChangeEvents: {"topic": "..."}})` | `str` or `Callable[[ActionExecution], str]` | The topic to publish to, instead of the routed base path |
-| `@action_configuration({ChangeEvents(): {...}})` | a fresh instance as the key | The plugin on this viewset only, with the global chain unchanged |
+| `@action_configuration({ChangeEvents(): {...}})` | a fresh instance as the key | The plugin on this viewset only; a global `ChangeEvents` publishes nothing for it |
 
 `record` carries the same bytes to every subscriber of the topic. A viewset whose `get_queryset`
 narrows rows per caller keeps the default: the frontend retrieves the pk and a 404 ends the matter
@@ -611,7 +622,7 @@ only module of the package that imports `redis`.
 ## Implementation plan
 
 Three pull requests here, then one in taskwire. Each lands with its tests, its documentation pages
-and its changelog entry; the version becomes 0.10.0 with the first.
+and its changelog entry; the version becomes 0.9.1 with the first.
 
 ### PR 1: the backend
 
@@ -662,7 +673,7 @@ One pull request, after PR 2 is published:
    tests stay as consumer tests of the same rules (TW-REST-010, -011, -014 unchanged).
 2. `MuxwsClientTransport` installs an `onStream` that calls `handleEventStream(peer, payload,
    stream)` first and delivers its own envelope otherwise, so one peer serves both libraries.
-3. Peer floors: `@dynamicforms/fastapi-viewsets ^0.10.0`, `muxws ^0.4.1`.
+3. Peer floors: `@dynamicforms/fastapi-viewsets ^0.9.1`, `muxws ^0.4.1`.
 4. A `GAPS.md` entry for the push path: `MuxwsTransport` and `RedisReader` against
    `publish("taskwire:" + ns, envelope)` with a delivery filter carrying TW-DEL and TW-PRIV, which
    touches TW-TR-004, TW-BP-001 and TW-BP-002 and is a spec change to decide separately.

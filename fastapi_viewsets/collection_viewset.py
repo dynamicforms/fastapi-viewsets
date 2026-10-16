@@ -102,6 +102,11 @@ class CollectionViewSet(AsyncCollectionViewSet[K, T]):
                 self._update_func = self._update_mapping
                 self._delete_func = container.__delitem__
 
+    @property
+    def pk_field_name(self) -> str:
+        """`pk_field`, the name the list's cursor shape and `ChangeEvents` read the pk under."""
+        return self.pk_field
+
     def _check_mutable(self):
         if not self.is_mutable:
             raise ReadOnlyCollectionError()

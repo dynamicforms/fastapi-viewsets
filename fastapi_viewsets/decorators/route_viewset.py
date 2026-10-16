@@ -38,6 +38,14 @@ from .primary_key_model_helper import (
 
 T = TypeVar("T")
 
+MIDDLEWARE_DEPENDS_ATTRIBUTE = "__viewset_middleware_depends__"
+"""
+Set to True on the dependency `route_viewset` appends to each route's `dependencies`, which runs
+`Middleware.depends()` of the effective middlewares. The other entries of a route's `dependencies`
+are the application's: those of `FastAPI(dependencies=...)`, of `include_router`, of the
+`APIRouter` and of the route itself.
+"""
+
 
 def build_type_map(cls: type[T], current_map: dict = None) -> dict:
     if current_map is None:
@@ -131,11 +139,12 @@ def _make_middleware_depends(cls: type, action_name: str):
         async def middleware_depends(request: Request) -> None:
             await _run(request)
 
-        return middleware_depends
+    else:
 
-    async def middleware_depends(request: Request, _credential=Depends(scheme)) -> None:  # noqa: B008
-        await _run(request)
+        async def middleware_depends(request: Request, _credential=Depends(scheme)) -> None:  # noqa: B008
+            await _run(request)
 
+    setattr(middleware_depends, MIDDLEWARE_DEPENDS_ATTRIBUTE, True)
     return middleware_depends
 
 
@@ -148,6 +157,13 @@ def route_viewset(
     register_rest: bool = None,
 ):
     """
+    Sets `cls.__viewset_metadata__`, a dict of `base_path`, `lifecycle`, `router` (the argument),
+    `pk_field_name` (the argument, None without it) and `paths`: each action name, the endpoint
+    method's name, mapped to its route's path relative to `base_path` (`""` for `list_items`,
+    `"/{pk}"` for `retrieve`, `"/bulk"` for `bulk_create`). Every endpoint added to `router` carries
+    `__viewset_class__` (`cls`) and `__viewset_action__` (the action name); the `/schema` endpoints
+    carry the action name `"schema"`.
+
     `register_rest` and `register_muxws` decide which transports this viewset is published on.
     True registers, False does not, and None - the default - defers: REST to "yes", muxws to
     `settings.viewsets_register_muxws`. Individual endpoints override either again with
@@ -373,11 +389,13 @@ def route_viewset(
         def is_schema_route(route) -> bool:
             return getattr(route.endpoint, "__viewset_schema_endpoint__", False)
 
-        def add_route(route_kwargs: dict, transports: set[str]) -> None:
+        def add_route(route_kwargs: dict, transports: set[str], action_name: str) -> None:
             # One route per endpoint on the application's router, whichever transports publish it,
             # so both transports go through the application's middleware, exception handlers and
             # router dependencies. The route matches only its own transports (see routing.py), and
             # only a route published on REST appears in the application's OpenAPI document.
+            route_kwargs["endpoint"].__viewset_class__ = cls
+            route_kwargs["endpoint"].__viewset_action__ = action_name
             router.add_api_route(
                 **{**route_kwargs, "include_in_schema": route_kwargs["include_in_schema"] and REST in transports},
                 route_class_override=transport_route_class(router.route_class, frozenset(transports)),
@@ -391,9 +409,14 @@ def route_viewset(
         rest_routes = []
         muxws_routes = []
         documented = set()
+        # action name -> the route's path after base_path, so that a route's path on the application
+        # is the routed base path (include_router prefix + base_path) followed by it
+        paths: dict[str, str] = {}
+        base = base_path.rstrip("/")
         for route in cls.__router.routes:
             action_name = route.endpoint.__name__  # survives @wraps(original_endpoint) in get_wrapper
             documented.add(action_name)
+            paths.setdefault(action_name, route.path[len(base) :] if route.path.startswith(base) else route.path)
             dependencies = list(route.dependencies or []) + [Depends(_make_middleware_depends(cls, action_name))]
             route_kwargs = route_to_add_api_route_kwargs(route, dependencies=dependencies)
             # Per-viewset wording for an endpoint the mixin provided - the mixin's own docstring is
@@ -407,9 +430,9 @@ def route_viewset(
                 if on_rest:
                     rest_schema_kwargs = {**route_kwargs, "endpoint": openapi_endpoint(rest_routes)}
                     rest_routes.append(rest_schema_kwargs)
-                    add_route(rest_schema_kwargs, {REST})
+                    add_route(rest_schema_kwargs, {REST}, action_name)
                 if on_muxws_any:
-                    add_route({**route_kwargs, "endpoint": openapi_endpoint(muxws_routes)}, {MUXWS})
+                    add_route({**route_kwargs, "endpoint": openapi_endpoint(muxws_routes)}, {MUXWS}, action_name)
                 continue
 
             on_muxws = resolve_register_muxws(route.endpoint, register_muxws)
@@ -421,7 +444,7 @@ def route_viewset(
                 transports.add(MUXWS)
                 muxws_routes.append(route_kwargs)
             if transports:
-                add_route(route_kwargs, transports)
+                add_route(route_kwargs, transports, action_name)
 
         # Checked here rather than in the decorator, which runs before any route exists. A name
         # that matches nothing would otherwise leave that endpoint on the mixin's generic
@@ -436,7 +459,13 @@ def route_viewset(
         if muxws_routes:
             register_viewset(cls, base_path, muxws_routes, default_tags)
 
-        cls.__viewset_metadata__ = {"base_path": base_path, "lifecycle": lifecycle, "router": router}
+        cls.__viewset_metadata__ = {
+            "base_path": base_path,
+            "lifecycle": lifecycle,
+            "router": router,
+            "pk_field_name": pk_field_name,
+            "paths": paths,
+        }
 
         return cls
 

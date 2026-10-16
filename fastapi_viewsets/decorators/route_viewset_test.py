@@ -396,3 +396,85 @@ def test_viewset_route_order():
 def test_an_unknown_lifecycle_is_refused_when_the_viewset_is_routed():
     with pytest.raises(ValueError, match="unknown lifecycle 'per-call'"):
         route_viewset(APIRouter(), base_path="/x", lifecycle="per-call")
+
+
+def test_the_metadata_records_the_pk_field_name_and_the_relative_paths():
+    router = APIRouter()
+
+    @route_viewset(router=router, base_path="/items/", pk_field_name="id")
+    class PathsViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
+        __router = APIRouter()
+
+        @__router.get("top-rated")
+        async def top_rated(self) -> list[Item]:
+            return []
+
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+    metadata = PathsViewSet.__viewset_metadata__
+    assert metadata["pk_field_name"] == "id"
+    assert metadata["paths"] == {
+        "list_items": "",
+        "create": "",
+        "retrieve": "/{pk}",
+        "update": "/{pk}",
+        "partial_update": "/{pk}",
+        "destroy": "/{pk}",
+        "bulk_create": "/bulk",
+        "bulk_update": "/bulk",
+        "bulk_partial_update": "/bulk",
+        "bulk_destroy": "/bulk",
+        "top_rated": "/top-rated",
+        "schema": "/schema",
+    }
+
+
+def test_without_pk_field_name_the_metadata_records_none():
+    router = APIRouter()
+
+    @route_viewset(router=router, base_path="/plain")
+    class PlainViewSet(ListMixin[Item]):
+        async def perform_list(self, _context) -> list[Item]:
+            return []
+
+    assert PlainViewSet.__viewset_metadata__["pk_field_name"] is None
+    assert PlainViewSet.__viewset_metadata__["paths"] == {"list_items": "", "schema": "/schema"}
+
+
+def test_every_registered_endpoint_carries_its_viewset_class_and_action():
+    router = APIRouter()
+
+    @route_viewset(router=router, base_path="/marked", pk_field_name="id")
+    class MarkedViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+    paths = MarkedViewSet.__viewset_metadata__["paths"]
+    for route in router.routes:
+        assert route.endpoint.__viewset_class__ is MarkedViewSet
+        action = route.endpoint.__viewset_action__
+        assert route.path == "/marked" + paths[action]
+    actions = {route.endpoint.__viewset_action__ for route in router.routes}
+    assert {"list_items", "retrieve", "create", "update", "destroy", "schema"} <= actions
+
+
+def test_the_middleware_dependency_is_the_last_of_every_route_and_carries_the_marker():
+    from fastapi import Depends
+
+    from fastapi_viewsets.decorators.route_viewset import MIDDLEWARE_DEPENDS_ATTRIBUTE
+
+    async def own() -> None:
+        return None
+
+    router = APIRouter(dependencies=[Depends(own)])
+
+    @route_viewset(router=router, base_path="/marked", pk_field_name="id")
+    class MarkedViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+    for route in router.routes:
+        *application, bridge = route.dependencies
+        assert getattr(bridge.dependency, MIDDLEWARE_DEPENDS_ATTRIBUTE) is True
+        assert [depends.dependency for depends in application] == [own]

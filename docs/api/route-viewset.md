@@ -37,10 +37,22 @@ single endpoint. See
 Returns a decorator; the decorator registers the class's routes and returns the class itself. The
 class is modified in place: it gains a router of its own, carrying every route the viewset serves
 rebased onto `base_path`; a FastAPI app that answers `GET {base_path}/schema` with the viewset's
-own OpenAPI document; and `cls.__viewset_metadata__`, a dict of `base_path`, `lifecycle` and
-`router`, where `router` is the `APIRouter` passed in as the first argument rather than the router
-the class gained. Applied as `@route_viewset(...)` on the class or called as
-`route_viewset(...)(SomeViewSet)`.
+own OpenAPI document; and `cls.__viewset_metadata__`, a dict of:
+
+| Key | Value |
+|-----|-------|
+| `base_path` | the `base_path` argument |
+| `lifecycle` | the `lifecycle` argument |
+| `router` | the `APIRouter` passed in as the first argument, not the router the class gained |
+| `pk_field_name` | the `pk_field_name` argument, `None` without it |
+| `paths` | each action name, the name of the method serving the endpoint, mapped to its route's path relative to `base_path`: `""` for `list_items`, `"/{pk}"` for `retrieve`, `"/bulk"` for `bulk_create`, `"/schema"` for `schema` |
+
+A route's path on the application is the routed base path, the `include_router` prefix followed by
+`base_path`, followed by `paths[action]`. Every endpoint added to `router` carries
+`__viewset_class__`, the class, and `__viewset_action__`, the action name; the `/schema` endpoints
+carry `"schema"`.
+
+Applied as `@route_viewset(...)` on the class or called as `route_viewset(...)(SomeViewSet)`.
 
 ## Behaviour
 
@@ -57,7 +69,9 @@ the class gained. Applied as `@route_viewset(...)` on the class or called as
 - Derives an OpenAPI tag from the class name (strips `ViewSet` suffix) and records the class's own docstring as that
   tag's description.
 - Gives every route a dependency that runs each configured `Middleware`'s `depends()` before the request body is parsed,
-  plus `settings.viewsets_security_scheme` when one is set.
+  plus `settings.viewsets_security_scheme` when one is set. That dependency is the last entry of the route's
+  `dependencies` and carries the attribute named by `MIDDLEWARE_DEPENDS_ATTRIBUTE`
+  (`"__viewset_middleware_depends__"`, in `fastapi_viewsets.decorators.route_viewset`) set to `True`.
 - Drops the declared `response_model` from every route when a middleware in `settings.viewsets_command_middleware`
   declares `modifies_response_shape`, since that middleware may reshape the body.
 - Raises `ValueError` when `lifecycle` is none of `"singleton"`, `"per-request"`, `"instance-key"`, and when

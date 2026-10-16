@@ -45,9 +45,13 @@ app = FastAPI()
 @app.websocket("/ws")
 async def muxws_endpoint(websocket: WebSocket) -> None:
     peer = await accept(websocket)
-    peer.on_stream(lambda payload, stream: process_command(payload, stream, connection=websocket))
+    peer.on_stream(lambda payload, stream: process_command(payload, stream, connection=websocket, peer=peer))
     await peer.serve()
 ```
+
+`peer=` places the peer in each command's request scope as `request.scope["fastapi_viewsets.peer"]`
+(`fastapi_viewsets.routing.PEER_SCOPE_KEY`), `None` without it. An endpoint that addresses the
+socket itself reads it from there; the [events](./events#peer) viewset's `subscribe` and `unsubscribe` require it.
 
 A peer may have only one `on_stream` handler, so this library never installs one itself — you keep
 ownership of the handler and call `process_command` from it. It returns `False` for a stream that
@@ -55,7 +59,7 @@ is not a viewset command, which is how viewset traffic and your own protocol sha
 
 ```python
 async def on_stream(payload, stream: Stream) -> None:
-    if await process_command(payload, stream, connection=websocket):
+    if await process_command(payload, stream, connection=websocket, peer=peer):
         return
     await my_own_dispatch(payload, stream)
 ```
@@ -81,6 +85,7 @@ back as the reply:
 | `request.client`, `request.server` | the WebSocket's addresses |
 | `request.state` | a shallow copy of the lifespan state, as an HTTP server makes for each request |
 | `scope["fastapi_viewsets.transport"]` | `"muxws"`; a request without it is a REST request |
+| `scope["fastapi_viewsets.peer"]` | the `peer` argument of `process_command`, `None` without it |
 
 The reply carries the response's status and headers, without the headers that describe an HTTP
 message (`content-length`, `transfer-encoding`, `connection`, `keep-alive`), and the body decoded
@@ -280,6 +285,7 @@ schemas differ.
 | `transport_route_class(base, transports)` | The route class `route_viewset` registers an endpoint with: the router's `route_class` restricted to `transports` |
 | `request_transport(scope)` | The transport a request arrived over: `scope["fastapi_viewsets.transport"]`, or `"rest"` without it |
 | `TRANSPORT_SCOPE_KEY`, `REST`, `MUXWS` | `"fastapi_viewsets.transport"`, `"rest"`, `"muxws"` |
+| `PEER_SCOPE_KEY` | `"fastapi_viewsets.peer"`, the scope key of the `peer` argument of `process_command`; absent from a REST request |
 | `openapi_endpoint(route_kwargs)` | A `/schema` endpoint answering with the OpenAPI document of the routes listed in `add_api_route` form |
 
 ## The wire format

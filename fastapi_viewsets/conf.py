@@ -8,6 +8,9 @@ if TYPE_CHECKING:
     from fastapi.security.base import SecurityBase
 
     from .context.auth import AuthBackend
+    from .events.authorizers import EventAuthorizer
+    from .events.delivery import DeliveryFilter
+    from .events.store import EventStore
     from .middleware import CommandMiddleware
 
 ContextProcessor = Callable[["Request", Any], Awaitable[dict[str, Any]]]
@@ -63,6 +66,51 @@ class Settings:
         route_viewset.py), not otherwise consumed by this library. Must be set before any viewset
         class is decorated with route_viewset, as `viewsets_command_middleware` must, which decides
         `disable_response_model` when the routes are built.
+        """
+        self.viewsets_event_store: EventStore | None = None
+        """
+        The `EventStore` of `fastapi_viewsets.events`: it assigns each event its rev, keeps the
+        topic's log for `poll` and carries the event to `deliver()` in every process that watches
+        the topic. None is one `MemoryEventStore` for this process. A deployment of more than one
+        process, a Celery worker included, sets a `RedisEventStore` in every process.
+        """
+        self.viewsets_event_authorizers: list[EventAuthorizer] = []
+        """
+        The functions that decide whether a caller may follow a topic, consulted in list order on
+        every `subscribe` and on every `poll`, per topic. The first `True` admits the topic, the first
+        `False` refuses it, and no decision refuses it: an empty list refuses every topic.
+        """
+        self.viewsets_event_delivery_filters: list[DeliveryFilter] = []
+        """
+        The functions that decide, per subscription and per event, whether a push is sent. A filter
+        that answers False skips that socket; a filter that raises counts as True.
+        """
+        self.viewsets_event_log_size: int = 32
+        """
+        The number of a topic's most recent events the store keeps for `poll`. 0 keeps none, and a
+        poll from any cursor behind the topic's rev answers `events: null`.
+        """
+        self.viewsets_event_log_ttl: float = 60.0
+        """
+        Seconds a topic's log is kept after the topic's last event. The topic's rev counter is kept
+        without expiry. `RedisEventStore` sets it as the log key's expiry; `MemoryEventStore` empties
+        an expired log when it next reads or appends to it.
+        """
+        self.viewsets_event_push_timeout: float = 2.0
+        """
+        Seconds the delivery filters and `peer.notify()` of one push of one event to one socket may
+        take together. `notify()` queues the push on the socket and returns without waiting for the
+        socket to send it. A push that takes longer is cancelled and logged at debug level.
+        """
+        self.viewsets_event_max_subscriptions: int = 256
+        """
+        The number of topics one socket may hold; a subscription beyond it raises
+        `EventSubscriptionsExceededError` (409). Also the number of cursors one poll may carry.
+        """
+        self.viewsets_event_poll_after_ms: int = 0
+        """
+        `poll_after_ms` of every poll answer: the shortest interval, in milliseconds, at which a
+        client polls.
         """
 
 

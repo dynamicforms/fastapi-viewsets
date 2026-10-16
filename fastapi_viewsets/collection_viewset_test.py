@@ -339,3 +339,16 @@ def test_a_write_to_an_immutable_container_is_405():
     response = client.post("/tracks", json={"title": "Two"})
     assert response.status_code == 405
     assert response.json()["detail_code"] == "read_only"
+
+
+def test_the_pk_field_name_is_the_pk_field_ahead_of_the_list_mixin_default():
+    from fastapi_viewsets.mixins import ViewSetMixin
+
+    class Coded(BaseModel):
+        code: str
+
+    class CodedViewSet(CollectionViewSet[str, Coded], ViewSetMixin[str, Coded]):
+        pass
+
+    assert CodedViewSet([], pk_field="code").pk_field_name == "code"
+    assert CollectionViewSet([]).pk_field_name == "id"
