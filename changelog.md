@@ -6,7 +6,7 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0] - Unreleased
+## [0.9.0] - 2026-10-16
 
 ### Added
 
@@ -87,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - npm: `ViewSetProxyBase`'s constructor binds every method of the instance's class chain as an own,
   non-enumerable property, which sets `key` on the method's promise.
 
-## [0.8.0] - Unreleased
+## [0.8.0] - 2026-10-13
 
 ### Added
 
