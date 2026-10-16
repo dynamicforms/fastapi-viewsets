@@ -42,7 +42,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
-    "httpx",
+    "httpx2",
     "redis",
     "celery",
     "django",
