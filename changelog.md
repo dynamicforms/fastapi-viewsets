@@ -6,6 +6,15 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - Unreleased
+
+### Changed
+
+- `Idempotency` extends a running record to `viewsets_idempotency_lock_ttl` every third of the lock
+  TTL while the call runs, and the `:attached` key with it. A call that runs longer than the lock TTL
+  keeps its record, and a repeat attaches to it instead of running the action again; the record
+  expires only once the process running the call stops extending it.
+
 ## [0.9.1] - 2026-10-16
 
 ### Added

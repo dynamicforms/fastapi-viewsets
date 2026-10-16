@@ -39,7 +39,7 @@ A [`Middleware`](../guide/command-middleware#class-based-middleware-middleware).
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `settings.viewsets_idempotency_ttl` | `float` | `86400` | Seconds a stored outcome is kept |
-| `settings.viewsets_idempotency_lock_ttl` | `float` | `600` | Seconds a running record is kept unless the action finishes first |
+| `settings.viewsets_idempotency_lock_ttl` | `float` | `600` | Seconds a running record is kept after it was last extended; the process running the call extends it every third of this time |
 
 ## Functions
 

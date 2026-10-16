@@ -20,7 +20,7 @@ from ..exceptions import (
     NotFoundError,
 )
 from . import ViewSetResult
-from .idempotency import _ATTACH_SCRIPT, Idempotency, parse_idempotency_key, request_fingerprint
+from .idempotency import _ATTACH_SCRIPT, _RENEW_SCRIPT, Idempotency, parse_idempotency_key, request_fingerprint
 
 KEY = '"8e03978e-40d5-43e8-bc93-6894a57f9324"'
 
@@ -63,6 +63,14 @@ class Counter:
 
 async def call(middleware: Idempotency, chain: Counter, **request) -> ViewSetResult:
     return await middleware(make_request(**request), object(), Context({}), chain)
+
+
+class Unrenewed(Idempotency):
+    """An Idempotency that never extends its running records, as a process that stopped running the
+    call without completing it."""
+
+    async def _renew(self, _storage_key, _run) -> None:
+        return None
 
 
 # the header
@@ -226,9 +234,20 @@ async def test_a_stored_outcome_expires_after_the_ttl():
 
 
 @pytest.mark.asyncio
-async def test_a_repeat_runs_again_once_the_running_record_expires():
+async def test_a_running_record_is_extended_while_the_call_runs():
     settings.viewsets_idempotency_lock_ttl = 0.05
     middleware, chain = Idempotency(), Counter(delay=0.2)
+    first = asyncio.ensure_future(call(middleware, chain))
+    await asyncio.sleep(0.01)
+    repeat = await call(middleware, chain)
+    assert chain.calls == 1
+    assert repeat.body == (await first).body == {"call": 1}
+
+
+@pytest.mark.asyncio
+async def test_a_repeat_runs_again_once_the_running_record_expires():
+    settings.viewsets_idempotency_lock_ttl = 0.05
+    middleware, chain = Unrenewed(), Counter(delay=0.2)
     first = asyncio.ensure_future(call(middleware, chain))
     await asyncio.sleep(0.01)
     repeat = await call(middleware, chain)
@@ -332,6 +351,15 @@ class FakeRedis:
         return int((self.values[key][1] - time.monotonic()) * 1000)
 
     async def eval(self, script: str, _numkeys: int, key: str, attached: str, *args):
+        if script == _RENEW_SCRIPT:
+            running, lock_ms = args
+            if self._live(key) != running:
+                return 0
+            expires_at = time.monotonic() + lock_ms / 1000
+            self.values[key] = (running, expires_at)
+            if self._live(attached) is not None:
+                self.values[attached] = ("1", expires_at)
+            return 1
         if script == _ATTACH_SCRIPT:
             (running,) = args
             if self._live(key) != running.decode():
@@ -441,11 +469,41 @@ async def test_redis_a_finished_get_runs_again():
 
 
 @pytest.mark.asyncio
+async def test_redis_the_running_record_and_the_attached_mark_are_extended_while_the_call_runs():
+    settings.viewsets_idempotency_lock_ttl = 0.05
+    redis = FakeRedis()
+    chain = Counter(delay=0.2)
+    first = asyncio.ensure_future(call(Idempotency(redis_client=redis), chain, method="GET"))
+    await asyncio.sleep(0.01)
+    repeat = await call(Idempotency(redis_client=redis), chain, method="GET")
+    assert (await first).body == repeat.body == {"call": 1}
+    # the attached mark outlived the first lock TTL, so the GET outcome was stored
+    await call(Idempotency(redis_client=redis), chain, method="GET")
+    assert chain.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_redis_renewal_leaves_a_record_another_call_took_over():
+    settings.viewsets_idempotency_lock_ttl = 0.05
+    redis = FakeRedis()
+    middleware = Idempotency(redis_client=redis, key_prefix="i:")
+    storage_key = "i:" + KEY.strip('"')
+
+    async def chain():
+        await redis.set(storage_key, "taken over", px=10_000)
+        await asyncio.sleep(0.1)
+        return ViewSetResult(body=None)
+
+    await middleware(make_request(), object(), Context({}), chain)
+    assert 9_000 < await redis.pttl(storage_key) <= 10_000
+
+
+@pytest.mark.asyncio
 async def test_redis_an_attached_repeat_takes_over_once_the_running_record_expires():
     settings.viewsets_idempotency_lock_ttl = 0.05
     redis = FakeRedis()
     stuck, chain = Counter(delay=0.3, result=ViewSetResult(body="stuck")), Counter()
-    first = asyncio.ensure_future(call(Idempotency(redis_client=redis), stuck))
+    first = asyncio.ensure_future(call(Unrenewed(redis_client=redis), stuck))
     await asyncio.sleep(0.01)
     repeat = await call(Idempotency(redis_client=redis), chain)
     assert (chain.calls, repeat.body) == (1, {"call": 1})

@@ -63,6 +63,19 @@ redis.call('SET', KEYS[2], '1', 'PX', ttl)
 return 1
 """
 
+# Extends the running record KEYS[1] and its attached mark KEYS[2] to ARGV[2] milliseconds, only while
+# KEYS[1] is still the running record ARGV[1] this process wrote. Returns 1 when it was extended.
+_RENEW_SCRIPT = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+    return 0
+end
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+if redis.call('EXISTS', KEYS[2]) == 1 then
+    redis.call('PEXPIRE', KEYS[2], ARGV[2])
+end
+return 1
+"""
+
 
 def parse_idempotency_key(value: str) -> str:
     """
@@ -232,7 +245,9 @@ class Idempotency(Middleware):
       (`request_fingerprint`). A key recorded with a different fingerprint raises
       `IdempotencyKeyReusedError` (422).
     - The record is written when the chain reaches this middleware, as running, for
-      `settings.viewsets_idempotency_lock_ttl` seconds. When the call completes, its outcome replaces
+      `settings.viewsets_idempotency_lock_ttl` seconds. While the call runs, this process extends the
+      running record to the lock TTL every third of the lock TTL, so it expires only once the process
+      stops running the call without completing it. When the call completes, its outcome replaces
       the running record for `settings.viewsets_idempotency_ttl` seconds. An outcome of `GET` or
       `HEAD` is stored only when a repeat attached while the call ran; an outcome with a cookie or a
       `set-cookie` header is never stored. A record that is not stored is deleted.
@@ -294,7 +309,7 @@ class Idempotency(Middleware):
         self, storage_key: str, run: _Run, method: str, call_next: Callable[[], Awaitable[ViewSetResult]]
     ) -> ViewSetResult:
         try:
-            result = await call_next()
+            result = await self._call_renewing(storage_key, run, call_next)
         except ActionDispatchError:
             await self._finish(storage_key, run, None, method)
             raise
@@ -306,6 +321,34 @@ class Idempotency(Middleware):
             raise
         await self._finish(storage_key, run, _Outcome(result=result), method)
         return result
+
+    async def _call_renewing(
+        self, storage_key: str, run: _Run, call_next: Callable[[], Awaitable[ViewSetResult]]
+    ) -> ViewSetResult:
+        renewal = asyncio.ensure_future(self._renew(storage_key, run))
+        try:
+            return await call_next()
+        finally:
+            renewal.cancel()
+
+    async def _renew(self, storage_key: str, run: _Run) -> None:
+        """Extends the running record of `run` to the lock TTL every third of the lock TTL, until it is
+        cancelled or the record is no longer the one this process wrote."""
+        lock_ttl = settings.viewsets_idempotency_lock_ttl
+        while True:
+            await asyncio.sleep(lock_ttl / 3)
+            try:
+                if self.redis_client is None:
+                    renewed = self._renew_in_memory(storage_key, run, lock_ttl)
+                else:
+                    renewed = await self.redis_client.eval(
+                        _RENEW_SCRIPT, 2, storage_key, storage_key + ":attached", run.running, _milliseconds(lock_ttl)
+                    )
+            except Exception:
+                logger.exception("Idempotency: extending the running record of %s failed", storage_key)
+                continue
+            if not renewed:
+                return
 
     async def _finish(self, storage_key: str, run: _Run, outcome: _Outcome | None, method: str) -> None:
         """Stores the outcome or deletes the record, publishes on the key's channel and resolves the
@@ -334,11 +377,12 @@ class Idempotency(Middleware):
         run = self._runs.get(storage_key)
         if run is not None:
             run.attached = True
-            remaining = await self._lock_remaining(storage_key)
-            if remaining <= 0:
-                return None
-            done, _ = await asyncio.wait({run.future}, timeout=remaining)
-            if not done or run.future.result() is None:
+            while not run.future.done():
+                remaining = await self._lock_remaining(storage_key)
+                if remaining <= 0:
+                    return None
+                await asyncio.wait({run.future}, timeout=remaining)
+            if run.future.result() is None:
                 return None
             return _Record(record.fingerprint, outcome=run.future.result())
         if self.redis_client is None:
@@ -368,6 +412,13 @@ class Idempotency(Middleware):
         run = _Run(owner=owner, running=owner)
         self._runs[storage_key] = run
         return run
+
+    def _renew_in_memory(self, storage_key: str, run: _Run, lock_ttl: float) -> bool:
+        record = self._records.get(storage_key)
+        if record is None or record.owner != run.owner:
+            return False
+        record.expires_at = time.monotonic() + lock_ttl
+        return True
 
     def _finish_in_memory(self, storage_key: str, run: _Run, outcome: _Outcome | None, mode: str) -> None:
         record = self._records.get(storage_key)

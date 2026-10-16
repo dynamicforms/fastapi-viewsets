@@ -43,8 +43,7 @@ export type ViewSetCalls<M> = {
 export interface RepeatOptions {
   /**
    * How long after the first attempt a repeat may still be sent, in milliseconds. Past it, the call
-   * rejects with the error of its last attempt. `0` turns repeating off. Default 600000, which is the
-   * BE's default `viewsets_idempotency_lock_ttl`.
+   * rejects with the error of its last attempt. `0` turns repeating off. Default 600000.
    */
   withinMs?: number;
   /**
