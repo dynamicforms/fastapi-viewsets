@@ -36,8 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ChangeEvents`: a command middleware that publishes `RecordsChanged` (`op`, `changes: list[Change]`)
   to the viewset's topic after each create, update and destroy action, from `execute()`, so in the
   Celery worker for a `celery_viewset` action. Configured per viewset or per `perform_*` method with
-  `@action_configuration({ChangeEvents: ...})`: `False`, `{"record": True}`, `{"topic": ...}`. A
-  `ChangeEvents()` instance as the key replaces the global one for that viewset or action.
+  `@action_configuration({ChangeEvents: ...})`: `False`, `{"topic": ...}`. A `ChangeEvents()`
+  instance as the key replaces the global one for that viewset or action. A change carries the pk
+  only; a frontend reads the changed record through the viewset's `retrieve`.
 - Settings `viewsets_event_store`, `viewsets_event_authorizers`, `viewsets_event_delivery_filters`,
   `viewsets_event_log_size` (32), `viewsets_event_log_ttl` (seconds, 60.0),
   `viewsets_event_push_timeout` (seconds, 2.0), `viewsets_event_max_subscriptions` (256) and

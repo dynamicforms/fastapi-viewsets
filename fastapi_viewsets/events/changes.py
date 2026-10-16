@@ -6,10 +6,10 @@ each of its create, update and destroy actions.
 
 | `execution.action` | `op` | `changes` |
 |---|---|---|
-| `create` | `created` | the returned record |
-| `bulk_create` | `created` | each returned record |
-| `update`, `partial_update` | `updated` | the returned record |
-| `bulk_update`, `bulk_partial_update` | `updated` | each returned record |
+| `create` | `created` | the pk of the returned record |
+| `bulk_create` | `created` | the pk of each returned record |
+| `update`, `partial_update` | `updated` | the pk of the returned record |
+| `bulk_update`, `bulk_partial_update` | `updated` | the pk of each returned record |
 | `destroy` | `deleted` | the `pk` argument |
 | `bulk_destroy` | `deleted` | each pk of the `pk` argument |
 """
@@ -20,7 +20,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Literal, TYPE_CHECKING
 
 from pydantic import BaseModel
-from pydantic_core import to_jsonable_python
 
 from ..action_configuration import resolve_action_configuration
 from ..context import Context
@@ -50,14 +49,14 @@ _OPS: dict[str, Literal["created", "updated", "deleted"]] = {
 
 _BULK_ACTIONS = frozenset({"bulk_create", "bulk_update", "bulk_partial_update", "bulk_destroy"})
 
-_OPTIONS = frozenset({"record", "topic"})
+_OPTIONS = frozenset({"topic"})
 
 
 class Change(BaseModel):
-    """One record an action touched: its pk, and with `{"record": True}` the record itself."""
+    """One record an action touched, by its pk. A frontend reads the record through the viewset's
+    retrieve, which answers in the endpoint's format and in the reader's context."""
 
     pk: Any
-    record: dict[str, Any] | None = None
 
 
 class RecordsChanged(Event):
@@ -115,8 +114,6 @@ class ChangeEvents(Middleware):
     `@action_configuration` on a class or a `perform_*` method:
 
     - `{ChangeEvents: False}`: no event for that viewset or action;
-    - `{ChangeEvents: {"record": True}}`: `created` and `updated` changes carry the returned record
-      as `model_dump(mode="json")`;
     - `{ChangeEvents: {"topic": ...}}`: a `str`, or a `Callable[[ActionExecution], str]`, the topic
       to publish to instead of the routed base path;
     - `{ChangeEvents(): {...}}`: a fresh instance as the key adds the plugin to that viewset or
@@ -124,8 +121,8 @@ class ChangeEvents(Middleware):
       `ChangeEvents` instance as a key, a `ChangeEvents` that is not one of its keys, such as the
       one in `settings.viewsets_command_middleware`, publishes nothing.
 
-    `True` and no value are the defaults. Any other value, or a dict with a key other than `record`
-    and `topic`, raises `TypeError`.
+    `True` and no value are the defaults. Any other value, or a dict with a key other than `topic`,
+    raises `TypeError`.
 
     `execute()` resolves the topic, and for a `created` or `updated` op the pk field, before
     `call_next()`: a missing or malformed one raises before the action runs. `topic_for` and
@@ -159,14 +156,14 @@ class ChangeEvents(Middleware):
             return None
         if not isinstance(config, dict):
             raise TypeError(
-                f"{type(self).__name__} is configured with {config!r}; it takes False, True or a dict of "
-                f"'record' and 'topic'"
+                f"{type(self).__name__} is configured with {config!r}; it takes False, True or a dict with "
+                f"the key 'topic'"
             )
         unknown = set(config) - _OPTIONS
         if unknown:
             raise TypeError(
                 f"{type(self).__name__} is configured with unknown option(s) {', '.join(sorted(map(repr, unknown)))}; "
-                f"it takes 'record' and 'topic'"
+                f"it takes 'topic' only"
             )
         return config
 
@@ -245,8 +242,8 @@ class ChangeEvents(Middleware):
     def changes_for(self, execution: ActionExecution, op: str, result: Any) -> list[Change]:
         """
         The changes of one execution: for `deleted`, one per pk of the `pk` argument; otherwise one per
-        returned record, its pk read from the field `pk_field_for(execution)` names, with `record`
-        when the options set `record`. A `ViewSetResult` contributes its `body`.
+        returned record, its pk read from the field `pk_field_for(execution)` names. A `ViewSetResult`
+        contributes its `body`.
         """
         bulk = execution.action in _BULK_ACTIONS
         if op == "deleted":
@@ -254,11 +251,7 @@ class ChangeEvents(Middleware):
             return [Change(pk=one) for one in (pk if bulk else [pk])]
         body = result.body if isinstance(result, ViewSetResult) else result
         field = self.pk_field_for(execution)
-        with_record = bool((self.options_for(execution.context) or {}).get("record", False))
-        return [
-            Change(pk=_read_pk(execution, record, field), record=_dump(record) if with_record else None)
-            for record in (body if bulk else [body])
-        ]
+        return [Change(pk=_read_pk(execution, record, field)) for record in (body if bulk else [body])]
 
 
 def _argument(execution: ActionExecution, name: str) -> Any:
@@ -280,9 +273,3 @@ def _read_pk(execution: ActionExecution, record: Any, field: str) -> Any:
         f"{execution.viewset_class.__qualname__}.{execution.action} returned a record without the pk field "
         f"{field!r}: {record!r}"
     )
-
-
-def _dump(record: Any) -> Any:
-    if isinstance(record, BaseModel):
-        return record.model_dump(mode="json")
-    return to_jsonable_python(record)
