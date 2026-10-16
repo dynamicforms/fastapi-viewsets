@@ -73,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own and no call was repeated. Without `Idempotency` on the backend a repeat runs the action again.
 - **Breaking (npm):** `MuxwsProxyOptions.timeoutMs` bounds one attempt; an attempt that reaches it is
   repeated, up to `repeat.withinMs`, instead of rejecting the call with `StreamTimeout`.
+- **Breaking:** the `muxws` extra requires `muxws>=0.4.0`, which requires `websockets>=14`.
 - **Breaking (npm):** the optional peer dependency `muxws` is `^0.4.0`. A repeat over muxws carries
   the headers that the peer's open interceptors (`Peer.interceptOpen`, muxws 0.4.0) added to the
   first stream.

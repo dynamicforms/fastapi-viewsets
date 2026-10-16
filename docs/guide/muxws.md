@@ -25,7 +25,8 @@ pip install "dynamicforms-fastapi-viewsets[muxws]"
 npm install muxws
 ```
 
-Requires muxws 0.3.1 or later, for response headers on data frames.
+Requires muxws 0.4.0 or later: response headers on data frames, and open interceptors, whose headers a
+repeated call keeps.
 
 ## Server
 
