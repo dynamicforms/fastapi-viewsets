@@ -10,6 +10,7 @@
 import axios, { AxiosError, AxiosHeaders, CanceledError, type InternalAxiosRequestConfig } from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { type CallEvent, onCallActivity } from './call';
 import {
   BulkViewSetMixin,
   CursorListMixin,
@@ -815,6 +816,37 @@ describe('RestProxyImpl — Idempotency-Key and repeats', () => {
     expect(keyOf(http.post, 1)).toBe(keyOf(http.post, 0));
     expect(signalOf(http.post, 0).aborted).toBe(true);
     expect(signalOf(http.post, 1).aborted).toBe(false);
+  });
+
+  it('reports the call and its repeat to onCallActivity under the call key, background as asked', async () => {
+    class Background extends RestProxyImpl<number, Item, 'id'> {
+      async quiet(): Promise<Item> {
+        return this.request<Item>('POST', '/quiet', { background: true });
+      }
+    }
+    const events: CallEvent[] = [];
+    const stop = onCallActivity((event) => events.push(event));
+    try {
+      http.post.mockRejectedValueOnce(networkError()).mockResolvedValueOnce({ data: MOCK_ITEM });
+      const api = new Background({
+        basePath: '/items',
+        pkFieldName: 'id',
+        axiosInstance: http as unknown as typeof axios,
+        validateSchema: false,
+      });
+      const call = api.quiet() as Promise<Item> & { key: string };
+      await vi.advanceTimersByTimeAsync(1000);
+      await call;
+      await vi.advanceTimersByTimeAsync(0);
+      const { key } = call;
+      expect(events).toEqual([
+        { type: 'start', key, background: true },
+        { type: 'retry', key, failure: 'lost', attempt: 1, delayMs: 1000 },
+        { type: 'settle', key, ok: true },
+      ]);
+    } finally {
+      stop();
+    }
   });
 
   it.each([502, 503, 504])('repeats a call answered %i by a gateway', async (status) => {

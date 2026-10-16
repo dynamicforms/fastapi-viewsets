@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { type CallEvent, onCallActivity } from './call';
 import { BulkViewSetMixin, LookupMixin } from './mixins';
 import { type MuxwsPeerLike, MuxwsProxyImpl, route_muxws } from './muxws-proxy';
 import { ListShapeMismatchError, ViewSetRequestError } from './proxy-base';
@@ -525,6 +526,26 @@ describe('MuxwsProxyImpl — repeats', () => {
     expect(flaky.opened).toHaveLength(2);
     expect(flaky.opened[1].headers['Idempotency-Key']).toBe(flaky.opened[0].headers['Idempotency-Key']);
     expect(flaky.opened[0].cancelled).toBe(true);
+  });
+
+  it('reports the call and its repeat to onCallActivity under the call key', async () => {
+    const events: CallEvent[] = [];
+    const stop = onCallActivity((event) => events.push(event));
+    try {
+      const flaky = makeFlakyPeer([muxwsError('StreamTimeout')]);
+      const call = proxyOn(flaky.peer).create(MOCK_ITEM);
+      await vi.advanceTimersByTimeAsync(0);
+      await call;
+      await vi.advanceTimersByTimeAsync(0);
+      const { key } = call;
+      expect(events).toEqual([
+        { type: 'start', key, background: false },
+        { type: 'retry', key, failure: 'timeout', attempt: 1, delayMs: 0 },
+        { type: 'settle', key, ok: true },
+      ]);
+    } finally {
+      stop();
+    }
   });
 
   it('repeats at once after StreamTimeout', async () => {

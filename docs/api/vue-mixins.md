@@ -80,6 +80,8 @@ interface RequestOptions {
   key?: string;
   /** Overrides the proxy's `repeat` for this call. */
   repeat?: RepeatOptions;
+  /** Reported to `onCallActivity` listeners as `background: true`; default false. */
+  background?: boolean;
 }
 
 /** The response shapes of `GET {basePath}`, as the BE names them in `X-List-Shape`. */

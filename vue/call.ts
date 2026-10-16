@@ -128,9 +128,17 @@ let capturing: { key?: string } | null = null;
  * Sets `key` on `promise` and reports it to the method running synchronously around this call, so
  * that its own promise gets the key of the first request it issues. Transports call this from
  * `request()`, synchronously.
+ *
+ * Reports the call to the `onCallActivity` listeners: `start` at once, `settle` when `promise`
+ * settles. `background` is passed on in `start`.
  */
-export function issueCall<R>(promise: Promise<R>, key: string): ViewSetCall<R> {
+export function issueCall<R>(promise: Promise<R>, key: string, background = false): ViewSetCall<R> {
   if (capturing && capturing.key === undefined) capturing.key = key;
+  emit({ type: 'start', key, background });
+  promise.then(
+    () => emit({ type: 'settle', key, ok: true }),
+    () => emit({ type: 'settle', key, ok: false }),
+  );
   return withKey(promise, key);
 }
 
@@ -195,13 +203,122 @@ function keyedMethod(method: (...args: unknown[]) => unknown): (...args: unknown
 }
 
 // ---------------------------------------------------------------------------
+// Call activity
+// ---------------------------------------------------------------------------
+
+/**
+ * What happens to a call issued through a proxy, as `onCallActivity` reports it.
+ *
+ * - `start`: the call was issued. `background` is `RequestOptions.background`.
+ * - `retry`: an attempt ended without an answer and is repeated. `failure` is how it ended,
+ *   `attempt` the number of the attempt that ended (1 for the first), `delayMs` the wait before the
+ *   repeat is sent.
+ * - `settle`: the call settled; `ok` is false when it rejected.
+ */
+export type CallEvent =
+  | { readonly type: 'start'; readonly key: string; readonly background: boolean }
+  | {
+      readonly type: 'retry';
+      readonly key: string;
+      readonly failure: 'timeout' | 'lost';
+      readonly attempt: number;
+      readonly delayMs: number;
+    }
+  | { readonly type: 'settle'; readonly key: string; readonly ok: boolean };
+
+/** A call issued through a proxy that has not settled, as `pendingCalls()` lists it. */
+export interface PendingCall {
+  readonly key: string;
+  readonly background: boolean;
+  /** `Date.now()` when the call was issued. */
+  readonly startedAt: number;
+  /** The attempts that ended without an answer and were repeated. */
+  readonly unanswered: number;
+}
+
+const listeners = new Set<(event: CallEvent) => void>();
+
+/**
+ * The unsettled calls, in the order they were issued. Two calls may share a key (an application that
+ * repeats a call itself while the first is pending); an event of that key applies to the older one.
+ */
+const pending: PendingCall[] = [];
+
+/** Every call issued through a proxy that has not settled, oldest first. */
+export function pendingCalls(): readonly PendingCall[] {
+  return [...pending];
+}
+
+/** The number of unsettled calls issued through a proxy; background calls only with `includeBackground`. */
+export function pendingCallCount(includeBackground = false): number {
+  return includeBackground ? pending.length : pending.filter((call) => !call.background).length;
+}
+
+function track(event: CallEvent): void {
+  if (event.type === 'start') {
+    pending.push({ key: event.key, background: event.background, startedAt: Date.now(), unanswered: 0 });
+    return;
+  }
+  const index = pending.findIndex((call) => call.key === event.key);
+  if (index < 0) return;
+  if (event.type === 'retry') pending[index] = { ...pending[index], unanswered: pending[index].unanswered + 1 };
+  else pending.splice(index, 1);
+}
+
+/**
+ * Calls `listener` for every `CallEvent` of every call issued through a proxy, REST and muxws alike.
+ * Returns the function that removes it. A listener that throws is logged with `console.error` and
+ * does not affect the call or the other listeners.
+ */
+export function onCallActivity(listener: (event: CallEvent) => void): () => void {
+  const entry = (event: CallEvent): void => listener(event);
+  listeners.add(entry);
+  return () => {
+    listeners.delete(entry);
+  };
+}
+
+function emit(event: CallEvent): void {
+  track(event);
+  for (const listener of [...listeners]) {
+    try {
+      listener(event);
+    } catch (error) {
+      console.error('fastapi-viewsets: an onCallActivity listener threw', error);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Repeats
 // ---------------------------------------------------------------------------
 
-function sleep(ms: number): Promise<void> {
+/** The wake-ups of the repeat delays now running. */
+const sleepers = new Set<() => void>();
+
+/** Resolves after `ms`, or at once on `retryNow()`, with true when `retryNow()` ended it. */
+function repeatDelay(ms: number): Promise<boolean> {
   return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+    const wake = (): void => {
+      clearTimeout(timer);
+      sleepers.delete(wake);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      sleepers.delete(wake);
+      resolve(false);
+    }, ms);
+    sleepers.add(wake);
   });
+}
+
+/**
+ * Ends the delay of every call waiting to send a repeat, so each sends it now; the delay of such a
+ * call's next repeat starts again from `repeat.delayMs`. A muxws call waiting for its peer to
+ * reconnect keeps waiting.
+ */
+export function retryNow(): void {
+  for (const wake of [...sleepers]) wake();
 }
 
 /**
@@ -213,19 +330,22 @@ function sleep(ms: number): Promise<void> {
  * `beforeRepeat` runs after the delay and before the repeat is started, and is given the deadline
  * (`Date.now()` scale) past which no repeat is sent; muxws waits there for the peer to reconnect.
  *
- * A `start()` that throws counts as an attempt that failed with that error.
+ * A `start()` that throws counts as an attempt that failed with that error. Every repeat is reported
+ * to the `onCallActivity` listeners as a `retry` of `key`.
  */
 export async function runCall<R>(
   start: () => CallAttempt<R>,
   classify: (error: unknown) => AttemptFailure,
   repeat: RepeatOptions | undefined,
   beforeRepeat?: (deadline: number) => Promise<void>,
+  key = '',
 ): Promise<R> {
   const withinMs = repeat?.withinMs ?? DEFAULT_REPEAT_WITHIN_MS;
-  let delayMs = repeat?.delayMs ?? DEFAULT_REPEAT_DELAY_MS;
+  const firstDelayMs = repeat?.delayMs ?? DEFAULT_REPEAT_DELAY_MS;
+  let delayMs = firstDelayMs;
   const deadline = Date.now() + withinMs;
 
-  for (;;) {
+  for (let attemptNumber = 1; ; attemptNumber += 1) {
     const attempt = startAttempt(start);
     try {
       return await attempt.result;
@@ -237,7 +357,8 @@ export async function runCall<R>(
       const wait = failure === 'timeout' ? 0 : delayMs;
       if (failure === 'lost') delayMs = Math.min(delayMs * 2, MAX_REPEAT_DELAY_MS);
       if (Date.now() + wait >= deadline) throw error;
-      if (wait > 0) await sleep(wait);
+      emit({ type: 'retry', key, failure, attempt: attemptNumber, delayMs: wait });
+      if (wait > 0 && (await repeatDelay(wait))) delayMs = firstDelayMs;
       if (beforeRepeat) await beforeRepeat(deadline);
       if (Date.now() >= deadline) throw error;
     }

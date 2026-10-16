@@ -197,13 +197,14 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
           (error) => muxwsAttemptFailure(peer, error),
           options.repeat ?? this.repeatOptions,
           (deadline) => waitForOpen(peer, deadline),
+          key,
         );
       const peer = this.peer();
       call = this.resolvedPeer ? run(this.resolvedPeer) : peer.then(run);
     } catch (error) {
       call = Promise.reject(error);
     }
-    return issueCall(call, key);
+    return issueCall(call, key, options.background);
   }
 
   /** One attempt: one stream, opened synchronously. `headers` are those the stream went out with. */

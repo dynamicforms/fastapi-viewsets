@@ -127,11 +127,13 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
           this.attempt<R>(method, url, options, sent ?? headers, (config) => (sent ??= sentHeaders(config, headers))),
         restAttemptFailure,
         options.repeat ?? this.repeatOptions,
+        undefined,
+        key,
       );
     } catch (error) {
       call = Promise.reject(error);
     }
-    return issueCall(call, key);
+    return issueCall(call, key, options.background);
   }
 
   /**

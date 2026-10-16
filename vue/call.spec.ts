@@ -1,5 +1,5 @@
 /**
- * Unit tests for call.ts: the key, ViewSetCall.key, and the repeat loop. The transports' use of them
+ * Unit tests for call.ts: the key, ViewSetCall.key, the repeat loop and the call activity. The transports' use of them
  * is covered in rest-proxy.spec.ts and muxws-proxy.spec.ts.
  */
 
@@ -9,9 +9,14 @@ import {
   type AttemptFailure,
   bindCallKeys,
   type CallAttempt,
+  type CallEvent,
   idempotencyKeyHeader,
   issueCall,
   newCallKey,
+  onCallActivity,
+  pendingCallCount,
+  pendingCalls,
+  retryNow,
   runCall,
 } from './call';
 
@@ -216,5 +221,166 @@ describe('runCall', () => {
     await vi.runAllTimersAsync();
     await expect(call).resolves.toBe('ok');
     expect(calls).toBe(2);
+  });
+});
+
+describe('onCallActivity', () => {
+  let events: CallEvent[];
+  let stop: () => void;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    events = [];
+    stop = onCallActivity((event) => events.push(event));
+  });
+
+  afterEach(() => {
+    stop();
+    vi.useRealTimers();
+  });
+
+  const lost = { kind: 'lost' as const };
+  const timeout = { kind: 'timeout' as const };
+  const classify = (error: unknown): AttemptFailure => (error as { kind: AttemptFailure }).kind;
+
+  function failing(errors: unknown[]): () => CallAttempt<string> {
+    let index = 0;
+    return () => {
+      const error = errors[index];
+      index += 1;
+      return { result: error === undefined ? Promise.resolve('ok') : Promise.reject(error), abandon: () => {} };
+    };
+  }
+
+  it('reports start at once and settle when the call settles', async () => {
+    const call = issueCall(Promise.resolve('ok'), 'k1');
+    expect(events).toEqual([{ type: 'start', key: 'k1', background: false }]);
+    await call;
+    await Promise.resolve();
+    expect(events.at(-1)).toEqual({ type: 'settle', key: 'k1', ok: true });
+  });
+
+  it('reports a rejected call as settled not ok, and passes background on', async () => {
+    const call = issueCall(Promise.reject(new Error('no')), 'k2', true);
+    await expect(call).rejects.toThrow('no');
+    await Promise.resolve();
+    expect(events).toEqual([
+      { type: 'start', key: 'k2', background: true },
+      { type: 'settle', key: 'k2', ok: false },
+    ]);
+  });
+
+  it('reports every repeat with the attempt that ended and the delay before the next', async () => {
+    const call = runCall(failing([lost, timeout, lost]), classify, { delayMs: 100 }, undefined, 'k3');
+    await vi.runAllTimersAsync();
+    await call;
+    expect(events).toEqual([
+      { type: 'retry', key: 'k3', failure: 'lost', attempt: 1, delayMs: 100 },
+      { type: 'retry', key: 'k3', failure: 'timeout', attempt: 2, delayMs: 0 },
+      { type: 'retry', key: 'k3', failure: 'lost', attempt: 3, delayMs: 200 },
+    ]);
+  });
+
+  it('isolates a listener that throws', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const throwing = onCallActivity(() => {
+      throw new Error('listener');
+    });
+    try {
+      await issueCall(Promise.resolve('ok'), 'k4');
+      expect(events[0]).toEqual({ type: 'start', key: 'k4', background: false });
+      expect(error).toHaveBeenCalled();
+    } finally {
+      throwing();
+      error.mockRestore();
+    }
+  });
+
+  it('stops calling a listener once it is removed', () => {
+    stop();
+    issueCall(Promise.resolve('ok'), 'k5');
+    expect(events).toEqual([]);
+  });
+});
+
+describe('retryNow', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('sends a waiting repeat at once and starts the next delay from delayMs again', async () => {
+    const started: number[] = [];
+    const lost = { kind: 'lost' as const };
+    const errors = [lost, lost, lost, lost];
+    const call = runCall(
+      () => {
+        const error = errors[started.length];
+        started.push(Date.now());
+        return { result: error === undefined ? Promise.resolve('ok') : Promise.reject(error), abandon: () => {} };
+      },
+      (error) => (error as { kind: AttemptFailure }).kind,
+      { delayMs: 1000 },
+    );
+    await vi.advanceTimersByTimeAsync(1000 + 2000);
+    expect(started.map((at) => at - started[0])).toEqual([0, 1000, 3000]);
+    await vi.advanceTimersByTimeAsync(500);
+    retryNow();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(started.map((at) => at - started[0])).toEqual([0, 1000, 3000, 3500]);
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(call).resolves.toBe('ok');
+    expect(started.map((at) => at - started[0])).toEqual([0, 1000, 3000, 3500, 4500]);
+  });
+});
+
+describe('pendingCalls', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('lists the unsettled calls oldest first, with their repeats, and counts them', async () => {
+    vi.setSystemTime(1000);
+    let settleFirst!: (value: string) => void;
+    const first = issueCall(new Promise<string>((resolve) => (settleFirst = resolve)), 'p1');
+    vi.setSystemTime(2000);
+    const lost = { kind: 'lost' as const };
+    const errors = [lost];
+    const second = issueCall(
+      runCall(
+        () => ({
+          result: errors.length ? Promise.reject(errors.shift()) : new Promise<string>(() => {}),
+          abandon: () => {},
+        }),
+        (error) => (error as { kind: AttemptFailure }).kind,
+        { delayMs: 10 },
+        undefined,
+        'p2',
+      ),
+      'p2',
+    );
+    issueCall(new Promise<string>(() => {}), 'p3', true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(pendingCalls()).toEqual([
+      { key: 'p1', background: false, startedAt: 1000, unanswered: 0 },
+      { key: 'p2', background: false, startedAt: 2000, unanswered: 1 },
+      { key: 'p3', background: true, startedAt: 2000, unanswered: 0 },
+    ]);
+    expect(pendingCallCount()).toBe(2);
+    expect(pendingCallCount(true)).toBe(3);
+
+    settleFirst('ok');
+    await first;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pendingCalls().map((call) => call.key)).toEqual(['p2', 'p3']);
+    void second;
   });
 });
