@@ -94,7 +94,7 @@ const watching = tracks.watch({
 });
 ```
 
-The store is the truth and a push is an accelerator. Every event is recorded before it is pushed,
+Every event is written to the store before it is pushed,
 each carries the `prev` it follows, and a frontend that misses one polls once or re-reads its state.
 A deployment without muxws is complete: its frontends poll.
 

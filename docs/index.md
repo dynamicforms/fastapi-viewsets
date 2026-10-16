@@ -29,7 +29,7 @@ features:
   - title: muxws WebSocket transport
     details: Reach the same viewsets over a single WebSocket instead of one HTTP request per call. A command goes through your application as an HTTP request does - its middleware, exception handlers, router dependencies and state - so both transports behave identically.
   - title: Backend-to-frontend events
-    details: Publish an event to a topic and every frontend following it learns of it, as a muxws push or on its next poll. The store is the truth and the push only makes it sooner, so a dropped push or a lost socket costs latency, never an event. ChangeEvents publishes every create, update and destroy of a viewset, globally or per viewset, with no change to the viewset, and watch() on the frontend ViewSet follows them.
+    details: Publish an event to a topic and every frontend following it learns of it, as a muxws push or on its next poll. Every event is written to the store before it is pushed, so a dropped push or a lost socket delays an event and does not lose it. ChangeEvents publishes every create, update and destroy of a viewset, globally or per viewset, with no change to the viewset, and watch() on the frontend ViewSet follows them.
   - title: Three list shapes
     details: A bare array, offset paging that carries a total wherever the source can be counted — a materialised collection, or a backend that counts in its store — and null where it cannot, or cursor paging whose next and previous links never re-read a row and never drift. A viewset declares which, and may let a client pick per request with an X-List-Shape header.
   - title: Declarative filters

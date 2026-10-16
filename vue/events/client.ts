@@ -13,10 +13,11 @@
  *   });
  *   await subscription.ready;
  *
- * The store on the BE is the truth and a push is an accelerator. Per topic the client holds the rev
- * of the last event it applied and applies an event only when the event's `prev` is that rev. A
- * larger rev with any other `prev` is a gap, answered by one poll of the topic; a poll the BE's log
- * cannot answer is a resync, on which every subscription of the topic re-reads what it displays.
+ * The BE writes every event to its store before it pushes it, and a poll answers from that store.
+ * Per topic the client holds the rev of the last event it applied and applies an event only when the
+ * event's `prev` is that rev. A larger rev with any other `prev` is a gap, answered by one poll of the
+ * topic; a poll the BE's log cannot answer is a resync, on which every subscription of the topic
+ * re-reads what it displays.
  *
  * Every event carries a version, the BE event's `event_version`. An event is dispatched by topic
  * and event name, whatever its version, and its handler receives the version in `EventMeta`.

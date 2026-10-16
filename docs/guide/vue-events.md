@@ -1,8 +1,8 @@
 # Events (Vue)
 
 The backend publishes an event to a topic; the frontend follows topics with an event client. The
-store on the backend is the truth and a push is an accelerator: a frontend with an open muxws peer
-receives each event as a push, and a frontend without one, or with a lost one, polls. The backend
+backend writes every event to its store before it pushes it. A frontend with an open muxws peer
+receives each event as a push; a frontend without one, or with a lost one, polls the store. The backend
 side, `publish()`, topics, authorizers and `ChangeEvents`, is `fastapi_viewsets.events`. The
 reference for everything on this page is [Events (Vue) — API Reference](../api/vue-events).
 

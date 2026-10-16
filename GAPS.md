@@ -274,87 +274,67 @@ small addition — but I would rather see the copies first.
 
 ## Events
 
-The reasoning behind `fastapi_viewsets.events` and its frontend client. Settled with the author.
+### Change events are published from `Middleware.execute()`
 
-### Change events come from `Middleware.execute()`, not from hooks in each backend
+`execute()` runs once per execution, in the process that executes the action, and receives the
+viewset, the action, its arguments and its result. `ChangeEvents` therefore needs no code in an
+`ImplMixin` backend or in an overridden `perform_*` method, and `@action_configuration` enables or
+configures it per viewset and per action.
 
-`execute()` runs exactly once per execution, in whichever process the action executes, with the
-viewset, the action, its arguments and its result. It covers every `ImplMixin` backend and every
-application override of a `perform_*` method without a line in any of them, and it is switched per
-viewset and per action by `@action_configuration`, the mechanism every other middleware is
-configured by.
+### Events are written to the store before they are pushed
 
-### The store is the truth and the push is an accelerator
+`poll` answers from the store. A dropped push, a lost socket and a publishing process without
+sockets are recovered by the next poll, or by one resync when the log no longer holds the gap. The
+push path has no acknowledgement and no retry.
 
-A push that is dropped, a socket that is lost and a process that holds no socket all end in the same
-place: the next poll answers from the store, and the worst case is one resync. There are no delivery
-guarantees to engineer on the socket.
+### `rev` and `prev` are per topic
 
-### A per-topic rev with a `prev` link instead of a per-document rev
+A viewset has no single document to carry a revision, so the topic carries it. The client detects a
+gap by comparing an event's `prev` with the rev it holds; the comparison stays valid after the
+counter is lost and restarts at the current time in milliseconds. A gap the log covers is answered
+by a poll instead of a re-read. With `viewsets_event_log_size = 0` every gap is a re-read.
 
-A viewset's data has no single document to carry a rev; the topic carries it. A gap is one
-comparison of `prev` against the held rev, which stays correct when the counter is lost and
-restarts, and a bounded log turns a gap of seconds into a poll rather than a re-read. `log_size = 0`
-is taskwire's model exactly.
+### The log expires, the counter does not
 
-### A short log, a permanent counter
-
-A reader absent for a minute re-reads its state; a backlog for it would be stale data delivered
-late. The counter outlives the log so that a reader that is present applies a sparse topic's next
-event as a delta, without the reload that a restarted counter would force on it. A keyed topic that
-is finished is dropped by its source.
+A reader that misses more than `viewsets_event_log_ttl` seconds of events re-reads its state. The
+counter has no expiry, so on a topic with sparse events a reader that holds the last rev applies the
+next event without a re-read. `Source.drop(key)` removes the counter and the log of a finished
+keyed topic.
 
 ### Every event carries a version
 
-An event's payload changes shape as the application evolves, and the producers and consumers of one
-topic are not deployed at once: a frontend still loaded in a tab, a worker on the previous release,
-a consumer that reads a stored series of events. The version names the shape of each payload, so a
-consumer handles several versions side by side instead of inferring the shape from the fields
-present.
+The publishers and the consumers of a topic are not upgraded at the same moment. `event_version`
+identifies the payload's shape, and a consumer branches on it instead of inferring the shape from
+the fields present.
 
 ### Subscribe and poll are viewset commands
 
-They pass through the application's command middleware, context processors, rate limiting and
-`/schema` like any other call. The only transport-specific piece is the socket in the request scope.
+They go through the application's command middleware, context processors, rate limiting and
+`/schema`. The only transport-specific value is the socket in the request scope.
 
-### One push per event, no long-lived stream
+### One push is one stream
 
-`process_command` serves a command as one ASGI request with one buffered response, and a
-subscription held open as a stream would need a second dispatch path beside it. `notify()` leaves
-nothing open on either side.
+`process_command` serves a command as one ASGI request with one buffered response. A subscription
+held open as a stream would need a second dispatch path. `notify()` opens and ends a stream in one
+frame and leaves nothing open.
 
 ### Two topic syntaxes
 
-A path is a viewset, a name is a declared source, and the two cannot name the same thing. A name is
-declared once per process, so two modules cannot publish under one name without one of them failing
-at import.
+A viewset topic starts with `/`; a declared source's topic does not. A source name is declared once
+per process, and a second declaration raises at import.
 
-### A change carries pks only
+### A change carries the pk only
 
-The record an action returns is its return value, built in the writer's context and not yet
-serialized; the viewset's `retrieve` answers through the endpoint's `response_model` with its
-aliases, after command middleware that may reshape the body, and in the reader's context. A frontend
-reads a record with its normal code only in the second form. A payload also reaches every subscriber
-of a topic with the same bytes, and `ViewsetTopics` admits a caller the viewset's `list_items`
-admits; row-level narrowing in `get_queryset` is invisible to both. A pk is safe for every
-subscriber, and `retrieve` answers 404 for a row the reader may not read.
+The record an action returns is not serialized through the endpoint's `response_model`, its aliases
+or command middleware, and is built in the writer's context. `retrieve` answers in the endpoint's
+format and in the reader's context. A payload reaches every subscriber of a topic with the same
+bytes, and `ViewsetTopics` does not see row-level filtering in `get_queryset`; `retrieve` answers
+404 for a row the reader may not read.
 
-### No authorizer, no subscription
+### A topic without an authorizer is refused
 
-A topic is a string any connected client can name. Admission is declared, `allow_all` included,
-never assumed.
-
-### The general layer lives here, not in taskwire
-
-taskwire's connectors for this package (`taskwire[viewsets]`, `taskwire[muxws]`, `taskwire/muxws` on
-npm) depend on it, so the shared mechanism can only sit below taskwire. taskwire itself lives
-without this package: it keeps its own copy of the polling ladder this package has in
-`vue/events/poll.ts`, a pure function of about a hundred lines, rather than making this package a required
-peer of its core.
-`taskwire/muxws` composes `handleEventStream()` into the peer's stream handler, so one socket
-carries both. taskwire's push path may later publish its envelopes through this store, with a
-delivery filter carrying its per-connection decisions, which is what
-`viewsets_event_delivery_filters` is for.
+Any connected client can name any topic, so an empty `viewsets_event_authorizers` admits nothing.
+`allow_all` admits every topic when listed explicitly.
 
 ## Settled, kept for the reasoning
 
