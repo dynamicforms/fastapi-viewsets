@@ -14,7 +14,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 
 from ..conf import settings
-from ..exceptions import DfViewSetError, IdempotencyKeyInvalidError, IdempotencyKeyReusedError
+from ..exceptions import ActionDispatchError, DfViewSetError, IdempotencyKeyInvalidError, IdempotencyKeyReusedError
 from . import Middleware, ViewSetResult
 
 if TYPE_CHECKING:
@@ -240,6 +240,8 @@ class Idempotency(Middleware):
       `DfViewSetError` with its `code` and `params`) as it was raised, a `RequestValidationError` as
       a 422 with its errors as `detail`, any other exception as a 500 with `detail`
       `"Internal Server Error"`.
+      An `ActionDispatchError` is not an outcome: the action did not run, the record is deleted, and
+      a repeat runs the call again.
 
     Without `redis_client` the records live in this instance, which serves one process. With a
     `redis_client` (`redis.asyncio.Redis`) the record of a key is the Redis string
@@ -293,6 +295,9 @@ class Idempotency(Middleware):
     ) -> ViewSetResult:
         try:
             result = await call_next()
+        except ActionDispatchError:
+            await self._finish(storage_key, run, None, method)
+            raise
         except Exception as error:
             await self._finish(storage_key, run, _Outcome.of_error(error), method)
             raise

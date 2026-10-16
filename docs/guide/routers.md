@@ -298,104 +298,28 @@ from fastapi_viewsets.decorators.celery_viewset import celery_viewset_client, ce
 | `get_running_queue_keys()` | The queue keys that have a running reader task |
 | `push_result(redis_client, queue_key, correlation_id, result=None, error=None)` | Pushes a result or an error for one call to `queue_key`, the `_result_queue_key` the task carries, and renews the list's expiry |
 
-### Extension hooks
+### Call data in the worker
 
-`celery_viewset_client` and `celery_viewset_server` each expose one module-level hook slot so an
-external package can attach dispatch/execute logic (e.g. propagating an operation token, opening a
-session around task execution) without this repo depending on that package. Both default to `None`
-and are no-ops until set.
+Every task carries, beside the action's own arguments, the call's data under reserved kwargs:
 
-`set_celery_dispatch_hook` (client side, in `celery_viewset_client`) registers an
-`async (kwargs: dict) -> dict`, awaited just before `send_task` with the call's current kwargs
-(a `Context`, if the action declares one, included); its returned dict is merged into the task
-kwargs:
+| Kwarg | Content |
+|-------|---------|
+| `_context` | The call's context, serialized whether or not the action declares a `context` parameter. A `LazyObject` crosses as its recipe, resolved only where it is awaited |
+| `_request` | The call's ASGI scope without the body: method, path, query string, headers, path parameters, client and server address |
+| `_parent` | The `ExecutionRef` of the execution in which the call was dispatched |
+| `_correlation_id`, `_result_queue_key` | Where the result goes (see [Result passing](#result-passing)) |
 
-```python
-from fastapi_viewsets.decorators.celery_viewset import set_celery_dispatch_hook
+The worker consumes them before the action is called. An action that declares `context` receives
+the call's context, and one that declares `request` receives a `Request` built from the scope,
+which has no body, no `app` and no `state`. [`Middleware.execute()`](./command-middleware#around-the-execution-middleware-execute)
+receives both either way.
 
-async def dispatch_hook(kwargs: dict) -> dict:
-    return {"_operation_token": current_operation_token()}
+A call made from inside another action's execution (an action calling a `celery_viewset` method)
+carries that execution's context and request, unless it passes a `context` of its own, and that
+execution as its `parent`. A call made outside any call carries an empty context and no request.
 
-set_celery_dispatch_hook(dispatch_hook)
-```
-
-`set_celery_kwargs_hook` (worker side, in `celery_viewset_server`) registers a
-`(run, kwargs) -> (run, kwargs)` callable, called with the task's raw kwargs before
-`_reconstruct_kwargs` turns them into typed arguments — a key the hook doesn't consume would
-otherwise reach the action as an argument it never declared. `run` is the callable that executes
-the coroutine (`loop.run_until_complete` unless the hook replaces it), letting the hook wrap
-execution (e.g. to open a session for the duration of the task):
-
-```python
-from fastapi_viewsets.decorators.celery_viewset import set_celery_kwargs_hook
-
-def kwargs_hook(run, kwargs):
-    token = kwargs.pop("_operation_token", None)
-
-    def run_with_session(coro):
-        with session_scope(token):
-            return run(coro)
-
-    return run_with_session, kwargs
-
-set_celery_kwargs_hook(kwargs_hook)
-```
-
-### Execution hook
-
-```python
-ExecutionHook = Callable[[ActionExecution], AbstractAsyncContextManager[Any]]
-
-def set_execution_hook(hook: ExecutionHook | None) -> None: ...
-```
-
-`set_execution_hook` (in `fastapi_viewsets.decorators`, with `ActionExecution` and
-`ExecutionHook`) registers a callable that receives an `ActionExecution` and returns an async
-context manager. `lifecycle_runner` enters it right before
-the viewset method executes and exits it when the method has returned or raised; `None` removes it.
-It runs where the action executes:
-
-| Action | Where the hook runs |
-|--------|---------------------|
-| in-process (`route_viewset` only) | the FastAPI process, inside the command middleware chain |
-| `celery_viewset` | the Celery worker, in `celery_viewset_server`; not in the FastAPI process, whose method only dispatches the call |
-
-`ActionExecution` is a frozen dataclass:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `viewset_class` | `type` | The viewset class |
-| `action` | `str` | The name of the viewset method, e.g. `"create"` |
-| `context` | `Context \| None` | The call's `Context`; `None` in a Celery worker for an action that does not declare a `context` parameter |
-| `request` | `Request \| None` | The live request; `None` in a Celery worker |
-
-```python
-from contextlib import asynccontextmanager
-
-from fastapi_viewsets.decorators import set_execution_hook
-
-@asynccontextmanager
-async def execution_hook(execution):
-    await mark_running(execution.action)
-    try:
-        yield
-    except Exception:
-        await mark_failed(execution.action)
-        raise
-    await mark_done(execution.action)
-
-set_execution_hook(execution_hook)
-```
-
-The methods `celery_viewset_client` installs carry the attribute named by
-`fastapi_viewsets.decorators.lifecycle_runner.CELERY_DISPATCH_ATTRIBUTE` (`"__celery_viewset_dispatch__"`),
-and `lifecycle_runner` does not enter the hook around them. A FastAPI-side subclass that overrides
-such a method and calls it through `super()` is an in-process method: the hook runs for it in the
-FastAPI process, and again in the worker.
-
-An exception the method raises reaches the context manager's `__aexit__` and propagates after it. An
-exception raised on entry keeps the method from running; one raised on exit propagates in place of
-the method's outcome.
+A call whose task cannot be sent raises `ActionDispatchError` (503, `action_dispatch_failed`, param
+`task`), with the error of `send_task` as its `__cause__`.
 
 ---
 

@@ -61,7 +61,7 @@ def paged_viewset(decorate):
 
 def test_pagination_parameters_reach_the_worker():
     task = worker_tasks_for(paged_viewset)["tracks.list_items"]
-    page = task(context={}, offset=5, limit=3)
+    page = task(offset=5, limit=3)
     assert [track.id for track in page.results] == [6, 7, 8]
     assert page.has_more is True
     assert page.has_previous is True
@@ -69,7 +69,7 @@ def test_pagination_parameters_reach_the_worker():
 
 def test_the_sort_parameter_reaches_the_worker():
     task = worker_tasks_for(paged_viewset)["tracks.list_items"]
-    page = task(context={}, sort="id:desc", limit=3)
+    page = task(sort="id:desc", limit=3)
     assert [track.id for track in page.results] == [30, 29, 28]
 
 
@@ -79,21 +79,21 @@ def test_the_filter_model_survives_the_round_trip_as_a_dict():
     that reconstruction broke, the filter would arrive as a plain dict and `fltr.year` would raise.
     """
     task = worker_tasks_for(paged_viewset)["tracks.list_items"]
-    page = task(context={}, fltr={"year": 2003}, limit=50)
+    page = task(fltr={"year": 2003}, limit=50)
     assert page.results
     assert all(track.year == 2003 for track in page.results)
 
 
 def test_filter_sort_and_paging_compose_in_the_worker():
     task = worker_tasks_for(paged_viewset)["tracks.list_items"]
-    page = task(context={}, fltr={"year": 2003}, sort="id:desc", offset=1, limit=2)
+    page = task(fltr={"year": 2003}, sort="id:desc", offset=1, limit=2)
     assert [track.id for track in page.results] == [23, 18]
     assert page.has_more is True
 
 
 def test_the_default_page_size_applies_in_the_worker():
     task = worker_tasks_for(paged_viewset)["tracks.list_items"]
-    assert len(task(context={}).results) == 10
+    assert len(task().results) == 10
 
 
 def test_a_stage_the_backend_handled_is_not_redone_in_the_worker():
@@ -117,5 +117,5 @@ def test_a_stage_the_backend_handled_is_not_redone_in_the_worker():
         return PushdownViewSet
 
     task = worker_tasks_for(pushdown_viewset)["tracks.list_items"]
-    page = task(context={}, sort="id:asc", limit=3)
+    page = task(sort="id:asc", limit=3)
     assert [track.id for track in page.results] == [30, 29, 28]

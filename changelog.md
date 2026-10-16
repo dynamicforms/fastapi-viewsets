@@ -22,11 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `settings.viewsets_idempotency_lock_ttl` (seconds, default 600).
 - `IdempotencyKeyInvalidError` (400, `idempotency_key_invalid`) and `IdempotencyKeyReusedError`
   (422, `idempotency_key_reused`, param `key`).
-- `set_execution_hook(hook)`, `ActionExecution` and `ExecutionHook` in `fastapi_viewsets.decorators`:
-  an async context manager entered around the execution of a viewset method, in the FastAPI process
-  for an in-process action and in the Celery worker for a `celery_viewset` action.
-- `CELERY_DISPATCH_ATTRIBUTE` in `fastapi_viewsets.decorators.lifecycle_runner`, set on the methods
-  `celery_viewset_client` installs.
+- `Middleware.execute(execution, call_next)`: an optional onion layer around the call of the viewset
+  method, below every `__call__`, run once per execution where the action executes: in the FastAPI
+  process for an in-process action, in the Celery worker for a `celery_viewset` action. Default:
+  passes through.
+- `ActionExecution` (`viewset_class`, `viewset`, `action`, `args`, `kwargs`, `context`, `request`,
+  `parent`) and `ExecutionRef` (`viewset_class`, `action`, `parent`) in `fastapi_viewsets.middleware`.
+- `ActionDispatchError` (503, `action_dispatch_failed`, param `task`): a `celery_viewset` call whose
+  task could not be sent. `Idempotency` does not store it; a repeat runs the call again.
+- A `celery_viewset` task carries the call's context whether or not the action declares `context`,
+  the call's request scope without the body, and the execution it was dispatched in (`_context`,
+  `_request`, `_parent`). An action declaring `request` receives a `Request` built from the scope in
+  the worker. A call made inside another action's execution carries that execution's context and
+  request unless it passes a `context` of its own.
+- A `celery_viewset` task interrupted by Celery (a time limit) while the action awaits is cancelled
+  and run until it has unwound, so its `finally` blocks and `execute()` see the interruption.
 - npm: every call through a proxy, REST and muxws, sends `Idempotency-Key`, a new UUID per call as a
   Structured Field string. `RequestOptions.key` sets it for one call.
 - npm: `ViewSetCall<R>`, a `Promise<R>` with the call's `key`. `request()` returns it, and every
@@ -45,8 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - npm: `MuxwsStreamLike.cancel`, `MuxwsStreamLike.headers` and `MuxwsPeerLike.isOpen`,
   `onReconnect`, `onClose`, all optional.
 
+### Removed
+
+- **Breaking:** `set_celery_dispatch_hook` and `set_celery_kwargs_hook`. `Middleware.execute()`
+  runs where the action executes, and the call's context reaches the worker for every action.
+
 ### Changed
 
+- **Breaking:** a `celery_viewset` task carries the call's context as `_context`, no longer as the
+  `context` kwarg. A worker and a FastAPI process of different versions do not understand each
+  other's tasks.
 - **Breaking (muxws):** `process_command` runs the request as a task of its own. When the stream
   ends before the answer (the peer cancels it or the socket is lost), the request runs to completion
   and its answer is discarded; cancelling the stream no longer cancels the request.

@@ -1,12 +1,14 @@
+import functools
+
 from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Literal, TYPE_CHECKING, TypeVar
 
 from ..action_configuration import extra_middlewares_for, resolve_action_configuration
 from ..conf import settings
 from ..context import Context, get_shared_context
-from ..middleware import run_command_chain, ViewSetResult
+from ..middleware import ActionExecution, ExecutionRef, run_command_chain, run_execution_chain, ViewSetResult
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -15,47 +17,43 @@ T = TypeVar("T")
 
 LifecycleType = Literal["singleton", "per-request", "instance-key"]
 
-CELERY_DISPATCH_ATTRIBUTE = "__celery_viewset_dispatch__"
+DEFERRED_ACTIONS_ATTRIBUTE = "__viewset_deferred_actions__"
 """
-Set to True on the methods `celery_viewset_client` installs. Such a method sends the call to a Celery
-worker instead of executing the action, so `lifecycle_runner` does not run the execution hook around
-it; the worker's `lifecycle_runner` runs it around the real execution.
+The class attribute holding the names of the actions whose method on that class hands the call to
+an executor instead of executing it (`celery_viewset_client` sets it). `lifecycle_runner` runs no
+`Middleware.execute()` around such a method, its override in a subclass included; the executor's
+`lifecycle_runner` runs it around the real execution.
 """
 
 
 @dataclass(frozen=True)
-class ActionExecution:
-    """What the execution hook receives about the action that is about to execute."""
+class CurrentCall:
+    """The call `lifecycle_runner` is running in this task, for a method that hands it on."""
 
-    viewset_class: type
-    action: str
-    """The name of the viewset method, e.g. `"create"`."""
-    context: Context | None
-    """The call's `Context`. None where none was built: in a Celery worker, for an action that does
-    not declare a `context` parameter."""
+    context: Context
     request: "Request | None"
-    """The live request; None in a Celery worker."""
+    execution: ActionExecution | None
+    """Set while the action executes in this process; None while a deferred action hands it on."""
+    parent: ExecutionRef | None
+
+    def parent_of_dispatch(self) -> ExecutionRef | None:
+        """The `parent` of an action handed to an executor now: this execution when one runs, else
+        this call's own parent (the deferred method handing its own call on)."""
+        return self.execution.ref() if self.execution is not None else self.parent
 
 
-ExecutionHook = Callable[[ActionExecution], AbstractAsyncContextManager[Any]]
-
-_execution_hook: ExecutionHook | None = None
+_current_call: ContextVar[CurrentCall | None] = ContextVar("viewsets_current_call", default=None)
 
 
-def set_execution_hook(hook: ExecutionHook | None) -> None:
-    """
-    Register a callable returning an async context manager that is entered right before the action
-    executes and exited when it has returned or raised. None removes it.
+def current_call() -> CurrentCall | None:
+    """The call `lifecycle_runner` is running in this task; None outside any call."""
+    return _current_call.get()
 
-    It runs where the action executes: in the FastAPI process for an in-process action, inside the
-    command middleware chain, and in the Celery worker (`celery_viewset_server`) for a
-    `celery_viewset` action, whose FastAPI side only dispatches and does not run it. An exception the
-    action raises reaches the context manager's `__aexit__` and propagates after it; an exception
-    raised by the context manager itself propagates in place of the action's outcome, and one raised
-    on entry keeps the action from running.
-    """
-    global _execution_hook
-    _execution_hook = hook
+
+def effective_middlewares(action_configuration: dict) -> list:
+    return settings.viewsets_command_middleware + extra_middlewares_for(
+        action_configuration, settings.viewsets_command_middleware
+    )
 
 
 async def lifecycle_runner(
@@ -68,6 +66,8 @@ async def lifecycle_runner(
     needs_context: bool = False,
     request: "Request | None" = None,
     forwards_request: bool = False,
+    context: Context | None = None,
+    parent: ExecutionRef | None = None,
     **kwargs,
 ):
     """
@@ -76,49 +76,53 @@ async def lifecycle_runner(
     it, and the chain is never invoked - the worker just executes the action and returns the plain
     result; command middleware only ever runs once that result is back in the FastAPI process.
 
-    `needs_context`/`request` are reserved for the context-processor mechanism (see
-    fastapi_viewsets/context): when needs_context is True, a Context is built (via
-    settings.viewsets_context_processors) against whichever instance ends up handling this
-    lifecycle and injected into kwargs as `context` before the endpoint runs. Callers that
-    already have a resolved context (e.g. `celery_viewset_server`, reconstructing it from a
-    Celery task payload) simply omit needs_context and pass `context` directly in kwargs.
-    `forwards_request` passes `request` on to an endpoint that declares a `request` parameter.
+    `context` is the call's data when the caller already has it (`celery_viewset_server`, from the
+    task payload); without it a Context is built via settings.viewsets_context_processors against
+    whichever instance ends up handling this lifecycle. Either way it is bound to this action's
+    configuration and is the context the middleware chains read. `needs_context` injects it into
+    kwargs as `context`, for a method declaring that parameter. `forwards_request` passes `request`
+    on to a method that declares a `request` parameter. `parent` is the execution in which the call
+    was dispatched.
 
-    The execution hook (see `set_execution_hook`) is entered around the method call itself, unless the
-    method is a `celery_viewset_client` dispatch stub (`CELERY_DISPATCH_ATTRIBUTE`).
+    `Middleware.execute()` of the effective middlewares runs around the method call itself, unless
+    the action is deferred on `cls` (`DEFERRED_ACTIONS_ATTRIBUTE`). While the method runs, the call
+    is readable through `current_call()`.
     """
 
     if forwards_request:
         kwargs["request"] = request
 
+    action = original_endpoint.__name__
     action_configuration: dict = {}
-    chain_context = kwargs.get("context")
+    chain_context: Context | None = None
 
     async def inject_context(req_instance: Any) -> None:
         nonlocal action_configuration, chain_context
-        # Resolved whether or not the route declares a `context` param: execute() needs it to
-        # compute any extra per-call middleware (see extra_middlewares_for), and the command
-        # middleware chain reads the context it is part of. Neither is built in the celery-worker
-        # path (no `response`), where command middleware never runs.
-        action_configuration = resolve_action_configuration(cls, original_endpoint.__name__)
-        if needs_context or response is not None:
-            chain_context = await get_shared_context(
-                request, req_instance, action_configuration, original_endpoint.__name__
-            )
+        action_configuration = resolve_action_configuration(cls, action)
+        if context is None:
+            chain_context = await get_shared_context(request, req_instance, action_configuration, action)
+        else:
+            chain_context = Context(context.raw(), action_configuration=action_configuration, action_name=action)
         if needs_context:
             kwargs["context"] = chain_context
 
     async def call_bound(req_instance: Any) -> Any:
-        bound_method = getattr(req_instance, original_endpoint.__name__, None)
-        if bound_method is not None:
-            call = lambda: bound_method(*args, **kwargs)
-        else:
-            call = lambda: original_endpoint(req_instance, *args, **kwargs)
-        hook = _execution_hook
-        if hook is None or getattr(bound_method or original_endpoint, CELERY_DISPATCH_ATTRIBUTE, False):
-            return await call()
-        async with hook(ActionExecution(cls, original_endpoint.__name__, chain_context, request)):
-            return await call()
+        bound_method = getattr(req_instance, action, None)
+        method = bound_method if bound_method is not None else functools.partial(original_endpoint, req_instance)
+        if action in getattr(cls, DEFERRED_ACTIONS_ATTRIBUTE, ()):
+            marker = _current_call.set(CurrentCall(chain_context, request, None, parent))
+            try:
+                return await method(*args, **kwargs)
+            finally:
+                _current_call.reset(marker)
+        execution = ActionExecution(cls, req_instance, action, args, dict(kwargs), chain_context, request, parent)
+        marker = _current_call.set(CurrentCall(chain_context, request, execution, parent))
+        try:
+            return await run_execution_chain(
+                effective_middlewares(action_configuration), execution, lambda: method(*args, **kwargs)
+            )
+        finally:
+            _current_call.reset(marker)
 
     async def execute(req_instance: Any) -> Any:
         if response is None:
@@ -134,10 +138,9 @@ async def lifecycle_runner(
             # through as-is.
             return raw if isinstance(raw, ViewSetResult) else ViewSetResult(body=raw)
 
-        effective_middlewares = settings.viewsets_command_middleware + extra_middlewares_for(
-            action_configuration, settings.viewsets_command_middleware
+        result = await run_command_chain(
+            effective_middlewares(action_configuration), request, req_instance, chain_context, final_handler
         )
-        result = await run_command_chain(effective_middlewares, request, req_instance, chain_context, final_handler)
         for key, value in result.headers.items():
             response.headers[key] = str(value)
         for key, value in result.cookies.items():

@@ -243,18 +243,19 @@ route_viewset-registered endpoint (lifecycle: singleton / per-request / instance
      │
      ├─ if lifecycle uses state:  await viewset.load_state()
      │
-     ├─ if the endpoint declares `context`:
-     │      reuse the already-built Context from the Depends() phase above (or build one now,
-     │      running settings.viewsets_context_processors, if depends() never touched it)
+     ├─ Context: reuse the one built in the Depends() phase above (or build one now, running
+     │      settings.viewsets_context_processors, if depends() never touched it); passed as
+     │      `context` to an endpoint that declares it
      │
      ▼
 Command middleware chain (settings.viewsets_command_middleware) — before phase, in list order
      │      (only meaningful for middleware with "after" work left to do - a middleware whose
      │       entire job lives in depends() is a trivial passthrough here)
      ▼
-perform_* execution
-     │      (optionally delegated: celery_viewset ships `context` to a worker,
-     │       awaits the result over Redis, and returns transparently)
+Middleware.execute() chain, around the viewset method, then perform_* execution
+     │      (optionally delegated: celery_viewset ships `context` to a worker, where the
+     │       execute() chain and the method run, awaits the result over Redis, and returns
+     │       transparently)
      │
      ▼
 Command middleware chain — after phase, unwinding in reverse order

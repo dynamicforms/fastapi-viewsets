@@ -12,8 +12,8 @@ from fastapi_viewsets.context import SerializableObject
 from fastapi_viewsets.decorators import (
     celery_viewset_client,
 )
-from fastapi_viewsets.decorators.lifecycle_runner import CELERY_DISPATCH_ATTRIBUTE
-from fastapi_viewsets.exceptions import ResultReaderStoppedError, ResultTimeoutError
+from fastapi_viewsets.decorators.lifecycle_runner import DEFERRED_ACTIONS_ATTRIBUTE
+from fastapi_viewsets.exceptions import ActionDispatchError, ResultReaderStoppedError, ResultTimeoutError
 from fastapi_viewsets.mixins import ListMixin
 
 
@@ -45,7 +45,7 @@ def test_celery_viewset_client_patches_methods():
 
     instance = ItemViewSet()
     assert asyncio.iscoroutinefunction(instance.list_items)
-    assert getattr(instance.list_items, CELERY_DISPATCH_ATTRIBUTE) is True
+    assert "list_items" in getattr(ItemViewSet, DEFERRED_ACTIONS_ATTRIBUTE)
 
 
 def test_celery_viewset_client_sends_task():
@@ -239,7 +239,7 @@ def test_celery_viewset_client_sends_task_with_ignore_result():
 
 
 def test_celery_viewset_client_unregisters_future_on_send_task_error():
-    """Client unregisters future when send_task raises an exception."""
+    """A send_task that raises fails the call with ActionDispatchError and unregisters the future."""
     from fastapi_viewsets.decorators.celery_viewset import result_reader
 
     celery_app = MagicMock()
@@ -254,8 +254,11 @@ def test_celery_viewset_client_unregisters_future_on_send_task_error():
     instance = ItemViewSet()
 
     async def run():
-        with pytest.raises(RuntimeError, match="Celery broker unavailable"):
+        with pytest.raises(ActionDispatchError) as raised:
             await instance.list_items()
+        assert raised.value.status_code == 503
+        assert raised.value.code == "action_dispatch_failed"
+        assert str(raised.value.__cause__) == "Celery broker unavailable"
         # Future should be unregistered after error
         assert len(result_reader._pending_futures) == 0
 
@@ -418,154 +421,86 @@ def test_celery_viewset_client_metadata():
 
 
 # ---------------------------------------------------------------------------
-# celery dispatch hook
+# call data
 # ---------------------------------------------------------------------------
 
 
-def test_celery_dispatch_hook_none_preserves_existing_behavior():
-    """With no hook registered, send_task kwargs are unchanged."""
-    from fastapi_viewsets.decorators.celery_viewset import client, result_reader
+def _resolving_register(result):
+    def register(_correlation_id, future, _queue_key=None):
+        asyncio.get_event_loop().call_soon(lambda: future.set_result(result))
 
-    celery_app = MagicMock()
-    redis_mock = MagicMock()
-
-    assert client._celery_dispatch_hook is None
-
-    original_register = result_reader.register_future
-
-    def mock_register(_correlation_id, future, _queue_key=None):
-        asyncio.get_event_loop().call_soon(lambda: future.set_result(["mocked"]))
-
-    result_reader.register_future = mock_register
-    try:
-
-        @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
-        class ItemViewSet(ListMixin[Item]):
-            async def perform_list(self) -> list[Item]:
-                return [Item(id=1, name="test")]
-
-        instance = ItemViewSet()
-        asyncio.run(instance.list_items())
-
-        sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
-        assert set(sent_kwargs) == {"_correlation_id", "_result_queue_key"}
-    finally:
-        result_reader.register_future = original_register
+    return register
 
 
-def test_celery_dispatch_hook_awaited_before_send_task():
-    """The hook is awaited, and its result merged into kwargs, before send_task is called."""
+def test_a_call_outside_any_call_carries_an_empty_context_and_no_request(monkeypatch):
     from fastapi_viewsets.decorators.celery_viewset import result_reader
-    from fastapi_viewsets.decorators.celery_viewset.client import set_celery_dispatch_hook
 
+    monkeypatch.setattr(result_reader, "register_future", _resolving_register([]))
     celery_app = MagicMock()
-    redis_mock = MagicMock()
 
-    call_order = []
-    received_kwargs = {}
-    celery_app.send_task.side_effect = lambda *_args, **_kwargs: call_order.append("send_task")
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
 
-    async def hook(kwargs):
-        received_kwargs.update(kwargs)
-        call_order.append("hook")
-        return {"_extra_field": "abc"}
+    asyncio.run(ItemViewSet().list_items())
 
-    original_register = result_reader.register_future
-
-    def mock_register(_correlation_id, future, _queue_key=None):
-        asyncio.get_event_loop().call_soon(lambda: future.set_result(None))
-
-    result_reader.register_future = mock_register
-    set_celery_dispatch_hook(hook)
-    try:
-
-        @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
-        class ItemViewSet(ListMixin[Item]):
-            async def perform_list(self) -> list[Item]:
-                return []
-
-        instance = ItemViewSet()
-        asyncio.run(instance.list_items())
-
-        assert call_order == ["hook", "send_task"]
-        sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
-        assert sent_kwargs["_extra_field"] == "abc"
-        assert received_kwargs == {}
-    finally:
-        set_celery_dispatch_hook(None)
-        result_reader.register_future = original_register
+    sent = celery_app.send_task.call_args.kwargs["kwargs"]
+    assert set(sent) == {"_context", "_request", "_parent", "_correlation_id", "_result_queue_key"}
+    assert (sent["_context"], sent["_request"], sent["_parent"]) == ({}, None, None)
 
 
-def test_celery_dispatch_hook_receives_call_kwargs():
-    """The hook receives the action's own kwargs, e.g. a Context put there by a context processor."""
+def test_a_dispatch_from_inside_an_execution_carries_its_context_request_and_parent(monkeypatch):
+    from fastapi import Request
+
+    from fastapi_viewsets.context import Context
     from fastapi_viewsets.decorators.celery_viewset import result_reader
-    from fastapi_viewsets.decorators.celery_viewset.client import set_celery_dispatch_hook
+    from fastapi_viewsets.decorators.lifecycle_runner import lifecycle_runner
 
+    monkeypatch.setattr(result_reader, "register_future", _resolving_register([]))
     celery_app = MagicMock()
-    redis_mock = MagicMock()
 
-    received_kwargs = {}
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
 
-    async def hook(kwargs):
-        received_kwargs.update(kwargs)
-        return {}
+    class Outer:
+        async def act(self):
+            return await ItemViewSet().list_items()
 
-    original_register = result_reader.register_future
+    request = Request({"type": "http", "method": "POST", "path": "/outer", "headers": [(b"x-a", b"1")]})
+    context = Context({"user": "u"})
+    asyncio.run(lifecycle_runner(Outer.act, Outer(), Outer, request=request, context=context))
 
-    def mock_register(_correlation_id, future, _queue_key=None):
-        asyncio.get_event_loop().call_soon(lambda: future.set_result(None))
-
-    result_reader.register_future = mock_register
-    set_celery_dispatch_hook(hook)
-    try:
-
-        @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
-        class ItemViewSet(ListMixin[Item]):
-            async def perform_list(self) -> list[Item]:
-                return []
-
-        instance = ItemViewSet()
-        asyncio.run(instance.list_items(fltr="mine"))
-
-        assert received_kwargs == {"fltr": "mine"}
-    finally:
-        set_celery_dispatch_hook(None)
-        result_reader.register_future = original_register
+    sent = celery_app.send_task.call_args.kwargs["kwargs"]
+    assert sent["_context"] == {"user": "u"}
+    assert (sent["_request"]["method"], sent["_request"]["path"]) == ("POST", "/outer")
+    assert sent["_request"]["headers"] == [["x-a", "1"]]
+    assert sent["_parent"] == {
+        "viewset_class": f"{Outer.__module__}.{Outer.__qualname__}",
+        "action": "act",
+        "parent": None,
+    }
 
 
-def test_celery_dispatch_hook_empty_dict_adds_nothing():
-    """A hook returning {} leaves send_task kwargs unchanged besides the built-in ones."""
+def test_a_context_the_caller_passes_replaces_the_calls(monkeypatch):
+    from fastapi_viewsets.context import Context
     from fastapi_viewsets.decorators.celery_viewset import result_reader
-    from fastapi_viewsets.decorators.celery_viewset.client import set_celery_dispatch_hook
 
+    monkeypatch.setattr(result_reader, "register_future", _resolving_register([]))
     celery_app = MagicMock()
-    redis_mock = MagicMock()
 
-    async def hook(_kwargs):
-        return {}
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self, _context) -> list[Item]:
+            return []
 
-    original_register = result_reader.register_future
+    asyncio.run(ItemViewSet().list_items(context=Context({"user": "given"})))
 
-    def mock_register(_correlation_id, future, _queue_key=None):
-        asyncio.get_event_loop().call_soon(lambda: future.set_result(None))
-
-    result_reader.register_future = mock_register
-    set_celery_dispatch_hook(hook)
-    try:
-
-        @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
-        class ItemViewSet(ListMixin[Item]):
-            async def perform_list(self) -> list[Item]:
-                return []
-
-        instance = ItemViewSet()
-        asyncio.run(instance.list_items())
-
-        sent_kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
-        assert set(sent_kwargs) == {"_correlation_id", "_result_queue_key"}
-    finally:
-        set_celery_dispatch_hook(None)
-        result_reader.register_future = original_register
+    sent = celery_app.send_task.call_args.kwargs["kwargs"]
+    assert sent["_context"] == {"user": "given"}
+    assert "context" not in sent
 
 
 # ---------------------------------------------------------------------------
@@ -613,3 +548,31 @@ def test_fastapi_client_endpoint_returns_200():
             assert celery_app.send_task.call_args[0][0] == "items.list_items"
     finally:
         result_reader.register_future = original_register
+
+
+def test_a_request_crosses_as_its_scope_without_the_body():
+    from fastapi import Request
+
+    from fastapi_viewsets.decorators.celery_viewset.payload import request_from_jsonable, request_to_jsonable
+
+    scope = {
+        "type": "http",
+        "method": "PATCH",
+        "scheme": "https",
+        "path": "/items/7",
+        "root_path": "",
+        "query_string": b"a=1&b=%C5%BE",
+        "headers": [(b"idempotency-key", b'"k"'), (b"host", b"example.com")],
+        "path_params": {"pk": 7},
+        "client": ("10.0.0.1", 5000),
+        "server": ("example.com", 443),
+    }
+    request = request_from_jsonable(request_to_jsonable(Request(scope)))
+
+    assert (request.method, request.url.path, request.url.scheme) == ("PATCH", "/items/7", "https")
+    assert dict(request.query_params) == {"a": "1", "b": "ž"}
+    assert request.headers["idempotency-key"] == '"k"'
+    assert request.path_params == {"pk": 7}
+    assert (request.client.host, request.client.port) == ("10.0.0.1", 5000)
+    assert request_to_jsonable(None) is None
+    assert request_from_jsonable(None) is None

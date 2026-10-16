@@ -86,7 +86,7 @@ def test_celery_viewset_server_execution():
 
     assert "items.list_items" in registered_tasks
     sync_func = registered_tasks["items.list_items"]
-    result = sync_func(context={})
+    result = sync_func()
     assert result == [Item(id=1, name="test")]
 
 
@@ -115,9 +115,9 @@ def test_celery_viewset_server_lifecycle_per_request():
             return [Counter.count]
 
     sync_func = registered_tasks["counter.list_items"]
-    res1 = sync_func(context={})
+    res1 = sync_func()
     assert res1 == [1]
-    res2 = sync_func(context={})
+    res2 = sync_func()
     assert res2 == [2]
 
 
@@ -144,7 +144,7 @@ def test_celery_viewset_server_pushes_result_to_redis():
             return [Item(id=1, name="test")]
 
     sync_func = registered_tasks["items.list_items"]
-    sync_func(context={}, _correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
+    sync_func(_correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
 
     redis_mock.rpush.assert_called_once()
     call_args = redis_mock.rpush.call_args
@@ -179,7 +179,7 @@ def test_celery_viewset_server_pushes_result_with_date_field_to_redis():
             return [ItemWithDate(id=1, created=date(2026, 8, 1), updated=datetime(2026, 8, 1, 12, 30))]
 
     sync_func = registered_tasks["items.list_items"]
-    sync_func(context={}, _correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
+    sync_func(_correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
 
     redis_mock.rpush.assert_called_once()
     payload = json.loads(redis_mock.rpush.call_args[0][1])
@@ -209,7 +209,7 @@ def test_celery_viewset_server_returns_json_trivial_value_once_pushed_to_redis()
             return [Item(id=1, name="test")]
 
     sync_func = registered_tasks["items.list_items"]
-    result = sync_func(context={}, _correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
+    result = sync_func(_correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
 
     assert result is True
     redis_mock.rpush.assert_called_once()
@@ -239,7 +239,7 @@ def test_celery_viewset_server_pushes_error_to_redis_on_exception():
 
     sync_func = registered_tasks["items.list_items"]
     with pytest.raises(ValueError, match="DB connection failed"):
-        sync_func(context={}, _correlation_id="err-corr-id", _result_queue_key="celery_viewset_results:items")
+        sync_func(_correlation_id="err-corr-id", _result_queue_key="celery_viewset_results:items")
 
     redis_mock.rpush.assert_called_once()
     call_args = redis_mock.rpush.call_args
@@ -274,7 +274,7 @@ def test_celery_viewset_server_pushes_http_exception_to_redis():
             raise HTTPException(status_code=404, detail="Item with pk 5 not found")
 
     sync_func = registered_tasks["items.list_items"]
-    result = sync_func(context={}, _correlation_id="http-corr-id", _result_queue_key="celery_viewset_results:items")
+    result = sync_func(_correlation_id="http-corr-id", _result_queue_key="celery_viewset_results:items")
     assert result is None
 
     redis_mock.rpush.assert_called_once()
@@ -305,7 +305,7 @@ def test_celery_viewset_server_no_redis_no_push():
             return [Item(id=1, name="test")]
 
     sync_func = registered_tasks["items.list_items"]
-    result = sync_func(context={}, _correlation_id="some-id", _result_queue_key="celery_viewset_results:items")
+    result = sync_func(_correlation_id="some-id", _result_queue_key="celery_viewset_results:items")
     assert result == [Item(id=1, name="test")]
 
 
@@ -423,11 +423,11 @@ def test_celery_viewset_server_pushes_viewset_result_to_redis():
         __router = APIRouter()
 
         @__router.post("go")
-        async def go(self, context) -> ViewSetResult[Item]:  # noqa: ARG002 - name matters, see _reconstruct_kwargs
+        async def go(self, context) -> ViewSetResult[Item]:  # noqa: ARG002 - the context is injected by name
             return ViewSetResult(body=Item(id=1, name="test"), status_code=200)
 
     sync_func = registered_tasks["items.go"]
-    sync_func(context={}, _correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
+    sync_func(_correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
 
     payload = json.loads(redis_mock.rpush.call_args[0][1])
     assert payload["result"]["__fpv_type__"] == "fastapi_viewsets.middleware.ViewSetResult"
@@ -459,7 +459,7 @@ def test_fastapi_server_endpoint_executes_directly():
             return [Item(id=42, name="server-item")]
 
     assert "items.list_items" in registered_tasks
-    result = registered_tasks["items.list_items"](context={})
+    result = registered_tasks["items.list_items"]()
     assert result == [Item(id=42, name="server-item")]
 
 
@@ -516,125 +516,6 @@ def test_reconstruct_kwargs_with_typevar_missing_field():
 
     assert isinstance(result["data"], Item)
     assert result["data"].name == "no id"
-
-
-# ---------------------------------------------------------------------------
-# celery kwargs hook
-# ---------------------------------------------------------------------------
-
-
-def test_celery_kwargs_hook_none_preserves_existing_behavior():
-    """With no hook registered, the sync wrapper behaves exactly as before."""
-    from fastapi_viewsets.decorators.celery_viewset import server
-
-    celery_app = MagicMock()
-    registered_tasks = {}
-
-    def mock_task(name, **_kwargs):
-        def deck(func):
-            registered_tasks[name] = func
-            return func
-
-        return deck
-
-    celery_app.task.side_effect = mock_task
-
-    assert server._celery_kwargs_hook is None
-
-    @celery_viewset_server(celery_app=celery_app, task_prefix="items")
-    class ItemViewSet(ListMixin[Item]):
-        async def perform_list(self, _context) -> list[Item]:
-            return [Item(id=1, name="test")]
-
-    sync_func = registered_tasks["items.list_items"]
-    result = sync_func(context={})
-    assert result == [Item(id=1, name="test")]
-
-
-def test_celery_kwargs_hook_called_before_reconstruct_kwargs():
-    """The hook receives raw kwargs, before _reconstruct_kwargs has turned dicts into models."""
-    from fastapi_viewsets.decorators.celery_viewset import server
-    from fastapi_viewsets.decorators.celery_viewset.server import set_celery_kwargs_hook
-
-    celery_app = MagicMock()
-    registered_tasks = {}
-
-    def mock_task(name, **_kwargs):
-        def deck(func):
-            registered_tasks[name] = func
-            return func
-
-        return deck
-
-    celery_app.task.side_effect = mock_task
-
-    seen_kwargs = {}
-
-    def hook(run, kwargs):
-        seen_kwargs.update(kwargs)
-        return run, kwargs
-
-    set_celery_kwargs_hook(hook)
-    try:
-
-        @celery_viewset_server(celery_app=celery_app, task_prefix="items")
-        class ItemViewSet(CreateMixin[int, Item]):
-            async def perform_create(self, _context, data: Item) -> Item:
-                return data
-
-        create_func = registered_tasks["items.create"]
-        create_func(context={}, data={"id": 1, "name": "raw"})
-
-        # If the hook ran after reconstruction, this would be an Item instance, not a dict.
-        assert seen_kwargs["data"] == {"id": 1, "name": "raw"}
-    finally:
-        set_celery_kwargs_hook(None)
-        assert server._celery_kwargs_hook is None
-
-
-def test_celery_kwargs_hook_can_replace_runner_and_consume_kwargs():
-    """The hook may swap out the runner and strip a kwarg the endpoint never declared."""
-    from fastapi_viewsets.decorators.celery_viewset.server import set_celery_kwargs_hook
-
-    celery_app = MagicMock()
-    registered_tasks = {}
-
-    def mock_task(name, **_kwargs):
-        def deck(func):
-            registered_tasks[name] = func
-            return func
-
-        return deck
-
-    celery_app.task.side_effect = mock_task
-
-    calls = []
-
-    def hook(run, kwargs):
-        kwargs = dict(kwargs)
-        kwargs.pop("_extra_field", None)
-
-        def wrapped_run(coro):
-            calls.append("wrapped_run")
-            return run(coro)
-
-        return wrapped_run, kwargs
-
-    set_celery_kwargs_hook(hook)
-    try:
-
-        @celery_viewset_server(celery_app=celery_app, task_prefix="items")
-        class ItemViewSet(ListMixin[Item]):
-            async def perform_list(self, _context) -> list[Item]:
-                return [Item(id=1, name="test")]
-
-        sync_func = registered_tasks["items.list_items"]
-        result = sync_func(context={}, _extra_field="unused-by-endpoint")
-
-        assert result == [Item(id=1, name="test")]
-        assert calls == ["wrapped_run"]
-    finally:
-        set_celery_kwargs_hook(None)
 
 
 def test_reconstruct_kwargs_with_full_model():
@@ -818,7 +699,7 @@ def test_celery_viewset_server_pushes_request_validation_error_as_422():
             raise RequestValidationError(errors)
 
     result = registered_tasks["items.list_items"](
-        context={}, _correlation_id="corr", _result_queue_key="celery_viewset_results:items"
+        _correlation_id="corr", _result_queue_key="celery_viewset_results:items"
     )
     assert result is None
     payload = json.loads(redis_mock.rpush.call_args[0][1])

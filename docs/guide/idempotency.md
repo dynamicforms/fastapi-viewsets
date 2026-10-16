@@ -78,6 +78,9 @@ rejected from `depends()`, before the request body is parsed.
   code, `detail` and headers, a `DfViewSetError` with its `code` and `params`. A
   `RequestValidationError` raised by the action is replayed as a `422` with its errors as `detail`.
   Any other exception is replayed as a `500` with `detail` `"Internal Server Error"`.
+- **A call that was not handed to its executor is not an outcome.** For an `ActionDispatchError`
+  (a `celery_viewset` task that could not be sent) the record is deleted, and a repeat runs the call
+  again.
 - **What is stored depends on the method.**
   - `POST`, `PUT`, `PATCH`, `DELETE`: the outcome is stored.
   - `GET`, `HEAD`: the outcome is stored only when a repeat attached to the call while it ran. A

@@ -1,19 +1,20 @@
 import asyncio
+import inspect
 import logging
 import uuid
 
-from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel
 
 from ...context import Context, SerializableObject, serialize_context, to_jsonable
-from ...exceptions import ResultTimeoutError
+from ...exceptions import ActionDispatchError, ResultTimeoutError
 from ..build_schema import build_schema
-from ..lifecycle_runner import CELERY_DISPATCH_ATTRIBUTE
+from ..lifecycle_runner import current_call, DEFERRED_ACTIONS_ATTRIBUTE
 from ..primary_key_model_helper import PARTIAL_UPDATE_ACTIONS
 from . import result_reader
+from .payload import CONTEXT_KWARG, PARENT_KWARG, REQUEST_KWARG, request_to_jsonable
 from .result_reader import get_process_queue_key, get_result_queue_key
 
 if TYPE_CHECKING:
@@ -25,20 +26,6 @@ T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
 DEFAULT_RESULT_TIMEOUT = 3600.0
-
-_celery_dispatch_hook: Callable[[dict], Awaitable[dict]] | None = None
-
-
-def set_celery_dispatch_hook(hook: Callable[[dict], Awaitable[dict]] | None) -> None:
-    """Register a callable awaited just before send_task; its return dict is merged into kwargs.
-
-    Receives the call's current kwargs (context included, if the action declares one) so a
-    registered hook can read what a context processor already put there instead of needing its own
-    request-level plumbing. Returns {} when there is nothing to add.
-    """
-    global _celery_dispatch_hook
-    _celery_dispatch_hook = hook
-
 
 # queue_keys registered by celery_viewset_client so far - populated at decoration (import) time,
 # used by check_result_readers() to spot a queue_key with no running result reader.
@@ -112,8 +99,13 @@ async def _serialize_value(value, partial: bool = False):
 def _patch_method(
     cls: type, original_endpoint, task_name: str, celery_app, queue_key: str, result_timeout: float | None
 ):
-    """Replace the method on cls with an async version that sends a Celery task and awaits the result."""
+    """Replace the method on cls with an async version that sends a Celery task and awaits the result.
+
+    The task carries the call's context, request and parent execution (see `payload`) from
+    `current_call()`; a `context` the caller passes replaces the call's. A send that fails raises
+    `ActionDispatchError`. The action's name joins the class's `DEFERRED_ACTIONS_ATTRIBUTE`."""
     method_name = original_endpoint.__name__
+    declares_request = "request" in inspect.signature(original_endpoint).parameters
 
     @wraps(original_endpoint)
     async def async_client_wrapper(_self, *args, **kwargs):
@@ -123,32 +115,41 @@ def _patch_method(
         result_reader.register_future(correlation_id, future, queue_key)
 
         try:
+            call = current_call()
+            context = kwargs.pop("context", None)
+            if context is None:
+                context = call.context if call is not None else Context({})
+            if declares_request:
+                kwargs.pop("request", None)
+            parent = call.parent_of_dispatch() if call is not None else None
             serializable_args = [await _serialize_value(v) for v in args]
-            serializable_kwargs = {}
-            for k, v in kwargs.items():
-                if k == "context":
-                    serializable_kwargs[k] = await serialize_context(v.raw())
-                else:
-                    serializable_kwargs[k] = await _serialize_value(v, method_name in PARTIAL_UPDATE_ACTIONS)
+            serializable_kwargs = {
+                k: await _serialize_value(v, method_name in PARTIAL_UPDATE_ACTIONS) for k, v in kwargs.items()
+            }
             logger.info("Celery task scheduling: %s (correlation_id=%s)", task_name, correlation_id)
-            extra_kwargs = await _celery_dispatch_hook(kwargs) if _celery_dispatch_hook is not None else {}
-            # send_task() blocks while it connects and publishes to the broker.
-            await asyncio.to_thread(
-                celery_app.send_task,
-                task_name,
-                args=serializable_args,
-                kwargs={
-                    **serializable_kwargs,
-                    "_correlation_id": correlation_id,
-                    "_result_queue_key": get_process_queue_key(queue_key),
-                    **extra_kwargs,
-                },
-                # send_task() defaults ignore_result to False regardless of what the task was
-                # registered with (celery_viewset_server sets ignore_result=True) - Celery's
-                # per-request value overrides the task's own, so it must be repeated here or the
-                # worker still tries to JSON-encode the raw return value into its result backend.
-                ignore_result=True,
-            )
+            try:
+                # send_task() blocks while it connects and publishes to the broker.
+                await asyncio.to_thread(
+                    celery_app.send_task,
+                    task_name,
+                    args=serializable_args,
+                    kwargs={
+                        **serializable_kwargs,
+                        CONTEXT_KWARG: await serialize_context(context.raw()),
+                        REQUEST_KWARG: request_to_jsonable(call.request if call is not None else None),
+                        PARENT_KWARG: parent.to_jsonable() if parent is not None else None,
+                        "_correlation_id": correlation_id,
+                        "_result_queue_key": get_process_queue_key(queue_key),
+                    },
+                    # send_task() defaults ignore_result to False regardless of what the task was
+                    # registered with (celery_viewset_server sets ignore_result=True) - Celery's
+                    # per-request value overrides the task's own, so it must be repeated here or the
+                    # worker still tries to JSON-encode the raw return value into its result backend.
+                    ignore_result=True,
+                )
+            except Exception as error:
+                logger.error("Celery task not sent: %s (correlation_id=%s)", task_name, correlation_id)
+                raise ActionDispatchError(task_name) from error
             try:
                 return await asyncio.wait_for(future, result_timeout)
             except asyncio.TimeoutError:
@@ -157,5 +158,5 @@ def _patch_method(
         finally:
             result_reader.unregister_future(correlation_id)
 
-    setattr(async_client_wrapper, CELERY_DISPATCH_ATTRIBUTE, True)
     setattr(cls, method_name, async_client_wrapper)
+    setattr(cls, DEFERRED_ACTIONS_ATTRIBUTE, frozenset(getattr(cls, DEFERRED_ACTIONS_ATTRIBUTE, ())) | {method_name})

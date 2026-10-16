@@ -49,6 +49,7 @@ The handler is registered on the application, so it shapes a `DfViewSetError` ov
 | `IdempotencyKeyReusedError(key)` | 422 | `idempotency_key_reused` | `{key}` |
 | `ResultTimeoutError(task, timeout)` | 504 | `result_timeout` | `{task, timeout}` |
 | `ResultReaderStoppedError(queue_key)` | 503 | `result_reader_stopped` | `{queue_key}` |
+| `ActionDispatchError(task)` | 503 | `action_dispatch_failed` | `{task}` |
 | `UnsupportedListShapeError(shape, allowed)` | 422 | `unsupported_list_shape` | `{shape, allowed}` |
 | `CursorRequestError(error)` | 400 | one of the cursor codes below | varies |
 

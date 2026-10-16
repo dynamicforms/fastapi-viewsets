@@ -7,6 +7,19 @@ releases at once, work from the bottom of the page upwards.
 
 ## Upgrading to v0.9.0 (from v0.8.x)
 
+- [ ] `set_celery_dispatch_hook` and `set_celery_kwargs_hook` are removed. Code that carried data to
+      the worker through them puts the data into the context with a context processor; the context
+      reaches the worker for every action. Code that wrapped the execution in the worker moves into
+      [`Middleware.execute()`](./command-middleware#around-the-execution-middleware-execute), and the
+      worker process sets the same `settings.viewsets_command_middleware`. Code that watched the
+      broker publish catches `ActionDispatchError` in `__call__`.
+- [ ] Deploy the FastAPI processes and the Celery workers together: the task's kwargs changed (the
+      context is sent as `_context`, with `_request` and `_parent` beside it).
+- [ ] A test that calls a `celery_viewset_server` task with `context={...}` passes
+      `_context={...}` instead, or nothing for an empty context.
+- [ ] Add the code `action_dispatch_failed` to the application's error translations; see
+      [Error codes](./error-codes#codes). A call whose task could not be sent raised the error of
+      `send_task` before; it raises `ActionDispatchError` (503) with that error as `__cause__`.
 - [ ] muxws: cancelling a stream, or losing the socket, no longer cancels the request it carries; the
       request runs to completion and its answer is discarded. An application that relied on
       cancelling the stream to stop an action stops it through the application instead.

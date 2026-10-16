@@ -70,6 +70,14 @@ class ResultReaderStoppedError(DfViewSetError):
         super().__init__(503, message, "result_reader_stopped", {"queue_key": queue_key})
 
 
+class ActionDispatchError(DfViewSetError):
+    """A `celery_viewset` call that could not be handed to its executor; the action did not run. The
+    error that prevented it is the `__cause__`."""
+
+    def __init__(self, task: str):
+        super().__init__(503, f"{task} could not be handed to its executor", "action_dispatch_failed", {"task": task})
+
+
 class IdempotencyKeyInvalidError(DfViewSetError):
     """An `Idempotency-Key` header that is not a single, non-empty Structured Field string."""
 

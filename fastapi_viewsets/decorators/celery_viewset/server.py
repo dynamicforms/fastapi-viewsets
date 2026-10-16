@@ -1,12 +1,12 @@
 import asyncio
+import contextlib
 import functools
 import inspect
 import logging
 import types
 
-from collections.abc import Callable
 from functools import wraps
-from typing import get_args, get_origin, get_type_hints, TYPE_CHECKING, TypeVar, Union
+from typing import Any, get_args, get_origin, get_type_hints, TYPE_CHECKING, TypeVar, Union
 
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -14,6 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from ...context import Context, deserialize_context, to_jsonable
+from ...middleware import ExecutionRef
 from ..build_schema import build_schema
 from ..lifecycle_runner import lifecycle_runner, LifecycleType
 from ..primary_key_model_helper import (
@@ -24,6 +25,7 @@ from ..primary_key_model_helper import (
     typecast_to_original_model,
 )
 from ..route_viewset import build_type_map, resolve_typevars
+from .payload import CONTEXT_KWARG, PARENT_KWARG, request_from_jsonable, REQUEST_KWARG
 from .result_reader import push_payload
 
 if TYPE_CHECKING:
@@ -34,19 +36,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-_celery_kwargs_hook: Callable[[Callable, dict], tuple[Callable, dict]] | None = None
-
-
-def set_celery_kwargs_hook(hook: Callable[[Callable, dict], tuple[Callable, dict]] | None) -> None:
-    """Register a callable that may wrap the runner and/or consume kwargs before reconstruction.
-
-    Receives (runner, kwargs), must return (runner, kwargs). Called with kwargs still raw - before
-    _reconstruct_kwargs, which passes through any key it has no type hint for, so a key the hook
-    does not consume would otherwise reach the action as an argument it never declared.
-    """
-    global _celery_kwargs_hook
-    _celery_kwargs_hook = hook
 
 
 def _unwrap_optional(hint):
@@ -119,17 +108,11 @@ _model_without_pk = functools.lru_cache(create_model_without_pk)
 def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> dict:
     """Reconstruct dict values back into Pydantic BaseModel instances based on endpoint type hints.
 
-    `context` is handled unconditionally (by name, not by type hint) via deserialize_context - see
-    fastapi_viewsets/context - since its declared type is a plain Context and its actual values
-    may need SerializableObject-aware reconstruction.
+    The call's context, request and parent arrive under the reserved kwargs of `payload`, which the
+    task consumes before this runs.
     """
     result = {}
-    remaining = {}
-    for key, value in kwargs.items():
-        if key == "context" and isinstance(value, dict):
-            result[key] = Context(deserialize_context(value))
-        else:
-            remaining[key] = value
+    remaining = dict(kwargs)
 
     try:
         hints = get_type_hints(original_endpoint)
@@ -154,6 +137,22 @@ def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> di
     return result
 
 
+def _run_to_end(loop: asyncio.AbstractEventLoop, coroutine) -> Any:
+    """Runs `coroutine` on `loop` as a task and returns its result. An exception that interrupts the
+    loop while the task is suspended (Celery's time limit, raised from a signal handler) cancels the
+    task and runs it until it has unwound, so its `finally` blocks and `Middleware.execute()` see the
+    interruption; the exception is then raised."""
+    task = loop.create_task(coroutine)
+    try:
+        return loop.run_until_complete(task)
+    except BaseException:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(BaseException):  # the interruption is what propagates
+                loop.run_until_complete(task)
+        raise
+
+
 def celery_viewset_server(
     celery_app: "Celery",
     task_prefix: str,
@@ -165,6 +164,8 @@ def celery_viewset_server(
         instance = cls() if lifecycle == "singleton" else None
 
         def get_sync_wrapper(original_endpoint, task_name: str):
+            parameters = inspect.signature(original_endpoint).parameters
+
             @wraps(original_endpoint)
             def sync_wrapper(*args, **kwargs):
                 nonlocal instance
@@ -186,11 +187,26 @@ def celery_viewset_server(
 
                 logger.info("Celery task executing: %s (correlation_id=%s)", task_name, correlation_id)
                 try:
-                    run = loop.run_until_complete
-                    if _celery_kwargs_hook is not None:
-                        run, kwargs = _celery_kwargs_hook(run, kwargs)
+                    context = Context(deserialize_context(kwargs.pop(CONTEXT_KWARG, None) or {}))
+                    request = request_from_jsonable(kwargs.pop(REQUEST_KWARG, None))
+                    parent = ExecutionRef.from_jsonable(kwargs.pop(PARENT_KWARG, None))
                     kwargs = _reconstruct_kwargs(original_endpoint, kwargs, cls)
-                    result = run(lifecycle_runner(original_endpoint, instance, cls, lifecycle, *args, **kwargs))
+                    result = _run_to_end(
+                        loop,
+                        lifecycle_runner(
+                            original_endpoint,
+                            instance,
+                            cls,
+                            lifecycle,
+                            *args,
+                            needs_context="context" in parameters,
+                            request=request,
+                            forwards_request="request" in parameters,
+                            context=context,
+                            parent=parent,
+                            **kwargs,
+                        ),
+                    )
                     logger.info("Celery task completed: %s (correlation_id=%s)", task_name, correlation_id)
                     if correlation_id and result_queue_key and redis_client is not None:
                         push_payload(

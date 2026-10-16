@@ -103,7 +103,9 @@ Building it centrally matters because a viewset's execution can be transparently
 `celery_viewset` section in
 [Routers & Decorators](./routers)): the worker process has no live `Request` to build a context
 from, so the context has to be built in the FastAPI process (which has the `Request`) and carried
-across the Celery/Redis boundary to the worker.
+across the Celery/Redis boundary to the worker. It is carried for every action, whether or not the action declares a
+`context` parameter, so [`Middleware.execute()`](./command-middleware#around-the-execution-middleware-execute)
+reads it in the worker as well.
 
 ## Custom (de)serialization: `SerializableObject` and `LazyObject`
 
@@ -232,8 +234,8 @@ getting its own, fully independent instance.
 
 ::: warning `SerializableObject`/`LazyObject` construction must be loop-independent
 `__init__`/`__deserialize__`/`deserialize_recipe` must never create real `asyncio` objects (a
-`Future`/`Task`) - reconstruction happens synchronously in `celery_viewset_server`'s
-`_reconstruct_kwargs`, before the worker's event loop starts. `LazyObject`'s own implementation
+`Future`/`Task`) - reconstruction happens synchronously in `celery_viewset_server`'s task,
+before the worker's event loop runs the action. `LazyObject`'s own implementation
 only creates its internal `Future` lazily, on first `await`, which is always guaranteed to run
 inside a live event loop.
 :::
