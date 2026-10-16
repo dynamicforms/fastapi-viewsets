@@ -15,10 +15,10 @@ function route_muxws<M>(viewSetClass: ViewSetClass, options: MuxwsProxyOptions):
 ```
 
 `viewSetClass` is used for its `static declares` only, which is handed to the proxy for the schema
-check. `MuxwsProxy<M>` is `ViewSetCalls<M>`: `M` with every method returning a
-[`ViewSetCall`](./idempotency#frontend), an instance of `MuxwsProxyImpl` cast to it, unchecked, as
-[`route_rest`'s return value](./route-rest#return-value) is. Passing a factory-built class fails to
-compile.
+check. `MuxwsProxy<M>` is `ViewSetCalls<M>`, `M` with every method returning a
+[`ViewSetCall`](./idempotency#frontend), and [`watch()`](./vue-mixins#watch). It is an instance of
+`MuxwsProxyImpl` cast to it, unchecked, as [`route_rest`'s return value](./route-rest#return-value)
+is. Passing a factory-built class fails to compile.
 
 ## MuxwsProxyOptions
 
@@ -32,6 +32,8 @@ interface MuxwsProxyOptions {
   declares?: readonly ViewSetMixinDeclaration[];
   /** When a call whose attempt ended without an answer is repeated. */
   repeat?: RepeatOptions;
+  /** The event client watch() subscribes on; without it, the client registered for the peer. */
+  events?: EventClient;
   peer: MuxwsPeerSource;
   /** Per-attempt timeout in milliseconds, the wait for the reply headers included. */
   timeoutMs?: number;
@@ -46,6 +48,7 @@ interface MuxwsProxyOptions {
 | `timeoutMs` | Bounds an attempt from opening the stream to the last byte of the reply; muxws resets the stream with `TIMEOUT` and the call is repeated at once, or rejects with that `StreamTimeout` when it is not repeated. Unset, an attempt has no timeout |
 | `headers` | Sent on every call; a pseudo-header (`:method`, `:path`, `:query`) and `Idempotency-Key` (in any letter case) cannot be overridden |
 | `repeat` | [`RepeatOptions`](./idempotency#repeatoptions); default `{ withinMs: 600000, delayMs: 1000 }` |
+| `events` | The event client [`watch()`](./vue-mixins#watch) subscribes on. Without it, `watch()` uses `eventsOf(peer)`, and throws for a peer without a client; before a function `peer` has resolved, the subscription is made once it has; for a peer without a client its `ready` rejects, and the error goes to `onError`, or is rethrown in a microtask without one |
 
 ## Peer types
 
@@ -71,7 +74,7 @@ interface MuxwsPeerLike {
 
 type MuxwsPeerSource = MuxwsPeerLike | (() => MuxwsPeerLike | Promise<MuxwsPeerLike>);
 
-type MuxwsProxy<M> = ViewSetCalls<M>;
+type MuxwsProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>>;
 ```
 
 A muxws `Peer` satisfies `MuxwsPeerLike`. A repeat after a lost connection waits for the peer while
@@ -98,7 +101,10 @@ stream without `headers` leaves the repeat with the headers the proxy built.
 ## ViewSetProxyBase
 
 `RestProxyImpl` and `MuxwsProxyImpl` both extend `ViewSetProxyBase<K, T, PK>`, which implements
-every standard action against the abstract `request()`. A transport of one's own extends it,
+every standard action against the abstract `request()`, and [`watch()`](./vue-mixins#watch) against
+the protected `eventClient(): EventClient | Promise<EventClient>`. `eventClient()` answers
+`ProxyBaseOptions.events` and throws without it; `MuxwsProxyImpl` overrides it to fall back to
+`eventsOf(peer)`. A transport of one's own extends it,
 implements `request()`, and calls `initSchemaValidation()` as the last statement of its constructor.
 
 `request()` returns a `ViewSetCall<R>`: it takes the key from `options.key` or `newCallKey()`, sends

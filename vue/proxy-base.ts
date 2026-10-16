@@ -20,6 +20,8 @@
  */
 
 import { bindCallKeys, type RepeatOptions, type ViewSetActionCall, type ViewSetCall } from './call';
+import { type ViewSetWatch, watchRecords, type WatchOptions } from './events/changes';
+import type { EventClient, EventSubscription } from './events/client';
 import type {
   ActionName,
   BulkViewSetMixin,
@@ -35,6 +37,8 @@ import type {
   PaginatedList,
   PaginatedListMixin,
 } from './mixins';
+
+export { ViewSetRequestError } from './errors';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -86,27 +90,6 @@ function listShapeOf(body: unknown): ListShape | 'unknown' {
   if ('offset' in body) return 'paginated';
   if ('next' in body && 'has_more' in body) return 'cursor';
   return 'unknown';
-}
-
-/**
- * What a failed call throws over muxws, where there is no axios to raise anything.
- *
- * The shape mirrors `AxiosError` — `error.response.status`, `error.response.data` and
- * `error.response.headers` — so a caller reads the same fields whichever transport the ViewSet
- * speaks. Over HTTP axios raises its own error, already in that shape, and it is passed through
- * untouched.
- *
- * `response` is always set here, unlike `AxiosError.response`, which is absent when the request
- * never reached a reply.
- */
-export class ViewSetRequestError extends Error {
-  readonly response: { status: number; data: unknown; headers: Record<string, string> };
-
-  constructor(status: number, data: unknown, headers: Record<string, string> = {}) {
-    super(`Request failed with status code ${status}`);
-    this.name = 'ViewSetRequestError';
-    this.response = { status, data, headers };
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +210,11 @@ export interface ProxyBaseOptions {
   declares?: readonly ViewSetMixinDeclaration[];
   /** When the proxy repeats a call whose attempt ended without an answer. See `RepeatOptions`. */
   repeat?: RepeatOptions;
+  /**
+   * The event client `watch()` subscribes on. A muxws ViewSet without it uses the client registered
+   * for its peer; a REST ViewSet without it throws from `watch()`.
+   */
+  events?: EventClient;
 }
 
 /**
@@ -270,7 +258,7 @@ export abstract class ViewSetInternals {
 
 export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   extends ViewSetInternals
-  implements BulkViewSetMixin<K, T, PK>, CursorListMixin<T>, PaginatedListMixin<T>, LookupMixin
+  implements BulkViewSetMixin<K, T, PK>, CursorListMixin<T>, PaginatedListMixin<T>, LookupMixin, ViewSetWatch<T, K>
 {
   /**
    * The mixins this ViewSet is composed of — the FE counterpart of a BE viewset's base classes.
@@ -299,6 +287,9 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   /** `ProxyBaseOptions.repeat`, for the transport's `request()`. */
   protected readonly repeatOptions?: RepeatOptions;
 
+  /** `ProxyBaseOptions.events`. */
+  protected readonly eventClientOption?: EventClient;
+
   /**
    * Binds every method of the class chain to set the `key` of the call it issues on the promise it
    * returns (see call.ts's `bindCallKeys`). The methods are bound per instance, here, so a subclass's
@@ -310,6 +301,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     this.schemaValidationEnabled = options.validateSchema !== false;
     this.declaredMixins = options.declares;
     this.repeatOptions = options.repeat;
+    this.eventClientOption = options.events;
     bindCallKeys(this, Object.prototype);
   }
 
@@ -423,6 +415,29 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     } catch {
       // Schema validation is non-critical; ignore fetch/parse errors silently
     }
+  }
+
+  /**
+   * The client `watch()` subscribes on: `ProxyBaseOptions.events`. Throws without it; the muxws
+   * proxy falls back to its peer's client.
+   */
+  protected eventClient(): EventClient | Promise<EventClient> {
+    if (this.eventClientOption) return this.eventClientOption;
+    throw new Error(
+      `[ViewSet ${this.basePath}] watch() needs an event client: pass \`events\` in the ViewSet's options`,
+    );
+  }
+
+  /**
+   * Subscribes `basePath` to `records_changed`; see `WatchOptions`. With `fetch`, a change without
+   * `record` is completed with `retrieve(pk)`.
+   */
+  watch(options: WatchOptions<T, K>): EventSubscription {
+    return watchRecords<T, K>(
+      { topic: this.basePath, retrieve: (pk) => this.retrieve(pk) },
+      this.eventClient(),
+      options,
+    );
   }
 
   create(data: Omit<T, PK>): ViewSetActionCall<T> {

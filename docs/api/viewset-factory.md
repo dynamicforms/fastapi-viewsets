@@ -54,6 +54,9 @@ type PkFieldName<T> = Extract<
   string
 >;
 
+/** The pk type of the model's pk field. */
+type PkType<T, PK extends keyof T> = NonNullable<T[PK]> & KeyType;
+
 type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> =
   // `[]` builds a ViewSet with no standard action; a list whose mixins name no action resolves to
   // its own error message, see TS2507 below.
@@ -65,7 +68,8 @@ type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinClass[],
 
 type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> = {
   new (options: Omit<O, 'pkFieldName' | 'declares'>): ViewSetInternals &
-    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>> & { readonly pkFieldName: PK };
+    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>> &
+    ViewSetWatch<T, PkType<T, PK>> & { readonly pkFieldName: PK };
   readonly declares: FactoryDeclares<D>;
 };
 
@@ -102,6 +106,7 @@ interface Options {
   basePath: string;
   validateSchema?: boolean;
   repeat?: RepeatOptions;
+  events?: EventClient;
   axiosInstance?: AxiosInstance;
   attemptTimeoutMs?: number;
 }
@@ -111,6 +116,7 @@ interface Options {
   basePath: string;
   validateSchema?: boolean;
   repeat?: RepeatOptions;
+  events?: EventClient;
   peer: MuxwsPeerSource;
   timeoutMs?: number;
   headers?: Record<string, string>;
@@ -122,11 +128,21 @@ interface Options {
 | `basePath` | `string` | — | Base path to the resource, e.g. `'/items'`. A trailing slash is stripped. |
 | `validateSchema` | `boolean` | `true` | Set `false` to skip the startup schema check (it is advisory and costs one request). |
 | `repeat` | [`RepeatOptions`](./idempotency#repeatoptions) | `{ withinMs: 600000, delayMs: 1000 }` | When a call whose attempt ended without an answer is repeated; see [Idempotent Calls](../guide/idempotency#repeats). |
+| `events` | `EventClient` | — | The event client [`watch()`](./vue-mixins#watch) subscribes on. Without it, a muxws ViewSet uses the client registered for its peer and a REST ViewSet throws from `watch()`. |
 | `axiosInstance` | `AxiosInstance` | global `axios` | REST only. |
 | `attemptTimeoutMs` | `number` | `30000` | REST only. Timeout of one attempt, passed to axios as `timeout`; `0` for none. |
 | `peer` | `MuxwsPeerSource` | — | muxws only. A `Peer`, or a function returning one — called once and cached. |
 | `timeoutMs` | `number` | — | muxws only. Per-attempt timeout, covering the wait for the reply headers and for the body; muxws resets the stream with `TIMEOUT` when it expires and the call is repeated, or rejects with its `StreamTimeout` when it is not. |
 | `headers` | `Record<string, string>` | `{}` | muxws only. Headers added to every request; a call's `RequestOptions.headers` override them. |
+
+## watch()
+
+Every class the factory builds has `watch(options)`, whatever `declares` holds, typed as
+`ViewSetWatch<T, PkType<T, PK>>`: `onChange` receives `RecordsChanged<T, PkType<T, PK>>`. It
+subscribes `basePath` to `records_changed` on the `events` client of the options; without one, a
+`muxwsViewSet` class uses the client registered for its peer, and a `restViewSet` class throws. With
+`fetch: true` it calls `retrieve(pk)` of the proxy underneath, whether or not `declares` names
+`RetrieveMixin`. See [`watch()`](./vue-mixins#watch).
 
 ## Inside the class body
 

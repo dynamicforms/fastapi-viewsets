@@ -58,3 +58,23 @@ export { route_muxws, MuxwsProxyImpl } from './muxws-proxy';
 
 export type { ApiErrorBody, ErrorDescription, FieldErrorEntry, FieldErrorsBody } from './errors';
 export { toErrorDescription, toFieldErrors } from './errors';
+
+export type {
+  EventAxiosLike,
+  EventClient,
+  EventClientOptions,
+  EventDefinition,
+  EventHandlers,
+  EventMeta,
+  EventPeerLike,
+  EventStreamHandler,
+  EventStreamLike,
+  EventSubscription,
+} from './events';
+export { attachEvents, createEventClient, defineEvent, eventsOf, handleEventStream } from './events';
+
+export type { Change, KeyOf, RecordOf, RecordsChanged, ViewSetWatch, WatchOptions } from './events';
+export { applyChanges, RECORDS_CHANGED } from './events';
+
+export type { Draw, PollLadderState, PollSettings } from './events';
+export { DEFAULT_POLL_SETTINGS, jitterMultiplier, ladderInterval, nextDelay, PollLadder } from './events';

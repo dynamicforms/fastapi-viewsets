@@ -23,7 +23,8 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
 - **Events** — publish an event to a topic and every frontend following it learns of it, as a muxws
   push or on its next poll. `ChangeEvents` publishes every create, update and destroy of a viewset to
   its routed base path; custom events are declared with `source()`. Every event is recorded before it
-  is pushed, so a dropped push costs latency, not an event.
+  is pushed, so a dropped push costs latency, not an event. On the frontend, `watch()` on a ViewSet
+  follows its topic and `applyChanges()` applies each change to a list of rows.
 - **Three list shapes** — a bare array, offset paging, or cursor paging. A viewset declares which,
   and may let a client pick per request with an `X-List-Shape` header.
 - **Declarative filters** — declare which fields accept which operators and get query parameters,

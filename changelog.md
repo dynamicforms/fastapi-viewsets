@@ -59,12 +59,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `__viewset_action__` on every endpoint it adds to the router. The dependency it adds to each route
   to run `Middleware.depends()` carries `MIDDLEWARE_DEPENDS_ATTRIBUTE`
   (`fastapi_viewsets.decorators.route_viewset`).
+- npm: the event client. `createEventClient({ basePath, peer?, axios?, pollSettings?, draw? })`
+  follows topics the backend publishes events to: pushes over a muxws peer, `subscribe` and
+  `unsubscribe` over the peer, and `poll` over the peer or over axios. `subscribe(topic, event,
+  handlers)` returns an `EventSubscription` (`ready`, `unsubscribe()`, `onError`); `close()` stops
+  the client. One client per peer; `eventsOf(peer)` returns it.
+- npm: `defineEvent<P>(name)`, `EventDefinition`, `EventHandlers` (`onEvent(payload, meta)`,
+  `onResync`, `onError`), `EventMeta` (`topic`, `rev`, `prev`, `version`), `EventClient`,
+  `EventClientOptions`, `EventPeerLike`, `EventStreamLike`, `EventStreamHandler` and
+  `EventAxiosLike`.
+- npm: event versions. The client reads an event's version from the push's `:version` header and
+  from the poll answer entry's `version`, dispatches by topic and event name whatever the version,
+  and passes it to `onEvent` in `EventMeta`; `P` of `defineEvent<P>` describes the payloads of every
+  version a subscription handles. A push without a usable `:version` is ignored; a poll answer
+  entry without one is malformed and resyncs the topic.
+- npm: `attachEvents(peer, fallback?)`, which installs the peer's `onStream` handler, and
+  `handleEventStream(peer, payload, stream)`, for a handler of one's own.
+- npm: per topic the client applies an event whose `prev` is the rev it holds, answers a gap with
+  one poll and a poll the backend's log cannot answer with `onResync`. Without an open peer it polls
+  every followed topic in one call per rung of the polling ladder; on `onReconnect` it subscribes
+  every topic again.
+- npm: the polling ladder, `PollSettings`, `DEFAULT_POLL_SETTINGS` (400 ms base, ×1.5, 5000 ms
+  ceiling, ±20 % jitter), `PollLadderState`, `Draw`, `ladderInterval`, `jitterMultiplier`,
+  `nextDelay` and `PollLadder`. `poll_after_ms` of a poll answer is a floor on the delay.
+- npm: `watch(options)` on every ViewSet (`ViewSetWatch`, `WatchOptions`): subscribes the ViewSet's
+  `basePath` to `records_changed` and calls `onChange` with the `RecordsChanged` payload and the
+  `EventMeta` of a version-1 event, and `onResync` for an event of any other version; `fetch: true`
+  completes a change without `record` with `retrieve(pk)`. The `events`
+  option on every ViewSet and proxy names the client; a muxws ViewSet without it uses
+  `eventsOf(peer)`.
+- npm: `RecordsChanged`, `Change`, `RECORDS_CHANGED`, `applyChanges(rows, change, pkFieldName)`,
+  `RecordOf` and `KeyOf`.
 
 ### Changed
 
 - `CollectionViewSet.pk_field_name` is the viewset's `pk_field`, ahead of `ListMixin`'s default
   `"id"`; the cursor list shape orders by it.
 - The `muxws` extra requires `muxws>=0.4.1`, and the npm peer dependency is `muxws ^0.4.1`.
+- npm: `RestProxy<M>` and `MuxwsProxy<M>` carry `watch()`. The positional form of `route_rest`,
+  which takes no `events`, returns `ViewSetCalls<M>`, without `watch()`; a variable typed
+  `RestProxy<M>` takes the options form only.
 
 ## [0.9.0] - 2026-10-16
 

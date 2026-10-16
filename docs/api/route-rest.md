@@ -12,7 +12,7 @@ function route_rest<M>(
   basePath: string,
   pkFieldName: string,
   axiosInstance?: AxiosInstance,
-): RestProxy<M>
+): ViewSetCalls<M>
 
 function route_rest<M>(
   viewSetClass: ViewSetClass,
@@ -32,6 +32,8 @@ interface RestProxyOptions {
   declares?: readonly ViewSetMixinDeclaration[];
   /** When a call whose attempt ended without an answer is repeated. */
   repeat?: RepeatOptions;
+  /** The event client watch() subscribes on; without it, watch() throws. */
+  events?: EventClient;
   /** Optional: existing axios instance. Defaults to the global axios. */
   axiosInstance?: AxiosInstance;
   /** The timeout of one attempt in milliseconds, passed to axios as `timeout`; 0 for none. */
@@ -49,11 +51,15 @@ interface RestProxyOptions {
 | `axiosInstance` | `AxiosInstance` | Optional custom axios instance; defaults to global `axios` |
 | `attemptTimeoutMs` | `number` | Options object only. Timeout of one attempt in milliseconds, default `30000`, `0` for none |
 | `repeat` | [`RepeatOptions`](./idempotency#repeatoptions) | Options object only. Default `{ withinMs: 600000, delayMs: 1000 }` |
+| `events` | `EventClient` | Options object only. The event client [`watch()`](./vue-mixins#watch) subscribes on; without it, `watch()` throws |
 
 ## Return value
 
-Returns a `RestProxy<M>`, which is `ViewSetCalls<M>` — `M` with every method returning a
-[`ViewSetCall`](./idempotency#frontend) — an instance of `RestProxyImpl` cast to it. The cast is unchecked: `M` is
+The options form returns a `RestProxy<M>`, which is `ViewSetCalls<M>` — `M` with every method
+returning a [`ViewSetCall`](./idempotency#frontend) — and [`watch()`](./vue-mixins#watch), typed as
+`ViewSetWatch<RecordOf<M>, KeyOf<M>>`: the record and pk types read off `M`'s actions. The
+positional form takes no `events` and returns `ViewSetCalls<M>`, without `watch()`. Either is an
+instance of `RestProxyImpl` cast to it. The cast is unchecked: `M` is
 whatever the caller wrote, and nothing compares it with the object. The standard actions listed under [HTTP
 mapping](#http-mapping) are implemented by `RestProxyImpl` and are therefore really there; anything else named in `M` —
 a custom endpoint of your own — type-checks at the call site and is `undefined` when called.
@@ -106,3 +112,6 @@ first attempt's `config` after the request interceptors, other than `Accept`, `A
 | `bulkPartialUpdate(records)` | `PATCH` | `{basePath}/bulk` |
 | `bulkDestroy(pks[])` | `DELETE` | `{basePath}/bulk` (body: pk array) |
 | `lookup()` | `GET` | `{basePath}/lookup` |
+
+`watch(options)` sends no request to `{basePath}`: it subscribes the topic `basePath` on the
+ViewSet's event client; see [`watch()`](./vue-mixins#watch).

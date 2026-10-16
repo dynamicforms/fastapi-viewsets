@@ -18,6 +18,7 @@
  * methods exist.
  */
 
+import type { ViewSetWatch } from './events/changes';
 import type { ActionName, ActionSurface, KeyType } from './mixins';
 import { MuxwsProxyImpl, type MuxwsProxyOptions } from './muxws-proxy';
 import { FACTORY_BUILT, type ProxyBaseOptions, ViewSetInternals, type ViewSetMixinDeclaration } from './proxy-base';
@@ -71,7 +72,8 @@ type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTO
  * real runtime type is `ProxyBaseOptions`'s `ViewSetProxyBase`, which already carries the public
  * `pkFieldName`, but `ViewSetInternals` is deliberately narrow (see its own doc comment), so this
  * type would otherwise hide a field that is genuinely there. Typed as the literal `PK` rather than
- * `string`, since the factory already knows exactly which field it is.
+ * `string`, since the factory already knows exactly which field it is. `watch()` is added the same
+ * way: every ViewSet has it, whichever mixins it declares.
  */
 export type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> = [
   D[number],
@@ -84,7 +86,9 @@ export type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinC
 type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> = {
   new (
     options: Omit<O, 'pkFieldName' | 'declares'>,
-  ): ViewSetInternals & ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>> & { readonly pkFieldName: PK };
+  ): ViewSetInternals &
+    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>> &
+    ViewSetWatch<T, PkType<T, PK>> & { readonly pkFieldName: PK };
   readonly declares: FactoryDeclares<D>;
 };
 

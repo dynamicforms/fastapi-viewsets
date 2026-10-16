@@ -27,6 +27,7 @@ import {
   type ViewSetCalls,
   withKeyHeader,
 } from './call';
+import type { KeyOf, RecordOf, ViewSetWatch } from './events/changes';
 import type { KeyType } from './mixins';
 import {
   FACTORY_BUILT,
@@ -71,10 +72,10 @@ declare const FACTORY_BUILT_REJECTION: 'route_rest cannot take a factory-built c
 
 /**
  * The REST proxy type is the mixin interface `M` the caller declares, with every method returning a
- * `ViewSetCall`. Because TypeScript cannot inspect Python class hierarchies at runtime, the caller
+ * `ViewSetCall`, and `watch()`. Because TypeScript cannot inspect Python class hierarchies at runtime, the caller
  * provides the explicit type via the generic parameter `M` (see route_rest).
  */
-export type RestProxy<M> = ViewSetCalls<M>;
+export type RestProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>>;
 
 export interface RestProxyOptions extends ProxyBaseOptions {
   /** Optional: existing axios instance. Defaults to the global axios. */
@@ -277,19 +278,20 @@ function route_rest<M = never>(
   viewSetClass: FactoryBuiltClass,
   options: RestProxyOptions,
 ): typeof FACTORY_BUILT_REJECTION;
+// The positional form takes no `events`, so its type carries no `watch()`.
 function route_rest<M>(
   _viewSetClass: ViewSetClass,
   basePath: string,
   pkFieldName: string,
   axiosInstance?: AxiosInstance,
-): RestProxy<M>;
+): ViewSetCalls<M>;
 function route_rest<M>(_viewSetClass: ViewSetClass, options: RestProxyOptions): RestProxy<M>;
 function route_rest<M>(
   viewSetClass: ViewSetClass,
   basePathOrOptions: string | RestProxyOptions,
   pkFieldName?: string,
   axiosInstance?: AxiosInstance,
-): RestProxy<M> | typeof FACTORY_BUILT_REJECTION {
+): RestProxy<M> | ViewSetCalls<M> | typeof FACTORY_BUILT_REJECTION {
   const options: RestProxyOptions =
     typeof basePathOrOptions === 'string'
       ? {
