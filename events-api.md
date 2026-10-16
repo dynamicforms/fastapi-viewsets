@@ -156,8 +156,13 @@ frontend holding the last rev receives the next event with `prev` equal to it an
 without a read. A counter that is lost anyway, a `MemoryEventStore` whose process restarted, a
 flushed Redis, a dropped topic, restarts at `now_ms`, which is larger than every rev it issued,
 and the first event after it carries `prev: 0`: no frontend holds `0`, so every one of them polls,
-finds no entry with its `prev`, and resyncs. The counter needs no reset: it is a millisecond
-timestamp that advances by at most one per event, and reaches `2^53` in about 285,000 years.
+finds no entry with its `prev`, and resyncs.
+
+A rev is below `2^53`, `Number.MAX_SAFE_INTEGER`, and travels as a JSON number on every transport;
+the frontend compares revs and never computes with them. The counter needs no reset: it is a
+millisecond timestamp, about `1.8 * 10^12` today, that advances by at most one per event, and it
+reaches `2^53` in about 285,000 years. `append` raises `OverflowError` at that bound rather than
+issuing a rev the frontend cannot hold.
 
 `settings.viewsets_event_store` holds the store; `None` means `MemoryEventStore()`. The application
 calls `start_events()` and `stop_events()` from its lifespan, and `check_events()` logs a warning
