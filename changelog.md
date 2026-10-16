@@ -73,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own and no call was repeated. Without `Idempotency` on the backend a repeat runs the action again.
 - **Breaking (npm):** `MuxwsProxyOptions.timeoutMs` bounds one attempt; an attempt that reaches it is
   repeated, up to `repeat.withinMs`, instead of rejecting the call with `StreamTimeout`.
+- **Breaking (npm):** the optional peer dependency `muxws` is `^0.4.0`. A repeat over muxws carries
+  the headers that the peer's open interceptors (`Peer.interceptOpen`, muxws 0.4.0) added to the
+  first stream.
 - **Breaking (npm):** `Idempotency-Key` is sent on every call; a cross-origin REST backend has to
   allow the header, and every call to it is preflighted.
 - **Breaking (npm):** the actions of the mixin interfaces and of `ViewSetProxyBase` return
