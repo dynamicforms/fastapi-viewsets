@@ -5,6 +5,8 @@ from fastapi_viewsets.exceptions import (
     CursorRequestError,
     df_viewset_exception_handler,
     DfViewSetError,
+    IdempotencyKeyInvalidError,
+    IdempotencyKeyReusedError,
     NotAuthorizedError,
     NotFoundError,
     RateLimitedError,
@@ -42,6 +44,21 @@ def test_rate_limited_error():
     assert error.status_code == 429
     assert error.detail == "Rate limit exceeded"
     assert error.code == "rate_limited"
+
+
+def test_idempotency_key_invalid_error():
+    error = IdempotencyKeyInvalidError()
+    assert error.status_code == 400
+    assert error.detail == "Idempotency-Key must be a non-empty Structured Field string"
+    assert error.code == "idempotency_key_invalid"
+
+
+def test_idempotency_key_reused_error_carries_the_key_as_param():
+    error = IdempotencyKeyReusedError("k1")
+    assert error.status_code == 422
+    assert error.detail == "Idempotency key k1 was used for a different request"
+    assert error.code == "idempotency_key_reused"
+    assert error.params == {"key": "k1"}
 
 
 def test_result_timeout_error_carries_task_and_timeout_as_params():

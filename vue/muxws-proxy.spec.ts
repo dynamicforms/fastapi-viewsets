@@ -6,7 +6,7 @@
  * conformance suite.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BulkViewSetMixin, LookupMixin } from './mixins';
 import { type MuxwsPeerLike, MuxwsProxyImpl, route_muxws } from './muxws-proxy';
@@ -235,11 +235,9 @@ describe('MuxwsProxyImpl — responses', () => {
     await expect(proxy.list()).rejects.toMatchObject({ response: { headers: { 'x-reason': 'no' } } });
   });
 
-  it('propagates a transport failure rather than dressing it as a status', async () => {
-    // Nothing survives a muxws reconnect: an in-flight call fails with ConnectionLost, and that
-    // is the caller's decision to retry, not ours to hide.
-    mock.fail(new Error('ConnectionLost'));
-    await expect(proxy.list()).rejects.toThrow('ConnectionLost');
+  it('propagates a failure it does not repeat rather than dressing it as a status', async () => {
+    mock.fail(new Error('stream broke'));
+    await expect(proxy.list()).rejects.toThrow('stream broke');
   });
 });
 
@@ -346,5 +344,246 @@ describe('route_muxws', () => {
     // @ts-expect-error route_muxws cannot take a factory-built ViewSet class
     const list = proxy.list;
     expect(typeof list).toBe('function');
+  });
+});
+
+describe('MuxwsProxyImpl — Idempotency-Key', () => {
+  it('opens every stream with a new key and exposes it as call.key', async () => {
+    const mock = makeMockPeer();
+    mock.reply(MOCK_ITEM);
+    const proxy = new MuxwsProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      peer: mock.peer,
+      validateSchema: false,
+      headers: { 'Idempotency-Key': '"proxy-wide"' },
+    });
+    const first = proxy.retrieve(1);
+    const second = proxy.retrieve(1);
+    await Promise.all([first, second]);
+    expect(mock.opened[0].headers['Idempotency-Key']).toBe(`"${first.key}"`);
+    expect(mock.opened[1].headers['Idempotency-Key']).toBe(`"${second.key}"`);
+    expect(first.key).not.toBe(second.key);
+  });
+
+  it('sends one Idempotency-Key whatever the spelling of a configured one', async () => {
+    const mock = makeMockPeer();
+    mock.reply(MOCK_ITEM);
+    const proxy = new MuxwsProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      peer: mock.peer,
+      validateSchema: false,
+      headers: { 'idempotency-key': '"proxy-wide"' },
+    });
+    const call = proxy.retrieve(1);
+    await call;
+    const names = Object.keys(mock.last.headers).filter((name) => name.toLowerCase() === 'idempotency-key');
+    expect(names).toEqual(['Idempotency-Key']);
+    expect(mock.last.headers['Idempotency-Key']).toBe(`"${call.key}"`);
+  });
+
+  it('exposes call.key on a custom method of a factory-built ViewSet', async () => {
+    class ItemApi extends muxwsViewSet<Item>()('id', [BulkViewSetMixin]) {
+      async count(): Promise<number> {
+        return this.request<number>('GET', '/count');
+      }
+    }
+    const mock = makeMockPeer();
+    mock.reply(3);
+    const api = new ItemApi({ basePath: '/items', peer: mock.peer, validateSchema: false });
+    const call = api.count() as Promise<number> & { key?: string };
+    await expect(call).resolves.toBe(3);
+    expect(mock.last.headers['Idempotency-Key']).toBe(`"${call.key}"`);
+  });
+});
+
+describe('MuxwsProxyImpl — synchronous open', () => {
+  it('opens the stream within the call once the peer has resolved', async () => {
+    const mock = makeMockPeer();
+    mock.reply(MOCK_ITEMS);
+    const proxy = new MuxwsProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      peer: () => Promise.resolve(mock.peer),
+      validateSchema: false,
+    });
+    await proxy.list();
+    const call = proxy.list();
+    expect(mock.opened).toHaveLength(2);
+    await call;
+  });
+
+  it('opens synchronously on the first call when the peer is given as a value', async () => {
+    const mock = makeMockPeer();
+    mock.reply(MOCK_ITEMS);
+    const proxy = new MuxwsProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      peer: mock.peer,
+      validateSchema: false,
+    });
+    const call = proxy.list();
+    expect(mock.opened).toHaveLength(1);
+    await call;
+  });
+});
+
+describe('MuxwsProxyImpl — repeats', () => {
+  /** A muxws-style error: muxws sets `name` on every error class. */
+  function muxwsError(name: string): Error {
+    const error = new Error(name);
+    error.name = name;
+    return error;
+  }
+
+  /**
+   * A peer whose streams fail with the queued errors in order and then answer `body`, and that can
+   * be dropped and reconnected the way a muxws Peer reports it.
+   */
+  function makeFlakyPeer(errors: Error[], body: unknown = MOCK_ITEM) {
+    const opened: { headers: Record<string, unknown>; cancelled: boolean }[] = [];
+    const reconnectHandlers: ((...args: any[]) => void)[] = [];
+    const closeHandlers: ((reason: { willRetry: boolean }) => void)[] = [];
+    const state = { isOpen: true, goingAway: false, ambient: undefined as string | undefined };
+    const peer: MuxwsPeerLike = {
+      get isOpen() {
+        return state.isOpen;
+      },
+      open(_payload, options) {
+        if (!state.isOpen) throw muxwsError('ConnectionClosed');
+        if (state.goingAway) throw muxwsError('ConnectionGoingAway');
+        // an open interceptor that adds a header from state bound only for the caller's synchronous part
+        const headers = { ...options?.headers } as Record<string, unknown>;
+        if (state.ambient !== undefined) headers['X-Token'] = state.ambient;
+        const entry = { headers, cancelled: false };
+        opened.push(entry);
+        const error = errors[opened.length - 1];
+        return {
+          headers,
+          result: () => (error ? Promise.reject(error) : Promise.resolve(body)),
+          replyHeadersArrived: Promise.resolve(),
+          replyHeaders: { ':status': 200 },
+          cancel: () => {
+            entry.cancelled = true;
+            return Promise.resolve();
+          },
+        };
+      },
+      onReconnect(handler) {
+        reconnectHandlers.push(handler);
+      },
+      onClose(handler) {
+        closeHandlers.push(handler);
+      },
+    };
+    return {
+      peer,
+      opened,
+      state,
+      drop() {
+        state.isOpen = false;
+      },
+      reconnect() {
+        state.isOpen = true;
+        for (const handler of reconnectHandlers) handler(1, peer);
+      },
+      closeForGood() {
+        state.isOpen = false;
+        for (const handler of closeHandlers) handler({ willRetry: false });
+      },
+    };
+  }
+
+  function proxyOn(peer: MuxwsPeerLike) {
+    return new MuxwsProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      peer,
+      validateSchema: false,
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('repeats after ConnectionLost once the peer has reconnected, with the same key', async () => {
+    const flaky = makeFlakyPeer([muxwsError('ConnectionLost')]);
+    const call = proxyOn(flaky.peer).create(MOCK_ITEM);
+    flaky.drop();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(flaky.opened).toHaveLength(1);
+
+    flaky.reconnect();
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(call).resolves.toEqual(MOCK_ITEM);
+    expect(flaky.opened).toHaveLength(2);
+    expect(flaky.opened[1].headers['Idempotency-Key']).toBe(flaky.opened[0].headers['Idempotency-Key']);
+    expect(flaky.opened[0].cancelled).toBe(true);
+  });
+
+  it('repeats at once after StreamTimeout', async () => {
+    const flaky = makeFlakyPeer([muxwsError('StreamTimeout')]);
+    const call = proxyOn(flaky.peer).create(MOCK_ITEM);
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(call).resolves.toEqual(MOCK_ITEM);
+    expect(flaky.opened).toHaveLength(2);
+  });
+
+  it('repeats after StreamRefused, after the delay', async () => {
+    const flaky = makeFlakyPeer([muxwsError('StreamRefused')]);
+    const call = proxyOn(flaky.peer).create(MOCK_ITEM);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(flaky.opened).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(call).resolves.toEqual(MOCK_ITEM);
+    expect(flaky.opened).toHaveLength(2);
+  });
+
+  it('repeats after ConnectionGoingAway, once open() accepts streams again', async () => {
+    const flaky = makeFlakyPeer([]);
+    flaky.state.goingAway = true;
+    const call = proxyOn(flaky.peer).create(MOCK_ITEM);
+    await vi.advanceTimersByTimeAsync(1000);
+    flaky.state.goingAway = false;
+    await vi.advanceTimersByTimeAsync(2000);
+    await expect(call).resolves.toEqual(MOCK_ITEM);
+    expect(flaky.opened).toHaveLength(1);
+  });
+
+  it('opens a repeat with the headers of the first stream, interceptors’ included', async () => {
+    const flaky = makeFlakyPeer([muxwsError('StreamRefused')]);
+    flaky.state.ambient = 'token';
+    const call = proxyOn(flaky.peer).create(MOCK_ITEM);
+    flaky.state.ambient = undefined;
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(call).resolves.toEqual(MOCK_ITEM);
+    expect(flaky.opened[1].headers).toEqual(flaky.opened[0].headers);
+    expect(flaky.opened[1].headers['X-Token']).toBe('token');
+  });
+
+  it('does not repeat an application answer', async () => {
+    const remote = muxwsError('RemoteError');
+    const flaky = makeFlakyPeer([remote]);
+    await expect(proxyOn(flaky.peer).create(MOCK_ITEM)).rejects.toBe(remote);
+    expect(flaky.opened).toHaveLength(1);
+  });
+
+  it('stops waiting when the peer closes for good', async () => {
+    const lost = muxwsError('ConnectionLost');
+    const flaky = makeFlakyPeer([lost]);
+    const call = proxyOn(flaky.peer).create(MOCK_ITEM);
+    const settled = expect(call).rejects.toMatchObject({ name: 'ConnectionClosed' });
+    flaky.drop();
+    await vi.advanceTimersByTimeAsync(1000);
+    flaky.closeForGood();
+    await vi.advanceTimersByTimeAsync(0);
+    await settled;
+    expect(flaky.opened).toHaveLength(1);
   });
 });

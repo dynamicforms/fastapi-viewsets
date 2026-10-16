@@ -7,6 +7,7 @@ inside it; a stream that is not a viewset command is reported as unhandled rathe
 so viewset traffic and the application's own protocol can share one socket.
 """
 
+import asyncio
 import logging
 
 from typing import Any, TYPE_CHECKING
@@ -21,6 +22,17 @@ if TYPE_CHECKING:
     from starlette.websockets import WebSocket
 
 logger = logging.getLogger(__name__)
+
+
+# Requests whose stream ended before the answer: referenced here until they complete, so that the
+# event loop, which keeps only weak references to tasks, does not collect them mid-run.
+_detached: set[asyncio.Task] = set()
+
+
+def _discard_detached(task: asyncio.Task) -> None:
+    _detached.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("muxws command failed after its stream ended", exc_info=task.exception())
 
 
 _CONNECTION_ONLY = frozenset({"connection", "upgrade", "accept-encoding"})
@@ -85,6 +97,11 @@ async def process_command(
     request's client and server address (`request.client`, which `RateLimiter` keys on by
     default), without which every call has the client address `("muxws", 0)`, and the lifespan
     state (`request.state`), copied for each command as an HTTP server copies it for each request.
+
+    The request runs as a task of its own. When the stream ends before the answer (the peer cancels
+    it or the socket is lost, and muxws cancels this handler), the request runs to completion and its
+    answer is discarded, as an HTTP server lets a request run after its client disconnected. An
+    exception it raises then is logged.
     """
     headers = getattr(stream, "headers", None) or {}
     if not is_command(headers):
@@ -110,8 +127,8 @@ async def process_command(
         effective["content-type"] = "application/json"
     effective["content-length"] = str(len(body))
 
-    try:
-        response = await call_asgi(
+    request = asyncio.ensure_future(
+        call_asgi(
             target,
             method=method,
             path=path,
@@ -122,6 +139,13 @@ async def process_command(
             server=connection.scope.get("server") if connection is not None else None,
             state=connection.scope.get("state") if connection is not None else None,
         )
+    )
+    try:
+        response = await asyncio.shield(request)
+    except asyncio.CancelledError:
+        _detached.add(request)
+        request.add_done_callback(_discard_detached)
+        raise
     except Exception:
         # The app raised before it started a response. Resetting the stream would turn "the
         # handler crashed" into "the transport failed", which is a different and less useful thing

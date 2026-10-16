@@ -85,6 +85,64 @@ middleware can inspect/replace the ViewSetResult `call_next()` returns and mutat
 """
 
 
+@dataclass(frozen=True)
+class ExecutionRef:
+    """The action in whose execution another action was dispatched (see `ActionExecution.parent`)."""
+
+    viewset_class: str
+    """The viewset class as `module.qualname`."""
+    action: str
+    parent: "ExecutionRef | None" = None
+
+    def to_jsonable(self) -> dict[str, Any]:
+        return {
+            "viewset_class": self.viewset_class,
+            "action": self.action,
+            "parent": self.parent.to_jsonable() if self.parent is not None else None,
+        }
+
+    @classmethod
+    def from_jsonable(cls, data: dict[str, Any] | None) -> "ExecutionRef | None":
+        if data is None:
+            return None
+        return cls(data["viewset_class"], data["action"], cls.from_jsonable(data["parent"]))
+
+
+@dataclass(frozen=True)
+class ActionExecution:
+    """
+    One execution of a viewset action, as `Middleware.execute()` receives it. The fields are the
+    same wherever the action executes: in the FastAPI process, or in the process of the executor
+    a `celery_viewset` action is handed to.
+    """
+
+    viewset_class: type
+    viewset: Any
+    """The instance the action executes on."""
+    action: str
+    """The name of the viewset method, e.g. `"create"`."""
+    args: tuple
+    """The positional arguments the method is called with."""
+    kwargs: dict[str, Any]
+    """The keyword arguments the method is called with: its own parameters, with `context` and
+    `request` among them only where the method declares them."""
+    context: Context
+    """The call's `Context`, whether or not the method declares a `context` parameter. Its
+    `configuration_for()` resolves against this action."""
+    request: "Request | None"
+    """The call's request. In an executor's process it is a `Request` built from the call's ASGI
+    scope (method, path, query string, headers, path parameters, client and server address), which
+    has no body, no `app` and no `state`. None for an action dispatched outside any call."""
+    parent: ExecutionRef | None
+    """The action in whose execution this action was dispatched; None for an action a request
+    called."""
+
+    def ref(self) -> ExecutionRef:
+        """This execution as the `parent` of an action dispatched while it runs."""
+        viewset_class = f"{self.viewset_class.__module__}.{self.viewset_class.__qualname__}"
+        return ExecutionRef(viewset_class, self.action, self.parent)
+
+
 class Middleware(ABC):
     """
     Class-based alternative to a plain CommandMiddleware function. Implement `__call__` with the
@@ -144,6 +202,23 @@ class Middleware(ABC):
         """
         return None
 
+    async def execute(self, _execution: ActionExecution, call_next: Callable[[], Awaitable[Any]]) -> Any:
+        """
+        Optional hook around the execution of the action itself. `call_next()` runs the next
+        middleware's `execute()`, or the viewset method at the innermost layer, and returns what the
+        method returned; an exception the method raises propagates out of it. The default passes
+        straight through.
+
+        It runs once per execution, where the action executes: in the FastAPI process for an
+        in-process action, inside the command middleware chain (below every `__call__`), and in the
+        executor's process for a `celery_viewset` action, whose FastAPI-side method only hands the
+        call over. The executor's process therefore needs the same
+        `settings.viewsets_command_middleware`. An execution an executor interrupts (a time limit)
+        reaches `call_next()` as the exception the executor raised, or as `asyncio.CancelledError`
+        where the action was suspended at an `await`.
+        """
+        return await call_next()
+
     @abstractmethod
     async def __call__(
         self,
@@ -196,5 +271,22 @@ async def run_command_chain(
         if index >= len(middlewares):
             return await final_handler()
         return await middlewares[index](request, viewset, context, lambda: _step(index + 1))
+
+    return await _step(0)
+
+
+async def run_execution_chain(
+    middlewares: list[CommandMiddleware],
+    execution: ActionExecution,
+    final_handler: Callable[[], Awaitable[Any]],
+) -> Any:
+    """Runs `execute()` of every middleware that has one, in list order, the first outermost;
+    final_handler (the viewset method call) is innermost."""
+    executors = [middleware.execute for middleware in middlewares if callable(getattr(middleware, "execute", None))]
+
+    async def _step(index: int) -> Any:
+        if index >= len(executors):
+            return await final_handler()
+        return await executors[index](execution, lambda: _step(index + 1))
 
     return await _step(0)

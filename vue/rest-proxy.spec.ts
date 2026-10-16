@@ -7,8 +7,8 @@
  * 3. That the proxy calls the correct HTTP methods on the correct URLs
  */
 
-import axios from 'axios';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import axios, { AxiosError, AxiosHeaders, CanceledError, type InternalAxiosRequestConfig } from 'axios';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   BulkViewSetMixin,
@@ -45,6 +45,16 @@ const MOCK_ITEMS: Item[] = [MOCK_ITEM, { id: 2, name: 'Second item' }];
 // Setup: mock axios instance
 // ---------------------------------------------------------------------------
 
+/** The config every REST attempt carries: the call's own, plus the key, the timeout and the abort signal. */
+function sent(config: { params?: unknown; headers?: Record<string, string>; data?: unknown } = {}) {
+  return {
+    ...config,
+    headers: { ...config.headers, 'Idempotency-Key': expect.stringMatching(/^"[0-9a-f-]{36}"$/) },
+    timeout: 30000,
+    signal: expect.any(AbortSignal),
+  };
+}
+
 function makeMockAxios() {
   return {
     get: vi.fn(),
@@ -75,21 +85,21 @@ describe('RestProxyImpl — direct instance', () => {
   it('list() — GET /items', async () => {
     http.get.mockResolvedValue({ data: MOCK_ITEMS });
     const result = await proxy.list();
-    expect(http.get).toHaveBeenCalledWith('/items', { headers: { 'X-List-Shape': 'plain' } });
+    expect(http.get).toHaveBeenCalledWith('/items', sent({ headers: { 'X-List-Shape': 'plain' } }));
     expect(result).toEqual(MOCK_ITEMS);
   });
 
   it('retrieve() — GET /items/1', async () => {
     http.get.mockResolvedValue({ data: MOCK_ITEM });
     const result = await proxy.retrieve(1);
-    expect(http.get).toHaveBeenCalledWith('/items/1');
+    expect(http.get).toHaveBeenCalledWith('/items/1', sent());
     expect(result).toEqual(MOCK_ITEM);
   });
 
   it('create() — POST /items', async () => {
     http.post.mockResolvedValue({ data: MOCK_ITEM });
     const result = await proxy.create(MOCK_ITEM);
-    expect(http.post).toHaveBeenCalledWith('/items', MOCK_ITEM);
+    expect(http.post).toHaveBeenCalledWith('/items', MOCK_ITEM, sent());
     expect(result).toEqual(MOCK_ITEM);
   });
 
@@ -97,7 +107,7 @@ describe('RestProxyImpl — direct instance', () => {
     const updated = { ...MOCK_ITEM, name: 'Updated' };
     http.put.mockResolvedValue({ data: updated });
     const result = await proxy.update(1, updated);
-    expect(http.put).toHaveBeenCalledWith('/items/1', updated);
+    expect(http.put).toHaveBeenCalledWith('/items/1', updated, sent());
     expect(result).toEqual(updated);
   });
 
@@ -105,21 +115,21 @@ describe('RestProxyImpl — direct instance', () => {
     const patch = { name: 'Patched' };
     http.patch.mockResolvedValue({ data: { ...MOCK_ITEM, ...patch } });
     const result = await proxy.partialUpdate(1, patch);
-    expect(http.patch).toHaveBeenCalledWith('/items/1', patch);
+    expect(http.patch).toHaveBeenCalledWith('/items/1', patch, sent());
     expect(result).toEqual({ ...MOCK_ITEM, ...patch });
   });
 
   it('destroy() — DELETE /items/1', async () => {
     http.delete.mockResolvedValue({ data: { deleted: 1 } });
     const result = await proxy.destroy(1);
-    expect(http.delete).toHaveBeenCalledWith('/items/1');
+    expect(http.delete).toHaveBeenCalledWith('/items/1', sent());
     expect(result).toEqual({ deleted: 1 });
   });
 
   it('bulkCreate() — POST /items/bulk', async () => {
     http.post.mockResolvedValue({ data: MOCK_ITEMS });
     const result = await proxy.bulkCreate(MOCK_ITEMS);
-    expect(http.post).toHaveBeenCalledWith('/items/bulk', MOCK_ITEMS);
+    expect(http.post).toHaveBeenCalledWith('/items/bulk', MOCK_ITEMS, sent());
     expect(result).toEqual(MOCK_ITEMS);
   });
 
@@ -127,7 +137,7 @@ describe('RestProxyImpl — direct instance', () => {
     const records = { 1: MOCK_ITEM };
     http.put.mockResolvedValue({ data: MOCK_ITEMS });
     const result = await proxy.bulkUpdate(records);
-    expect(http.put).toHaveBeenCalledWith('/items/bulk', records);
+    expect(http.put).toHaveBeenCalledWith('/items/bulk', records, sent());
     expect(result).toEqual(MOCK_ITEMS);
   });
 
@@ -135,14 +145,14 @@ describe('RestProxyImpl — direct instance', () => {
     const records = { 1: { name: 'Patched' } };
     http.patch.mockResolvedValue({ data: MOCK_ITEMS });
     const result = await proxy.bulkPartialUpdate(records);
-    expect(http.patch).toHaveBeenCalledWith('/items/bulk', records);
+    expect(http.patch).toHaveBeenCalledWith('/items/bulk', records, sent());
     expect(result).toEqual(MOCK_ITEMS);
   });
 
   it('bulkDestroy() — DELETE /items/bulk', async () => {
     http.delete.mockResolvedValue({ data: [{ deleted: 1 }] });
     const result = await proxy.bulkDestroy([1, 2]);
-    expect(http.delete).toHaveBeenCalledWith('/items/bulk', { data: [1, 2] });
+    expect(http.delete).toHaveBeenCalledWith('/items/bulk', sent({ data: [1, 2] }));
     expect(result).toEqual([{ deleted: 1 }]);
   });
 
@@ -151,10 +161,10 @@ describe('RestProxyImpl — direct instance', () => {
       data: { results: MOCK_ITEMS, offset: 10, limit: 2, count: 42, has_more: true, has_previous: true },
     });
     const page = await proxy.listPage({ offset: 10, limit: 2 });
-    expect(http.get).toHaveBeenCalledWith('/items', {
-      params: { offset: 10, limit: 2 },
-      headers: { 'X-List-Shape': 'paginated' },
-    });
+    expect(http.get).toHaveBeenCalledWith(
+      '/items',
+      sent({ params: { offset: 10, limit: 2 }, headers: { 'X-List-Shape': 'paginated' } }),
+    );
     expect(page).toEqual({ results: MOCK_ITEMS, offset: 10, limit: 2, count: 42, hasMore: true, hasPrevious: true });
   });
 
@@ -171,7 +181,10 @@ describe('RestProxyImpl — direct instance', () => {
     };
     http.get.mockResolvedValue({ data: envelope });
     const page = await proxy.listCursor({ limit: 2 });
-    expect(http.get).toHaveBeenCalledWith('/items', { params: { limit: 2 }, headers: { 'X-List-Shape': 'cursor' } });
+    expect(http.get).toHaveBeenCalledWith(
+      '/items',
+      sent({ params: { limit: 2 }, headers: { 'X-List-Shape': 'cursor' } }),
+    );
     expect(page.next).toBe('n');
     expect(page.hasMore).toBe(true);
   });
@@ -199,7 +212,7 @@ describe('RestProxyImpl — direct instance', () => {
     const lookupItems = [{ group: null, pk: 1, title: 'Test item', icon: null }];
     http.get.mockResolvedValue({ data: lookupItems });
     const result = await proxy.lookup();
-    expect(http.get).toHaveBeenCalledWith('/items/lookup');
+    expect(http.get).toHaveBeenCalledWith('/items/lookup', sent());
     expect(result).toEqual(lookupItems);
   });
 
@@ -255,7 +268,7 @@ describe('route_rest — factory with separate arguments', () => {
 
     http.delete.mockResolvedValue({ data: {} });
     await proxy.destroy(1);
-    expect(http.delete).toHaveBeenCalledWith('/items/1');
+    expect(http.delete).toHaveBeenCalledWith('/items/1', sent());
   });
 
   it('rejects a factory-built ViewSet class', () => {
@@ -359,13 +372,13 @@ describe('route_rest — BulkViewSetMixin & LookupMixin', () => {
   it('destroy()', async () => {
     http.delete.mockResolvedValue({ data: {} });
     await proxy.destroy(1);
-    expect(http.delete).toHaveBeenCalledWith('/items/1');
+    expect(http.delete).toHaveBeenCalledWith('/items/1', sent());
   });
 
   it('bulkDestroy()', async () => {
     http.delete.mockResolvedValue({ data: [] });
     await proxy.bulkDestroy([1, 2]);
-    expect(http.delete).toHaveBeenCalledWith('/items/bulk', { data: [1, 2] });
+    expect(http.delete).toHaveBeenCalledWith('/items/bulk', sent({ data: [1, 2] }));
   });
 
   it('lookup()', async () => {
@@ -431,14 +444,14 @@ describe('custom endpoints — extending RestProxyImpl', () => {
   it('standard mixin methods still work on extended class', async () => {
     http.get.mockResolvedValue({ data: [MOCK_ITEM] });
     const items = await api.list();
-    expect(http.get).toHaveBeenCalledWith('/items', { headers: { 'X-List-Shape': 'plain' } });
+    expect(http.get).toHaveBeenCalledWith('/items', sent({ headers: { 'X-List-Shape': 'plain' } }));
     expect(items).toEqual([MOCK_ITEM]);
   });
 
   it('retrieve() still works on extended class', async () => {
     http.get.mockResolvedValue({ data: MOCK_ITEM });
     const item = await api.retrieve(1);
-    expect(http.get).toHaveBeenCalledWith('/items/1');
+    expect(http.get).toHaveBeenCalledWith('/items/1', sent());
     expect(item).toEqual(MOCK_ITEM);
   });
 
@@ -546,7 +559,7 @@ describe('schema validation — validateAgainstSchema()', () => {
       pkFieldName: 'id',
       axiosInstance: http as unknown as typeof axios,
     });
-    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema'));
+    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema', sent()));
   });
 
   it('no warnings when BE matches what the ViewSet declared', async () => {
@@ -572,7 +585,7 @@ describe('schema validation — validateAgainstSchema()', () => {
     await new Promise((r) => setTimeout(r, 0));
     await (proxy as any).validateAgainstSchema();
     expect(warnSpy).not.toHaveBeenCalled();
-    expect(http.get).not.toHaveBeenCalledWith('/items/schema');
+    expect(http.get.mock.calls.map(([url]) => url)).not.toContain('/items/schema');
   });
 
   it('warns for each declared action the BE viewset does not serve', async () => {
@@ -658,5 +671,234 @@ describe('schema validation — validateAgainstSchema()', () => {
       },
     });
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. Idempotency-Key and repeats
+// ---------------------------------------------------------------------------
+
+describe('RestProxyImpl — Idempotency-Key and repeats', () => {
+  let http: ReturnType<typeof makeMockAxios>;
+  let proxy: RestProxyImpl<number, Item, 'id'>;
+
+  /** The Idempotency-Key header of the n-th call to `fn`. */
+  function keyOf(fn: ReturnType<typeof vi.fn>, n = 0): string {
+    const config = fn.mock.calls[n][fn === http.get || fn === http.delete ? 1 : 2] as {
+      headers: Record<string, string>;
+    };
+    return config.headers['Idempotency-Key'];
+  }
+
+  function signalOf(fn: ReturnType<typeof vi.fn>, n: number): AbortSignal {
+    return (fn.mock.calls[n][2] as { signal: AbortSignal }).signal;
+  }
+
+  function networkError(code = 'ERR_NETWORK'): AxiosError {
+    return new AxiosError('Network Error', code);
+  }
+
+  function statusError(status: number, data: unknown = null): AxiosError {
+    return new AxiosError(`Request failed with status code ${status}`, 'ERR_BAD_RESPONSE', undefined, undefined, {
+      status,
+      statusText: '',
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+      data,
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    http = makeMockAxios();
+    proxy = new RestProxyImpl({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+      validateSchema: false,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('sends a new key on every call, GET included, and exposes it as call.key', async () => {
+    http.get.mockResolvedValue({ data: MOCK_ITEM });
+    const first = proxy.retrieve(1);
+    const second = proxy.retrieve(1);
+    await Promise.all([first, second]);
+    expect(keyOf(http.get, 0)).toBe(`"${first.key}"`);
+    expect(keyOf(http.get, 1)).toBe(`"${second.key}"`);
+    expect(first.key).not.toBe(second.key);
+  });
+
+  it('sets call.key on the methods that post-process the answer', async () => {
+    http.get.mockResolvedValue({
+      data: { results: [], offset: 0, limit: 2, count: 0, has_more: false, has_previous: false },
+    });
+    const call = proxy.listPage();
+    expect(call.key).toBeDefined();
+    await call;
+    expect(keyOf(http.get)).toBe(`"${call.key}"`);
+  });
+
+  it('exposes call.key on a route_rest proxy', async () => {
+    http.post.mockResolvedValue({ data: MOCK_ITEM });
+    const items = route_rest<ViewSetMixin<number, Item, 'id'>>(ItemViewSet, {
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+      validateSchema: false,
+    });
+    const call = items.create(MOCK_ITEM);
+    const key: string = call.key;
+    await call;
+    expect(keyOf(http.post)).toBe(`"${key}"`);
+  });
+
+  it('takes the key from RequestOptions.key, over a header of the same name', async () => {
+    class Keyed extends RestProxyImpl<number, Item, 'id'> {
+      async again(key: string): Promise<Item> {
+        return this.request<Item>('POST', '/again', { key, headers: { 'Idempotency-Key': '"other"' } });
+      }
+    }
+    http.post.mockResolvedValue({ data: MOCK_ITEM });
+    const api = new Keyed({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+      validateSchema: false,
+    });
+    const call = api.again('first-key') as Promise<Item> & { key?: string };
+    expect(call.key).toBe('first-key');
+    await call;
+    expect(keyOf(http.post)).toBe('"first-key"');
+  });
+
+  it('rejects a key an sf-string cannot carry, without sending', async () => {
+    class Keyed extends RestProxyImpl<number, Item, 'id'> {
+      async bad(): Promise<Item> {
+        return this.request<Item>('GET', '', { key: '' });
+      }
+    }
+    const api = new Keyed({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+      validateSchema: false,
+    });
+    await expect(api.bad()).rejects.toThrow(TypeError);
+    expect(http.get).not.toHaveBeenCalled();
+  });
+
+  it('passes attemptTimeoutMs to axios as timeout', async () => {
+    http.get.mockResolvedValue({ data: MOCK_ITEM });
+    const api = new RestProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+      validateSchema: false,
+      attemptTimeoutMs: 5000,
+    });
+    await api.retrieve(1);
+    expect(http.get).toHaveBeenCalledWith('/items/1', expect.objectContaining({ timeout: 5000 }));
+  });
+
+  it('repeats a call that got no answer, with the same key, and aborts the repeated attempt', async () => {
+    http.post.mockRejectedValueOnce(networkError()).mockResolvedValueOnce({ data: MOCK_ITEM });
+    const call = proxy.create(MOCK_ITEM);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(http.post).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(call).resolves.toEqual(MOCK_ITEM);
+    expect(http.post).toHaveBeenCalledTimes(2);
+    expect(keyOf(http.post, 1)).toBe(keyOf(http.post, 0));
+    expect(signalOf(http.post, 0).aborted).toBe(true);
+    expect(signalOf(http.post, 1).aborted).toBe(false);
+  });
+
+  it.each([502, 503, 504])('repeats a call answered %i by a gateway', async (status) => {
+    http.post.mockRejectedValueOnce(statusError(status)).mockResolvedValueOnce({ data: MOCK_ITEM });
+    const call = proxy.create(MOCK_ITEM);
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(call).resolves.toEqual(MOCK_ITEM);
+    expect(http.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('settles with a gateway status the application answered', async () => {
+    const timeout = statusError(504, { detail: 'No result for items.create within 3600 s' });
+    http.post.mockRejectedValueOnce(timeout);
+    await expect(proxy.create(MOCK_ITEM)).rejects.toBe(timeout);
+    expect(http.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('repeats with the headers the first attempt was sent with, interceptors’ included', async () => {
+    const lost = new AxiosError('Network Error', 'ERR_NETWORK', {
+      headers: new AxiosHeaders({
+        'Idempotency-Key': '"k"',
+        'X-Token': 't1',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': '12',
+      }),
+    } as InternalAxiosRequestConfig);
+    http.post.mockRejectedValueOnce(lost).mockResolvedValueOnce({ data: MOCK_ITEM });
+    class Headed extends RestProxyImpl<number, Item, 'id'> {
+      send(): Promise<Item> {
+        return this.request<Item>('POST', '', { body: MOCK_ITEM, key: 'k', headers: { 'X-Own': 'o' } });
+      }
+    }
+    const api = new Headed({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+      validateSchema: false,
+    });
+    const call = api.send();
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(call).resolves.toEqual(MOCK_ITEM);
+    expect((http.post.mock.calls[1][2] as { headers: Record<string, string> }).headers).toEqual({
+      'X-Token': 't1',
+      'X-Own': 'o',
+      'Idempotency-Key': '"k"',
+    });
+  });
+
+  it('repeats at once after the attempt timeout', async () => {
+    http.post.mockRejectedValueOnce(networkError('ECONNABORTED')).mockResolvedValueOnce({ data: MOCK_ITEM });
+    const call = proxy.create(MOCK_ITEM);
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(call).resolves.toEqual(MOCK_ITEM);
+    expect(http.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('settles with any other answer', async () => {
+    const notFound = statusError(404);
+    http.get.mockRejectedValue(notFound);
+    await expect(proxy.retrieve(1)).rejects.toBe(notFound);
+    expect(http.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not repeat an error that is not axios’, nor a cancellation', async () => {
+    http.get.mockRejectedValueOnce(new TypeError('boom')).mockRejectedValueOnce(new CanceledError());
+    await expect(proxy.retrieve(1)).rejects.toThrow('boom');
+    await expect(proxy.retrieve(1)).rejects.toBeInstanceOf(CanceledError);
+    expect(http.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects with the last error once repeat.withinMs has elapsed', async () => {
+    const api = new RestProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+      validateSchema: false,
+      repeat: { withinMs: 2500, delayMs: 1000 },
+    });
+    const errors = [networkError(), networkError(), networkError()];
+    http.get.mockRejectedValueOnce(errors[0]).mockRejectedValueOnce(errors[1]).mockRejectedValueOnce(errors[2]);
+    const settled = expect(api.retrieve(1)).rejects.toBe(errors[1]);
+    await vi.runAllTimersAsync();
+    await settled;
+    expect(http.get).toHaveBeenCalledTimes(2);
   });
 });

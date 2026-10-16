@@ -42,6 +42,16 @@ const READONLY_LOOKUP_SCHEMA = {
   },
 };
 
+/** The config every REST attempt carries: the call's own, plus the key, the timeout and the abort signal. */
+function sent(config: { params?: unknown; headers?: Record<string, string>; data?: unknown } = {}) {
+  return {
+    ...config,
+    headers: { ...config.headers, 'Idempotency-Key': expect.stringMatching(/^"[0-9a-f-]{36}"$/) },
+    timeout: 30000,
+    signal: expect.any(AbortSignal),
+  };
+}
+
 function makeMockAxios() {
   return {
     get: vi.fn().mockResolvedValue({ data: MOCK_ITEMS }),
@@ -86,13 +96,13 @@ describe('restViewSet', () => {
   it('produces a working proxy for the actions it declares', async () => {
     const api = build();
     await expect(api.list()).resolves.toEqual(MOCK_ITEMS);
-    expect(http.get).toHaveBeenCalledWith('/items', { headers: { 'X-List-Shape': 'plain' } });
+    expect(http.get).toHaveBeenCalledWith('/items', sent({ headers: { 'X-List-Shape': 'plain' } }));
   });
 
   it('binds pkFieldName from the factory rather than the constructor', async () => {
     const api = build();
     await api.retrieve(2);
-    expect(http.get).toHaveBeenCalledWith('/items/2');
+    expect(http.get).toHaveBeenCalledWith('/items/2', sent());
     // No cast: pkFieldName is part of a factory-built class's own type surface (typed as the
     // literal 'id', not widened to string), not just present at runtime - a generic caller (a grid
     // or table component) holding the instance can read which field is the pk without one.
@@ -101,7 +111,7 @@ describe('restViewSet', () => {
 
   it('carries the declaration to the schema check, which then finds nothing to report', async () => {
     build();
-    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema'));
+    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema', sent()));
     await new Promise((r) => setTimeout(r, 0));
     expect(warnSpy).not.toHaveBeenCalled();
   });
@@ -119,7 +129,7 @@ describe('restViewSet', () => {
       paths: { ...READONLY_LOOKUP_SCHEMA.paths, '/items/count': { get: { 'x-viewset-action': 'count' } } },
     });
     expect(typeof Object.getPrototypeOf(api).count).toBe('function');
-    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema'));
+    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema', sent()));
     await new Promise((r) => setTimeout(r, 0));
     expect(warnSpy).not.toHaveBeenCalled();
   });
@@ -141,7 +151,7 @@ describe('restViewSet', () => {
     class ItemDbApi extends restViewSet<Item>()('id', [CursorListMixin]) {}
     mockSchema({ paths: { '/items': { get: {} }, '/items/schema': { get: {} } } });
     new ItemDbApi({ basePath: '/items', axiosInstance: http as unknown as typeof axios });
-    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema'));
+    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema', sent()));
     await new Promise((r) => setTimeout(r, 0));
     expect(warnSpy).not.toHaveBeenCalled();
   });
@@ -152,7 +162,15 @@ describe('restViewSet', () => {
     // running after super() and would overwrite what the base had set.
     const api = build();
     expect(Object.keys(api).sort()).toEqual(
-      ['basePath', 'declaredMixins', 'http', 'pkFieldName', 'schemaValidationEnabled'].sort(),
+      [
+        'attemptTimeoutMs',
+        'basePath',
+        'declaredMixins',
+        'http',
+        'pkFieldName',
+        'repeatOptions',
+        'schemaValidationEnabled',
+      ].sort(),
     );
   });
 
@@ -160,14 +178,14 @@ describe('restViewSet', () => {
     mockSchema(READONLY_LOOKUP_SCHEMA);
     const api = new ItemApi({ basePath: '/items/', axiosInstance: http as unknown as typeof axios });
     await api.list();
-    expect(http.get).toHaveBeenCalledWith('/items', { headers: { 'X-List-Shape': 'plain' } });
+    expect(http.get).toHaveBeenCalledWith('/items', sent({ headers: { 'X-List-Shape': 'plain' } }));
   });
 
   it('still honours validateSchema: false per instance', async () => {
     mockSchema(READONLY_LOOKUP_SCHEMA);
     new ItemApi({ basePath: '/items', validateSchema: false, axiosInstance: http as unknown as typeof axios });
     await new Promise((r) => setTimeout(r, 0));
-    expect(http.get).not.toHaveBeenCalledWith('/items/schema');
+    expect(http.get.mock.calls.map(([url]) => url)).not.toContain('/items/schema');
   });
 
   it('descends from ViewSetInternals, which is what makes request() reachable', () => {
@@ -313,7 +331,7 @@ describe('a ViewSet with custom endpoints only', () => {
   }
 
   async function schemaChecked() {
-    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/reports/schema'));
+    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/reports/schema', sent()));
     await new Promise((r) => setTimeout(r, 0));
   }
 
@@ -328,11 +346,11 @@ describe('a ViewSet with custom endpoints only', () => {
   it('calls its custom endpoints', async () => {
     const api = build(ReportApi);
     await expect(api.summary()).resolves.toEqual(REPORT);
-    expect(http.get).toHaveBeenCalledWith('/reports/summary');
+    expect(http.get).toHaveBeenCalledWith('/reports/summary', sent());
     await api.topRated();
-    expect(http.get).toHaveBeenCalledWith('/reports/top-rated');
+    expect(http.get).toHaveBeenCalledWith('/reports/top-rated', sent());
     await expect(api.approve(7)).resolves.toEqual(REPORT);
-    expect(http.post).toHaveBeenCalledWith('/reports/7/approve', undefined);
+    expect(http.post).toHaveBeenCalledWith('/reports/7/approve', undefined, sent());
   });
 
   it('agrees with a BE that serves exactly its custom endpoints', async () => {

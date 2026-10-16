@@ -101,13 +101,16 @@ The returned class binds `pkFieldName` and `declares` itself, so its constructor
 interface Options {
   basePath: string;
   validateSchema?: boolean;
+  repeat?: RepeatOptions;
   axiosInstance?: AxiosInstance;
+  attemptTimeoutMs?: number;
 }
 
 // muxwsViewSet
 interface Options {
   basePath: string;
   validateSchema?: boolean;
+  repeat?: RepeatOptions;
   peer: MuxwsPeerSource;
   timeoutMs?: number;
   headers?: Record<string, string>;
@@ -118,9 +121,11 @@ interface Options {
 |--------|------|---------|-------------|
 | `basePath` | `string` | — | Base path to the resource, e.g. `'/items'`. A trailing slash is stripped. |
 | `validateSchema` | `boolean` | `true` | Set `false` to skip the startup schema check (it is advisory and costs one request). |
+| `repeat` | [`RepeatOptions`](./idempotency#repeatoptions) | `{ withinMs: 600000, delayMs: 1000 }` | When a call whose attempt ended without an answer is repeated; see [Idempotent Calls](../guide/idempotency#repeats). |
 | `axiosInstance` | `AxiosInstance` | global `axios` | REST only. |
+| `attemptTimeoutMs` | `number` | `30000` | REST only. Timeout of one attempt, passed to axios as `timeout`; `0` for none. |
 | `peer` | `MuxwsPeerSource` | — | muxws only. A `Peer`, or a function returning one — called once and cached. |
-| `timeoutMs` | `number` | — | muxws only. Per-request timeout, covering the wait for the reply headers and for the body; muxws resets the stream with `TIMEOUT` when it expires and the call rejects with its `StreamTimeout`. |
+| `timeoutMs` | `number` | — | muxws only. Per-attempt timeout, covering the wait for the reply headers and for the body; muxws resets the stream with `TIMEOUT` when it expires and the call is repeated, or rejects with its `StreamTimeout` when it is not. |
 | `headers` | `Record<string, string>` | `{}` | muxws only. Headers added to every request; a call's `RequestOptions.headers` override them. |
 
 ## Inside the class body
@@ -129,7 +134,7 @@ A ViewSet's own methods reach `this.request()` and `this.basePath`, inherited fr
 
 ```ts
 protected readonly basePath: string;
-protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): Promise<R>;
+protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>;
 ```
 
 `path` is relative to `basePath` — `''` for the collection, `/1` for a record. Writing a custom endpoint against

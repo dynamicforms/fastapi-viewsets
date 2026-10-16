@@ -28,7 +28,6 @@ from fastapi_viewsets.context import (
 )
 from fastapi_viewsets.decorators import route_viewset
 from fastapi_viewsets.decorators.celery_viewset import celery_viewset_client
-from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
 from fastapi_viewsets.mixins import ListMixin
 
 
@@ -765,15 +764,10 @@ def test_celery_context_round_trip_with_lazy_object():
         result_reader.register_future = original_register
 
     # The context sent to Celery carries the LazyObject's serialized recipe, not a resolved value
-    assert captured_kwargs["context"]["user"]["__fpv_value__"]["recipe"] == {"session_id": "sess-1"}
+    assert captured_kwargs["_context"]["user"]["__fpv_value__"]["recipe"] == {"session_id": "sess-1"}
 
     # Worker-side reconstruction restores an unresolved _SessionUser that can still be resolved
-    async def worker_endpoint(_self, context: Context):
-        return context
-
-    worker_endpoint.__name__ = "list_items"
-    reconstructed = _reconstruct_kwargs(worker_endpoint, {"context": captured_kwargs["context"]})
-    context_obj = reconstructed["context"]
+    context_obj = Context(deserialize_context(captured_kwargs["_context"]))
     assert isinstance(context_obj, Context)
     user_obj = context_obj.raw()["user"]
     assert isinstance(user_obj, _SessionUser)

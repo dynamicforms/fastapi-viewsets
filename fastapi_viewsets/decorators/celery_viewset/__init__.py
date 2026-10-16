@@ -6,7 +6,6 @@ from .client import (
     celery_viewset_client,
     DEFAULT_RESULT_TIMEOUT,
     get_registered_queue_keys,
-    set_celery_dispatch_hook,
 )
 from .result_reader import (
     get_process_queue_key,
@@ -16,7 +15,7 @@ from .result_reader import (
     start_result_reader,
     stop_result_reader,
 )
-from .server import celery_viewset_server, set_celery_kwargs_hook
+from .server import celery_viewset_server
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +91,6 @@ __all__ = [
     "celery_viewset_server",
     "DEFAULT_RESULT_TIMEOUT",
     "set_is_celery_worker",
-    "set_celery_kwargs_hook",
-    "set_celery_dispatch_hook",
     "start_result_reader",
     "stop_result_reader",
     "check_result_readers",

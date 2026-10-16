@@ -314,7 +314,7 @@ def test_command_middleware_does_not_run_in_celery_worker_path():
         async def perform_list(self, _context) -> list[int]:
             return [1]
 
-    result = registered_tasks["items.list_items"](context={})
+    result = registered_tasks["items.list_items"]()
     assert result == [1]
     assert calls == []  # middleware never ran - no live Response in the worker path
 

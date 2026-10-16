@@ -185,6 +185,8 @@ proxy = new RestProxyImpl<number, Item, 'id'>({
 | `validateSchema` | `boolean` | Set `false` to skip the startup schema check |
 | `declares` | `readonly ViewSetMixinDeclaration[]` | The mixins the ViewSet declares, for that check |
 | `axiosInstance` | `AxiosInstance` | Optional custom axios instance (defaults to global axios) |
+| `attemptTimeoutMs` | `number` | Timeout of one attempt in milliseconds, passed to axios as `timeout`; default `30000`, `0` for none |
+| `repeat` | `RepeatOptions` | When a call whose attempt ended without an answer is repeated; default `{ withinMs: 600000, delayMs: 1000 }` |
 
 The difference between the two approaches:
 
@@ -193,9 +195,26 @@ The difference between the two approaches:
 | Typical use | Application code | Tests / advanced use |
 | Type inference | Via generic `M` parameter | Via generic type parameters on class |
 | ViewSet class argument | Required (type token) | Not needed |
-| Result | `RestProxy<M>` (typed as `M`) | `RestProxyImpl` instance |
+| Result | `RestProxy<M>` (typed as `M`, methods returning `ViewSetCall`) | `RestProxyImpl` instance |
 
 Both produce the same underlying object — `route_rest` simply wraps `new RestProxyImpl(options)`.
+
+## Idempotency-Key and repeats
+
+Every call carries an `Idempotency-Key` header, a new UUID per call, and the promise it returns has
+that key as `key`:
+
+```ts
+const call = itemsApi.create({ name: 'Widget', price: 9.99 });
+call.key;                  // '8e03978e-40d5-43e8-bc93-6894a57f9324'
+const created = await call;
+```
+
+An attempt that ends without an answer — an axios error without `response` (a network error, the
+attempt's `attemptTimeoutMs`), or `502`, `503`, `504` from a gateway — is aborted and repeated with
+the same key, and with the headers the first attempt was sent with;
+the backend's `Idempotency` middleware answers the repeat with the outcome of the first attempt. The
+rules and the options are in [Idempotent Calls](./idempotency#frontend).
 
 ## HTTP mapping
 

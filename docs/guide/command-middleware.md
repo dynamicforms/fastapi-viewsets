@@ -263,15 +263,89 @@ the declared model, e.g. an error payload. Prefer raising `HTTPException` from `
 for that case (see [Early rejection](#early-rejection-middleware-depends) above) - it never goes
 through response_model validation at all, so this doesn't come up.
 
-## Only runs in the FastAPI process
+## Around the execution: `Middleware.execute()`
 
-Like the context-processor's `Request`, command middleware only ever runs in the outer,
-HTTP-facing `route_viewset` call - never inside `celery_viewset_server`'s inner, worker-only call
-(there's no live `Response` there to shape, and no `Depends()` concept either). A
-`celery_viewset`-dispatched action's core logic runs in the worker; both `depends()` and the onion
-chain run once (before dispatch and once the result is back, respectively) in the FastAPI process -
-`depends()` in particular means an action never even reaches the worker if it was going to be
-rejected anyway.
+```python
+async def execute(self, execution: ActionExecution, call_next) -> Any: ...
+```
+
+`execute()` wraps the call of the viewset method itself. `call_next()` runs the next middleware's
+`execute()`, or the method at the innermost layer, and returns what the method returned; an
+exception the method raises propagates out of it. The default passes straight through, and a
+plain-function middleware has none.
+
+The middlewares' `execute()` run in `viewsets_command_middleware` order, the first outermost, below
+every `__call__`:
+
+```text
+depends() ... → __call__ ... → execute() ... → viewset method
+```
+
+`ActionExecution` (in `fastapi_viewsets.middleware`) is a frozen dataclass:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `viewset_class` | `type` | The viewset class |
+| `viewset` | `Any` | The instance the action executes on |
+| `action` | `str` | The name of the viewset method, e.g. `"create"` |
+| `args` | `tuple` | The positional arguments the method is called with |
+| `kwargs` | `dict` | The keyword arguments the method is called with; `context` and `request` only where the method declares them |
+| `context` | `Context` | The call's context, whether or not the method declares a `context` parameter; `configuration_for()` resolves against this action |
+| `request` | `Request \| None` | The call's request; `None` for an action dispatched outside any call |
+| `parent` | `ExecutionRef \| None` | The execution in which this action was dispatched; `None` for an action a request called |
+
+`execution.ref()` returns the execution as an `ExecutionRef`: `viewset_class` (as
+`module.qualname`), `action` and its own `parent`.
+
+```python
+class Tracking(Middleware):
+    async def __call__(self, request, viewset, context, call_next):
+        return await call_next()
+
+    async def execute(self, execution, call_next):
+        await mark_running(execution.action, await execution.context.user)
+        try:
+            result = await call_next()
+        except BaseException:
+            await mark_failed(execution.action)
+            raise
+        await mark_done(execution.action, result)
+        return result
+```
+
+## Where each part runs
+
+| Part | In-process action | `celery_viewset` action |
+|------|-------------------|-------------------------|
+| `depends()` | FastAPI process | FastAPI process, before the call is handed on |
+| `__call__` | FastAPI process | FastAPI process, around handing the call on and receiving the result |
+| `execute()` | FastAPI process | Celery worker |
+
+`execute()` runs once per execution, where the action executes. A `celery_viewset` action's method in
+the FastAPI process only hands the call to the worker, and `execute()` does not run around it, an
+override in a subclass that calls it through `super()` included. The worker runs it around the real
+execution, so the worker process needs the same `settings.viewsets_command_middleware`.
+
+In the worker, `execution.context` holds the call's context as the FastAPI process built it, and
+`execution.request` is a `Request` built from the call's ASGI scope (method, path, query string,
+headers, path parameters, client and server address); it has no body, no `app` and no `state`. See
+[Call data in the worker](./routers#call-data-in-the-worker).
+
+An execution the worker interrupts (Celery's time limit) reaches `call_next()` as the exception
+Celery raises, or as `asyncio.CancelledError` where the action was suspended at an `await`, and
+`execute()` runs to its end before the task fails.
+
+A call that cannot be handed to the worker raises `ActionDispatchError` (503,
+`action_dispatch_failed`) out of `call_next()` in `__call__`; the action did not run.
+
+## Built-in middleware
+
+| Middleware | Description |
+|------------|-------------|
+| [`Session`](./authentication#rejecting-unauthenticated-requests-session) | Rejects a call without a user |
+| [`Authorization`](./authorization) | Checks the action's authorization configuration |
+| [`RateLimiter`](./rate-limiter) | Fixed-window request counting |
+| [`Idempotency`](./idempotency) | Answers a repeated call with the outcome of the first one; placed first in the list |
 
 ## Known limitations
 

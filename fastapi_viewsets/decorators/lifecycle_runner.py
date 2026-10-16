@@ -1,10 +1,14 @@
+import functools
+
 from collections.abc import Callable
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, Literal, TYPE_CHECKING, TypeVar
 
 from ..action_configuration import extra_middlewares_for, resolve_action_configuration
 from ..conf import settings
-from ..context import get_shared_context
-from ..middleware import run_command_chain, ViewSetResult
+from ..context import Context, get_shared_context
+from ..middleware import ActionExecution, ExecutionRef, run_command_chain, run_execution_chain, ViewSetResult
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -12,6 +16,44 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 LifecycleType = Literal["singleton", "per-request", "instance-key"]
+
+DEFERRED_ACTIONS_ATTRIBUTE = "__viewset_deferred_actions__"
+"""
+The class attribute holding the names of the actions whose method on that class hands the call to
+an executor instead of executing it (`celery_viewset_client` sets it). `lifecycle_runner` runs no
+`Middleware.execute()` around such a method, its override in a subclass included; the executor's
+`lifecycle_runner` runs it around the real execution.
+"""
+
+
+@dataclass(frozen=True)
+class CurrentCall:
+    """The call `lifecycle_runner` is running in this task, for a method that hands it on."""
+
+    context: Context
+    request: "Request | None"
+    execution: ActionExecution | None
+    """Set while the action executes in this process; None while a deferred action hands it on."""
+    parent: ExecutionRef | None
+
+    def parent_of_dispatch(self) -> ExecutionRef | None:
+        """The `parent` of an action handed to an executor now: this execution when one runs, else
+        this call's own parent (the deferred method handing its own call on)."""
+        return self.execution.ref() if self.execution is not None else self.parent
+
+
+_current_call: ContextVar[CurrentCall | None] = ContextVar("viewsets_current_call", default=None)
+
+
+def current_call() -> CurrentCall | None:
+    """The call `lifecycle_runner` is running in this task; None outside any call."""
+    return _current_call.get()
+
+
+def effective_middlewares(action_configuration: dict) -> list:
+    return settings.viewsets_command_middleware + extra_middlewares_for(
+        action_configuration, settings.viewsets_command_middleware
+    )
 
 
 async def lifecycle_runner(
@@ -24,6 +66,8 @@ async def lifecycle_runner(
     needs_context: bool = False,
     request: "Request | None" = None,
     forwards_request: bool = False,
+    context: Context | None = None,
+    parent: ExecutionRef | None = None,
     **kwargs,
 ):
     """
@@ -32,40 +76,53 @@ async def lifecycle_runner(
     it, and the chain is never invoked - the worker just executes the action and returns the plain
     result; command middleware only ever runs once that result is back in the FastAPI process.
 
-    `needs_context`/`request` are reserved for the context-processor mechanism (see
-    fastapi_viewsets/context): when needs_context is True, a Context is built (via
-    settings.viewsets_context_processors) against whichever instance ends up handling this
-    lifecycle and injected into kwargs as `context` before the endpoint runs. Callers that
-    already have a resolved context (e.g. `celery_viewset_server`, reconstructing it from a
-    Celery task payload) simply omit needs_context and pass `context` directly in kwargs.
-    `forwards_request` passes `request` on to an endpoint that declares a `request` parameter.
+    `context` is the call's data when the caller already has it (`celery_viewset_server`, from the
+    task payload); without it a Context is built via settings.viewsets_context_processors against
+    whichever instance ends up handling this lifecycle. Either way it is bound to this action's
+    configuration and is the context the middleware chains read. `needs_context` injects it into
+    kwargs as `context`, for a method declaring that parameter. `forwards_request` passes `request`
+    on to a method that declares a `request` parameter. `parent` is the execution in which the call
+    was dispatched.
+
+    `Middleware.execute()` of the effective middlewares runs around the method call itself, unless
+    the action is deferred on `cls` (`DEFERRED_ACTIONS_ATTRIBUTE`). While the method runs, the call
+    is readable through `current_call()`.
     """
 
     if forwards_request:
         kwargs["request"] = request
 
+    action = original_endpoint.__name__
     action_configuration: dict = {}
-    chain_context = kwargs.get("context")
+    chain_context: Context | None = None
 
     async def inject_context(req_instance: Any) -> None:
         nonlocal action_configuration, chain_context
-        # Resolved whether or not the route declares a `context` param: execute() needs it to
-        # compute any extra per-call middleware (see extra_middlewares_for), and the command
-        # middleware chain reads the context it is part of. Neither is built in the celery-worker
-        # path (no `response`), where command middleware never runs.
-        action_configuration = resolve_action_configuration(cls, original_endpoint.__name__)
-        if needs_context or response is not None:
-            chain_context = await get_shared_context(
-                request, req_instance, action_configuration, original_endpoint.__name__
-            )
+        action_configuration = resolve_action_configuration(cls, action)
+        if context is None:
+            chain_context = await get_shared_context(request, req_instance, action_configuration, action)
+        else:
+            chain_context = Context(context.raw(), action_configuration=action_configuration, action_name=action)
         if needs_context:
             kwargs["context"] = chain_context
 
     async def call_bound(req_instance: Any) -> Any:
-        bound_method = getattr(req_instance, original_endpoint.__name__, None)
-        if bound_method is not None:
-            return await bound_method(*args, **kwargs)
-        return await original_endpoint(req_instance, *args, **kwargs)
+        bound_method = getattr(req_instance, action, None)
+        method = bound_method if bound_method is not None else functools.partial(original_endpoint, req_instance)
+        if action in getattr(cls, DEFERRED_ACTIONS_ATTRIBUTE, ()):
+            marker = _current_call.set(CurrentCall(chain_context, request, None, parent))
+            try:
+                return await method(*args, **kwargs)
+            finally:
+                _current_call.reset(marker)
+        execution = ActionExecution(cls, req_instance, action, args, dict(kwargs), chain_context, request, parent)
+        marker = _current_call.set(CurrentCall(chain_context, request, execution, parent))
+        try:
+            return await run_execution_chain(
+                effective_middlewares(action_configuration), execution, lambda: method(*args, **kwargs)
+            )
+        finally:
+            _current_call.reset(marker)
 
     async def execute(req_instance: Any) -> Any:
         if response is None:
@@ -81,10 +138,9 @@ async def lifecycle_runner(
             # through as-is.
             return raw if isinstance(raw, ViewSetResult) else ViewSetResult(body=raw)
 
-        effective_middlewares = settings.viewsets_command_middleware + extra_middlewares_for(
-            action_configuration, settings.viewsets_command_middleware
+        result = await run_command_chain(
+            effective_middlewares(action_configuration), request, req_instance, chain_context, final_handler
         )
-        result = await run_command_chain(effective_middlewares, request, req_instance, chain_context, final_handler)
         for key, value in result.headers.items():
             response.headers[key] = str(value)
         for key, value in result.cookies.items():

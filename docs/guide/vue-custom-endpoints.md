@@ -47,8 +47,9 @@ Four things about the base-class expression, each of which the compiler enforces
   is read off `Item['id']`. It is not repeated in the constructor options.
 - The mixin list decides the public surface. Calling an action it does not name is a compile error,
   not a 404 at run time.
-- Constructor options are `{ basePath, validateSchema?, axiosInstance? }` for `restViewSet` and
-  `{ basePath, validateSchema?, peer, headers?, timeoutMs? }` for `muxwsViewSet`. `pkFieldName` and
+- Constructor options are `{ basePath, validateSchema?, repeat?, axiosInstance?, attemptTimeoutMs? }`
+  for `restViewSet` and `{ basePath, validateSchema?, repeat?, peer, headers?, timeoutMs? }` for
+  `muxwsViewSet`. `pkFieldName` and
   `declares` are bound by the factory; passing either is TS2353.
 
 The method's name is also what the [schema check](./route-rest#schema-validation) looks for. The
@@ -116,7 +117,30 @@ muxws.
 |----------|-------|
 | `method` | `'GET'` \| `'POST'` \| `'PUT'` \| `'PATCH'` \| `'DELETE'` |
 | `path` | relative to `basePath`: `''` for the collection, `'/search'`, `` `/${pk}/history` `` |
-| `options` | `{ query?, body? }`, both optional |
+| `options` | `{ query?, body?, headers?, key?, repeat? }`, all optional |
+
+`request()` returns a `ViewSetCall<R>`: the promise of the body, with the call's `Idempotency-Key`
+as `key`. The call is repeated with that key when an attempt ends without an answer; `key` sets the
+key, `repeat` overrides the proxy's repeat options for this call (see
+[Idempotent Calls](./idempotency#frontend)).
+
+A method that calls `request()` before its first `await` returns a promise with the same `key`, also
+when the method is declared `async` and typed `Promise<R>`; a method that awaits something before its
+first request returns a promise without `key`. To have `key` in the method's type, return the
+`ViewSetCall` from a method that is not `async`:
+
+```ts
+import type { ViewSetCall } from '@dynamicforms/fastapi-viewsets';
+
+class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin, LookupMixin]) {
+  search(q: string): ViewSetCall<Item[]> {
+    return this.request<Item[]>('GET', '/search', { query: { q } });
+  }
+}
+
+const call = itemsApi.search('widget');
+call.key;   // the Idempotency-Key of GET /items/search
+```
 
 An array-valued query entry becomes a repeated key, which is how FastAPI binds a `list[str]`
 parameter. A status of 400 or above throws on both transports, and what is thrown and what a handler
@@ -129,7 +153,7 @@ need and nothing a caller does:
 
 | Member | Type | Description |
 |--------|------|-------------|
-| `this.request(method, path, opts?)` | `Promise<R>` | Sends one call and returns the decoded body. Transport-independent. |
+| `this.request(method, path, opts?)` | `ViewSetCall<R>` | Sends one call and returns the decoded body, with the call's `key`. Transport-independent. |
 | `this.basePath` | `string` | The base path, trailing slash removed, e.g. `'/items'` |
 
 Both are `protected`, so reaching them from outside the class body is TS2445.
@@ -215,6 +239,9 @@ const http = axios.create({
 
 const itemsApi = new ItemApi({ basePath: '/items', pkFieldName: 'id', axiosInstance: http });
 ```
+
+A call made through `this.http` directly carries no `Idempotency-Key` and is not repeated; only
+`request()` does both.
 
 Here `pkFieldName` is a constructor option and `declares` a static, since there is no factory call
 to bind them. A custom axios instance is passed the same way to a factory-built REST ViewSet:

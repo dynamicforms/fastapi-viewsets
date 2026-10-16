@@ -127,8 +127,8 @@ given explicitly while the pk field and the mixin list are inferred from argumen
 `'id'` is an argument, not a type argument. It is checked against the fields of `Item` — a name that
 is not a field, or a field that cannot be a key, is TS2345 — and the pk type is read off `Item['id']`,
 so `retrieve(1)` compiles and `retrieve('1')` does not. It is not repeated in the constructor
-options: those are `{ basePath, validateSchema?, axiosInstance? }`, and passing `pkFieldName` or
-`declares` is TS2353.
+options: those are `{ basePath, validateSchema?, axiosInstance?, attemptTimeoutMs?, repeat? }`, and
+passing `pkFieldName` or `declares` is TS2353.
 
 The mixin list decides the ViewSet's public surface. `itemsApi.listCursor()` is a compile error
 (TS2339), not a 404 at runtime. The same list reaches the proxy, which fetches `GET /items/schema`

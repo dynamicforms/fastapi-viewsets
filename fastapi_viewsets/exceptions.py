@@ -70,6 +70,29 @@ class ResultReaderStoppedError(DfViewSetError):
         super().__init__(503, message, "result_reader_stopped", {"queue_key": queue_key})
 
 
+class ActionDispatchError(DfViewSetError):
+    """A `celery_viewset` call that could not be handed to its executor; the action did not run. The
+    error that prevented it is the `__cause__`."""
+
+    def __init__(self, task: str):
+        super().__init__(503, f"{task} could not be handed to its executor", "action_dispatch_failed", {"task": task})
+
+
+class IdempotencyKeyInvalidError(DfViewSetError):
+    """An `Idempotency-Key` header that is not a single, non-empty Structured Field string."""
+
+    def __init__(self):
+        super().__init__(400, "Idempotency-Key must be a non-empty Structured Field string", "idempotency_key_invalid")
+
+
+class IdempotencyKeyReusedError(DfViewSetError):
+    """An `Idempotency-Key` already recorded for a call with a different method, path, query or body."""
+
+    def __init__(self, key: str):
+        message = f"Idempotency key {key} was used for a different request"
+        super().__init__(422, message, "idempotency_key_reused", {"key": key})
+
+
 class UnsupportedListShapeError(DfViewSetError):
     def __init__(self, shape: str, allowed: list[str]):
         message = f"unsupported list shape {shape!r}; this endpoint offers {', '.join(allowed)}"

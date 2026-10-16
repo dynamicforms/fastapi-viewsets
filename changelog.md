@@ -6,6 +6,87 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - Unreleased
+
+### Added
+
+- `fastapi_viewsets.middleware.idempotency.Idempotency(redis_client=None, key_prefix="idempotency:")`:
+  a command middleware that answers a call repeated with the same `Idempotency-Key` (a Structured
+  Field string, `draft-ietf-httpapi-idempotency-key-header-07`) with the outcome of the first call.
+  A repeat of a running call attaches to it. Records live in the instance, or in Redis with
+  `redis_client`. `GET` and `HEAD` outcomes are stored only when a repeat attached; an outcome that
+  sets a cookie is never stored.
+- `parse_idempotency_key`, `read_idempotency_key`, `request_fingerprint` and
+  `IDEMPOTENCY_KEY_HEADER` in `fastapi_viewsets.middleware.idempotency`.
+- `settings.viewsets_idempotency_ttl` (seconds, default 86400) and
+  `settings.viewsets_idempotency_lock_ttl` (seconds, default 600).
+- `IdempotencyKeyInvalidError` (400, `idempotency_key_invalid`) and `IdempotencyKeyReusedError`
+  (422, `idempotency_key_reused`, param `key`).
+- `Middleware.execute(execution, call_next)`: an optional onion layer around the call of the viewset
+  method, below every `__call__`, run once per execution where the action executes: in the FastAPI
+  process for an in-process action, in the Celery worker for a `celery_viewset` action. Default:
+  passes through.
+- `ActionExecution` (`viewset_class`, `viewset`, `action`, `args`, `kwargs`, `context`, `request`,
+  `parent`) and `ExecutionRef` (`viewset_class`, `action`, `parent`) in `fastapi_viewsets.middleware`.
+- `ActionDispatchError` (503, `action_dispatch_failed`, param `task`): a `celery_viewset` call whose
+  task could not be sent. `Idempotency` does not store it; a repeat runs the call again.
+- A `celery_viewset` task carries the call's context whether or not the action declares `context`,
+  the call's request scope without the body, and the execution it was dispatched in (`_context`,
+  `_request`, `_parent`). An action declaring `request` receives a `Request` built from the scope in
+  the worker. A call made inside another action's execution carries that execution's context and
+  request unless it passes a `context` of its own.
+- A `celery_viewset` task interrupted by Celery (a time limit) while the action awaits is cancelled
+  and run until it has unwound, so its `finally` blocks and `execute()` see the interruption.
+- npm: every call through a proxy, REST and muxws, sends `Idempotency-Key`, a new UUID per call as a
+  Structured Field string. `RequestOptions.key` sets it for one call.
+- npm: `ViewSetCall<R>`, a `Promise<R>` with the call's `key`. `request()` returns it, and every
+  method of a proxy sets `key` on its promise when it issues a request before its first `await`.
+  `ViewSetActionCall<R>` (the type of a declared action, `key` optional) and `ViewSetCalls<M>`.
+- npm: a call whose attempt ends without an answer is repeated with the same key and with the headers
+  of its first attempt — REST: an axios error without `response`, or `502`, `503`, `504` whose body
+  is not a JSON object with `detail`; muxws: `ConnectionLost`, `StreamTimeout`, `StreamRefused`, and
+  `ConnectionClosed` or `ConnectionGoingAway` thrown by `open()` while the peer has not closed for
+  good, after the peer has reconnected. The repeated attempt is aborted (REST) or its stream
+  cancelled (muxws). Options `repeat: RepeatOptions` (`withinMs`, default 600000, `0` turns
+  repeating off; `delayMs`, default 1000, doubled per repeat up to 30000) on every proxy and on
+  `RequestOptions`, and `attemptTimeoutMs` (default 30000) on REST proxies.
+- npm: `IDEMPOTENCY_KEY_HEADER`, `newCallKey()`, `idempotencyKeyHeader(key)` and
+  `issueCall(promise, key)`.
+- npm: `MuxwsStreamLike.cancel`, `MuxwsStreamLike.headers` and `MuxwsPeerLike.isOpen`,
+  `onReconnect`, `onClose`, all optional.
+
+### Removed
+
+- **Breaking:** `set_celery_dispatch_hook` and `set_celery_kwargs_hook`. `Middleware.execute()`
+  runs where the action executes, and the call's context reaches the worker for every action.
+
+### Changed
+
+- **Breaking:** a `celery_viewset` task carries the call's context as `_context`, no longer as the
+  `context` kwarg. A worker and a FastAPI process of different versions do not understand each
+  other's tasks.
+- **Breaking (muxws):** `process_command` runs the request as a task of its own. When the stream
+  ends before the answer (the peer cancels it or the socket is lost), the request runs to completion
+  and its answer is discarded; cancelling the stream no longer cancels the request.
+- **Breaking (npm):** a call that gets no answer is repeated, for up to 10 minutes by default, and a
+  REST attempt times out after 30 s (`attemptTimeoutMs`); before, a REST call had no timeout of its
+  own and no call was repeated. Without `Idempotency` on the backend a repeat runs the action again.
+- **Breaking (npm):** `MuxwsProxyOptions.timeoutMs` bounds one attempt; an attempt that reaches it is
+  repeated, up to `repeat.withinMs`, instead of rejecting the call with `StreamTimeout`.
+- **Breaking:** the `muxws` extra requires `muxws>=0.4.0`, which requires `websockets>=14`.
+- **Breaking (npm):** the optional peer dependency `muxws` is `^0.4.0`. A repeat over muxws carries
+  the headers that the peer's open interceptors (`Peer.interceptOpen`, muxws 0.4.0) added to the
+  first stream.
+- **Breaking (npm):** `Idempotency-Key` is sent on every call; a cross-origin REST backend has to
+  allow the header, and every call to it is preflighted.
+- **Breaking (npm):** the actions of the mixin interfaces and of `ViewSetProxyBase` return
+  `ViewSetActionCall<R>`, `request()` returns `ViewSetCall<R>`, and `RestProxy<M>` and
+  `MuxwsProxy<M>` are `ViewSetCalls<M>`. A transport of one's own returns
+  `issueCall(promise, key)` from `request()`.
+- npm: `MuxwsProxyImpl.request()` opens its stream synchronously once the peer has resolved.
+- npm: `ViewSetProxyBase`'s constructor binds every method of the instance's class chain as an own,
+  non-enumerable property, which sets `key` on the method's promise.
+
 ## [0.8.0] - Unreleased
 
 ### Added

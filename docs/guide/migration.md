@@ -5,6 +5,50 @@ releases at once, work from the bottom of the page upwards.
 
 <!-- New releases go directly below this comment, above the previous one, as `## Upgrading to vX.Y.Z (from vA.B.x)`. -->
 
+## Upgrading to v0.9.0 (from v0.8.x)
+
+- [ ] `set_celery_dispatch_hook` and `set_celery_kwargs_hook` are removed. Code that carried data to
+      the worker through them puts the data into the context with a context processor; the context
+      reaches the worker for every action. Code that wrapped the execution in the worker moves into
+      [`Middleware.execute()`](./command-middleware#around-the-execution-middleware-execute), and the
+      worker process sets the same `settings.viewsets_command_middleware`. Code that watched the
+      broker publish catches `ActionDispatchError` in `__call__`.
+- [ ] Deploy the FastAPI processes and the Celery workers together: the task's kwargs changed (the
+      context is sent as `_context`, with `_request` and `_parent` beside it).
+- [ ] A test that calls a `celery_viewset_server` task with `context={...}` passes
+      `_context={...}` instead, or nothing for an empty context.
+- [ ] Add the code `action_dispatch_failed` to the application's error translations; see
+      [Error codes](./error-codes#codes). A call whose task could not be sent raised the error of
+      `send_task` before; it raises `ActionDispatchError` (503) with that error as `__cause__`.
+- [ ] muxws: cancelling a stream, or losing the socket, no longer cancels the request it carries; the
+      request runs to completion and its answer is discarded. An application that relied on
+      cancelling the stream to stop an action stops it through the application instead.
+- [ ] To make calls repeatable, add `Idempotency()` (with `redis_client=` for more than one process)
+      as the first entry of `settings.viewsets_command_middleware`; see
+      [Idempotent Calls](./idempotency). Add the codes `idempotency_key_invalid` and
+      `idempotency_key_reused` to the application's error translations; see
+      [Error codes](./error-codes#codes).
+- [ ] npm: the proxies repeat a call that gets no answer, with the same `Idempotency-Key`, and a REST
+      attempt times out after 30 s. Add `Idempotency` on the backend, or pass
+      `repeat: { withinMs: 0 }` (and `attemptTimeoutMs: 0` to keep REST calls without a timeout) to
+      every proxy: without the middleware a repeat runs the action again. A REST call that
+      legitimately takes longer than 30 s needs a larger `attemptTimeoutMs`, or `Idempotency` on the
+      backend, which attaches the repeat to the running call.
+- [ ] npm: a muxws proxy's `timeoutMs` bounds one attempt; an attempt that reaches it is repeated, up
+      to `repeat.withinMs`, instead of rejecting the call with `StreamTimeout`. Pass
+      `repeat: { withinMs: 0 }` to reject on the first timeout.
+- [ ] An application using muxws upgrades it to 0.4.0: `muxws>=0.4.0` (with `websockets>=14`) in
+      Python, `muxws@^0.4.0` on npm. See the muxws migration guide for its own changes.
+- [ ] npm: a REST backend on another origin adds `Idempotency-Key` to its CORS allowed headers.
+- [ ] npm: code that calls the proxy's methods by `Promise<R>` is unaffected; `ViewSetCall<R>` is a
+      subtype. A transport of one's own that extends `ViewSetProxyBase` returns
+      `issueCall(promise, key)` from `request()`, with the key from `options.key ?? newCallKey()`
+      sent as `Idempotency-Key: idempotencyKeyHeader(key)`.
+- [ ] npm: a test that asserts the exact arguments of an axios mock includes the config every call
+      now carries: `headers` with `Idempotency-Key`, `timeout` and `signal`.
+- [ ] npm: an application that repeats a call itself passes the first call's `key` as
+      `RequestOptions.key` from a custom method, instead of letting the repeat get a new key.
+
 ## Upgrading to v0.8.0 (from v0.7.x)
 
 The npm package no longer translates errors and no longer depends on `@dynamicforms/translatable`.
