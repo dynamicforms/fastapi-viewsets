@@ -33,7 +33,7 @@ is the application's.
 | **event** | A pydantic model with a class-level `event_name`. The name and the fields are the same on both sides. |
 | **topic** | A string that names a stream of events. Either a viewset's routed base path (`/api/music`) or a declared source's name with an optional key (`imports`, `imports:7`). Matching is exact. |
 | **source** | A declared owner of custom topics. Declared once per name; a second declaration raises. |
-| **rev** | The integer the store assigns to each event of a topic: `max(previous rev + 1, now in milliseconds)`. Strictly increasing per topic, and larger than every rev issued before the topic's counter expired. |
+| **rev** | The integer the store assigns to each event of a topic: `max(previous rev + 1, now in milliseconds)`. Strictly increasing per topic, and larger than every rev issued before the counter was lost or dropped. |
 | **prev** | The rev an event replaced: the topic's rev before it, `0` for a topic without one. Carried by every event. |
 | **log** | The last `viewsets_event_log_size` events of a topic, kept by the store for `viewsets_event_log_ttl` seconds for `poll`. |
 | **subscription** | One (socket, topic) pair, held by the web process that holds the socket. |
@@ -95,7 +95,8 @@ await imports.publish(ImportFinished(file="members.csv", rows=412), key="7")   #
 `authorizer` is an `EventAuthorizer` (below) consulted by `DeclaredSources()` for the source's
 topics. `Source.publish(event, key=None)` is `publish(f"{name}:{key}", event)` with the key, or
 `publish(name, event)` without. `publish(topic, event)` is also public, for a topic the caller
-composed itself; it validates the topic's form and nothing else.
+composed itself; it validates the topic's form and nothing else. `Source.drop(key)` removes the
+topic's counter and log from the store, for a keyed topic that has no further events.
 
 `event_name` is unique within a source, not globally: the frontend dispatches on the pair (topic,
 event name). `records_changed` is the library's event on viewset topics.
@@ -130,13 +131,15 @@ class EventStore(Protocol):
     async def revs(self, topics: list[str]) -> dict[str, int]: ...
     async def since(self, topic: str, after: int) -> list[LoggedEvent] | None: ...
     async def publish(self, topic: str, rev: int, prev: int, name: str, payload: Any) -> None: ...
+    async def drop(self, topic: str) -> None: ...
     async def watch(self, topic: str) -> None: ...
     async def unwatch(self, topic: str) -> None: ...
 ```
 
 | Method | `MemoryEventStore` | `RedisEventStore(redis_client, key_prefix="events:")` |
 |---|---|---|
-| `append` | sets the counter to `max(previous + 1, now_ms)`, appends to a bounded list | one Lua script: the same on `{prefix}rev:{topic}` with `EXPIRE viewsets_event_rev_ttl`, `LPUSH` + `LTRIM` on `{prefix}log:{topic}` with `EXPIRE viewsets_event_log_ttl` |
+| `append` | sets the counter to `max(previous + 1, now_ms)`, appends to a bounded list | one Lua script: the same on `{prefix}rev:{topic}`, which has no expiry, and `LPUSH` + `LTRIM` on `{prefix}log:{topic}` with `EXPIRE viewsets_event_log_ttl` |
+| `drop` | deletes the counter and the list | `DEL` on both keys |
 | `revs` | reads the counters; an unknown topic is `0` | `MGET`; an absent key is `0` |
 | `since` | `[]` when the topic's rev is `after`; otherwise the kept entry with `prev == after` and every newer one; `None` when no kept entry has that `prev` | `LRANGE`, the same rule |
 | `publish` | calls `deliver()` in the same process | `PUBLISH {prefix}ch:{topic}`; the reader calls `deliver()` |
@@ -146,13 +149,15 @@ class EventStore(Protocol):
 `LoggedEvent` is `(rev, prev, name, payload)`. With `viewsets_event_log_size = 0` the log is empty
 and every `since` behind the current rev answers `None`.
 
-The counter and the log expire separately. The log lives `viewsets_event_log_ttl` seconds after
-the topic's last event: a frontend that did not follow the topic for longer than that holds no
-cursor the log can answer, and reloads. The counter lives `viewsets_event_rev_ttl` seconds, so that
-on a topic with sparse events a frontend holding the last rev still receives the next event with
-`prev` equal to it and applies it without a read. A counter that expired restarts at `now_ms`,
-which is larger than every rev it issued, and the first event after it carries `prev: 0`: no
-frontend holds `0`, so every one of them polls, finds no entry with its `prev`, and resyncs.
+The log expires, the counter does not. The log lives `viewsets_event_log_ttl` seconds after the
+topic's last event: a frontend that did not follow the topic for longer than that holds no cursor
+the log can answer, and reloads. The counter stays, so that on a topic with sparse events a
+frontend holding the last rev receives the next event with `prev` equal to it and applies it
+without a read. A counter that is lost anyway, a `MemoryEventStore` whose process restarted, a
+flushed Redis, a dropped topic, restarts at `now_ms`, which is larger than every rev it issued,
+and the first event after it carries `prev: 0`: no frontend holds `0`, so every one of them polls,
+finds no entry with its `prev`, and resyncs. The counter needs no reset: it is a millisecond
+timestamp that advances by at most one per event, and reaches `2^53` in about 285,000 years.
 
 `settings.viewsets_event_store` holds the store; `None` means `MemoryEventStore()`. The application
 calls `start_events()` and `stop_events()` from its lifespan, and `check_events()` logs a warning
@@ -299,7 +304,6 @@ An event stream is never answered. On the wire it is one `open` frame with `end`
 | `viewsets_event_delivery_filters` | `[]` | The delivery filter list |
 | `viewsets_event_log_size` | `32` | Events kept per topic for `poll` |
 | `viewsets_event_log_ttl` | `60.0` | Seconds a topic's log lives after its last event (`RedisEventStore`; `MemoryEventStore` prunes on access) |
-| `viewsets_event_rev_ttl` | `86400.0` | Seconds a topic's counter lives after its last event, the same way |
 | `viewsets_event_push_timeout` | `2.0` | Seconds one push to one socket may take |
 | `viewsets_event_max_subscriptions` | `256` | Topics one socket may hold, and cursors one poll may carry |
 | `viewsets_event_poll_after_ms` | `0` | The floor advertised to polling clients |
@@ -525,7 +529,7 @@ and filters locally needs nothing else; one that pages on the server re-reads it
 |---|---|
 | `mux_ws.process_command` | `peer=` argument, placed in the request scope as `fastapi_viewsets.peer` |
 | `decorators.route_viewset` | `__viewset_metadata__["pk_field_name"]` and `["paths"]` (action name to relative route path); `__viewset_class__` and `__viewset_action__` on every registered endpoint |
-| `conf.Settings` | the nine settings above |
+| `conf.Settings` | the eight settings above |
 | `exceptions` | the four errors above, and their rows in the error code table |
 | `vue/poll.ts` | the polling ladder, moved from taskwire |
 | `vue/events.ts` | the event client |
@@ -567,10 +571,10 @@ only module of the package that imports `redis`.
   single document to carry a rev; the topic carries it. A gap is one comparison of `prev` against
   the held rev, which stays correct when the counter expires and restarts, and a bounded log turns a
   gap of seconds into a poll rather than a re-read. `log_size = 0` is taskwire's model exactly.
-- **A short log, a long counter.** A reader absent for a minute re-reads its state; a backlog for it
-  would be stale data delivered late. The counter outlives the log so that a reader that is present
-  applies a sparse topic's next event as a delta, without the reload that a restarted counter
-  would force on it.
+- **A short log, a permanent counter.** A reader absent for a minute re-reads its state; a backlog
+  for it would be stale data delivered late. The counter outlives the log so that a reader that is
+  present applies a sparse topic's next event as a delta, without the reload that a restarted
+  counter would force on it. A keyed topic that is finished is dropped by its source.
 - **Subscribe and poll are viewset commands.** They pass through the application's command
   middleware, context processors, rate limiting and `/schema` like any other call. The only
   transport-specific piece is the socket in the request scope.
