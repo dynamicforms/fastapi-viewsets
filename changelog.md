@@ -6,6 +6,62 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - Unreleased
+
+### Added
+
+- `ActionInterruptedError` (`action_interrupted`; 504 for reason `time_limit`, 503 for `terminated`
+  and `lost`): the executor ended an execution of a deferred action that had started.
+- `ActionFailedError` (500, `action_failed`, reasons `error`, `result`, `executor`): a deferred
+  action failed with an error that is not an `HTTPException`. `detail` names the task only.
+- `ActionOutcomeUnknownError`, the base of `ResultTimeoutError` and `ResultReaderStoppedError`.
+- `ActionDispatchError` takes a `reason` param: `send`, `serialization`, `unknown_task`,
+  `rejected`, `revoked`, `expired`.
+- `Middleware.executor_started()`, awaited in every process of a `celery_viewset` worker before it
+  uses the middleware there, in every pool type.
+- `Middleware.on_transition(transition)` and `ActionTransition`: a deferred call that was
+  dispatched, did not run, was interrupted from outside its execution, or failed in the worker's
+  own machinery. The worker's supervisor reports a hard time limit, a termination, a lost process,
+  a revoked or expired call, an unknown task and a rejected message to the caller at once, instead
+  of after `result_timeout`.
+- `TimeLimits(soft=, hard=)`, an `@action_configuration` key: the time limits `celery_viewset`
+  sends with each call of the action.
+- `push_result(..., task=)` names the task in the `ActionFailedError` it pushes for an error that
+  is not an `HTTPException`.
+
+### Changed
+
+- **Breaking.** No Celery, billiard or kombu exception reaches `Middleware.execute()`, the caller
+  or the application. A soft time limit reaches `execute()` as `ActionInterruptedError`, whether
+  the action was running or suspended at an `await`; the caller receives the same error. Any other
+  Celery exception the action raises (`Retry`, `Ignore`, `Reject`) becomes `ActionFailedError`.
+- **Breaking.** An error a deferred action raises that is not an `HTTPException` reaches the caller
+  as `ActionFailedError` (500, JSON body) instead of a bare `Exception`. A `DfViewSetError` the
+  worker raises reaches the caller as its own class when `fastapi_viewsets.exceptions` defines it,
+  with its `code`, `params` and headers; an `HTTPException` keeps its headers.
+- **Breaking.** Arguments, context or request that cannot be serialized raise
+  `ActionDispatchError` (reason `serialization`) before the task is sent. A model argument that
+  fails validation in the worker raises `ActionFailedError`.
+- **Breaking.** A call the worker revokes, rejects or does not know ends with `ActionDispatchError`,
+  so `Idempotency` deletes its record and a repeat runs the call again.
+- **Breaking.** `redis_client` is required by `celery_viewset` in worker mode and by
+  `celery_viewset_server`; without it they raise `ValueError`.
+- **Breaking.** `celery_viewset_server` registers its tasks with `acks_late=False`,
+  `reject_on_worker_lost=False` and `store_errors_even_if_ignored=False`, overriding a global
+  `task_acks_late`: a call is never delivered to the worker twice.
+- The result payload carries the error encoded with its class, `code`, `params` and headers, plus
+  `task`; `http_status_code` and `http_detail` stay for a reader that does not decode it.
+- `Idempotency` replays a recorded `DfViewSetError` as its own class when
+  `fastapi_viewsets.exceptions` defines it.
+
+### Fixed
+
+- A result the caller cannot deserialize fails the call with `ActionFailedError` (reason `result`)
+  instead of leaving it to wait for `result_timeout`.
+- An exception that is not an `Exception` (a `BaseException` subclass) raised by a deferred action
+  is pushed to the caller; `SystemExit` and `KeyboardInterrupt` are pushed as
+  `ActionInterruptedError` (reason `terminated`) and still end the process.
+
 ## [0.10.0] - 2026-10-16
 
 ### Added

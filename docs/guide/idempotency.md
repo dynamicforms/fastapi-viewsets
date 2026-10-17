@@ -75,12 +75,13 @@ rejected from `depends()`, before the request body is parsed.
   its aliases), which the response model validates again on a repeat; an outcome that cannot be
   encoded is not stored.
 - **Error outcomes are stored too.** An `HTTPException` is raised again on a repeat with its status
-  code, `detail` and headers, a `DfViewSetError` with its `code` and `params`. A
+  code, `detail` and headers, a `DfViewSetError` with its `code` and `params`, and with its class when
+  `fastapi_viewsets.exceptions` defines it (an `ActionInterruptedError` is replayed as one). A
   `RequestValidationError` raised by the action is replayed as a `422` with its errors as `detail`.
   Any other exception is replayed as a `500` with `detail` `"Internal Server Error"`.
-- **A call that was not handed to its executor is not an outcome.** For an `ActionDispatchError`
-  (a `celery_viewset` task that could not be sent) the record is deleted, and a repeat runs the call
-  again.
+- **A call that did not run is not an outcome.** For an `ActionDispatchError` (a `celery_viewset`
+  task that could not be sent, or that the worker revoked, rejected or did not know) the record is
+  deleted, and a repeat runs the call again.
 - **What is stored depends on the method.**
   - `POST`, `PUT`, `PATCH`, `DELETE`: the outcome is stored.
   - `GET`, `HEAD`: the outcome is stored only when a repeat attached to the call while it ran. A

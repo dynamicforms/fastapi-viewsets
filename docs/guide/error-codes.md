@@ -49,7 +49,9 @@ The handler is registered on the application, so it shapes a `DfViewSetError` ov
 | `IdempotencyKeyReusedError(key)` | 422 | `idempotency_key_reused` | `{key}` |
 | `ResultTimeoutError(task, timeout)` | 504 | `result_timeout` | `{task, timeout}` |
 | `ResultReaderStoppedError(queue_key)` | 503 | `result_reader_stopped` | `{queue_key}` |
-| `ActionDispatchError(task)` | 503 | `action_dispatch_failed` | `{task}` |
+| `ActionDispatchError(task, reason=None)` | 503 | `action_dispatch_failed` | `{task, reason}` |
+| `ActionInterruptedError(task, reason)` | 504 for `time_limit`, else 503 | `action_interrupted` | `{task, reason}` |
+| `ActionFailedError(task, reason="error")` | 500 | `action_failed` | `{task, reason}` |
 | `UnsupportedListShapeError(shape, allowed)` | 422 | `unsupported_list_shape` | `{shape, allowed}` |
 | `EventTopicInvalidError(topic)` | 422 | `event_topic_invalid` | `{topic}` |
 | `EventTopicRefusedError(topic)` | 403 | `event_topic_refused` | `{topic}` |
@@ -76,6 +78,28 @@ raise NotFoundError(pk)
 # registered:   {"detail": "Item with pk 42 not found", "detail_code": "not_found", "detail_params": {"pk": 42}}
 ```
 
+### Executor outcomes
+
+The errors that end a call to a `celery_viewset` action without its result, by `reason` (see
+[Outcomes of a call](./routers#outcomes-of-a-call)):
+
+| `code` | `reason` | The action |
+|--------|----------|------------|
+| `action_dispatch_failed` | `send` | was not sent: the broker is unreachable, or the message cannot be encoded |
+| | `serialization` | was not sent: its arguments, context or request cannot be serialized |
+| | `unknown_task` | did not run: the worker has no task of that name |
+| | `rejected` | did not run: the worker rejected the message |
+| | `revoked`, `expired` | did not run: it was revoked, or expired, before it started |
+| `action_interrupted` | `time_limit` | exceeded its soft or hard time limit (504) |
+| | `terminated` | was terminated (503) |
+| | `lost` | lost the worker process executing it (503) |
+| `action_failed` | `error` | raised an error that is not an `HTTPException`; `detail` names the task only, the error is logged in the worker |
+| | `result` | returned a result that cannot be serialized, or that the caller cannot deserialize |
+| | `executor` | did not complete because the worker failed around it, or `Middleware.executor_started()` raised |
+
+`ResultTimeoutError` and `ResultReaderStoppedError` descend from `ActionOutcomeUnknownError`: the
+caller stopped waiting, and the action may have run, may still run, or never will.
+
 ### Custom errors
 
 Subclass `DfViewSetError` for an application's own errors that should carry the same shape:
@@ -91,6 +115,10 @@ class InsufficientBalanceError(DfViewSetError):
 
 Registering `df_viewset_exception_handler` for `DfViewSetError` covers every subclass, this
 package's own errors and an application's own alike.
+
+An application's own subclass raised by a `celery_viewset` action reaches the FastAPI process as a
+`DfViewSetError` with the same status, `detail`, `code`, `params` and headers; only the classes
+`fastapi_viewsets.exceptions` defines are rebuilt as their own class.
 
 ## Frontend
 
@@ -235,7 +263,9 @@ The codes this package raises, with their English `detail`:
 | `rate_limited` | `Rate limit exceeded` | — |
 | `result_timeout` | `No result for {task} within {timeout} s` | `task`, `timeout` |
 | `result_reader_stopped` | `The result reader for {queue_key} stopped before the result arrived` | `queue_key` |
-| `action_dispatch_failed` | `{task} could not be handed to its executor` | `task` |
+| `action_dispatch_failed` | `{task} could not be handed to its executor` | `task`, `reason` |
+| `action_interrupted` | `{task} exceeded its time limit` (`time_limit`), `{task} was terminated` (`terminated`), `{task} lost the process executing it` (`lost`) | `task`, `reason` |
+| `action_failed` | `{task} failed` | `task`, `reason` |
 | `idempotency_key_invalid` | `Idempotency-Key must be a non-empty Structured Field string` | — |
 | `idempotency_key_reused` | `Idempotency key {key} was used for a different request` | `key` |
 | `unsupported_list_shape` | `unsupported list shape '{shape}'; this endpoint offers {allowed}` | `shape`, `allowed` |

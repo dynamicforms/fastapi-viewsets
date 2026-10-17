@@ -146,6 +146,31 @@ The instance is constructed once (at class-body/decoration time, like any decora
 shared across every request to that viewset/method - same as a globally-registered middleware
 singleton would be.
 
+## Time limits of a deferred action
+
+`TimeLimits` (in `fastapi_viewsets.action_configuration`) is a key the library itself reads: the
+time limits, in seconds, of an execution of a [`celery_viewset`](./routers#time-limits) action.
+
+```python
+from fastapi_viewsets.action_configuration import action_configuration, TimeLimits
+
+@action_configuration({TimeLimits: TimeLimits(soft=30, hard=60)})
+class ReportViewSet(...):
+    @action_configuration({TimeLimits: TimeLimits(soft=300, hard=330)})
+    async def perform_create(self, context, data): ...
+
+settings.default_action_configuration = {TimeLimits: TimeLimits(soft=120)}
+```
+
+| Field | Default | When it passes |
+|-------|---------|----------------|
+| `soft` | `None` | `Middleware.execute()` sees `ActionInterruptedError` from `call_next()`, `finally` blocks and `save_state()` run, and the caller receives `ActionInterruptedError` (504, reason `time_limit`) |
+| `hard` | `None` | the worker ends the process executing the action; the caller receives the same error and `Middleware.on_transition()` receives `interrupted` |
+
+`None` leaves that limit to the worker's own configuration. The entry merges like any other: a
+method-level `TimeLimits` replaces the class-level one whole, and `ByAction` varies it per action.
+An action executed in the FastAPI process has no time limit.
+
 ## Rejecting a request: just raise
 
 There's no dedicated "reject" hook - a context processor or command middleware that wants to

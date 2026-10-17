@@ -48,6 +48,12 @@ constructing the `Celery(...)` instance, Celery's own built-in Django fixup
 [Celery's own documentation](https://docs.celeryq.dev/en/stable/userguide/configuration.html) for
 that fixup rather than reimplementing it — nothing on this library's side is involved.
 
+Setup a command middleware needs in each worker process (a client it creates, a connection it
+opens) goes in
+[`Middleware.executor_started()`](./command-middleware#setting-up-the-worker-middleware-executor-started),
+which runs in every pool type before the process's first execution, rather than in a handler of
+Celery's `worker_process_init`, which only the `prefork` and `solo` pools send.
+
 ## `autodiscover_tasks` for non-conventional task locations
 
 `celery_viewset`-decorated classes register Celery tasks as a side effect of being

@@ -336,6 +336,56 @@ bytes, and `ViewsetTopics` does not see row-level filtering in `get_queryset`; `
 Any connected client can name any topic, so an empty `viewsets_event_authorizers` admits nothing.
 `allow_all` admits every topic when listed explicitly.
 
+## Executor outcomes
+
+### A call whose outcome is unknown is stored by `Idempotency`
+
+`ResultTimeoutError` and `ResultReaderStoppedError` (`ActionOutcomeUnknownError`) are recorded as
+the call's outcome, although the worker may still complete the action; a repeat answers the stored
+error instead of attaching to a run that may finish. The alternative is to leave the running record
+until `viewsets_idempotency_lock_ttl` passes, which holds a repeat for up to the lock TTL on a call
+that may never answer.
+
+### `on_transition()` in the worker is bounded by a constant, not a setting
+
+Each call runs on the supervisor's own transition loop with a 5 second bound
+(`server.TRANSITION_LISTENER_TIMEOUT`). A listener that needs longer belongs on a queue of its own;
+a setting would invite making the supervisor wait.
+
+### A worker process shutting down is not reported
+
+Celery's `worker_process_shutdown` is not delivered when a process is killed with SIGKILL, so an
+`executor_stopping` hook could not promise to run, and no consumer needs one.
+
+### No executor-neutral cancel
+
+A web-side cancellation, or an `ActionOutcomeUnknownError`, does not revoke the task. Revoking needs
+the task id on the caller's side and an executor-neutral notion of "stop", which no consumer has
+asked for.
+
+### The soft time limit is translated by replacing billiard's signal handler
+
+While an execution runs on the main thread of a prefork child, SIGUSR1 raises
+`ActionInterruptedError` at the executing frame instead of billiard's `SoftTimeLimitExceeded`, and
+billiard's handler is restored afterwards. It depends on billiard installing
+`billiard.pool.soft_timeout_sighandler` on SIGUSR1, which is checked by identity: with any other
+handler nothing is replaced, and the boundary translation still turns `SoftTimeLimitExceeded` into
+`ActionInterruptedError` at every `call_next()`, but the action body itself then sees billiard's
+class.
+
+### A process exit inside an execution is pushed as `terminated`
+
+`SystemExit` and `KeyboardInterrupt` are re-raised as they are, so the process still exits, and
+the caller is sent `ActionInterruptedError` (reason `terminated`). For a hard time limit the
+supervisor has already sent `time_limit`, and the reader drops the second payload; for a cold
+shutdown of a `solo` worker it is the only report.
+
+### Time limits apply to executor-run actions only
+
+An in-process action has no time limit. `asyncio.timeout` around the execution would interrupt it
+only at an `await`, never in synchronous code, and offers no hard limit, so the same configuration
+would mean something weaker in-process than in the worker.
+
 ## Settled, kept for the reasoning
 
 ### An unhandled exception answers 500 rather than resetting the stream
