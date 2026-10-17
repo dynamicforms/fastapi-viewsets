@@ -44,6 +44,27 @@ record needs an anchor, the row it sorts next to. Fetching a page around the rec
 another new row, so the neighbour read is not a reliable anchor, and nothing provides one yet. A
 frontend that pages on the server re-reads its page.
 
+## Async actions in a gevent worker with concurrency above 1
+
+*Recorded 2026-10-17, Claude Code session `16391925-a3f2-4380-8a30-f3c15ec62bad` (taskwire repo).*
+
+`celery_viewset` runs an async action on the event loop of the current thread: `_event_loop()` in
+`decorators/celery_viewset/server.py` takes the thread's loop and, when that loop is already
+running, applies `nest_asyncio`. In a prefork pool every child has its own thread and loop, so this
+never happens. In a gevent pool every greenlet shares the main thread and its loop: while one task
+is inside `run_until_complete`, a second concurrent task finds the loop running and imports
+`nest_asyncio`, which is not a dependency, so it fails with `ModuleNotFoundError` and the caller gets
+500 `action_failed`. Two concurrent `/jobs/long` calls on `-P gevent -c 4` reproduce it;
+`worker_e2e_test.py` runs its gevent worker with `-c 1` for this reason, and no doc mentions it.
+
+To decide:
+
+- whether nested execution through `nest_asyncio` is correct when greenlets interleave on one loop
+  (untested); if it is, declare `nest_asyncio` for the gevent path and document that gevent runs
+  async actions nested on one loop per process;
+- if it is not, a different way to run async actions under gevent (e.g. one loop per process that
+  executions submit to), or a documented limit: gevent pools with async actions need `-c 1`.
+
 ## To assess: worth doing at all?
 
 None of these hurts in normal use. Each needs a decision on whether it is worth the change before
