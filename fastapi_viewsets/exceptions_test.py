@@ -1,7 +1,17 @@
+import pickle
+
+import pytest
+
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from fastapi_viewsets.exceptions import (
+    _error_from_jsonable,
+    _error_to_jsonable,
+    ActionDispatchError,
+    ActionFailedError,
+    ActionInterruptedError,
+    ActionOutcomeUnknownError,
     CursorRequestError,
     df_viewset_exception_handler,
     DfViewSetError,
@@ -172,3 +182,59 @@ def test_event_cursors_exceeded_error_carries_the_count_and_the_limit():
         {"count": 300, "limit": 256},
     )
     assert error.detail == "A poll carries at most 256 cursors, this one carries 300"
+
+
+def test_action_dispatch_error_carries_task_and_reason():
+    error = ActionDispatchError("items.create", "revoked")
+    assert (error.status_code, error.code) == (503, "action_dispatch_failed")
+    assert error.params == {"task": "items.create", "reason": "revoked"}
+
+
+@pytest.mark.parametrize(
+    ("reason", "status", "detail"),
+    [
+        ("time_limit", 504, "items.create exceeded its time limit"),
+        ("terminated", 503, "items.create was terminated"),
+        ("lost", 503, "items.create lost the process executing it"),
+    ],
+)
+def test_action_interrupted_error_takes_its_status_from_the_reason(reason, status, detail):
+    error = ActionInterruptedError("items.create", reason)
+    assert (error.status_code, error.detail, error.code) == (status, detail, "action_interrupted")
+    assert error.params == {"task": "items.create", "reason": reason}
+
+
+def test_action_failed_error_names_the_task_only():
+    error = ActionFailedError("items.create", "result")
+    assert (error.status_code, error.detail, error.code) == (500, "items.create failed", "action_failed")
+    assert error.params == {"task": "items.create", "reason": "result"}
+
+
+def test_the_errors_of_a_call_whose_outcome_is_unknown_share_a_base():
+    assert isinstance(ResultTimeoutError("t", 1.0), ActionOutcomeUnknownError)
+    assert isinstance(ResultReaderStoppedError("q"), ActionOutcomeUnknownError)
+
+
+def test_a_df_viewset_error_survives_pickling_with_its_class_and_fields():
+    error = ActionInterruptedError("items.create", "lost")
+    error.headers = {"Retry-After": "1"}
+    copy = pickle.loads(pickle.dumps(error))  # noqa: S301 - a round trip of this test's own object
+    assert type(copy) is ActionInterruptedError
+    assert (copy.status_code, copy.detail, copy.code, copy.params, copy.headers) == (
+        503,
+        error.detail,
+        "action_interrupted",
+        error.params,
+        {"Retry-After": "1"},
+    )
+
+
+def test_the_encoded_fields_rebuild_the_error():
+    rebuilt = _error_from_jsonable(_error_to_jsonable(NotFoundError(3)))
+    assert type(rebuilt) is NotFoundError
+    assert (rebuilt.status_code, rebuilt.code, rebuilt.params) == (404, "not_found", {"pk": 3})
+    assert _error_to_jsonable(RuntimeError("x")) == {
+        "status_code": 500,
+        "detail": "Internal Server Error",
+        "headers": None,
+    }

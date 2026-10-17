@@ -41,7 +41,7 @@ def worker_tasks_for(viewset_factory) -> dict:
         return decorator
 
     celery_app.task.side_effect = mock_task
-    viewset_factory(celery_viewset_server(celery_app=celery_app, task_prefix="tracks"))
+    viewset_factory(celery_viewset_server(celery_app=celery_app, task_prefix="tracks", redis_client=MagicMock()))
     return registered
 
 

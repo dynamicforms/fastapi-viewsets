@@ -8,13 +8,16 @@ import pytest
 
 from pydantic import BaseModel
 
-from fastapi_viewsets.context import SerializableObject
+from fastapi_viewsets.action_configuration import action_configuration, TimeLimits
+from fastapi_viewsets.conf import settings
+from fastapi_viewsets.context import Context, SerializableObject
 from fastapi_viewsets.decorators import (
     celery_viewset_client,
 )
 from fastapi_viewsets.decorators.lifecycle_runner import DEFERRED_ACTIONS_ATTRIBUTE
 from fastapi_viewsets.exceptions import ActionDispatchError, ResultReaderStoppedError, ResultTimeoutError
-from fastapi_viewsets.mixins import ListMixin
+from fastapi_viewsets.middleware import Middleware
+from fastapi_viewsets.mixins import CreateMixin, ListMixin
 
 
 class Item(BaseModel):
@@ -258,6 +261,7 @@ def test_celery_viewset_client_unregisters_future_on_send_task_error():
             await instance.list_items()
         assert raised.value.status_code == 503
         assert raised.value.code == "action_dispatch_failed"
+        assert raised.value.params == {"task": "items.list_items", "reason": "send"}
         assert str(raised.value.__cause__) == "Celery broker unavailable"
         # Future should be unregistered after error
         assert len(result_reader._pending_futures) == 0
@@ -576,3 +580,118 @@ def test_a_request_crosses_as_its_scope_without_the_body():
     assert (request.client.host, request.client.port) == ("10.0.0.1", 5000)
     assert request_to_jsonable(None) is None
     assert request_from_jsonable(None) is None
+
+
+class _Unserializable(SerializableObject):
+    def __serialize__(self):
+        raise TypeError("not serializable")
+
+    @classmethod
+    def __deserialize__(cls, data):
+        return cls(data)
+
+
+def test_arguments_that_cannot_be_serialized_did_not_dispatch(monkeypatch):
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    monkeypatch.setattr(result_reader, "register_future", _resolving_register([]))
+    celery_app = MagicMock()
+
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
+
+    with pytest.raises(ActionDispatchError) as raised:
+        asyncio.run(ItemViewSet().list_items(context=Context({"value": _Unserializable(1)})))
+    assert raised.value.params == {"task": "items.list_items", "reason": "serialization"}
+    assert isinstance(raised.value.__cause__, TypeError)
+    celery_app.send_task.assert_not_called()
+
+
+class _Transitions(Middleware):
+    def __init__(self):
+        self.received = []
+
+    async def __call__(self, _request, _viewset, _context, call_next):
+        return await call_next()
+
+    async def on_transition(self, transition):
+        self.received.append(transition)
+
+
+def test_a_sent_call_is_reported_as_dispatched_once(monkeypatch):
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    monkeypatch.setattr(result_reader, "register_future", _resolving_register([]))
+    listener = _Transitions()
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [listener])
+
+    @celery_viewset_client(celery_app=MagicMock(), task_prefix="items", redis_client=MagicMock())
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
+
+    asyncio.run(ItemViewSet().list_items(context=Context({"user": "u"})))
+
+    [transition] = listener.received
+    assert (transition.kind, transition.viewset_class, transition.action) == ("dispatched", ItemViewSet, "list_items")
+    assert transition.context.raw() == {"user": "u"}
+    assert (transition.parent, transition.error) == (None, None)
+
+
+def test_a_call_that_was_not_sent_is_not_reported_as_dispatched(monkeypatch):
+    listener = _Transitions()
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [listener])
+    celery_app = MagicMock()
+    celery_app.send_task.side_effect = RuntimeError("down")
+
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
+
+    with pytest.raises(ActionDispatchError):
+        asyncio.run(ItemViewSet().list_items())
+    assert listener.received == []
+
+
+def test_the_actions_time_limits_are_sent_with_the_task(monkeypatch):
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    monkeypatch.setattr(result_reader, "register_future", _resolving_register([]))
+    monkeypatch.setattr(settings, "default_action_configuration", {TimeLimits: TimeLimits(soft=50, hard=60)})
+    celery_app = MagicMock()
+
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
+    class ItemViewSet(ListMixin[Item], CreateMixin[int, Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
+
+        @action_configuration({TimeLimits: TimeLimits(soft=5)})
+        async def perform_create(self, data: Item) -> Item:
+            return data
+
+    asyncio.run(ItemViewSet().list_items())
+    options = celery_app.send_task.call_args.kwargs
+    assert (options["soft_time_limit"], options["time_limit"]) == (50, 60)
+
+    asyncio.run(ItemViewSet().create(data=Item(id=1, name="a")))
+    options = celery_app.send_task.call_args.kwargs
+    assert options["soft_time_limit"] == 5
+    assert "time_limit" not in options
+
+
+def test_an_action_without_time_limits_sends_none(monkeypatch):
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    monkeypatch.setattr(result_reader, "register_future", _resolving_register([]))
+    celery_app = MagicMock()
+
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
+
+    asyncio.run(ItemViewSet().list_items())
+    assert not {"soft_time_limit", "time_limit"} & set(celery_app.send_task.call_args.kwargs)

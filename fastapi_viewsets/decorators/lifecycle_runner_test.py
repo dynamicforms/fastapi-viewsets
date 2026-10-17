@@ -1,5 +1,7 @@
 import asyncio
+import os
 import signal
+import threading
 
 from unittest.mock import MagicMock
 
@@ -11,6 +13,7 @@ from fastapi.testclient import TestClient
 from ..action_configuration import action_configuration
 from ..conf import settings
 from ..context import Context
+from ..exceptions import ActionInterruptedError
 from ..middleware import ActionExecution, Middleware
 from .celery_viewset import celery_viewset_client, celery_viewset_server, result_reader
 from .lifecycle_runner import current_call, lifecycle_runner
@@ -174,7 +177,9 @@ def _viewset_pair(executor: _Executor, events: list):
             events.append(("action", "run", current_call()))
             return "created"
 
-    worker = celery_viewset_server(celery_app=executor.server_app, task_prefix="things")(type("Worker", (Base,), {}))
+    worker = celery_viewset_server(celery_app=executor.server_app, task_prefix="things", redis_client=MagicMock())(
+        type("Worker", (Base,), {})
+    )
     client = celery_viewset_client(celery_app=executor.client_app, task_prefix="things", redis_client=MagicMock())(
         type("Client", (Base,), {})
     )
@@ -248,34 +253,41 @@ def test_an_action_dispatched_inside_an_execution_has_it_as_parent(events, monke
     assert inner.request.url.path == "/outer"
 
 
-def test_an_interrupted_execution_unwinds_through_execute(events):
+def test_a_soft_time_limit_reaches_every_execute_as_action_interrupted(events):
+    """The action, suspended at an await, sees CancelledError; every execute() sees the interruption
+    as ActionInterruptedError."""
+    from billiard.pool import soft_timeout_sighandler
+
     executor = MagicMock()
     tasks = {}
     executor.task.side_effect = lambda name, **_kwargs: lambda func: tasks.setdefault(name, func)
-
-    class TimeLimitError(Exception):
-        pass
+    seen = []
 
     class Slow:
         __router = APIRouter()
 
         @__router.post("")
         async def slow(self) -> None:
-            await asyncio.sleep(10)
+            try:
+                await asyncio.sleep(10)
+            except BaseException as error:
+                seen.append(error)
+                raise
 
-    celery_viewset_server(celery_app=executor, task_prefix="slow")(Slow)
+    celery_viewset_server(celery_app=executor, task_prefix="slow", redis_client=MagicMock())(Slow)
 
-    def interrupt(_signum, _frame):
-        raise TimeLimitError
-
-    previous = signal.signal(signal.SIGALRM, interrupt)
-    signal.setitimer(signal.ITIMER_REAL, 0.05)
+    previous = signal.signal(signal.SIGUSR1, soft_timeout_sighandler)
+    timer = threading.Timer(0.05, os.kill, (os.getpid(), signal.SIGUSR1))
+    timer.start()
     try:
-        with pytest.raises(TimeLimitError):
+        with pytest.raises(ActionInterruptedError) as raised:
             tasks["slow.slow"]()
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous)
+        timer.cancel()
+        signal.signal(signal.SIGUSR1, previous)
 
+    assert raised.value.params == {"task": "slow.slow", "reason": "time_limit"}
+    assert isinstance(seen[0], asyncio.CancelledError)
     assert kinds(events) == [("outer", "enter"), ("inner", "enter"), ("inner", "error"), ("outer", "error")]
-    assert isinstance(events[2][2], asyncio.CancelledError)
+    assert events[2][2] is raised.value
+    assert events[3][2] is raised.value

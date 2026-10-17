@@ -138,6 +138,9 @@ combine-as-imports = true
 order-by-type = false
 
 [tool.pytest.ini_options]
+markers = [
+    "celery_worker: runs a real Celery worker against the Redis named by FASTAPI_VIEWSETS_TEST_REDIS_URL",
+]
 filterwarnings = [
     # Emitted on purpose when two viewsets claim one base path (see mux_ws/registry.py). Tests
     # build a throwaway viewset per case, which is indistinguishable from the real mistake.

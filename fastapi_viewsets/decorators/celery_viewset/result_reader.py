@@ -7,9 +7,10 @@ import socket
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
 
 from ...context import from_jsonable
-from ...exceptions import ResultReaderStoppedError
+from ...exceptions import _error_from_jsonable, _error_to_jsonable, ActionFailedError, ResultReaderStoppedError
 
 if TYPE_CHECKING:
     import redis
@@ -88,27 +89,12 @@ async def _read_results(redis_client: "redis.Redis", queue_key: str, poll_interv
 
             data = json.loads(item)
             correlation_id = data.get("correlation_id")
-            result = data.get("result")
-            error = data.get("error")
 
             pending = _pending_futures.pop(correlation_id, None)
             if pending is None:
                 logger.warning("No pending future for correlation_id=%s", correlation_id)
                 continue
-            future = pending[0]
-
-            if not future.done():
-                if error is not None:
-                    http_status_code = data.get("http_status_code")
-                    http_detail = data.get("http_detail")
-                    if http_status_code is not None:
-                        future.set_exception(HTTPException(status_code=http_status_code, detail=http_detail))
-                    else:
-                        future.set_exception(Exception(error))
-                else:
-                    # Undoes _to_jsonable's SerializableObject tagging (see server.py) at any depth -
-                    # an untagged value passes through unchanged.
-                    future.set_result(from_jsonable(result))
+            _resolve(pending[0], data)
 
         except asyncio.CancelledError:
             break
@@ -117,22 +103,78 @@ async def _read_results(redis_client: "redis.Redis", queue_key: str, poll_interv
             await asyncio.sleep(poll_interval)
 
 
+def _resolve(future: asyncio.Future, data: dict) -> None:
+    """Resolves `future` with the result or the error of one payload."""
+    if future.done():
+        return
+    task = data.get("task")
+    try:
+        if data.get("error") is not None:
+            future.set_exception(_payload_error(data))
+        else:
+            # Undoes _to_jsonable's SerializableObject tagging (see server.py) at any depth - an
+            # untagged value passes through unchanged.
+            future.set_result(from_jsonable(data.get("result")))
+    except Exception as error:
+        logger.exception("Result of %s (correlation_id=%s) cannot be read", task, data.get("correlation_id"))
+        failure = ActionFailedError(task, "result")
+        failure.__cause__ = error
+        future.set_exception(failure)
+
+
+def _payload_error(data: dict) -> Exception:
+    """The exception a payload's `error` carries. An `error` that is not encoded fields is an
+    `HTTPException` when the payload has `http_status_code`, else an `ActionFailedError`."""
+    error = data["error"]
+    if isinstance(error, dict):
+        return _error_from_jsonable(error)
+    if data.get("http_status_code") is not None:
+        return HTTPException(status_code=data["http_status_code"], detail=data.get("http_detail"))
+    return ActionFailedError(data.get("task"))
+
+
+def error_payload(correlation_id: str, task: str | None, error: BaseException) -> dict:
+    """
+    The payload that fails one call with `error`: an `HTTPException` (a `DfViewSetError` with its
+    class), any other error as `ActionFailedError`. `http_status_code` and `http_detail` repeat the
+    status and detail for a reader that does not decode `error`.
+    """
+    if not isinstance(error, (HTTPException, RequestValidationError)):
+        error = ActionFailedError(task)
+    encoded = _error_to_jsonable(error)
+    return {
+        "correlation_id": correlation_id,
+        "task": task,
+        "error": encoded,
+        "http_status_code": encoded["status_code"],
+        "http_detail": encoded["detail"],
+    }
+
+
 def push_payload(redis_client: "redis.Redis", queue_key: str, data: dict) -> None:
     """Push one result payload to queue_key and renew the list's expiry to RESULT_QUEUE_TTL."""
     redis_client.rpush(queue_key, json.dumps(data))
     redis_client.expire(queue_key, RESULT_QUEUE_TTL)
 
 
-def push_result(redis_client: "redis.Redis", queue_key: str, correlation_id: str, result=None, error=None) -> None:
+def push_result(
+    redis_client: "redis.Redis",
+    queue_key: str,
+    correlation_id: str,
+    result=None,
+    error: BaseException | None = None,
+    task: str | None = None,
+) -> None:
     """
     Push a result or an error for one call. queue_key is the `_result_queue_key` the client sent with
-    the task.
+    the task. An `error` that is an `HTTPException` reaches the caller as it is (a `DfViewSetError`
+    of a class `fastapi_viewsets.exceptions` defines keeps its class); any other error reaches it
+    as `ActionFailedError`. `task` names the call's task in that error.
     """
-    data = {"correlation_id": correlation_id}
     if error is not None:
-        data["error"] = str(error)
+        data = error_payload(correlation_id, task, error)
     else:
-        data["result"] = result
+        data = {"correlation_id": correlation_id, "task": task, "result": result}
     push_payload(redis_client, queue_key, data)
 
 

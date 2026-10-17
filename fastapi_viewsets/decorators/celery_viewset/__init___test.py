@@ -47,7 +47,7 @@ def test_celery_viewset_auto_detect_server():
     set_is_celery_worker(True)
     try:
 
-        @celery_viewset(celery_app=celery_app, task_prefix="items")
+        @celery_viewset(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self) -> list[Item]:
                 return [Item(id=1, name="test")]

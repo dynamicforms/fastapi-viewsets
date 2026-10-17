@@ -1,10 +1,17 @@
 import asyncio
+import concurrent.futures
 import contextlib
 import functools
 import inspect
 import logging
+import os
+import signal
+import threading
 import types
 
+from collections import OrderedDict
+from collections.abc import Callable
+from dataclasses import dataclass
 from functools import wraps
 from typing import Any, get_args, get_origin, get_type_hints, TYPE_CHECKING, TypeVar, Union
 
@@ -13,10 +20,13 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from ...action_configuration import resolve_action_configuration
+from ...conf import settings
 from ...context import Context, deserialize_context, to_jsonable
-from ...middleware import ExecutionRef
+from ...exceptions import ActionDispatchError, ActionFailedError, ActionInterruptedError, DfViewSetError
+from ...middleware import ActionTransition, ExecutionRef, run_executor_started, run_transition_listeners
 from ..build_schema import build_schema
-from ..lifecycle_runner import lifecycle_runner, LifecycleType
+from ..lifecycle_runner import effective_middlewares, execution_translator, lifecycle_runner, LifecycleType
 from ..primary_key_model_helper import (
     create_model_without_pk,
     from_partial_body,
@@ -26,7 +36,7 @@ from ..primary_key_model_helper import (
 )
 from ..route_viewset import build_type_map, resolve_typevars
 from .payload import CONTEXT_KWARG, PARENT_KWARG, request_from_jsonable, REQUEST_KWARG
-from .result_reader import push_payload
+from .result_reader import error_payload, push_payload
 
 if TYPE_CHECKING:
     import redis
@@ -137,20 +147,320 @@ def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> di
     return result
 
 
-def _run_to_end(loop: asyncio.AbstractEventLoop, coroutine) -> Any:
+TRANSITION_LISTENER_TIMEOUT = 5.0
+"""Seconds one `on_transition()` call may take in an executor's process."""
+
+_EXECUTOR_MODULES = frozenset({"celery", "billiard", "kombu"})
+_SOFT_LIMIT_SIGNAL = getattr(signal, "SIGUSR1", None)
+
+
+@functools.cache
+def _billiard_exceptions() -> types.SimpleNamespace:
+    from billiard.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded, WorkerLostError
+
+    return types.SimpleNamespace(
+        SoftTimeLimitExceeded=SoftTimeLimitExceeded,
+        TimeLimitExceeded=TimeLimitExceeded,
+        WorkerLostError=WorkerLostError,
+    )
+
+
+def _is_executor_error(error: BaseException) -> bool:
+    return type(error).__module__.split(".")[0] in _EXECUTOR_MODULES
+
+
+class _Run:
+    """
+    One execution in this process. Maps the exceptions the executor raises into it to this
+    package's: a soft time limit to `ActionInterruptedError`, any other celery, billiard or kombu
+    exception to `ActionFailedError`, and the `asyncio.CancelledError` of an execution an interruption
+    cancelled to that interruption.
+    """
+
+    def __init__(self, task: str):
+        self.task = task
+        self.interruption: ActionInterruptedError | None = None
+        self._interrupting: BaseException | None = None
+
+    def interrupted(self, error: BaseException) -> None:
+        """Records `error`, which interrupted the loop while the execution was suspended."""
+        translated = self.translate(error)
+        if isinstance(translated, ActionInterruptedError):
+            self.interruption = translated
+            self._interrupting = error
+
+    def translate(self, error: BaseException) -> BaseException:
+        if self.interruption is not None and (error is self._interrupting or isinstance(error, asyncio.CancelledError)):
+            return self.interruption
+        if _is_executor_error(error):
+            if isinstance(error, _billiard_exceptions().SoftTimeLimitExceeded):
+                return ActionInterruptedError(self.task, "time_limit")
+            return ActionFailedError(self.task)
+        return error
+
+
+@contextlib.contextmanager
+def _soft_limit_raises(task: str):
+    """
+    While active, the soft time limit raises `ActionInterruptedError` at the executing frame in
+    place of billiard's `SoftTimeLimitExceeded`. It takes effect on the main thread of a process
+    whose soft time limit signal runs billiard's handler, which is restored on exit.
+    """
+    previous = None
+    if _SOFT_LIMIT_SIGNAL is not None and threading.current_thread() is threading.main_thread():
+        from billiard.pool import soft_timeout_sighandler
+
+        if signal.getsignal(_SOFT_LIMIT_SIGNAL) is soft_timeout_sighandler:
+            previous = soft_timeout_sighandler
+
+    if previous is None:
+        yield
+        return
+
+    def raise_interrupted(_signum, _frame):
+        raise ActionInterruptedError(task, "time_limit")
+
+    signal.signal(_SOFT_LIMIT_SIGNAL, raise_interrupted)
+    try:
+        yield
+    finally:
+        signal.signal(_SOFT_LIMIT_SIGNAL, previous)
+
+
+def _run_to_end(loop: asyncio.AbstractEventLoop, coroutine, run: _Run | None = None) -> Any:
     """Runs `coroutine` on `loop` as a task and returns its result. An exception that interrupts the
-    loop while the task is suspended (Celery's time limit, raised from a signal handler) cancels the
-    task and runs it until it has unwound, so its `finally` blocks and `Middleware.execute()` see the
-    interruption; the exception is then raised."""
+    loop while the task is suspended (the executor's time limit, raised from a signal handler) is
+    recorded on `run`, cancels the task and runs it until it has unwound, so its `finally` blocks and
+    `Middleware.execute()` see the interruption; the exception is then raised."""
     task = loop.create_task(coroutine)
     try:
         return loop.run_until_complete(task)
-    except BaseException:
+    except BaseException as error:
         if not task.done():
+            if run is not None:
+                run.interrupted(error)
             task.cancel()
             with contextlib.suppress(BaseException):  # the interruption is what propagates
                 loop.run_until_complete(task)
         raise
+
+
+def _event_loop() -> asyncio.AbstractEventLoop:
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    if loop.is_running():
+        import nest_asyncio
+
+        nest_asyncio.apply()
+    return loop
+
+
+_started_pid: int | None = None
+_started_lock = threading.Lock()
+
+
+def _ensure_executor_started(loop: asyncio.AbstractEventLoop, task: str) -> None:
+    """Runs `Middleware.executor_started()` on `loop` once per process. A failure raises
+    `ActionFailedError` (reason `executor`) and leaves it to run again on the next execution."""
+    global _started_pid
+    if _started_pid == os.getpid():
+        return
+    with _started_lock:
+        if _started_pid == os.getpid():
+            return
+        try:
+            _run_to_end(loop, run_executor_started(settings.viewsets_command_middleware))
+        except Exception as error:
+            logger.exception("executor_started() failed in process %d", os.getpid())
+            raise ActionFailedError(task, "executor") from error
+        _started_pid = os.getpid()
+
+
+# Transitions observed by the executor outside an execution
+
+
+@dataclass(frozen=True)
+class _Prefix:
+    viewset_class: type
+    redis_client: "redis.Redis"
+
+
+_prefixes: dict[str, _Prefix] = {}
+_task_actions: dict[str, tuple[type, str]] = {}
+_reported: OrderedDict[str, None] = OrderedDict()
+_reported_lock = threading.Lock()
+_REPORTED_KEPT = 4096
+
+
+def _action_of(task_name: str | None) -> tuple[type, str, "redis.Redis"] | None:
+    """The viewset class, action and redis client of a task named under a registered prefix. A
+    task the process did not register resolves to its prefix's class and the name after the prefix."""
+    if not task_name:
+        return None
+    prefix = max((p for p in _prefixes if task_name.startswith(f"{p}.")), key=len, default=None)
+    if prefix is None:
+        return None
+    entry = _prefixes[prefix]
+    viewset_class, action = _task_actions.get(task_name, (entry.viewset_class, task_name[len(prefix) + 1 :]))
+    return viewset_class, action, entry.redis_client
+
+
+def _first_report(correlation_id: str) -> bool:
+    with _reported_lock:
+        if correlation_id in _reported:
+            return False
+        _reported[correlation_id] = None
+        while len(_reported) > _REPORTED_KEPT:
+            _reported.popitem(last=False)
+        return True
+
+
+class _TransitionLoop:
+    """An event loop on a daemon thread of this process that runs `on_transition()` listeners, after
+    `Middleware.executor_started()` once."""
+
+    def __init__(self):
+        self.pid = os.getpid()
+        self.loop = asyncio.new_event_loop()
+        self.started = False
+        self.lock: asyncio.Lock | None = None
+        threading.Thread(target=self.loop.run_forever, name="fastapi-viewsets-transitions", daemon=True).start()
+
+    async def report(self, transition: ActionTransition) -> None:
+        if self.lock is None:
+            self.lock = asyncio.Lock()
+        async with self.lock:
+            if not self.started:
+                try:
+                    await run_executor_started(settings.viewsets_command_middleware)
+                    self.started = True
+                except Exception:
+                    logger.exception("executor_started() failed in process %d", os.getpid())
+            middlewares = effective_middlewares(
+                resolve_action_configuration(transition.viewset_class, transition.action)
+            )
+            await run_transition_listeners(middlewares, transition, TRANSITION_LISTENER_TIMEOUT)
+
+
+_transition_loop: _TransitionLoop | None = None
+_transition_loop_lock = threading.Lock()
+
+
+def _submit_transition(transition: ActionTransition) -> concurrent.futures.Future:
+    global _transition_loop
+    with _transition_loop_lock:
+        if _transition_loop is None or _transition_loop.pid != os.getpid():
+            _transition_loop = _TransitionLoop()
+        transition_loop = _transition_loop
+    return asyncio.run_coroutine_threadsafe(transition_loop.report(transition), transition_loop.loop)
+
+
+def _report(
+    kind: str, task_name: str | None, task_kwargs: Any, error_of: Callable[[str], DfViewSetError]
+) -> concurrent.futures.Future | None:
+    """
+    Pushes the error `error_of(task)` to the caller of the call `task_kwargs` belong to, then submits
+    the transition. Does nothing for a task outside the registered prefixes, for kwargs without the
+    call's result queue and for a call already reported in this process.
+    """
+    resolved = _action_of(task_name)
+    if resolved is None or not isinstance(task_kwargs, dict):
+        return None
+    correlation_id = task_kwargs.get("_correlation_id")
+    result_queue_key = task_kwargs.get("_result_queue_key")
+    if not correlation_id or not result_queue_key or not _first_report(correlation_id):
+        return None
+    viewset_class, action, redis_client = resolved
+    error = error_of(task_name)
+    logger.warning("Celery task %s: %s (correlation_id=%s): %s", kind, task_name, correlation_id, error.detail)
+    try:
+        push_payload(redis_client, result_queue_key, error_payload(correlation_id, task_name, error))
+    except Exception:
+        logger.exception("Celery task %s: %s not reported to its caller", kind, task_name)
+    try:
+        context = Context(
+            deserialize_context(task_kwargs.get(CONTEXT_KWARG) or {}),
+            action_configuration=resolve_action_configuration(viewset_class, action),
+            action_name=action,
+        )
+        parent = ExecutionRef.from_jsonable(task_kwargs.get(PARENT_KWARG))
+    except Exception:
+        logger.exception("Celery task %s: %s carries no readable context", kind, task_name)
+        return None
+    return _submit_transition(ActionTransition(kind, viewset_class, action, context, parent, error))
+
+
+def _message_call(message: Any) -> tuple[str | None, dict | None]:
+    """The task name and kwargs of a task message; None for what cannot be decoded."""
+    try:
+        name = (message.headers or {}).get("task")
+        body = message.decode()
+    except Exception:
+        return None, None
+    if isinstance(body, (list, tuple)) and len(body) == 3 and isinstance(body[1], dict):
+        return name, body[1]
+    if isinstance(body, dict):
+        return name or body.get("task"), body.get("kwargs")
+    return name, None
+
+
+def _on_task_failure(sender=None, exception=None, kwargs=None, **_signal):
+    """Celery's supervisor reports a hard time limit and a lost worker process here; any other
+    failure the execution already pushed itself."""
+    billiard = _billiard_exceptions()
+    if isinstance(exception, billiard.TimeLimitExceeded):
+        reason = "time_limit"
+    elif isinstance(exception, billiard.WorkerLostError):
+        reason = "lost"
+    else:
+        return None
+    return _report("interrupted", getattr(sender, "name", None), kwargs, lambda t: ActionInterruptedError(t, reason))
+
+
+def _on_task_revoked(sender=None, request=None, terminated=False, expired=False, **_signal):
+    task_kwargs = getattr(request, "kwargs", None)
+    task_name = getattr(sender, "name", None) or getattr(request, "task", None)
+    if terminated:
+        return _report("interrupted", task_name, task_kwargs, lambda t: ActionInterruptedError(t, "terminated"))
+    reason = "expired" if expired else "revoked"
+    return _report("not_run", task_name, task_kwargs, lambda t: ActionDispatchError(t, reason))
+
+
+def _on_task_unknown(message=None, name=None, **_signal):
+    message_name, task_kwargs = _message_call(message)
+    return _report("not_run", name or message_name, task_kwargs, lambda t: ActionDispatchError(t, "unknown_task"))
+
+
+def _on_task_rejected(message=None, **_signal):
+    task_name, task_kwargs = _message_call(message)
+    return _report("not_run", task_name, task_kwargs, lambda t: ActionDispatchError(t, "rejected"))
+
+
+def _on_task_internal_error(sender=None, kwargs=None, **_signal):
+    return _report("failed", getattr(sender, "name", None), kwargs, lambda t: ActionFailedError(t, "executor"))
+
+
+_receivers_connected = False
+
+
+def _connect_receivers() -> None:
+    global _receivers_connected
+    if _receivers_connected:
+        return
+    from celery import signals
+
+    for name, receiver in (
+        ("task_failure", _on_task_failure),
+        ("task_revoked", _on_task_revoked),
+        ("task_unknown", _on_task_unknown),
+        ("task_rejected", _on_task_rejected),
+        ("task_internal_error", _on_task_internal_error),
+    ):
+        getattr(signals, name).connect(receiver, weak=False, dispatch_uid=f"fastapi_viewsets.{name}")
+    _receivers_connected = True
 
 
 def celery_viewset_server(
@@ -159,6 +469,25 @@ def celery_viewset_server(
     lifecycle: LifecycleType = "singleton",
     redis_client: "redis.Redis | None" = None,
 ):
+    """
+    Decorator for the Celery worker side. Registers a task per route of the viewset that executes
+    the action and pushes its result or error to the caller's result queue through `redis_client`
+    (a synchronous `redis.Redis`, required).
+
+    The tasks are registered with `ignore_result=True`, `acks_late=False`,
+    `reject_on_worker_lost=False` and `store_errors_even_if_ignored=False`, overriding the
+    application's `task_acks_late`: a call is acknowledged when its execution starts, and never
+    delivered a second time, since its caller receives one outcome only.
+
+    No celery, billiard or kombu exception reaches `Middleware.execute()` or the caller: a soft
+    time limit arrives as `ActionInterruptedError`, any other one as `ActionFailedError`. The
+    worker's supervisor reports what ends an execution from outside it (a hard time limit, a
+    termination, a lost process) and a call that never runs (revoked, expired, unknown, rejected)
+    to the caller and to `Middleware.on_transition()`.
+    """
+    if redis_client is None:
+        raise ValueError("redis_client is required for celery_viewset_server")
+
     def decorator(cls: type[T]):
         seen_tasks = set()
         instance = cls() if lifecycle == "singleton" else None
@@ -170,84 +499,102 @@ def celery_viewset_server(
             def sync_wrapper(*args, **kwargs):
                 nonlocal instance
 
-                # Extract pottery/result-queue params injected by client
                 correlation_id = kwargs.pop("_correlation_id", None)
                 result_queue_key = kwargs.pop("_result_queue_key", None)
-
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-
-                if loop.is_running():
-                    import nest_asyncio
-
-                    nest_asyncio.apply()
+                run = _Run(task_name)
 
                 logger.info("Celery task executing: %s (correlation_id=%s)", task_name, correlation_id)
                 try:
+                    loop = _event_loop()
+                    _ensure_executor_started(loop, task_name)
                     context = Context(deserialize_context(kwargs.pop(CONTEXT_KWARG, None) or {}))
                     request = request_from_jsonable(kwargs.pop(REQUEST_KWARG, None))
                     parent = ExecutionRef.from_jsonable(kwargs.pop(PARENT_KWARG, None))
                     kwargs = _reconstruct_kwargs(original_endpoint, kwargs, cls)
-                    result = _run_to_end(
-                        loop,
-                        lifecycle_runner(
-                            original_endpoint,
-                            instance,
-                            cls,
-                            lifecycle,
-                            *args,
-                            needs_context="context" in parameters,
-                            request=request,
-                            forwards_request="request" in parameters,
-                            context=context,
-                            parent=parent,
-                            **kwargs,
-                        ),
-                    )
+                    marker = execution_translator.set(run.translate)
+                    try:
+                        with _soft_limit_raises(task_name):
+                            result = _run_to_end(
+                                loop,
+                                lifecycle_runner(
+                                    original_endpoint,
+                                    instance,
+                                    cls,
+                                    lifecycle,
+                                    *args,
+                                    needs_context="context" in parameters,
+                                    request=request,
+                                    forwards_request="request" in parameters,
+                                    context=context,
+                                    parent=parent,
+                                    **kwargs,
+                                ),
+                                run,
+                            )
+                    finally:
+                        execution_translator.reset(marker)
                     logger.info("Celery task completed: %s (correlation_id=%s)", task_name, correlation_id)
-                    if correlation_id and result_queue_key and redis_client is not None:
-                        push_payload(
-                            redis_client,
-                            result_queue_key,
-                            {"correlation_id": correlation_id, "result": _to_jsonable(result)},
-                        )
-                        # celery_viewset_client never reads this task's own retval (only the queue
-                        # entry just pushed above), so returning `result` a second time here would
-                        # hand Celery a raw endpoint return value - e.g. a Pydantic model - to
-                        # encode on its own (result backend, task-succeeded event, ...), which
-                        # isn't JSON-safe. ignore_result=True (set on both task registration and
-                        # send_task) tells Celery to skip that, but a JSON-trivial retval here means
-                        # nothing breaks even where that setting doesn't reach.
+                    if correlation_id and result_queue_key:
+                        try:
+                            payload = {
+                                "correlation_id": correlation_id,
+                                "task": task_name,
+                                "result": _to_jsonable(result),
+                            }
+                        except Exception as error:
+                            raise ActionFailedError(task_name, "result") from error
+                        push_payload(redis_client, result_queue_key, payload)
+                        # The caller reads the pushed payload only, so the task returns a JSON-trivial
+                        # value instead of handing Celery a raw endpoint return value - e.g. a Pydantic
+                        # model - to encode on its own (task-succeeded event, ...).
                         return True
                     return result
-                except Exception as e:
-                    if isinstance(e, RequestValidationError):
-                        # a request the worker found invalid (a filter value that will not convert)
-                        # answers as FastAPI answers one: 422 with the errors as `detail`
-                        e = HTTPException(status_code=422, detail=jsonable_encoder(e.errors()))
-                    if isinstance(e, HTTPException):
-                        logger.info(
-                            "Celery task returned standard error: %s (correlation_id=%s): %d: %s",
-                            task_name,
-                            correlation_id,
-                            e.status_code,
-                            e.detail,
-                        )
-                    else:
-                        logger.exception("Celery task failed: %s (correlation_id=%s): %s", task_name, correlation_id, e)
-                    if correlation_id and result_queue_key and redis_client is not None:
-                        error_payload = {"correlation_id": correlation_id, "error": str(e)}
-                        if isinstance(e, HTTPException):
-                            error_payload["http_status_code"] = e.status_code
-                            error_payload["http_detail"] = e.detail
-                        push_payload(redis_client, result_queue_key, error_payload)
-                    if not isinstance(e, HTTPException):
-                        raise
+                except BaseException as caught:
+                    return _fail(caught, run, task_name, correlation_id, result_queue_key)
 
             return sync_wrapper
+
+        def _fail(caught: BaseException, run: _Run, task_name: str, correlation_id, result_queue_key):
+            """Pushes the error of a failed execution and re-raises what Celery is to record: the
+            translated error, or a process exit as it is. An `HTTPException` the action raised is its
+            answer and is not re-raised."""
+            error = run.translate(caught)
+            if isinstance(error, RequestValidationError):
+                # a request the worker found invalid (a filter value that will not convert) answers as
+                # FastAPI answers one: 422 with the errors as `detail`
+                error = HTTPException(status_code=422, detail=jsonable_encoder(error.errors()))
+            process_exit = isinstance(error, (KeyboardInterrupt, SystemExit))
+            if process_exit:
+                pushed = ActionInterruptedError(task_name, "terminated")
+            elif isinstance(error, HTTPException):
+                pushed = error
+            else:
+                pushed = ActionFailedError(task_name)
+            if isinstance(pushed, (ActionInterruptedError, ActionFailedError)):
+                logger.error(
+                    "Celery task failed: %s (correlation_id=%s): %s",
+                    task_name,
+                    correlation_id,
+                    pushed.detail,
+                    exc_info=caught,
+                )
+            else:
+                logger.info(
+                    "Celery task returned standard error: %s (correlation_id=%s): %d: %s",
+                    task_name,
+                    correlation_id,
+                    pushed.status_code,
+                    pushed.detail,
+                )
+            if correlation_id and result_queue_key:
+                push_payload(redis_client, result_queue_key, error_payload(correlation_id, task_name, pushed))
+            if process_exit:
+                raise caught
+            if isinstance(pushed, (ActionInterruptedError, ActionFailedError)):
+                if pushed is caught:
+                    raise caught
+                raise pushed from caught
+            return None
 
         build_schema(cls)
         for route in cls.__router.routes:
@@ -256,14 +603,22 @@ def celery_viewset_server(
             if task_name in seen_tasks:
                 continue
             seen_tasks.add(task_name)
+            _task_actions[task_name] = (cls, route.endpoint.__name__)
 
-            # ignore_result=True - celery_viewset_client never reads Celery's own result backend,
-            # it awaits the result queue pushed to above instead (see client.py). Without this,
-            # Celery still calls task.backend.mark_as_done(retval=result) on every task, and a raw
-            # Pydantic model (or list of them) returned by the endpoint isn't JSON-serializable by
-            # Celery's own encoder, crashing that unused store.
-            celery_app.task(name=task_name, ignore_result=True)(get_sync_wrapper(route.endpoint, task_name))
+            # ignore_result=True - celery_viewset_client never reads Celery's own result backend, it
+            # awaits the result queue pushed to above instead (see client.py). acks_late=False and
+            # reject_on_worker_lost=False: a call is never delivered twice. store_errors_even_if_ignored=False:
+            # the supervisor stores no failure in the unused backend either.
+            celery_app.task(
+                name=task_name,
+                ignore_result=True,
+                acks_late=False,
+                reject_on_worker_lost=False,
+                store_errors_even_if_ignored=False,
+            )(get_sync_wrapper(route.endpoint, task_name))
 
+        _prefixes[task_prefix] = _Prefix(cls, redis_client)
+        _connect_receivers()
         cls.__celery_viewset_metadata__ = {"task_prefix": task_prefix, "lifecycle": lifecycle, "celery_app": celery_app}
 
         return cls

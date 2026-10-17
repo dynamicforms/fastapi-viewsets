@@ -49,14 +49,14 @@ def celery_viewset(
     - In a Celery worker (detected via sys.argv or set_is_celery_worker): uses celery_viewset_server
     - In a FastAPI app: uses celery_viewset_client
 
-    For explicit control, use celery_viewset_client or celery_viewset_server directly.
+    For explicit control, use celery_viewset_client or celery_viewset_server directly. Both modes
+    require redis_client.
     """
+    if redis_client is None:
+        raise ValueError("redis_client is required for celery_viewset")
     if _detect_is_celery_worker():
         return celery_viewset_server(celery_app, task_prefix, lifecycle=lifecycle, redis_client=redis_client)
-    else:
-        if redis_client is None:
-            raise ValueError("redis_client is required for celery_viewset in client (FastAPI) mode")
-        return celery_viewset_client(celery_app, task_prefix, redis_client=redis_client, result_timeout=result_timeout)
+    return celery_viewset_client(celery_app, task_prefix, redis_client=redis_client, result_timeout=result_timeout)
 
 
 def check_result_readers() -> frozenset[str]:
