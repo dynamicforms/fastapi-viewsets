@@ -331,12 +331,105 @@ In the worker, `execution.context` holds the call's context as the FastAPI proce
 headers, path parameters, client and server address); it has no body, no `app` and no `state`. See
 [Call data in the worker](./routers#call-data-in-the-worker).
 
-An execution the worker interrupts (Celery's time limit) reaches `call_next()` as the exception
-Celery raises, or as `asyncio.CancelledError` where the action was suspended at an `await`, and
-`execute()` runs to its end before the task fails.
+In the worker, `call_next()` raises none of Celery's, billiard's or kombu's exceptions: one that
+reaches it is raised as `ActionFailedError`. An execution the worker interrupts from inside (a soft
+time limit) reaches `call_next()` as `ActionInterruptedError` (reason `time_limit`), whether the
+action was running or suspended at an `await`; the action itself sees `asyncio.CancelledError` in
+the latter case. `execute()` runs to its end before the task fails. An execution the worker ends from
+outside (a hard time limit, a termination, a lost process) ends its process: `call_next()` raises
+`SystemExit` only where the process has time to unwind, and
+[`on_transition()`](#transitions-outside-the-execution-middleware-on-transition) reports it.
 
-A call that cannot be handed to the worker raises `ActionDispatchError` (503,
-`action_dispatch_failed`) out of `call_next()` in `__call__`; the action did not run.
+In `__call__`, a `celery_viewset` action's `call_next()` returns the result the worker sent back or
+raises exactly one of:
+
+| Error | The action |
+|-------|------------|
+| `ActionDispatchError` (503, `action_dispatch_failed`) | did not run: it was not sent, or the worker revoked, rejected or did not know it |
+| `ActionInterruptedError` (504 / 503, `action_interrupted`) | started and the worker ended it |
+| `ActionFailedError` (500, `action_failed`) | failed with an error that is not an `HTTPException`, or the worker failed around it |
+| the `HTTPException` the action raised | answered with it |
+| `ResultTimeoutError`, `ResultReaderStoppedError` (`ActionOutcomeUnknownError`) | may have run, may still run, or never will: the caller stopped waiting |
+
+See [Outcomes of a call](./routers#outcomes-of-a-call) for what produces each one.
+
+## Setting up the worker: `Middleware.executor_started()`
+
+```python
+async def executor_started(self) -> None: ...
+```
+
+Awaited in every process of a `celery_viewset` worker before it uses a middleware there, e.g. to
+create the clients the middleware's `execute()` and `on_transition()` use. The hook is awaited once
+on each event loop the process uses, before the loop's first execution or first `on_transition()`
+call. A process runs `on_transition()` calls on a loop of its own, and executions on the loop of
+the thread that runs them:
+
+| Pool | Loops of executions |
+|------|---------------------|
+| `prefork` | one in each child process |
+| `solo` | one in the worker process |
+| `threads` | one in each pool thread |
+| `gevent` | one in the worker process, shared by its greenlets |
+
+In a prefork pool the hook therefore runs once in every child before its first execution, and once
+in the supervisor before its first transition; in a threads pool, once in every pool thread. A
+client bound to an event loop is created in the hook, not once per process. Every entry of
+`settings.viewsets_command_middleware` that defines it is awaited, in list order, on the loop it is
+set up for.
+
+An exception before an execution fails that execution with `ActionFailedError` (reason `executor`),
+and the hook runs again before the loop's next execution. An exception before an `on_transition()`
+call is logged. The default does nothing. The hook is not tied to a Celery signal, so it runs in
+every pool type.
+
+## Transitions outside the execution: `Middleware.on_transition()`
+
+```python
+async def on_transition(self, transition: ActionTransition) -> None: ...
+```
+
+Receives the changes of state of a `celery_viewset` call that happen outside its execution, on the
+effective middlewares of the call's action (the global list plus the instances
+[`@action_configuration`](./action-configuration#injecting-a-new-middleware-just-for-one-viewset-method)
+injects). `ActionTransition` (in `fastapi_viewsets.middleware`) is a frozen dataclass:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `kind` | `"dispatched" \| "not_run" \| "interrupted" \| "failed"` | What happened |
+| `viewset_class` | `type` | The viewset class |
+| `action` | `str` | The name of the viewset method |
+| `context` | `Context` | The call's context, bound to the action's configuration |
+| `parent` | `ExecutionRef \| None` | The execution in which the call was dispatched |
+| `error` | `DfViewSetError \| None` | What the caller receives; `None` for `dispatched` |
+
+| `kind` | When | Where | `error` |
+|--------|------|-------|---------|
+| `dispatched` | The call was sent to the broker | FastAPI process | `None` |
+| `not_run` | The worker will not run the call: revoked or expired before it started, unknown task, rejected message | Worker's supervisor | `ActionDispatchError` |
+| `interrupted` | The worker ended the execution from outside: hard time limit, termination, lost process | Worker's supervisor | `ActionInterruptedError` |
+| `failed` | The worker's own machinery failed around the execution | Worker process | `ActionFailedError` |
+
+In the worker, `on_transition()` runs after the caller was sent `transition.error`, on an event loop
+of its own on a thread of the process, one transition at a time, each call bounded to 5 seconds. An
+exception it raises, or a timeout, is logged and changes nothing. A worker process that shuts down
+waits up to 10 seconds (`TRANSITION_DRAIN_TIMEOUT`) for the transitions it has not reported yet: on
+Celery's `worker_shutdown` and `worker_process_shutdown`, and at interpreter exit. A process killed
+with SIGKILL reports none of them.
+
+Every other change of state is observed elsewhere:
+
+| Change | Observed by |
+|--------|-------------|
+| received | `depends()`, `__call__` |
+| sent to the broker | `on_transition("dispatched")` |
+| could not be sent | `ActionDispatchError` out of `call_next()` in `__call__` |
+| started, returned, raised, soft time limit, hard time limit in a `gevent` pool | `execute()` |
+| progress | the application's own channel, e.g. an [event](./events) it publishes |
+| outcome unknown | `ActionOutcomeUnknownError` in `__call__` |
+
+A call waiting in the broker's queue, and a worker process shutting down, are not reported. A call is
+never retried or delivered to the worker twice (see [Outcomes of a call](./routers#outcomes-of-a-call)).
 
 ## Built-in middleware
 

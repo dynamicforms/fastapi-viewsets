@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any
 
 from .conf import settings
@@ -45,6 +46,31 @@ def action_configuration(config: dict[Any, Any]):
         return target
 
     return decorator
+
+
+@dataclass(frozen=True)
+class TimeLimits:
+    """
+    The time limits, in seconds, of an execution of a deferred action, configured under the
+    `TimeLimits` key:
+
+        @action_configuration({TimeLimits: TimeLimits(soft=30, hard=60)})
+        class ReportViewSet(...): ...
+
+    `soft` interrupts the execution from inside: `Middleware.execute()` sees `ActionInterruptedError`
+    from `call_next()`, `finally` blocks and `save_state()` run, and the caller receives the error.
+    `hard` ends the execution's process: the execution unwinds as `SystemExit` only as far as it
+    gets before the process is killed, the caller receives `ActionInterruptedError` with reason
+    `time_limit`, and `Middleware.on_transition()` receives `interrupted`. None leaves a limit to
+    the executor's own configuration.
+
+    The executor enforces them (`celery_viewset` sends them with each call); an in-process action
+    has no time limit. A value in `settings.default_action_configuration` applies to every action,
+    and `ByAction` varies it per action.
+    """
+
+    soft: float | None = None
+    hard: float | None = None
 
 
 def _candidate_method_names(action_name: str) -> list[str]:

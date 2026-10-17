@@ -9,9 +9,13 @@ interpolated with; both reach the response body only once the application regist
 `raise HTTPException(status_code, detail="...")` is unaffected either way.
 """
 
+import sys
+
 from typing import Any
 
 from fastapi import HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .cursor import CursorError
@@ -24,6 +28,25 @@ class DfViewSetError(HTTPException):
         super().__init__(status_code=status_code, detail=message)
         self.code = code
         self.params = params or {}
+
+    def __reduce__(self):
+        # pickled by its fields, not by its constructor's arguments, which differ per subclass
+        return _rebuild_error, (type(self), self.status_code, self.detail, self.code, self.params, self.headers)
+
+
+def _rebuild_error(
+    cls: type[DfViewSetError],
+    status_code: int,
+    detail: Any,
+    code: str,
+    params: dict[str, Any] | None,
+    headers: dict[str, str] | None,
+) -> DfViewSetError:
+    """An instance of `cls` with these fields, built without `cls.__init__`."""
+    error = cls.__new__(cls)
+    DfViewSetError.__init__(error, status_code, detail, code, params)
+    error.headers = headers
+    return error
 
 
 class NotFoundError(DfViewSetError):
@@ -54,7 +77,14 @@ class RateLimitedError(DfViewSetError):
         super().__init__(429, "Rate limit exceeded", "rate_limited")
 
 
-class ResultTimeoutError(DfViewSetError):
+class ActionOutcomeUnknownError(DfViewSetError):
+    """
+    Base of the errors that end a call to a deferred action whose outcome the caller did not learn:
+    the action may have run, may still run, or may never run. Not raised itself.
+    """
+
+
+class ResultTimeoutError(ActionOutcomeUnknownError):
     """A `celery_viewset` call whose result did not arrive from the worker within `timeout` seconds."""
 
     def __init__(self, task: str, timeout: float):
@@ -62,7 +92,7 @@ class ResultTimeoutError(DfViewSetError):
         super().__init__(504, message, "result_timeout", {"task": task, "timeout": timeout})
 
 
-class ResultReaderStoppedError(DfViewSetError):
+class ResultReaderStoppedError(ActionOutcomeUnknownError):
     """A `celery_viewset` call that was pending when the result reader of its `queue_key` stopped."""
 
     def __init__(self, queue_key: str):
@@ -71,11 +101,65 @@ class ResultReaderStoppedError(DfViewSetError):
 
 
 class ActionDispatchError(DfViewSetError):
-    """A `celery_viewset` call that could not be handed to its executor; the action did not run. The
-    error that prevented it is the `__cause__`."""
+    """
+    A call to a deferred action that did not run. `reason`:
 
-    def __init__(self, task: str):
-        super().__init__(503, f"{task} could not be handed to its executor", "action_dispatch_failed", {"task": task})
+    - `send`: the call could not be handed to the executor (the broker is unreachable, the message
+      cannot be encoded)
+    - `serialization`: the call's arguments, context or request cannot be serialized
+    - `unknown_task`: the executor has no task registered under the action's name
+    - `rejected`: the executor rejected the message
+    - `revoked`: the call was revoked before it started
+    - `expired`: the call expired before it started
+
+    Raised in the calling process, the error that prevented the dispatch is the `__cause__`.
+    """
+
+    def __init__(self, task: str, reason: str | None = None):
+        message = f"{task} could not be handed to its executor"
+        super().__init__(503, message, "action_dispatch_failed", {"task": task, "reason": reason})
+
+
+class ActionInterruptedError(DfViewSetError):
+    """
+    An execution of a deferred action that the executor ended after it had started. `reason`:
+
+    - `time_limit`: the execution exceeded its time limit (504)
+    - `terminated`: the execution was terminated (503)
+    - `lost`: the process running the execution exited (503)
+
+    Inside the execution, `Middleware.execute()` sees it from `call_next()` and the action itself
+    sees it at the point it was interrupted, or `asyncio.CancelledError` where it was suspended at
+    an `await`.
+    """
+
+    _MESSAGES = {
+        "time_limit": "{task} exceeded its time limit",
+        "terminated": "{task} was terminated",
+        "lost": "{task} lost the process executing it",
+    }
+
+    def __init__(self, task: str, reason: str):
+        message = self._MESSAGES.get(reason, "{task} was interrupted").format(task=task)
+        status_code = 504 if reason == "time_limit" else 503
+        super().__init__(status_code, message, "action_interrupted", {"task": task, "reason": reason})
+
+
+class ActionFailedError(DfViewSetError):
+    """
+    A deferred action that failed in its executor with an error that is not an `HTTPException`.
+    `detail` names the task only; the original error is logged in the executor's process and is the
+    `__cause__` there. `reason`:
+
+    - `error`: the action, or the executor's handling of its call, raised
+    - `result`: the action's result cannot be serialized or deserialized
+    - `executor`: the executor failed outside the action (`Middleware.executor_started()` raised,
+      or the executor's own machinery failed)
+    """
+
+    def __init__(self, task: str | None, reason: str = "error"):
+        message = f"{task} failed" if task else "The action failed"
+        super().__init__(500, message, "action_failed", {"task": task, "reason": reason})
 
 
 class IdempotencyKeyInvalidError(DfViewSetError):
@@ -135,6 +219,45 @@ class EventCursorsExceededError(DfViewSetError):
     def __init__(self, count: int, limit: int):
         message = f"A poll carries at most {limit} cursors, this one carries {count}"
         super().__init__(422, message, "event_cursors_exceeded", {"count": count, "limit": limit})
+
+
+def _error_to_jsonable(error: BaseException) -> dict[str, Any]:
+    """
+    `error` as the JSON fields of an `HTTPException`: `status_code`, `detail` and `headers`, plus
+    `class`, `code` and `params` for a `DfViewSetError`. A `RequestValidationError` is a 422 with its
+    errors as `detail`; any other error a 500 with `detail` `"Internal Server Error"`.
+    """
+    if isinstance(error, RequestValidationError):
+        return {"status_code": 422, "detail": jsonable_encoder(error.errors()), "headers": None}
+    if isinstance(error, HTTPException):
+        encoded = {
+            "status_code": error.status_code,
+            "detail": jsonable_encoder(error.detail),
+            "headers": dict(error.headers) if error.headers else None,
+        }
+        if isinstance(error, DfViewSetError):
+            encoded["class"] = type(error).__name__
+            encoded["code"] = error.code
+            encoded["params"] = jsonable_encoder(error.params)
+        return encoded
+    return {"status_code": 500, "detail": "Internal Server Error", "headers": None}
+
+
+def _error_from_jsonable(data: dict[str, Any]) -> HTTPException:
+    """
+    The exception `_error_to_jsonable` encoded. Fields with a `code` are a `DfViewSetError`: of the
+    class `class` names when this module defines a `DfViewSetError` subclass of that name, else of
+    `DfViewSetError` itself, with the same fields either way. Fields without one are an
+    `HTTPException`.
+    """
+    if "code" not in data:
+        return HTTPException(status_code=data["status_code"], detail=data["detail"], headers=data.get("headers"))
+    cls = getattr(sys.modules[__name__], data.get("class") or "", None)
+    if not (isinstance(cls, type) and issubclass(cls, DfViewSetError)):
+        cls = DfViewSetError
+    return _rebuild_error(
+        cls, data["status_code"], data["detail"], data["code"], data.get("params"), data.get("headers")
+    )
 
 
 async def df_viewset_exception_handler(_request: Request, exc: DfViewSetError) -> JSONResponse:

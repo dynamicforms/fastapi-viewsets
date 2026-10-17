@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -6,12 +7,14 @@ import pytest
 
 from fastapi_viewsets.decorators.celery_viewset import result_reader
 from fastapi_viewsets.decorators.celery_viewset.result_reader import (
+    error_payload,
     get_process_queue_key,
     get_result_queue_key,
     push_result,
     start_result_reader,
     stop_result_reader,
 )
+from fastapi_viewsets.exceptions import ActionFailedError, ActionInterruptedError, DfViewSetError
 
 # ---------------------------------------------------------------------------
 # register / unregister future
@@ -89,7 +92,9 @@ def test_push_result_error():
     key, payload_str = redis_mock.rpush.call_args[0]
     payload = json.loads(payload_str)
     assert payload["correlation_id"] == "corr-2"
-    assert payload["error"] == "something failed"
+    assert payload["error"]["class"] == "ActionFailedError"
+    assert payload["error"]["detail"] == "The action failed"
+    assert payload["http_status_code"] == 500
     assert "result" not in payload
 
 
@@ -166,8 +171,8 @@ async def test_result_reader_loop_reconstructs_tagged_serializable_object():
 
 
 @pytest.mark.asyncio
-async def test_result_reader_loop_sets_exception_on_error():
-    """result_reader_loop sets exception on future when error is in payload."""
+async def test_result_reader_loop_reads_a_legacy_error_as_action_failed():
+    """An `error` that is a string, without `http_status_code`, fails the call with ActionFailedError."""
     import json
 
     redis_mock = AsyncMock()
@@ -181,7 +186,7 @@ async def test_result_reader_loop_sets_exception_on_error():
     result_reader.register_future(correlation_id, future)
 
     task = asyncio.create_task(result_reader.result_reader_loop(redis_mock, queue_key, poll_interval=0.01))
-    with pytest.raises(Exception, match="task failed"):
+    with pytest.raises(ActionFailedError):
         await asyncio.wait_for(future, timeout=2.0)
     task.cancel()
     try:
@@ -337,3 +342,59 @@ async def test_stopped_reader_fails_only_its_own_pending_futures():
     assert "own-id" not in result_reader._pending_futures
     assert "other-id" in result_reader._pending_futures
     result_reader.unregister_future("other-id")
+
+
+async def _read_one(data: dict) -> asyncio.Future:
+    """A future registered for `data`'s correlation id, once the reader has read `data`."""
+    import json
+
+    redis_mock = AsyncMock()
+    redis_mock.lpop.side_effect = [json.dumps(data).encode(), None, None]
+    future = asyncio.get_event_loop().create_future()
+    result_reader.register_future(data["correlation_id"], future)
+    task = asyncio.create_task(result_reader.result_reader_loop(redis_mock, "celery_viewset_results:t", 0.01))
+    try:
+        await asyncio.wait({future}, timeout=2.0)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    return future
+
+
+@pytest.mark.asyncio
+async def test_an_encoded_error_is_raised_as_its_class_with_code_params_and_headers():
+    error = ActionInterruptedError("items.list_items", "terminated")
+    error.headers = {"Retry-After": "5"}
+    payload = error_payload("enc-1", "items.list_items", error)
+    future = await _read_one(payload)
+    raised = future.exception()
+    assert type(raised) is ActionInterruptedError
+    assert (raised.status_code, raised.code) == (503, "action_interrupted")
+    assert raised.params == {"task": "items.list_items", "reason": "terminated"}
+    assert raised.headers == {"Retry-After": "5"}
+
+
+@pytest.mark.asyncio
+async def test_an_error_of_an_unknown_class_is_raised_as_df_viewset_error():
+    encoded = {
+        "status_code": 409,
+        "detail": "taken",
+        "headers": None,
+        "class": "AppError",
+        "code": "taken",
+        "params": {},
+    }
+    future = await _read_one({"correlation_id": "enc-2", "error": encoded})
+    raised = future.exception()
+    assert type(raised) is DfViewSetError
+    assert (raised.status_code, raised.code) == (409, "taken")
+
+
+@pytest.mark.asyncio
+async def test_a_result_that_cannot_be_read_fails_the_call():
+    result = {"__fpv_type__": "no.such.Class", "__fpv_value__": {}}
+    future = await _read_one({"correlation_id": "enc-3", "task": "items.list_items", "result": result})
+    raised = future.exception()
+    assert isinstance(raised, ActionFailedError)
+    assert raised.params == {"task": "items.list_items", "reason": "result"}

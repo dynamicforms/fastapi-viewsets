@@ -45,6 +45,15 @@ class CurrentCall:
 _current_call: ContextVar[CurrentCall | None] = ContextVar("viewsets_current_call", default=None)
 
 
+execution_translator: ContextVar[Callable[[BaseException], BaseException] | None] = ContextVar(
+    "viewsets_execution_translator", default=None
+)
+"""
+Set by an executor around the executions it runs: maps an exception out of each `call_next()` of
+`Middleware.execute()` to the exception raised in its place. None for an in-process execution.
+"""
+
+
 def current_call() -> CurrentCall | None:
     """The call `lifecycle_runner` is running in this task; None outside any call."""
     return _current_call.get()
@@ -119,7 +128,10 @@ async def lifecycle_runner(
         marker = _current_call.set(CurrentCall(chain_context, request, execution, parent))
         try:
             return await run_execution_chain(
-                effective_middlewares(action_configuration), execution, lambda: method(*args, **kwargs)
+                effective_middlewares(action_configuration),
+                execution,
+                lambda: method(*args, **kwargs),
+                _translate=execution_translator.get(),
             )
         finally:
             _current_call.reset(marker)

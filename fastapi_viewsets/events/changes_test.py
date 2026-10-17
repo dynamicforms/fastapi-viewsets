@@ -640,7 +640,9 @@ def test_a_celery_viewset_action_publishes_in_the_worker_to_the_routed_topic(mon
         async def create(self, data: Track) -> Track:
             return Track(id=7, title=data.title)
 
-    worker = celery_viewset_server(celery_app=executor.server_app, task_prefix="things")(type("Worker", (Base,), {}))
+    worker = celery_viewset_server(celery_app=executor.server_app, task_prefix="things", redis_client=MagicMock())(
+        type("Worker", (Base,), {})
+    )
     client = celery_viewset_client(celery_app=executor.client_app, task_prefix="things", redis_client=MagicMock())(
         type("Client", (Base,), {})
     )
@@ -670,7 +672,9 @@ def _celery_pair(monkeypatch, decorators=()):
     base = Base
     for decorator in decorators:
         base = decorator(base)
-    worker = celery_viewset_server(celery_app=executor.server_app, task_prefix="things")(type("Worker", (base,), {}))
+    worker = celery_viewset_server(celery_app=executor.server_app, task_prefix="things", redis_client=MagicMock())(
+        type("Worker", (base,), {})
+    )
     client = celery_viewset_client(celery_app=executor.client_app, task_prefix="things", redis_client=MagicMock())(
         type("Client", (base,), {})
     )

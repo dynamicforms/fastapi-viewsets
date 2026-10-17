@@ -145,7 +145,7 @@ def celery_viewset(
 | `celery_app` | `Celery` | — | The Celery application instance |
 | `task_prefix` | `str` | — | Prefix for all registered Celery task names, e.g. `"items"` |
 | `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle on the worker side (same semantics as `route_viewset` — see [ViewSet Lifecycle](./lifecycle)) |
-| `redis_client` | `redis.Redis \| None` | `None` | Redis client used to pass results back to FastAPI. Required in client (FastAPI) mode; optional in worker mode. |
+| `redis_client` | `redis.Redis \| None` | `None` | Redis client used to pass results back to FastAPI. Required in both modes; without it the decorator raises `ValueError`. |
 | `result_timeout` | `float \| None` | `3600.0` | Client mode: seconds a call waits for its result before it raises `ResultTimeoutError` (504, `result_timeout`). `None` waits without a limit. Ignored in worker mode. |
 
 ### Usage
@@ -232,7 +232,10 @@ one Redis. Every push renews the list's expiry to one hour, so the list of a pro
 is removed from Redis.
 
 A call raises `ResultTimeoutError` (504, `result_timeout`) when its result does not arrive within
-`result_timeout` seconds, one hour by default.
+`result_timeout` seconds, one hour by default. Every outcome the worker observes reaches the caller
+as soon as it happens (see [Outcomes of a call](#outcomes-of-a-call)); `result_timeout` covers what
+the worker cannot observe: a supervisor process that is itself killed, or a task message that
+cannot be decoded.
 
 A call pending when `stop_result_reader` stops the reader of its `queue_key`, or when that reader task
 is cancelled, raises `ResultReaderStoppedError` (503, `result_reader_stopped`, param `queue_key`). A
@@ -299,7 +302,7 @@ from fastapi_viewsets.decorators.celery_viewset import celery_viewset_client, ce
 | `get_process_queue_key(queue_key)` | The Redis list this process receives a queue key's results on |
 | `get_registered_queue_keys()` | Every queue key a `celery_viewset_client` registered |
 | `get_running_queue_keys()` | The queue keys that have a running reader task |
-| `push_result(redis_client, queue_key, correlation_id, result=None, error=None)` | Pushes a result or an error for one call to `queue_key`, the `_result_queue_key` the task carries, and renews the list's expiry |
+| `push_result(redis_client, queue_key, correlation_id, result=None, error=None, task=None)` | Pushes a result or an error for one call to `queue_key`, the `_result_queue_key` the task carries, and renews the list's expiry. An `HTTPException` error reaches the caller as it is; any other error as `ActionFailedError` naming `task` |
 
 ### Call data in the worker
 
@@ -321,8 +324,75 @@ A call made from inside another action's execution (an action calling a `celery_
 carries that execution's context and request, unless it passes a `context` of its own, and that
 execution as its `parent`. A call made outside any call carries an empty context and no request.
 
-A call whose task cannot be sent raises `ActionDispatchError` (503, `action_dispatch_failed`, param
-`task`), with the error of `send_task` as its `__cause__`.
+A call whose arguments cannot be serialized raises `ActionDispatchError` (503,
+`action_dispatch_failed`, reason `serialization`), and a call whose task cannot be sent raises it with
+reason `send`; the error that prevented the dispatch is its `__cause__`.
+
+### Outcomes of a call
+
+No Celery, billiard or kombu exception reaches the caller, `Middleware.execute()` or the action's
+own `except` clauses at the points listed below; each outcome arrives as one of this package's
+errors (see [Error Codes](./error-codes#executor-outcomes)):
+
+| What happens | Caller receives | Observed in the worker by |
+|---|---|---|
+| The action returns | its result | `execute()` |
+| The action raises an `HTTPException` | that exception: a `DfViewSetError` of a class `fastapi_viewsets.exceptions` defines keeps its class, `code`, `params` and headers, any other one is rebuilt as `HTTPException` or `DfViewSetError` with the same fields | `execute()` |
+| The action raises anything else (a Celery `Retry`, `Ignore` or `Reject` included), or a model argument fails validation in the worker | `ActionFailedError` (500, reason `error`); the original error is logged in the worker | `execute()` |
+| The result cannot be serialized, or deserialized by the caller | `ActionFailedError` (500, reason `result`) | — |
+| Soft time limit | `ActionInterruptedError` (504, reason `time_limit`) | `execute()` (`ActionInterruptedError` from `call_next()`) |
+| Hard time limit | `ActionInterruptedError` (504, reason `time_limit`) | `on_transition("interrupted")`; in a `gevent` pool also `execute()` (`ActionInterruptedError` from `call_next()`) |
+| `revoke(..., terminate=True)` | `ActionInterruptedError` (503, reason `terminated`) | `on_transition("interrupted")` |
+| The worker process exits | `ActionInterruptedError` (503, reason `lost`) | `on_transition("interrupted")` |
+| Revoked or expired before it started | `ActionDispatchError` (503, reason `revoked` / `expired`) | `on_transition("not_run")` |
+| The worker has no task of that name under a registered `task_prefix` | `ActionDispatchError` (503, reason `unknown_task`) | `on_transition("not_run")` |
+| The worker rejects the message | `ActionDispatchError` (503, reason `rejected`) | `on_transition("not_run")` |
+| The worker's own machinery fails, or `executor_started()` raises | `ActionFailedError` (500, reason `executor`) | `on_transition("failed")` / — |
+| The caller stops waiting | `ResultTimeoutError` / `ResultReaderStoppedError`, both `ActionOutcomeUnknownError` | — |
+
+A hard time limit, a termination and a lost process end the process executing the action. Celery
+stops it with SIGTERM: the execution unwinds as `SystemExit` through `finally` blocks and
+`execute()` only as far as it gets before the process is killed, so `save_state()` is not
+guaranteed to run. The supervisor process sends the caller its error and then calls
+[`on_transition()`](./command-middleware#transitions-outside-the-execution-middleware-on-transition).
+
+In a `gevent` pool a hard time limit ends the execution's greenlet, not the process. Celery raises
+`gevent.Timeout` in it: the action sees that exception where it runs synchronously and
+`asyncio.CancelledError` where it is suspended at an `await`, `execute()` sees
+`ActionInterruptedError` from `call_next()`, and `finally` blocks and `save_state()` run. The worker
+process then sends the caller its error and calls `on_transition("interrupted")`. The time limit
+interrupts only code that yields to gevent; synchronous code that does not runs on.
+
+Celery's `current_task.retry()` publishes the retry before it raises, so the task runs again while
+its caller has already received `ActionFailedError`; the second run's result is dropped. A
+`celery_viewset` action does not retry through Celery.
+
+The tasks are registered with `ignore_result=True`, `acks_late=False`,
+`reject_on_worker_lost=False` and `store_errors_even_if_ignored=False`, which override a global
+`task_acks_late`: a call is acknowledged when its execution starts and is never delivered to the
+worker a second time, since its caller receives one outcome only.
+
+### Time limits
+
+An action's time limits are configured with
+[`@action_configuration`](./action-configuration#time-limits-of-a-deferred-action) under the
+`TimeLimits` key, not in Celery's configuration; the client sends them with each call as the task's
+`soft_time_limit` and `time_limit`:
+
+```python
+from fastapi_viewsets.action_configuration import action_configuration, TimeLimits
+
+@celery_viewset(celery_app, task_prefix="reports", redis_client=redis_client)
+class ReportViewSet(...):
+    @action_configuration({TimeLimits: TimeLimits(soft=30, hard=60)})
+    async def perform_create(self, data: Report) -> Report: ...
+```
+
+`settings.default_action_configuration = {TimeLimits: TimeLimits(...)}` sets them for every action.
+An action without a `TimeLimits` entry runs under the worker's own limits (`--soft-time-limit`,
+`--time-limit`). Soft time limits need the `prefork` pool, hard time limits the `prefork` or
+`gevent` pool; the `solo`, `threads` and `eventlet` pools enforce neither. An action executed in the
+FastAPI process has no time limit.
 
 ---
 

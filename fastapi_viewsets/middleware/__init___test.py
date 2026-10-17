@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from fastapi import APIRouter, FastAPI
@@ -5,12 +7,15 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from fastapi_viewsets.conf import settings
-from fastapi_viewsets.context import SerializableObject
+from fastapi_viewsets.context import Context, SerializableObject
 from fastapi_viewsets.decorators import route_viewset
 from fastapi_viewsets.middleware import (
+    ActionTransition,
     any_modifies_response_shape,
     Middleware,
     run_command_chain,
+    run_execution_chain,
+    run_transition_listeners,
     unwrap_viewset_result_type,
     ViewSetResult,
 )
@@ -307,7 +312,7 @@ def test_command_middleware_does_not_run_in_celery_worker_path():
 
     celery_app.task.side_effect = mock_task
 
-    @celery_viewset_server(celery_app=celery_app, task_prefix="items")
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
     class ItemViewSet(ListMixin[int]):
         async def perform_list(self, _context) -> list[int]:
             return [1]
@@ -456,3 +461,94 @@ def test_declared_return_type_viewset_result_of_x_documents_as_x():
 
     schema = app.openapi()["paths"]["/items"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]
     assert schema == {"$ref": "#/components/schemas/Item"}
+
+
+# ---------------------------------------------------------------------------
+# run_execution_chain's translation, executor_started, on_transition
+# ---------------------------------------------------------------------------
+
+
+class _TranslatedError(Exception):
+    pass
+
+
+class _Seeing(Middleware):
+    def __init__(self, seen: list):
+        self.seen = seen
+
+    async def __call__(self, _request, _viewset, _context, call_next):
+        return await call_next()
+
+    async def execute(self, _execution, call_next):
+        try:
+            return await call_next()
+        except BaseException as error:
+            self.seen.append(type(error))
+            raise
+
+
+@pytest.mark.asyncio
+async def test_the_translation_applies_to_every_call_next():
+    seen = []
+
+    async def failing():
+        raise KeyError("executor")
+
+    def translate(error):
+        return _TranslatedError() if isinstance(error, KeyError) else error
+
+    with pytest.raises(_TranslatedError):
+        await run_execution_chain([_Seeing(seen), _Seeing(seen)], None, failing, _translate=translate)
+    assert seen == [_TranslatedError, _TranslatedError]
+
+
+@pytest.mark.asyncio
+async def test_without_a_translation_an_exception_passes_unchanged():
+    seen = []
+
+    async def failing():
+        raise KeyError("executor")
+
+    with pytest.raises(KeyError):
+        await run_execution_chain([_Seeing(seen)], None, failing)
+    assert seen == [KeyError]
+
+
+@pytest.mark.asyncio
+async def test_the_default_hooks_do_nothing():
+    middleware = _Seeing([])
+    assert await middleware.executor_started() is None
+    assert await middleware.on_transition(None) is None
+
+
+@pytest.mark.asyncio
+async def test_a_transition_listener_that_fails_or_overruns_is_logged_and_the_rest_run(caplog):
+    received = []
+
+    class Listening(_Seeing):
+        def __init__(self, behaviour):
+            super().__init__([])
+            self.behaviour = behaviour
+
+        async def on_transition(self, transition):
+            await self.behaviour(transition)
+
+    async def fail(_transition):
+        raise RuntimeError("listener")
+
+    async def hang(_transition):
+        await asyncio.sleep(10)
+
+    async def record(transition):
+        received.append(transition)
+
+    transition = ActionTransition("dispatched", object, "create", Context({}), None, None)
+
+    async def plain(_request, _viewset, _context, call_next):
+        return await call_next()
+
+    await run_transition_listeners(
+        [Listening(fail), Listening(hang), plain, Listening(record)], transition, timeout=0.05
+    )
+    assert received == [transition]
+    assert caplog.text.count("on_transition(dispatched)") == 2

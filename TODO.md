@@ -60,8 +60,8 @@ any work starts.
 - **Separate input and output schemas.** `CreateSchema`, `UpdateSchema`, `ResponseSchema` per
   viewset, settling where the PK, read-only fields and validators belong. Changes the public API on
   every transport and in the Vue mixins.
-- **Configuration bound to the application.** Settings, registries and Celery hooks are global, so
-  two applications with different configuration cannot share a process, and tests share state.
+- **Configuration bound to the application.** Settings and registries are global, so two
+  applications with different configuration cannot share a process, and tests share state.
 - **Tests for contracts and failures.** Multiple processes, cancellation, concurrent `PATCH`,
   input model constraints, the same contract run against every backend, CI against minimum
   dependency versions.

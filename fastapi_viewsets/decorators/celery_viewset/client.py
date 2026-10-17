@@ -8,10 +8,12 @@ from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel
 
+from ...action_configuration import resolve_action_configuration, TimeLimits
 from ...context import Context, SerializableObject, serialize_context, to_jsonable
 from ...exceptions import ActionDispatchError, ResultTimeoutError
+from ...middleware import ActionTransition, run_transition_listeners
 from ..build_schema import build_schema
-from ..lifecycle_runner import current_call, DEFERRED_ACTIONS_ATTRIBUTE
+from ..lifecycle_runner import current_call, DEFERRED_ACTIONS_ATTRIBUTE, effective_middlewares
 from ..primary_key_model_helper import PARTIAL_UPDATE_ACTIONS
 from . import result_reader
 from .payload import CONTEXT_KWARG, PARENT_KWARG, REQUEST_KWARG, request_to_jsonable
@@ -96,14 +98,30 @@ async def _serialize_value(value, partial: bool = False):
     return to_jsonable(value)
 
 
+def _time_limit_options(context: Context) -> dict:
+    """The `send_task` time limit options of the call's `TimeLimits` configuration."""
+    limits = context.configuration_for(TimeLimits)
+    if limits is None:
+        return {}
+    options = {}
+    if limits.soft is not None:
+        options["soft_time_limit"] = limits.soft
+    if limits.hard is not None:
+        options["time_limit"] = limits.hard
+    return options
+
+
 def _patch_method(
     cls: type, original_endpoint, task_name: str, celery_app, queue_key: str, result_timeout: float | None
 ):
     """Replace the method on cls with an async version that sends a Celery task and awaits the result.
 
     The task carries the call's context, request and parent execution (see `payload`) from
-    `current_call()`; a `context` the caller passes replaces the call's. A send that fails raises
-    `ActionDispatchError`. The action's name joins the class's `DEFERRED_ACTIONS_ATTRIBUTE`."""
+    `current_call()`; a `context` the caller passes replaces the call's. The action's `TimeLimits`
+    configuration is sent as the task's time limits. Arguments that cannot be serialized raise
+    `ActionDispatchError` (reason `serialization`), a send that fails raises it with reason `send`.
+    Once the task is sent, `Middleware.on_transition()` of the action's effective middlewares
+    receives `dispatched`. The action's name joins the class's `DEFERRED_ACTIONS_ATTRIBUTE`."""
     method_name = original_endpoint.__name__
     declares_request = "request" in inspect.signature(original_endpoint).parameters
 
@@ -122,10 +140,26 @@ def _patch_method(
             if declares_request:
                 kwargs.pop("request", None)
             parent = call.parent_of_dispatch() if call is not None else None
-            serializable_args = [await _serialize_value(v) for v in args]
-            serializable_kwargs = {
-                k: await _serialize_value(v, method_name in PARTIAL_UPDATE_ACTIONS) for k, v in kwargs.items()
-            }
+            action_configuration = resolve_action_configuration(cls, method_name)
+            bound_context = Context(context.raw(), action_configuration=action_configuration, action_name=method_name)
+            try:
+                serializable_args = [await _serialize_value(v) for v in args]
+                serializable_kwargs = {
+                    k: await _serialize_value(v, method_name in PARTIAL_UPDATE_ACTIONS) for k, v in kwargs.items()
+                }
+                task_kwargs = {
+                    **serializable_kwargs,
+                    CONTEXT_KWARG: await serialize_context(context.raw()),
+                    REQUEST_KWARG: request_to_jsonable(call.request if call is not None else None),
+                    PARENT_KWARG: parent.to_jsonable() if parent is not None else None,
+                    "_correlation_id": correlation_id,
+                    "_result_queue_key": get_process_queue_key(queue_key),
+                }
+            except Exception as error:
+                logger.error(
+                    "Celery task arguments not serializable: %s (correlation_id=%s)", task_name, correlation_id
+                )
+                raise ActionDispatchError(task_name, "serialization") from error
             logger.info("Celery task scheduling: %s (correlation_id=%s)", task_name, correlation_id)
             try:
                 # send_task() blocks while it connects and publishes to the broker.
@@ -133,23 +167,21 @@ def _patch_method(
                     celery_app.send_task,
                     task_name,
                     args=serializable_args,
-                    kwargs={
-                        **serializable_kwargs,
-                        CONTEXT_KWARG: await serialize_context(context.raw()),
-                        REQUEST_KWARG: request_to_jsonable(call.request if call is not None else None),
-                        PARENT_KWARG: parent.to_jsonable() if parent is not None else None,
-                        "_correlation_id": correlation_id,
-                        "_result_queue_key": get_process_queue_key(queue_key),
-                    },
+                    kwargs=task_kwargs,
                     # send_task() defaults ignore_result to False regardless of what the task was
                     # registered with (celery_viewset_server sets ignore_result=True) - Celery's
                     # per-request value overrides the task's own, so it must be repeated here or the
                     # worker still tries to JSON-encode the raw return value into its result backend.
                     ignore_result=True,
+                    **_time_limit_options(bound_context),
                 )
             except Exception as error:
                 logger.error("Celery task not sent: %s (correlation_id=%s)", task_name, correlation_id)
-                raise ActionDispatchError(task_name) from error
+                raise ActionDispatchError(task_name, "send") from error
+            await run_transition_listeners(
+                effective_middlewares(action_configuration),
+                ActionTransition("dispatched", cls, method_name, bound_context, parent, None),
+            )
             try:
                 return await asyncio.wait_for(future, result_timeout)
             except asyncio.TimeoutError:

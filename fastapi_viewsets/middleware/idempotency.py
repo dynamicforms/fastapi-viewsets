@@ -9,12 +9,16 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
-from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
 
 from ..conf import settings
-from ..exceptions import ActionDispatchError, DfViewSetError, IdempotencyKeyInvalidError, IdempotencyKeyReusedError
+from ..exceptions import (
+    _error_from_jsonable,
+    _error_to_jsonable,
+    ActionDispatchError,
+    IdempotencyKeyInvalidError,
+    IdempotencyKeyReusedError,
+)
 from . import Middleware, ViewSetResult
 
 if TYPE_CHECKING:
@@ -147,19 +151,7 @@ class _Outcome:
 
     @classmethod
     def of_error(cls, error: Exception) -> "_Outcome":
-        if isinstance(error, RequestValidationError):
-            return cls(error={"status_code": 422, "detail": jsonable_encoder(error.errors()), "headers": None})
-        if isinstance(error, HTTPException):
-            recorded = {
-                "status_code": error.status_code,
-                "detail": jsonable_encoder(error.detail),
-                "headers": dict(error.headers) if error.headers else None,
-            }
-            if isinstance(error, DfViewSetError):
-                recorded["code"] = error.code
-                recorded["params"] = jsonable_encoder(error.params)
-            return cls(error=recorded)
-        return cls(error={"status_code": 500, "detail": "Internal Server Error", "headers": None})
+        return cls(error=_error_to_jsonable(error))
 
     @property
     def sets_cookie(self) -> bool:
@@ -177,12 +169,7 @@ class _Outcome:
                 cookies=dict(self.result.cookies),
                 status_code=self.result.status_code,
             )
-        error = self.error
-        if "code" in error:
-            exception = DfViewSetError(error["status_code"], error["detail"], error["code"], error["params"])
-            exception.headers = error["headers"]
-            raise exception
-        raise HTTPException(status_code=error["status_code"], detail=error["detail"], headers=error["headers"])
+        raise _error_from_jsonable(self.error)
 
     def to_json(self) -> Any:
         """The outcome in JSON form. A result's body is encoded as FastAPI encodes a response body
@@ -251,12 +238,13 @@ class Idempotency(Middleware):
       the running record for `settings.viewsets_idempotency_ttl` seconds. An outcome of `GET` or
       `HEAD` is stored only when a repeat attached while the call ran; an outcome with a cookie or a
       `set-cookie` header is never stored. A record that is not stored is deleted.
-    - An error outcome is stored too and raised again on a repeat: an `HTTPException` (a
-      `DfViewSetError` with its `code` and `params`) as it was raised, a `RequestValidationError` as
-      a 422 with its errors as `detail`, any other exception as a 500 with `detail`
-      `"Internal Server Error"`.
-      An `ActionDispatchError` is not an outcome: the action did not run, the record is deleted, and
-      a repeat runs the call again.
+    - An error outcome is stored too and raised again on a repeat: an `HTTPException` as it was
+      raised (a `DfViewSetError` with its `code` and `params`, and with its class when
+      `fastapi_viewsets.exceptions` defines it), a `RequestValidationError` as a 422 with its
+      errors as `detail`, any other exception as a 500 with `detail` `"Internal Server Error"`.
+      An `ActionDispatchError` is not an outcome: the action did not run (it was not sent, or the
+      executor revoked, rejected or did not know it), the record is deleted, and a repeat runs the
+      call again.
 
     Without `redis_client` the records live in this instance, which serves one process. With a
     `redis_client` (`redis.asyncio.Redis`) the record of a key is the Redis string

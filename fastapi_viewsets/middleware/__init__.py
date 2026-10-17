@@ -1,12 +1,19 @@
+import asyncio
+import logging
+
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Generic, get_args, get_origin, TYPE_CHECKING, TypeVar
+from typing import Any, Generic, get_args, get_origin, Literal, TYPE_CHECKING, TypeVar
 
 from ..context import Context, from_jsonable, SerializableObject, to_jsonable
 
 if TYPE_CHECKING:
     from fastapi import Request
+
+    from ..exceptions import DfViewSetError
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -143,6 +150,32 @@ class ActionExecution:
         return ExecutionRef(viewset_class, self.action, self.parent)
 
 
+@dataclass(frozen=True)
+class ActionTransition:
+    """
+    A change of state of a call to a deferred action that `Middleware.on_transition()` receives,
+    observed outside the execution itself.
+    """
+
+    kind: Literal["dispatched", "not_run", "interrupted", "failed"]
+    """
+    - `dispatched`: the call was handed to the executor (in the calling process)
+    - `not_run`: the executor will not run the call (`error` is an `ActionDispatchError`)
+    - `interrupted`: the executor ended the execution from outside it: a hard time limit, a
+      termination, the loss of the executing process (`error` is an `ActionInterruptedError`)
+    - `failed`: the executor failed outside the action (`error` is an `ActionFailedError`)
+    """
+    viewset_class: type
+    action: str
+    """The name of the viewset method, e.g. `"create"`."""
+    context: Context
+    """The call's `Context`, bound to the action's configuration."""
+    parent: ExecutionRef | None
+    """The action in whose execution the call was dispatched; None for an action a request called."""
+    error: "DfViewSetError | None"
+    """What the caller receives for the call; None for `dispatched`."""
+
+
 class Middleware(ABC):
     """
     Class-based alternative to a plain CommandMiddleware function. Implement `__call__` with the
@@ -210,13 +243,46 @@ class Middleware(ABC):
 
         It runs once per execution, where the action executes: in the FastAPI process for an
         in-process action, inside the command middleware chain (below every `__call__`), and in the
-        executor's process for a `celery_viewset` action, whose FastAPI-side method only hands the
-        call over. The executor's process therefore needs the same
-        `settings.viewsets_command_middleware`. An execution an executor interrupts (a time limit)
-        reaches `call_next()` as the exception the executor raised, or as `asyncio.CancelledError`
-        where the action was suspended at an `await`.
+        executor's process for a deferred (`celery_viewset`) action, whose FastAPI-side method only
+        hands the call over. The executor's process therefore needs the same
+        `settings.viewsets_command_middleware`.
+
+        In an executor's process `call_next()` raises no exception type of the executor itself. An
+        execution the executor interrupts from inside (a soft time limit) reaches `call_next()` as
+        `ActionInterruptedError`, whether the action was running or suspended at an `await`; the
+        action itself sees `asyncio.CancelledError` in the latter case. An execution the executor
+        ends from outside (a hard time limit, a termination, a lost process) ends its process:
+        `call_next()` raises `SystemExit` where the process is stopped with SIGTERM and has time to
+        unwind, and nothing at all where it is killed. `on_transition()` reports it either way. In a
+        gevent pool a hard time limit ends the execution only and reaches `call_next()` as
+        `ActionInterruptedError`.
         """
         return await call_next()
+
+    async def executor_started(self) -> None:
+        """
+        Optional hook for setting up an executor's process (`celery_viewset_server`), e.g. the
+        clients a middleware uses there. A process runs `on_transition()` calls on an event loop of
+        their own and executions on the loop of the thread that runs them (one loop per pool thread
+        in a threads pool); the hook is awaited once on each loop the process uses, before the
+        loop's first execution or its first `on_transition()` call. Every entry of
+        `settings.viewsets_command_middleware` that defines it is awaited, in list order. An
+        exception before an execution fails that execution with `ActionFailedError` (reason
+        `executor`) and the hook runs again before the loop's next one; an exception before an
+        `on_transition()` call is logged. The default does nothing.
+        """
+        return None
+
+    async def on_transition(self, _transition: ActionTransition) -> None:
+        """
+        Optional hook that receives the changes of state of a call to a deferred action that happen
+        outside its execution (see `ActionTransition.kind`). It runs on the effective middlewares of
+        the call's action: `dispatched` in the calling process once the executor accepted the call,
+        the other kinds in the executor's process after the caller was sent `transition.error`. An
+        exception it raises is logged and changes nothing; in an executor's process each call is
+        bounded to 5 seconds. The default does nothing.
+        """
+        return None
 
     @abstractmethod
     async def __call__(
@@ -226,6 +292,15 @@ class Middleware(ABC):
         context: Context,
         call_next: Callable[[], Awaitable[ViewSetResult]],
     ) -> ViewSetResult:
+        """
+        The middleware's step of the command chain. For a deferred action `call_next()` returns
+        the result the executor sent back, or raises one of: `ActionDispatchError` (the action did
+        not run), `ActionInterruptedError` (the executor ended its execution), `ActionFailedError`
+        (it failed with an error that is not an `HTTPException`), the `HTTPException` the action
+        raised (a `DfViewSetError` of a class `fastapi_viewsets.exceptions` defines keeps its class,
+        `code`, `params` and headers), or an `ActionOutcomeUnknownError` (the caller stopped
+        waiting).
+        """
         raise NotImplementedError
 
 
@@ -278,14 +353,56 @@ async def run_execution_chain(
     middlewares: list[CommandMiddleware],
     execution: ActionExecution,
     final_handler: Callable[[], Awaitable[Any]],
+    *,
+    _translate: Callable[[BaseException], BaseException] | None = None,
 ) -> Any:
     """Runs `execute()` of every middleware that has one, in list order, the first outermost;
-    final_handler (the viewset method call) is innermost."""
+    final_handler (the viewset method call) is innermost. `_translate`, set by an executor, maps
+    an exception out of every step to the exception raised in its place."""
     executors = [middleware.execute for middleware in middlewares if callable(getattr(middleware, "execute", None))]
 
     async def _step(index: int) -> Any:
         if index >= len(executors):
             return await final_handler()
-        return await executors[index](execution, lambda: _step(index + 1))
+        return await executors[index](execution, lambda: _next(index + 1))
 
-    return await _step(0)
+    async def _translated_step(index: int) -> Any:
+        try:
+            return await _step(index)
+        except BaseException as error:
+            translated = _translate(error)
+            if translated is error:
+                raise
+            raise translated from error
+
+    _next = _step if _translate is None else _translated_step
+    return await _next(0)
+
+
+async def run_executor_started(middlewares: list) -> None:
+    """Awaits `executor_started()` of every entry of `middlewares` that defines it, in list order."""
+    for middleware in middlewares:
+        hook = getattr(middleware, "executor_started", None)
+        if callable(hook):
+            await hook()
+
+
+async def run_transition_listeners(
+    middlewares: list, transition: ActionTransition, timeout: float | None = None
+) -> None:
+    """Awaits `on_transition(transition)` of every entry of `middlewares` that defines it, in list
+    order, each bounded to `timeout` seconds. An exception or a timeout is logged."""
+    for middleware in middlewares:
+        listener = getattr(middleware, "on_transition", None)
+        if not callable(listener):
+            continue
+        try:
+            await asyncio.wait_for(listener(transition), timeout)
+        except Exception:
+            logger.exception(
+                "on_transition(%s) of %r failed for %s.%s",
+                transition.kind,
+                middleware,
+                transition.viewset_class.__qualname__,
+                transition.action,
+            )

@@ -9,6 +9,7 @@ from fastapi_viewsets.decorators import (
     celery_viewset_server,
 )
 from fastapi_viewsets.decorators.celery_viewset.result_reader import RESULT_QUEUE_TTL
+from fastapi_viewsets.exceptions import ActionFailedError
 from fastapi_viewsets.mixins import CreateMixin, ListMixin
 
 
@@ -33,7 +34,7 @@ def test_celery_viewset_server_decorator_registration():
     task_decorator = MagicMock()
     celery_app.task.return_value = task_decorator
 
-    @celery_viewset_server(celery_app=celery_app, task_prefix="items")
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
     class ItemViewSet(ListMixin[Item], CreateMixin[int, Item]):
         async def perform_list(self, _context) -> list[Item]:
             return [Item(id=1, name="test")]
@@ -51,19 +52,31 @@ def test_celery_viewset_server_decorator_registration():
 def test_celery_viewset_server_registers_tasks_with_ignore_result():
     """celery_viewset_client never reads Celery's own result backend (it awaits the redis_client
     queue in client.py instead) - ignore_result=True must be set so Celery does not also try to
-    JSON-serialize/store the raw return value (which may be a Pydantic model)."""
+    JSON-serialize/store the raw return value (which may be a Pydantic model). acks_late=False and
+    reject_on_worker_lost=False override the application's settings, so a call is never delivered a
+    second time; store_errors_even_if_ignored=False stores no failure in the unused backend."""
     celery_app = MagicMock()
     task_decorator = MagicMock()
     celery_app.task.return_value = task_decorator
 
-    @celery_viewset_server(celery_app=celery_app, task_prefix="items")
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
     class ItemViewSet(ListMixin[Item]):
         async def perform_list(self, _context) -> list[Item]:
             return [Item(id=1, name="test")]
 
     calls = celery_app.task.call_args_list
     assert calls
-    assert all(call.kwargs.get("ignore_result") is True for call in calls)
+    for call in calls:
+        options = {
+            name: call.kwargs.get(name)
+            for name in ("ignore_result", "acks_late", "reject_on_worker_lost", "store_errors_even_if_ignored")
+        }
+        assert options == {
+            "ignore_result": True,
+            "acks_late": False,
+            "reject_on_worker_lost": False,
+            "store_errors_even_if_ignored": False,
+        }
 
 
 def test_celery_viewset_server_execution():
@@ -79,7 +92,7 @@ def test_celery_viewset_server_execution():
 
     celery_app.task.side_effect = mock_task
 
-    @celery_viewset_server(celery_app=celery_app, task_prefix="items")
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
     class ItemViewSet(ListMixin[Item]):
         async def perform_list(self, _context) -> list[Item]:
             return [Item(id=1, name="test")]
@@ -106,7 +119,9 @@ def test_celery_viewset_server_lifecycle_per_request():
     class Counter:
         count = 0
 
-    @celery_viewset_server(celery_app=celery_app, task_prefix="counter", lifecycle="per-request")
+    @celery_viewset_server(
+        celery_app=celery_app, task_prefix="counter", lifecycle="per-request", redis_client=MagicMock()
+    )
     class CounterViewSet(ListMixin[int]):
         def __init__(self):
             Counter.count += 1
@@ -238,15 +253,17 @@ def test_celery_viewset_server_pushes_error_to_redis_on_exception():
             raise ValueError("DB connection failed")
 
     sync_func = registered_tasks["items.list_items"]
-    with pytest.raises(ValueError, match="DB connection failed"):
+    with pytest.raises(ActionFailedError) as raised:
         sync_func(_correlation_id="err-corr-id", _result_queue_key="celery_viewset_results:items")
+    assert isinstance(raised.value.__cause__, ValueError)
 
     redis_mock.rpush.assert_called_once()
     call_args = redis_mock.rpush.call_args
     payload = json.loads(call_args[0][1])
     assert payload["correlation_id"] == "err-corr-id"
-    assert "error" in payload
-    assert "DB connection failed" in payload["error"]
+    assert payload["error"]["class"] == "ActionFailedError"
+    assert payload["error"]["params"] == {"task": "items.list_items", "reason": "error"}
+    assert "DB connection failed" not in json.dumps(payload)
 
 
 def test_celery_viewset_server_pushes_http_exception_to_redis():
@@ -285,35 +302,16 @@ def test_celery_viewset_server_pushes_http_exception_to_redis():
     assert "error" in payload
 
 
-def test_celery_viewset_server_no_redis_no_push():
-    """When redis_client is None, server does not attempt to push result."""
-    celery_app = MagicMock()
-    registered_tasks = {}
-
-    def mock_task(name, **_kwargs):
-        def deck(func):
-            registered_tasks[name] = func
-            return func
-
-        return deck
-
-    celery_app.task.side_effect = mock_task
-
-    @celery_viewset_server(celery_app=celery_app, task_prefix="items")
-    class ItemViewSet(ListMixin[Item]):
-        async def perform_list(self, _context) -> list[Item]:
-            return [Item(id=1, name="test")]
-
-    sync_func = registered_tasks["items.list_items"]
-    result = sync_func(_correlation_id="some-id", _result_queue_key="celery_viewset_results:items")
-    assert result == [Item(id=1, name="test")]
+def test_celery_viewset_server_requires_a_redis_client():
+    with pytest.raises(ValueError, match="redis_client"):
+        celery_viewset_server(celery_app=MagicMock(), task_prefix="items")
 
 
 def test_celery_viewset_server_metadata():
     """Server decorator sets __celery_viewset_metadata__ on the class."""
     celery_app = MagicMock()
 
-    @celery_viewset_server(celery_app=celery_app, task_prefix="myprefix")
+    @celery_viewset_server(celery_app=celery_app, task_prefix="myprefix", redis_client=MagicMock())
     class ItemViewSet(ListMixin[Item]):
         async def perform_list(self, _context) -> list[Item]:
             return []
@@ -453,7 +451,7 @@ def test_fastapi_server_endpoint_executes_directly():
 
     celery_app.task.side_effect = mock_task
 
-    @celery_viewset_server(celery_app=celery_app, task_prefix="items")
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
     class ItemViewSet(ListMixin[Item]):
         async def perform_list(self, _context) -> list[Item]:
             return [Item(id=42, name="server-item")]

@@ -5,6 +5,41 @@ releases at once, work from the bottom of the page upwards.
 
 <!-- New releases go directly below this comment, above the previous one, as `## Upgrading to vX.Y.Z (from vA.B.x)`. -->
 
+## Upgrading to v0.11.0 (from v0.10.x)
+
+- [ ] Pass `redis_client` (a synchronous `redis.Redis`) to `celery_viewset` and
+      `celery_viewset_server` in the worker too; without it the decorator raises `ValueError`.
+- [ ] Deploy the FastAPI processes and the Celery workers together. A 0.10 FastAPI process reads a
+      0.11 worker's error for a non-HTTP failure as a bare `Exception`; a 0.11 process reads a 0.10
+      worker's error as before.
+- [ ] Code in `Middleware.execute()` or in an action that catches billiard's
+      `SoftTimeLimitExceeded`, or `asyncio.CancelledError` for a time limit, catches
+      `ActionInterruptedError` (reason `time_limit`) from `fastapi_viewsets.exceptions`. The action
+      itself still sees `asyncio.CancelledError` where it was suspended at an `await`.
+- [ ] Code in `__call__` that caught a bare `Exception` from a deferred action catches
+      `ActionFailedError` (500, `action_failed`); its `detail` names the task only, and the original
+      error is logged in the worker. Code that waited for `ResultTimeoutError` after a hard time
+      limit, a termination or a lost worker process catches `ActionInterruptedError`. Code that
+      treats the two "stopped waiting" errors alike catches `ActionOutcomeUnknownError`.
+- [ ] Add the codes `action_interrupted` and `action_failed` to the application's error
+      translations, and read `params.reason` where the reason matters; see
+      [Error codes](./error-codes#executor-outcomes).
+- [ ] Move per-task time limits out of Celery's `task_annotations` (or `soft_time_limit` /
+      `time_limit` on the tasks) into `@action_configuration({TimeLimits: TimeLimits(soft=, hard=)})`;
+      see [Time limits](./routers#time-limits). Limits in the worker's command line still apply to
+      an action without a `TimeLimits` entry.
+- [ ] Setup a middleware did in a handler of Celery's `worker_process_init` (or `worker_init`)
+      moves into [`Middleware.executor_started()`](./command-middleware#setting-up-the-worker-middleware-executor-started),
+      and code that watched Celery's `task_failure`, `task_revoked`, `task_unknown` or
+      `task_rejected` for `celery_viewset` tasks moves into
+      [`Middleware.on_transition()`](./command-middleware#transitions-outside-the-execution-middleware-on-transition).
+- [ ] An application that relies on `task_acks_late` or `reject_on_worker_lost` for
+      `celery_viewset` tasks: they are registered with `acks_late=False` and
+      `reject_on_worker_lost=False`, and a call is never delivered twice. A call whose worker
+      process is lost ends with `ActionInterruptedError` (reason `lost`).
+- [ ] A test that called a `celery_viewset_server` task and expected the action's own non-HTTP
+      exception expects `ActionFailedError`, with the original as `__cause__`.
+
 ## Upgrading to v0.10.0 (from v0.9.x)
 
 - [ ] Deploy every process with a `RedisEventStore`, web processes and workers, together:

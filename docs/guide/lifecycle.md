@@ -36,7 +36,16 @@ request:
 | `async def save_state(self)` | After the endpoint handler (in a `finally` block) | Persist state back to the external store |
 
 Neither method is required — if absent, it is simply skipped. `save_state` is called even if the
-endpoint raises an exception.
+endpoint raises an exception, and for a `celery_viewset` action interrupted by a soft time limit.
+A hard time limit, a termination or a lost worker process ends the process executing the action, and
+`save_state` runs only if the process unwinds that far before it is killed (see
+[Outcomes of a call](./routers#outcomes-of-a-call)).
+
+A worker process that needs setting up before its first execution (a connection a state hook
+uses) does it in
+[`Middleware.executor_started()`](./command-middleware#setting-up-the-worker-middleware-executor-started),
+not in the viewset's constructor: a `"singleton"` instance is created when the decorator runs, in
+the process that imports the viewset.
 
 > **Note:** There is currently no distributed locking around `load_state` / `save_state`. In
 > deployments with multiple worker processes, concurrent requests can interleave their load/save

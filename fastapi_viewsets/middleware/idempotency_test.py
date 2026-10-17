@@ -13,6 +13,7 @@ from ..context import Context
 from ..decorators import route_viewset
 from ..exceptions import (
     ActionDispatchError,
+    ActionInterruptedError,
     df_viewset_exception_handler,
     DfViewSetError,
     IdempotencyKeyInvalidError,
@@ -165,6 +166,17 @@ async def test_an_error_outcome_is_stored_and_raised_again():
         await call(middleware, chain)
     assert chain.calls == 1
     assert (exc_info.value.status_code, exc_info.value.code, exc_info.value.params) == (404, "not_found", {"pk": 7})
+
+
+@pytest.mark.asyncio
+async def test_a_replayed_error_keeps_its_class():
+    middleware, chain = Idempotency(), Counter(error=ActionInterruptedError("things.create", "time_limit"))
+    with pytest.raises(ActionInterruptedError):
+        await call(middleware, chain)
+    with pytest.raises(ActionInterruptedError) as exc_info:
+        await call(middleware, chain)
+    assert chain.calls == 1
+    assert (exc_info.value.status_code, exc_info.value.params["reason"]) == (504, "time_limit")
 
 
 @pytest.mark.asyncio
