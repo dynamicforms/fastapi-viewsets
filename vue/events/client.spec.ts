@@ -151,7 +151,13 @@ const flush = () => vi.advanceTimersByTimeAsync(0);
 
 /** `draw: () => 0.5` makes the jitter multiplier exactly 1, so every delay is the ladder's own. */
 function client(transport: Transport, options: Partial<EventClientOptions> = {}): EventClient {
-  return createEventClient({ basePath: '/events', peer: transport.peer, draw: () => 0.5, ...options });
+  return createEventClient({
+    basePath: '/events',
+    peer: transport.peer,
+    draw: () => 0.5,
+    checkIntervalMs: 0,
+    ...options,
+  });
 }
 
 let clients: EventClient[] = [];
@@ -1077,6 +1083,106 @@ describe('the peer: ladder held, lost and reconnected', () => {
     await flush();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(t.take()).toEqual([]);
+  });
+});
+
+describe('the check poll', () => {
+  async function checked(t: Transport, options: Partial<EventClientOptions> = {}) {
+    const c = track(client(t, { axios: t.axios, checkIntervalMs: 60_000, ...options }));
+    const h = handlers();
+    const sub = c.subscribe('a', Changed, h);
+    t.take()[0].answer({ rev: 10 });
+    await sub.ready;
+    return { c, h, sub };
+  }
+
+  it('polls every subscribed topic over the open peer once per checkIntervalMs', async () => {
+    const t = makeTransport();
+    await checked(t);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(t.take()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    const [poll] = t.take();
+    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: 10 } } });
+    poll.answer({ topics: { a: { rev: 10, events: [] } } });
+    await flush();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(t.take()).toMatchObject([{ via: 'peer', body: { cursors: { a: 10 } } }]);
+  });
+
+  it('applies the events a lost push left out', async () => {
+    const t = makeTransport();
+    const { h } = await checked(t);
+    await vi.advanceTimersByTimeAsync(60_000);
+    t.take()[0].answer({
+      topics: { a: { rev: 11, events: [{ rev: 11, prev: 10, event: 'changed', version: 1, payload: { n: 11 } }] } },
+    });
+    await flush();
+    expect(payloads(h)).toEqual([{ n: 11 }]);
+    expect(t.push('a', 12, 11, 'changed', { n: 12 })).toBe(true);
+    expect(payloads(h)).toEqual([{ n: 11 }, { n: 12 }]);
+    expect(t.take()).toEqual([]);
+  });
+
+  it('jitters the interval by pollSettings.jitterFraction', async () => {
+    const t = makeTransport();
+    await checked(t, { draw: () => 0 });
+    await vi.advanceTimersByTimeAsync(47_999);
+    expect(t.take()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(t.take()).toMatchObject([{ via: 'peer', path: '/events/poll' }]);
+  });
+
+  it('a check that fails without a status leaves the topic to the ladder', async () => {
+    const t = makeTransport();
+    await checked(t);
+    await vi.advanceTimersByTimeAsync(60_000);
+    t.take()[0].fail(new Error('no status'));
+    await flush();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(t.take()).toMatchObject([{ via: 'peer', body: { cursors: { a: 10 } } }]);
+  });
+
+  it('a refused check is reported through onError and removes the subscription', async () => {
+    const t = makeTransport();
+    const { h } = await checked(t);
+    await vi.advanceTimersByTimeAsync(60_000);
+    t.take()[0].answer({ detail: 'no' }, 403);
+    await flush();
+    expect(h.onError).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('sends nothing while the peer is closed; the ladder polls over axios', async () => {
+    const t = makeTransport();
+    await checked(t);
+    t.close();
+    await vi.advanceTimersByTimeAsync(400);
+    t.take()[0].answer({ topics: { a: { rev: 10, events: [] } } });
+    await flush();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(t.take().every((call) => call.via === 'axios')).toBe(true);
+  });
+
+  it('checkIntervalMs 0 or non-finite sends none, and the last unsubscribe stops the timer', async () => {
+    for (const checkIntervalMs of [0, NaN, Infinity]) {
+      const t = makeTransport();
+      const { c } = await checked(t, { checkIntervalMs });
+      expect(vi.getTimerCount()).toBe(0);
+      c.close();
+    }
+    const t2 = makeTransport();
+    const { sub } = await checked(t2);
+    expect(vi.getTimerCount()).toBe(1);
+    sub.unsubscribe();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('close() stops the timer', async () => {
+    const t = makeTransport();
+    const { c } = await checked(t);
+    c.close();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

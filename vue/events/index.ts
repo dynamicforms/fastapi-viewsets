@@ -15,7 +15,14 @@ export type {
   EventStreamLike,
   EventSubscription,
 } from './client';
-export { attachEvents, createEventClient, defineEvent, eventsOf, handleEventStream } from './client';
+export {
+  attachEvents,
+  createEventClient,
+  DEFAULT_CHECK_INTERVAL_MS,
+  defineEvent,
+  eventsOf,
+  handleEventStream,
+} from './client';
 
 export type { Change, KeyOf, RecordOf, RecordsChanged, ViewSetWatch, WatchOptions } from './changes';
 export { applyChanges, RECORDS_CHANGED } from './changes';

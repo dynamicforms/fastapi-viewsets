@@ -163,9 +163,9 @@ ViewSet's options; without it, a muxws ViewSet uses `eventsOf(peer)`, and a REST
 
 | Option | Meaning |
 |--------|---------|
-| `onChange` | Required. Called once per `records_changed` event of version `1` of the topic, with its [`RecordsChanged`](./vue-events#records-changed) payload and its [`EventMeta`](./vue-events#eventmeta) |
+| `onChange` | Required. Called once per `records_changed` event of version `1` of the topic (with `fetch`, twice for an event some of whose retrieves answer 404), with its [`RecordsChanged`](./vue-events#records-changed) payload and its [`EventMeta`](./vue-events#eventmeta) |
 | `onResync` | Required. Called on a resync of the topic, and for a `records_changed` event whose version is not `1`, with or without `fetch`: the caller re-reads what it displays |
-| `fetch` | `true`: every `created` and `updated` change without `record` is completed with `retrieve(pk)` before `onChange`, and a change whose retrieve answers 404 is dropped. A retrieve that fails with another error is passed to `onError` and the event ends in `onResync` instead of `onChange`. Default `false` |
+| `fetch` | `true`: every `created` and `updated` change without `record` is completed with `retrieve(pk)` before `onChange`, and the changes whose retrieve answers 404 follow the event in a second `onChange` with `op: 'deleted'` and the same `meta`; when every retrieve answers 404 only that one is called. A retrieve that fails with another error is passed to `onError` and the event ends in `onResync` instead of `onChange`. Default `false` |
 | `onError` | Called with the error of a refused `subscribe` or `poll` of the topic, and of a failed `fetch` retrieve |
 
 `onChange` and `onResync` are called in the order their events arrived, also while `fetch` waits for

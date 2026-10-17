@@ -70,8 +70,8 @@ class Settings:
         self.viewsets_event_store: EventStore | None = None
         """
         The `EventStore` of `fastapi_viewsets.events`: it assigns each event its rev, keeps the
-        topic's log for `poll` and carries the event to `deliver()` in every process that watches
-        the topic. None is one `MemoryEventStore` for this process. A deployment of more than one
+        topic's log for `poll` and carries the event to `deliver()` in every process whose store
+        is started. None is one `MemoryEventStore` for this process. A deployment of more than one
         process, a Celery worker included, sets a `RedisEventStore` in every process.
         """
         self.viewsets_event_authorizers: list[EventAuthorizer] = []

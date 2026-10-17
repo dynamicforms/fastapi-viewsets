@@ -6,7 +6,7 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.2] - Unreleased
+## [0.10.0] - 2026-10-16
 
 ### Added
 
@@ -15,9 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out; `pendingCalls()` and `pendingCallCount()` list and count the calls that have not settled;
   `retryNow()` sends every waiting repeat at once. `issueCall()` takes `background` as a third
   argument.
+- npm: the event client sends a check poll of every subscribed topic over the open peer once per
+  `checkIntervalMs` (`DEFAULT_CHECK_INTERVAL_MS`, 60 s; `0` sends none) while the ladder is held,
+  so a lost push of a topic's last event is caught without a later event of the topic.
 
 ### Changed
 
+- **Breaking.** Events: `RedisEventStore` publishes every event on one channel, `{prefix}events`,
+  which `start()` subscribes once and returns after Redis has confirmed; `deliver()` pushes an event
+  to the sockets of the process that hold its topic. `EventStore.watch` and `EventStore.unwatch` are
+  removed, as are `RedisEventStore.watch`, `unwatch` and `channel(topic)`; `RedisEventStore.channel`
+  is the channel's name. `subscribe` no longer calls the store, and a failed or slow Redis
+  `SUBSCRIBE` no longer fails a subscribe or leaves a channel subscribed. `start()` raises
+  `asyncio.TimeoutError` when Redis does not confirm the SUBSCRIBE within 5 seconds.
+- npm: `watch({ fetch: true })` passes the changes whose `retrieve` answers 404 to a second
+  `onChange` with `op: 'deleted'`, after the event's other changes, instead of dropping them, so a
+  displayed record that is gone or no longer visible to the reader is removed.
 - `Idempotency` extends a running record to `viewsets_idempotency_lock_ttl` every third of the lock
   TTL while the call runs, and the `:attached` key with it. A call that runs longer than the lock TTL
   keeps its record, and a repeat attaches to it instead of running the action again; the record

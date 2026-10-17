@@ -40,7 +40,8 @@ export const RECORDS_CHANGED = defineEvent<RecordsChanged<unknown>>('records_cha
 export interface WatchOptions<T, K extends KeyType = KeyType> {
   /**
    * Called once per `records_changed` event of version 1 of the ViewSet's topic, in rev order, with
-   * the change and the event's `EventMeta`. An event of any other version calls `onResync` instead.
+   * the change and the event's `EventMeta`; with `fetch`, twice for an event some of whose retrieves
+   * answer 404. An event of any other version calls `onResync` instead.
    */
   onChange: (change: RecordsChanged<T, K>, meta: EventMeta) => void;
   /**
@@ -50,7 +51,9 @@ export interface WatchOptions<T, K extends KeyType = KeyType> {
   onResync: () => void;
   /**
    * `true` completes every `created` and `updated` change without `record` with `retrieve(pk)`
-   * before `onChange`; a change whose retrieve answers 404 is dropped from the event. Default `false`.
+   * before `onChange`. The changes whose retrieve answers 404 leave the event and follow it in a
+   * second `onChange` with `op: 'deleted'` and the same `meta`, in their order in the event; an event
+   * whose every retrieve answers 404 calls `onChange` once, with `op: 'deleted'`. Default `false`.
    */
   fetch?: boolean;
   /**
@@ -154,16 +157,18 @@ export function watchRecords<T, K extends KeyType>(
     queue = queue.then(() => (stopped ? undefined : step())).catch(rethrowLater);
   };
 
-  const complete = async (change: RecordsChanged<T, K>): Promise<RecordsChanged<T, K> | null> => {
-    if (!options.fetch || change.op === 'deleted') return change;
+  /** The events `change` is passed to `onChange` as, or `null` for a failed retrieve. */
+  const complete = async (change: RecordsChanged<T, K>): Promise<RecordsChanged<T, K>[] | null> => {
+    if (!options.fetch || change.op === 'deleted') return [change];
     let failed: unknown = undefined;
+    const gone = Symbol('gone');
     const changes = await Promise.all(
-      change.changes.map(async (item): Promise<Change<T, K> | null> => {
+      change.changes.map(async (item): Promise<Change<T, K> | typeof gone | null> => {
         if (item.record !== undefined && item.record !== null) return item;
         try {
           return { pk: item.pk, record: await target.retrieve(item.pk) };
         } catch (error) {
-          if ((error as { response?: { status?: unknown } } | null)?.response?.status === 404) return null;
+          if ((error as { response?: { status?: unknown } } | null)?.response?.status === 404) return gone;
           failed ??= error;
           return null;
         }
@@ -174,7 +179,12 @@ export function watchRecords<T, K extends KeyType>(
       if (options.onError && !stopped) options.onError(error);
       return null;
     }
-    return { op: change.op, changes: changes.filter((item): item is Change<T, K> => item !== null) };
+    const found = changes.filter((item): item is Change<T, K> => item !== gone && item !== null);
+    const deleted = change.changes.filter((_, index) => changes[index] === gone).map(({ pk }) => ({ pk }));
+    const out: RecordsChanged<T, K>[] = [];
+    if (found.length > 0 || deleted.length === 0) out.push({ op: change.op, changes: found });
+    if (deleted.length > 0) out.push({ op: 'deleted', changes: deleted });
+    return out;
   };
 
   const subscribe = (events: EventClient): EventSubscription =>
@@ -188,8 +198,14 @@ export function watchRecords<T, K extends KeyType>(
         enqueue(async () => {
           const completed = await complete(change);
           if (stopped) return;
-          if (completed) options.onChange(completed, meta);
-          else options.onResync();
+          if (!completed) {
+            options.onResync();
+            return;
+          }
+          for (const item of completed) {
+            if (stopped) return;
+            options.onChange(item, meta);
+          }
         });
       },
       onResync() {

@@ -147,7 +147,7 @@ An event that does not set `event_version` has version `1`; a subclass inherits 
    `Event`; the topic's form is all that is checked;
 2. `rev, prev = await store.append(topic, event.event_name, payload, event.event_version)`;
 3. `await store.publish(topic, rev, prev, event.event_name, payload, event.event_version)`, which
-   reaches `deliver()` in every process that watches the topic. An exception of this step is logged
+   reaches `deliver()` in every process whose store is started. An exception of this step is logged
    at warning level and not raised: the event is recorded and is answered by the next poll;
 4. returns `(rev, prev)`.
 
@@ -167,9 +167,8 @@ process, created on first use.
 |-|----------------------|--------------------------------------------------------|
 | Reach | the process | every process that reaches the Redis |
 | `append` | one synchronous step without an `await` | one Lua script |
-| `publish` | `deliver()` in the same process | `PUBLISH` on `{prefix}ch:{topic}`; the reader of each watching process calls `deliver()` |
-| `watch` / `unwatch` | no-op | `SUBSCRIBE` / `UNSUBSCRIBE` on the reader's connection |
-| `start` / `stop` | no-op | opens / closes the reader |
+| `publish` | `deliver()` in the same process | `PUBLISH` on `{prefix}events`; the reader of every started process calls `deliver()` |
+| `start` / `stop` | no-op | `SUBSCRIBE` of `{prefix}events` and the reader / closes the reader |
 
 `redis_client` is a `redis.asyncio.Redis` the application constructs. `RedisEventStore` lives in
 `fastapi_viewsets.events.redis`, the only module of the package that uses `redis`. Its keys:
@@ -178,7 +177,7 @@ process, created on first use.
 |-----|---------|
 | `{prefix}rev:{topic}` | The topic's rev, a decimal string without expiry |
 | `{prefix}log:{topic}` | The topic's log, a list of JSON entries, newest first, at most `viewsets_event_log_size` long, expiring `viewsets_event_log_ttl` seconds after the topic's last event |
-| `{prefix}ch:{topic}` | The pub/sub channel of the topic's events |
+| `{prefix}events` | The pub/sub channel of every event |
 
 ### The log and the counter
 
@@ -228,15 +227,18 @@ async def lifespan(app: FastAPI):
 `check_events()` logs a warning naming `await start_events()`, and returns `False`, when the store
 has a reader and the reader does not run; otherwise it returns `True`.
 
-The `RedisEventStore` reader is one task on one pub/sub connection. It subscribes to the channel of
-every topic the process watches; a topic watched before `start()` is subscribed when the reader
-opens. A failed read is logged and retried after one second; a message that cannot be delivered is
-logged and skipped.
+`RedisEventStore.start()` subscribes one pub/sub connection to `{prefix}events` and returns once
+Redis has confirmed it; the reader, one task on that connection, then calls `deliver()` for every
+event. `deliver()` pushes an event to the sockets of the process that hold its topic and leaves out a
+topic without one, so every process receives every event and no event reaches a socket that does
+not hold its topic. A failed read is logged and retried after one second; a message that cannot be
+delivered is logged and skipped. When redis-py reconnects the connection it subscribes the channel
+again; an event published while it is down does not reach the process, and the event client finds
+it by poll, on the topic's next push or its check poll.
 
 ### Processes
 
-A process watches a topic while it holds at least one subscription for it. An event published in a
-process that holds no socket, a Celery worker, reaches the sockets through Redis only. With a
+An event published in a process that holds no socket, a Celery worker, reaches the sockets through Redis only. With a
 `MemoryEventStore` in a worker, `publish()` records the event in the worker's store and delivers it
 to nobody, and a frontend polling a web process reads that process's store. A deployment of more
 than one process configures a `RedisEventStore` in every process, workers included.
@@ -303,26 +305,22 @@ async def muxws_endpoint(websocket: WebSocket) -> None:
 2. a topic of neither form is 422 `event_topic_invalid`;
 3. runs the [authorizers](#authorization); a refusal is 403 `event_topic_refused`, or the status of
    the `HTTPException` an authorizer raised;
-4. subscribes the socket and waits until the store watches the topic; a socket that already holds
+4. subscribes the socket; a socket that already holds
    `settings.viewsets_event_max_subscriptions` other topics (default `256`) is 409
    `event_subscriptions_exceeded`;
-5. answers the topic's current rev, read after the store watches the topic, so every event
-   published after the rev the answer carries is pushed to the socket.
+5. answers the topic's current rev, read after the subscription is in the table, so every event
+   published after the rev the answer carries is pushed to the socket while the store's reader
+   receives events.
 
 A topic the socket already holds is subscribed again with the new call's context and counts once.
 
-Subscriptions are held per process, in a table keyed by topic and socket. The first subscription of
-a topic in the process calls `store.watch(topic)`; when that raises, the subscription is removed and
-the call fails. A `subscribe` of a topic whose `watch` or `unwatch` is running waits for it to end
-and then calls `store.watch(topic)` itself when the topic is still not watched, so each `subscribe`
-answers once the topic is watched or fails with the error of its own `watch`. `RedisEventStore`'s
-`watch` returns once Redis has confirmed the `SUBSCRIBE`. The last subscription removed calls
-`store.unwatch(topic)`; an exception it raises is logged.
+Subscriptions are held per process, in a table keyed by topic and socket; the store does not take
+part in subscribing.
 
 The first subscription of a socket installs one `peer.on_close` handler, which drops every
 subscription of the socket. A command runs to completion after its socket is lost; a `subscribe`
-that reaches the table after its socket closed (`peer.is_open` false) is not entered in it and does
-not watch the topic. A reconnected peer is a new socket and subscribes again.
+that reaches the table after its socket closed (`peer.is_open` false) is not entered in it. A
+reconnected peer is a new socket and subscribes again.
 
 `unsubscribe` removes the socket's subscription to the topic and answers 204. It neither validates
 nor authorizes the topic.

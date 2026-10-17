@@ -17,7 +17,6 @@ from typing import Any
 from ..conf import settings
 from ..context import Context
 from ..exceptions import EventSubscriptionsExceededError
-from .store import get_store
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +51,7 @@ _by_topic: dict[str, dict[int, Subscription]] = {}
 _by_peer: dict[int, dict[str, Subscription]] = {}
 # id(peer) of every socket whose on_close handler is installed
 _close_installed: set[int] = set()
-# the topics this process has called store.watch() for and not store.unwatch() since
-_watched: set[str] = set()
-# topic -> the future that completes when the running call bringing its watch in line with the
-# table ends
-_syncing: dict[str, asyncio.Future] = {}
-# background tasks: pushes, and unwatches after a socket loss
+# background tasks: pushes
 _tasks: set[asyncio.Task] = set()
 
 
@@ -70,45 +64,6 @@ def _spawn(coroutine: Coroutine[Any, Any, Any]) -> asyncio.Task | None:
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
     return task
-
-
-async def _sync_watch(topic: str) -> None:
-    """
-    Calls `store.watch(topic)` when the topic has subscriptions and is not watched, and
-    `store.unwatch(topic)` when it has none and is watched, until the two agree, and returns when
-    they agree. One call per topic runs the store at a time: a call made while another runs waits
-    for it to end, whatever its outcome, and then checks again. An exception of a store call this
-    call made propagates.
-    """
-    while (running := _syncing.get(topic)) is not None:
-        await asyncio.shield(running)
-    done = asyncio.get_running_loop().create_future()
-    _syncing[topic] = done
-    try:
-        while True:
-            wanted = topic in _by_topic
-            if wanted == (topic in _watched):
-                return
-            store = get_store()
-            if wanted:
-                await store.watch(topic)
-                _watched.add(topic)
-            else:
-                _watched.discard(topic)
-                await store.unwatch(topic)
-    finally:
-        if _syncing.get(topic) is done:
-            del _syncing[topic]
-        done.set_result(None)
-
-
-async def _sync_watch_logged(topic: str) -> None:
-    try:
-        await _sync_watch(topic)
-    except Exception:
-        logger.warning(
-            "events: bringing the watch of topic %s in line with its subscriptions failed", topic, exc_info=True
-        )
 
 
 def _remove(key: int, topic: str) -> Subscription | None:
@@ -126,18 +81,16 @@ def _remove(key: int, topic: str) -> Subscription | None:
 
 async def subscribe(peer: Any, context: Context, topic: str) -> Subscription:
     """
-    Subscribes the socket `peer` to `topic` and returns the subscription once the store watches the
-    topic. A topic the socket already holds is subscribed again with `context`, and counts once.
+    Subscribes the socket `peer` to `topic` and returns the subscription. A topic the socket already
+    holds is subscribed again with `context`, and counts once. From then on `deliver()` pushes the
+    topic's events to the socket.
 
     Raises `EventSubscriptionsExceededError` (409) when the socket already holds
-    `settings.viewsets_event_max_subscriptions` other topics. The first subscription of a topic in
-    this process calls `store.watch(topic)`; when that raises, the subscription is removed and the
-    exception propagates. A subscribe that arrives while the topic's watch is being brought in line
-    waits for it. The first subscription of a socket installs one `peer.on_close` handler, which
-    drops every subscription of the socket.
+    `settings.viewsets_event_max_subscriptions` other topics. The first subscription of a socket
+    installs one `peer.on_close` handler, which drops every subscription of the socket.
 
     A socket whose `is_open` is false is closed, and its `on_close` handlers have run: the
-    subscription is returned without entering the table, and the store is not called.
+    subscription is returned without entering the table.
     """
     subscription = Subscription(peer, context, topic)
     if not getattr(peer, "is_open", True):
@@ -152,31 +105,20 @@ async def subscribe(peer: Any, context: Context, topic: str) -> Subscription:
     if key not in _close_installed:
         _close_installed.add(key)
         peer.on_close(lambda _reason: drop_peer(peer))
-    try:
-        await _sync_watch(topic)
-    except BaseException:
-        if _by_peer.get(key, {}).get(topic) is subscription:
-            _remove(key, topic)
-        raise
     return subscription
 
 
 async def unsubscribe(peer: Any, topic: str) -> None:
-    """Removes the socket's subscription to `topic`, if it holds one. The last subscription of a
-    topic in this process calls `store.unwatch(topic)`; an exception it raises is logged."""
-    if _remove(id(peer), topic) is not None and topic not in _by_topic:
-        await _sync_watch_logged(topic)
+    """Removes the socket's subscription to `topic`, if it holds one."""
+    _remove(id(peer), topic)
 
 
 def drop_peer(peer: Any) -> None:
-    """Removes every subscription of the socket `peer`. The topics left without subscriptions are
-    unwatched in a background task of the running event loop."""
+    """Removes every subscription of the socket `peer`."""
     key = id(peer)
     _close_installed.discard(key)
     for topic in list(_by_peer.get(key, {})):
         _remove(key, topic)
-        if topic not in _by_topic:
-            _spawn(_sync_watch_logged(topic))
 
 
 def subscriptions(topic: str) -> list[Subscription]:
@@ -255,9 +197,7 @@ async def wait_for_pushes() -> None:
 
 
 def reset_subscriptions() -> None:
-    """Forgets every subscription and watch of this process without calling the store."""
+    """Forgets every subscription of this process."""
     _by_topic.clear()
     _by_peer.clear()
     _close_installed.clear()
-    _watched.clear()
-    _syncing.clear()

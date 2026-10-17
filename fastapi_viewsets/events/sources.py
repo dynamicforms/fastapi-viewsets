@@ -20,7 +20,7 @@ async def publish(topic: str, event: Event) -> tuple[int, int]:
 
     Raises `ValueError` for a topic of neither form; the form is all that is checked. Records the
     event's `event_name`, payload and `event_version` with `store.append`, then carries them to
-    every process that watches the topic with `store.publish`. An exception of `store.publish` is
+    every process whose store is started with `store.publish`. An exception of `store.publish` is
     logged and not raised: the event is recorded, and a frontend learns of it on its next poll.
     """
     validate_topic(topic)
@@ -35,7 +35,7 @@ async def publish(topic: str, event: Event) -> tuple[int, int]:
         await store.publish(topic, rev, prev, name, payload, version)
     except Exception:
         logger.warning(
-            "events: carrying %s rev %s of topic %s to the watching processes failed", name, rev, topic, exc_info=True
+            "events: carrying %s rev %s of topic %s to the processes failed", name, rev, topic, exc_info=True
         )
     return rev, prev
 

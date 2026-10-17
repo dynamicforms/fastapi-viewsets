@@ -2,7 +2,7 @@
 
 ```ts
 import {
-  attachEvents, createEventClient, defineEvent, eventsOf, handleEventStream,
+  attachEvents, createEventClient, DEFAULT_CHECK_INTERVAL_MS, defineEvent, eventsOf, handleEventStream,
   applyChanges, RECORDS_CHANGED,
   DEFAULT_POLL_SETTINGS, jitterMultiplier, ladderInterval, nextDelay, PollLadder,
 } from '@dynamicforms/fastapi-viewsets';
@@ -29,7 +29,11 @@ interface EventClientOptions {
   pollSettings?: PollSettings;
   /** The ladder's jitter draw. */
   draw?: Draw;
+  /** Milliseconds between the check polls over the open peer; `0` sends none. */
+  checkIntervalMs?: number;
 }
+
+const DEFAULT_CHECK_INTERVAL_MS = 60000;
 ```
 
 | Option | Type | Default | Description |
@@ -39,6 +43,7 @@ interface EventClientOptions {
 | `axios` | `EventAxiosLike` | — | An `AxiosInstance`, or the `axios` module. Carries `poll` while there is no open peer. |
 | `pollSettings` | [`PollSettings`](#pollsettings) | `DEFAULT_POLL_SETTINGS` | The constants of the polling ladder. |
 | `draw` | [`Draw`](#draw) | `Math.random` | The jitter draw of the polling ladder. |
+| `checkIntervalMs` | `number` | `DEFAULT_CHECK_INTERVAL_MS` (60000) | The interval of the [check poll](#the-peer), jittered by `pollSettings.jitterFraction` and drawn with `draw`. `0`, a negative and a non-finite value send none. |
 
 The client is registered for its `peer` until [`close()`](#eventclient); `eventsOf(peer)` returns it.
 
@@ -229,10 +234,18 @@ follows, also when a handler of a held push replayed before it ended the followi
 
 | Peer state | The client |
 |------------|------------|
-| open, every followed topic subscribed on its socket | holds the ladder; no poll is sent |
-| open, a topic not subscribed on its socket (a `subscribe` in flight, or one that failed without refusing), or a topic whose gap poll failed without refusing | runs the ladder over the peer |
+| open, every followed topic subscribed on its socket | holds the ladder; sends a check poll once per `checkIntervalMs` |
+| open, a topic not subscribed on its socket (a `subscribe` in flight, or one that failed without refusing), or a topic whose gap poll or check poll failed without refusing or left the topic unanswered | runs the ladder over the peer |
 | `onClose` fired | drops every socket subscription and resumes the ladder on its base rung over axios; without axios it waits for `onReconnect` |
 | `onReconnect` fired | sends `subscribe` for every followed topic, runs the ladder over the peer until every one is answered, then holds it |
+
+A check poll is one `poll` over the open peer of every topic that is subscribed on its socket, holds
+a rev, and has no gap poll in flight, sent while the ladder is held. It closes a gap the next push
+would reveal, when no next push comes: a push the BE lost on its way to the socket. Its answer is
+applied as a rung's. A topic the answer does not answer, and every topic of a check that fails
+without refusing them, start the ladder until a poll answers them; a refusal refuses the topics.
+The check timer runs while the client has a peer and follows a topic; a tick on which the peer is
+not open or the ladder runs sends nothing.
 
 A `subscribe` refused on the new socket refuses the topic. An answer from a socket that has since
 closed is dropped. The peer counts as open while `peer.isOpen` is not `false`; a peer without

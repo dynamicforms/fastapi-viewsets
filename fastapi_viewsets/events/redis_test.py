@@ -48,7 +48,7 @@ async def test_the_keys_and_the_channel_are_under_the_prefix():
         "prev": prev,
         "event": {"name": "ping", "payload": {"n": 1}, "version": 2},
     }
-    assert store.channel("imports:7") == "ev:ch:imports:7"
+    assert store.channel == "ev:events"
 
 
 @pytest.mark.asyncio
@@ -121,7 +121,7 @@ async def test_the_channel_message_carries_the_version_to_the_other_process():
 
 
 @pytest.mark.asyncio
-async def test_a_topic_watched_before_start_is_subscribed_when_the_reader_opens():
+async def test_a_subscription_made_before_start_is_pushed_to_once_the_reader_runs():
     redis = FakeRedis()
     store = RedisEventStore(redis)
     settings.viewsets_event_store = store
@@ -138,20 +138,23 @@ async def test_a_topic_watched_before_start_is_subscribed_when_the_reader_opens(
 
 
 @pytest.mark.asyncio
-async def test_an_unwatched_topic_is_no_longer_read():
+async def test_the_reader_subscribes_one_channel_whatever_the_subscriptions():
     redis = FakeRedis()
     store = RedisEventStore(redis)
     settings.viewsets_event_store = store
     await store.start()
     try:
+        assert list(redis.channels) == ["events:events"]
         peer = FakePeer()
         await subscribe(peer, Context({}), "/a")
-        assert redis.channels["events:ch:/a"]
+        await subscribe(peer, Context({}), "/b")
         await unsubscribe(peer, "/a")
-        assert redis.channels["events:ch:/a"] == []
+        assert list(redis.channels) == ["events:events"]
+        assert redis.channels["events:events"] == [store._pubsub]
         await publish("/a", Ping(n=1))
+        await publish("/b", Ping(n=2))
         await settle()
-        assert peer.pushes == []
+        assert [(payload, headers[":topic"]) for payload, headers in peer.pushes] == [({"n": 2}, "/b")]
     finally:
         await store.stop()
 
@@ -166,7 +169,7 @@ async def test_a_message_that_cannot_be_read_is_logged_and_the_reader_carries_on
         peer = FakePeer()
         await subscribe(peer, Context({}), "/a")
         with caplog.at_level(logging.ERROR, logger="fastapi_viewsets.events.redis"):
-            await redis.publish("events:ch:/a", "not json")
+            await redis.publish("events:events", "not json")
             await settle()
         assert "could not be delivered" in caplog.text
         await publish("/a", Ping(n=3))
@@ -182,12 +185,11 @@ async def test_stop_ends_the_reader_and_closes_its_connection():
     store = RedisEventStore(redis)
     await store.start()
     pubsub = store._pubsub
-    await store.watch("/a")
     assert store.reader_running
     await store.stop()
     assert not store.reader_running
     assert pubsub.closed
-    assert redis.channels["events:ch:/a"] == []
+    assert redis.channels["events:events"] == []
     await store.stop()
 
 
@@ -228,70 +230,53 @@ def test_check_events_accepts_a_memory_store(caplog):
 
 
 @pytest.mark.asyncio
-async def test_watch_returns_once_redis_has_confirmed_the_subscribe():
+async def test_start_returns_once_redis_has_confirmed_the_subscribe():
+    redis = FakeRedis()
+    store = RedisEventStore(redis)
+    redis.pubsub_held = True
+    starting = asyncio.ensure_future(store.start())
+    await asyncio.sleep(0.02)
+    assert not starting.done()
+    assert not store.reader_running
+    redis.opened[0].release()
+    await asyncio.wait_for(starting, 1.0)
+    try:
+        assert store.reader_running
+        assert redis.channels["events:events"] == [store._pubsub]
+    finally:
+        await store.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_raises_and_closes_the_connection_when_the_confirmation_does_not_arrive(monkeypatch):
+    monkeypatch.setattr(redis_module, "_SUBSCRIBE_TIMEOUT", 0.05)
+    redis = FakeRedis()
+    store = RedisEventStore(redis)
+    redis.pubsub_held = True
+    with pytest.raises(asyncio.TimeoutError):
+        await store.start()
+    assert not store.reader_running
+    assert redis.opened[0].closed
+    redis.pubsub_held = False
+    await store.start()
+    try:
+        assert store.reader_running
+    finally:
+        await store.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_reconnect_subscribes_the_events_channel_again():
     redis = FakeRedis()
     store = RedisEventStore(redis)
     settings.viewsets_event_store = store
     await store.start()
     try:
-        store._pubsub.held = True
         peer = FakePeer()
-        subscribing = asyncio.ensure_future(subscribe(peer, Context({}), "/a"))
-        await asyncio.sleep(0.02)
-        assert not subscribing.done()
-        assert redis.channels == {}
-
-        store._pubsub.release()
-        await asyncio.wait_for(subscribing, 1.0)
+        await subscribe(peer, Context({}), "/a")
+        store._pubsub.lose_connection()
         await publish("/a", Ping(n=1))
         await settle()
         assert [payload for payload, _headers in peer.pushes] == [{"n": 1}]
     finally:
         await store.stop()
-
-
-@pytest.mark.asyncio
-async def test_watch_of_a_topic_with_an_unconfirmed_subscribe_waits_for_it():
-    store = RedisEventStore(FakeRedis())
-    await store.start()
-    try:
-        store._pubsub.held = True
-        first = asyncio.ensure_future(store.watch("/a"))
-        await asyncio.sleep(0)
-        second = asyncio.ensure_future(store.watch("/a"))
-        await asyncio.sleep(0.02)
-        assert not first.done()
-        assert not second.done()
-        store._pubsub.release()
-        await asyncio.wait_for(asyncio.gather(first, second), 1.0)
-        await asyncio.wait_for(store.watch("/a"), 0.1)
-    finally:
-        await store.stop()
-
-
-@pytest.mark.asyncio
-async def test_watch_raises_when_the_confirmation_does_not_arrive_in_time(monkeypatch):
-    monkeypatch.setattr(redis_module, "_SUBSCRIBE_TIMEOUT", 0.05)
-    store = RedisEventStore(FakeRedis())
-    await store.start()
-    try:
-        store._pubsub.held = True
-        with pytest.raises(asyncio.TimeoutError):
-            await store.watch("/a")
-        store._pubsub.release()
-        await asyncio.sleep(0.02)
-        await asyncio.wait_for(store.watch("/a"), 0.1)
-    finally:
-        await store.stop()
-
-
-@pytest.mark.asyncio
-async def test_watch_raises_when_the_reader_stops_before_the_confirmation():
-    store = RedisEventStore(FakeRedis())
-    await store.start()
-    store._pubsub.held = True
-    watching = asyncio.ensure_future(store.watch("/a"))
-    await asyncio.sleep(0.01)
-    await store.stop()
-    with pytest.raises(ConnectionError):
-        await watching
