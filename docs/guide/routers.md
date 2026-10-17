@@ -341,7 +341,7 @@ errors (see [Error Codes](./error-codes#executor-outcomes)):
 | The action raises anything else (a Celery `Retry`, `Ignore` or `Reject` included), or a model argument fails validation in the worker | `ActionFailedError` (500, reason `error`); the original error is logged in the worker | `execute()` |
 | The result cannot be serialized, or deserialized by the caller | `ActionFailedError` (500, reason `result`) | — |
 | Soft time limit | `ActionInterruptedError` (504, reason `time_limit`) | `execute()` (`ActionInterruptedError` from `call_next()`) |
-| Hard time limit | `ActionInterruptedError` (504, reason `time_limit`) | `on_transition("interrupted")` |
+| Hard time limit | `ActionInterruptedError` (504, reason `time_limit`) | `on_transition("interrupted")`; in a `gevent` pool also `execute()` (`ActionInterruptedError` from `call_next()`) |
 | `revoke(..., terminate=True)` | `ActionInterruptedError` (503, reason `terminated`) | `on_transition("interrupted")` |
 | The worker process exits | `ActionInterruptedError` (503, reason `lost`) | `on_transition("interrupted")` |
 | Revoked or expired before it started | `ActionDispatchError` (503, reason `revoked` / `expired`) | `on_transition("not_run")` |
@@ -355,6 +355,13 @@ stops it with SIGTERM: the execution unwinds as `SystemExit` through `finally` b
 `execute()` only as far as it gets before the process is killed, so `save_state()` is not
 guaranteed to run. The supervisor process sends the caller its error and then calls
 [`on_transition()`](./command-middleware#transitions-outside-the-execution-middleware-on-transition).
+
+In a `gevent` pool a hard time limit ends the execution's greenlet, not the process. Celery raises
+`gevent.Timeout` in it: the action sees that exception where it runs synchronously and
+`asyncio.CancelledError` where it is suspended at an `await`, `execute()` sees
+`ActionInterruptedError` from `call_next()`, and `finally` blocks and `save_state()` run. The worker
+process then sends the caller its error and calls `on_transition("interrupted")`. The time limit
+interrupts only code that yields to gevent; synchronous code that does not runs on.
 
 Celery's `current_task.retry()` publishes the retry before it raises, so the task runs again while
 its caller has already received `ActionFailedError`; the second run's result is dropped. A
@@ -383,8 +390,9 @@ class ReportViewSet(...):
 
 `settings.default_action_configuration = {TimeLimits: TimeLimits(...)}` sets them for every action.
 An action without a `TimeLimits` entry runs under the worker's own limits (`--soft-time-limit`,
-`--time-limit`). Soft time limits need a pool that implements them (`prefork`). An action executed
-in the FastAPI process has no time limit.
+`--time-limit`). Soft time limits need the `prefork` pool, hard time limits the `prefork` or
+`gevent` pool; the `solo`, `threads` and `eventlet` pools enforce neither. An action executed in the
+FastAPI process has no time limit.
 
 ---
 

@@ -360,17 +360,28 @@ async def executor_started(self) -> None: ...
 ```
 
 Awaited in every process of a `celery_viewset` worker before it uses a middleware there, e.g. to
-create the clients the middleware's `execute()` and `on_transition()` use. A worker process runs
-executions on one event loop and `on_transition()` calls on another, and the hook is awaited once
-on each loop the process uses: in a prefork pool, once in every child before its first execution,
-and once in the supervisor before its first transition. Every entry of
+create the clients the middleware's `execute()` and `on_transition()` use. The hook is awaited once
+on each event loop the process uses, before the loop's first execution or first `on_transition()`
+call. A process runs `on_transition()` calls on a loop of its own, and executions on the loop of
+the thread that runs them:
+
+| Pool | Loops of executions |
+|------|---------------------|
+| `prefork` | one in each child process |
+| `solo` | one in the worker process |
+| `threads` | one in each pool thread |
+| `gevent` | one in the worker process, shared by its greenlets |
+
+In a prefork pool the hook therefore runs once in every child before its first execution, and once
+in the supervisor before its first transition; in a threads pool, once in every pool thread. A
+client bound to an event loop is created in the hook, not once per process. Every entry of
 `settings.viewsets_command_middleware` that defines it is awaited, in list order, on the loop it is
 set up for.
 
 An exception before an execution fails that execution with `ActionFailedError` (reason `executor`),
-and the hook runs again before the next one. An exception before an `on_transition()` call is
-logged. The default does nothing. The hook is not tied to a Celery signal, so it runs the same in
-the `prefork`, `solo`, `threads`, `gevent` and `eventlet` pools.
+and the hook runs again before the loop's next execution. An exception before an `on_transition()`
+call is logged. The default does nothing. The hook is not tied to a Celery signal, so it runs in
+every pool type.
 
 ## Transitions outside the execution: `Middleware.on_transition()`
 
@@ -400,8 +411,11 @@ injects). `ActionTransition` (in `fastapi_viewsets.middleware`) is a frozen data
 | `failed` | The worker's own machinery failed around the execution | Worker process | `ActionFailedError` |
 
 In the worker, `on_transition()` runs after the caller was sent `transition.error`, on an event loop
-of its own on a thread of the process, each call bounded to 5 seconds. An exception it raises, or a
-timeout, is logged and changes nothing.
+of its own on a thread of the process, one transition at a time, each call bounded to 5 seconds. An
+exception it raises, or a timeout, is logged and changes nothing. A worker process that shuts down
+waits up to 10 seconds (`TRANSITION_DRAIN_TIMEOUT`) for the transitions it has not reported yet: on
+Celery's `worker_shutdown` and `worker_process_shutdown`, and at interpreter exit. A process killed
+with SIGKILL reports none of them.
 
 Every other change of state is observed elsewhere:
 
@@ -410,7 +424,7 @@ Every other change of state is observed elsewhere:
 | received | `depends()`, `__call__` |
 | sent to the broker | `on_transition("dispatched")` |
 | could not be sent | `ActionDispatchError` out of `call_next()` in `__call__` |
-| started, returned, raised, soft time limit | `execute()` |
+| started, returned, raised, soft time limit, hard time limit in a `gevent` pool | `execute()` |
 | progress | the application's own channel, e.g. an [event](./events) it publishes |
 | outcome unknown | `ActionOutcomeUnknownError` in `__call__` |
 

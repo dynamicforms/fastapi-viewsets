@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ActionDispatchError` takes a `reason` param: `send`, `serialization`, `unknown_task`,
   `rejected`, `revoked`, `expired`.
 - `Middleware.executor_started()`, awaited in every process of a `celery_viewset` worker before it
-  uses the middleware there, in every pool type.
+  uses the middleware there, once on each event loop the process uses, in every pool type.
 - `Middleware.on_transition(transition)` and `ActionTransition`: a deferred call that was
   dispatched, did not run, was interrupted from outside its execution, or failed in the worker's
   own machinery. The worker's supervisor reports a hard time limit, a termination, a lost process,
@@ -33,7 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking.** No Celery, billiard or kombu exception reaches `Middleware.execute()`, the caller
   or the application. A soft time limit reaches `execute()` as `ActionInterruptedError`, whether
-  the action was running or suspended at an `await`; the caller receives the same error. Any other
+  the action was running or suspended at an `await`; the caller receives the same error. In a
+  `gevent` pool a hard time limit does the same and is reported to `on_transition()`. Any other
   Celery exception the action raises (`Retry`, `Ignore`, `Reject`) becomes `ActionFailedError`.
 - **Breaking.** An error a deferred action raises that is not an `HTTPException` reaches the caller
   as `ActionFailedError` (500, JSON body) instead of a bare `Exception`. A `DfViewSetError` the

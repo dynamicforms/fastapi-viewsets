@@ -45,6 +45,7 @@ dev = [
     "httpx2",
     "redis",
     "celery",
+    "gevent",
     "django",
     "asgiref",
     "PyJWT",

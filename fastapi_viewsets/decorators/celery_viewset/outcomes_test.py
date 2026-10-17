@@ -4,9 +4,12 @@ import asyncio
 import json
 import os
 import signal
+import sys
 import threading
 import time
 
+from collections import OrderedDict
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -255,7 +258,7 @@ class Starting(Middleware):
             raise RuntimeError("not ready")
 
 
-def test_executor_started_runs_once_per_process_on_the_loop_of_the_actions(monkeypatch):
+def test_executor_started_runs_once_on_the_loop_of_the_actions(monkeypatch):
     starting = Starting()
     monkeypatch.setattr(settings, "viewsets_command_middleware", [starting])
     loops = []
@@ -268,6 +271,39 @@ def test_executor_started_runs_once_per_process_on_the_loop_of_the_actions(monke
     tasks["jobs.run"](**CALL)
     assert starting.loops == loops[:1]
     assert len(loops) == 2
+
+
+def test_executor_started_runs_once_on_each_threads_loop(monkeypatch):
+    starting = Starting()
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [starting])
+    loops = []
+
+    async def body():
+        loops.append(asyncio.get_running_loop())
+
+    tasks, _redis = _worker(_state_recording_viewset(body, []))
+    for _ in range(2):
+        for _ in range(2):
+            thread = threading.Thread(target=lambda: tasks["jobs.run"](**CALL))
+            thread.start()
+            thread.join()
+    assert len(loops) == 4
+    assert len(set(loops)) == 4
+    assert starting.loops == loops
+
+
+def test_executor_started_runs_again_in_a_forked_process(monkeypatch):
+    starting = Starting()
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [starting])
+
+    async def body():
+        return None
+
+    tasks, _redis = _worker(_state_recording_viewset(body, []))
+    tasks["jobs.run"](**CALL)
+    monkeypatch.setattr(server.os, "getpid", lambda: -1)
+    tasks["jobs.run"](**CALL)
+    assert len(starting.loops) == 2
 
 
 def test_executor_started_that_fails_fails_the_execution_and_runs_again(monkeypatch):
@@ -298,3 +334,76 @@ def test_an_http_exception_without_a_code_is_pushed_with_its_status():
     payload = _pushed(redis_client)
     assert payload["error"] == {"status_code": 409, "detail": "busy", "headers": {"Retry-After": "1"}}
     assert (payload["http_status_code"], payload["http_detail"]) == (409, "busy")
+
+
+# ---------------------------------------------------------------------------
+# the gevent pool's hard time limit
+# ---------------------------------------------------------------------------
+
+
+class Timeout(BaseException):
+    """Stands in for `gevent.Timeout`, which the gevent pool raises in the execution's greenlet."""
+
+
+@pytest.fixture
+def gevent_timeout(monkeypatch):
+    monkeypatch.setitem(sys.modules, "gevent", SimpleNamespace(Timeout=Timeout))
+    monkeypatch.setattr(server, "_reported", OrderedDict())
+    submitted = []
+    monkeypatch.setattr(server, "_submit_transition", submitted.append)
+    return submitted
+
+
+def _assert_reported_as_time_limit(redis_client, submitted):
+    payload = _pushed(redis_client)
+    assert payload["error"]["class"] == "ActionInterruptedError"
+    assert payload["error"]["params"] == {"task": "jobs.run", "reason": "time_limit"}
+    assert [(t.kind, t.action, t.error.params["reason"]) for t in submitted] == [("interrupted", "run", "time_limit")]
+
+
+def test_the_gevent_hard_limit_while_running_is_interrupted_and_reaches_the_pool(events, gevent_timeout):
+    timeout = Timeout()
+
+    async def body():
+        raise timeout
+
+    saved = []
+    tasks, redis_client = _worker(_state_recording_viewset(body, saved))
+    with pytest.raises(Timeout) as raised:
+        tasks["jobs.run"](**CALL)
+
+    assert raised.value is timeout
+    assert saved == [True]
+    assert [(kind, type(error)) for kind, error in events] == [("execute", ActionInterruptedError)]
+    _assert_reported_as_time_limit(redis_client, gevent_timeout)
+
+
+def test_the_gevent_hard_limit_while_suspended_is_interrupted_and_reaches_the_pool(events, gevent_timeout):
+    def raise_timeout(_signum, _frame):
+        raise Timeout
+
+    previous = signal.signal(signal.SIGUSR2, raise_timeout)
+    timer = threading.Timer(0.05, os.kill, (os.getpid(), signal.SIGUSR2))
+    seen = []
+
+    async def body():
+        try:
+            await asyncio.sleep(5)
+        except BaseException as error:
+            seen.append(error)
+            raise
+
+    saved = []
+    tasks, redis_client = _worker(_state_recording_viewset(body, saved))
+    timer.start()
+    try:
+        with pytest.raises(Timeout):
+            tasks["jobs.run"](**CALL)
+    finally:
+        timer.cancel()
+        signal.signal(signal.SIGUSR2, previous)
+
+    assert isinstance(seen[0], asyncio.CancelledError)
+    assert saved == [True]
+    assert [(kind, type(error)) for kind, error in events] == [("execute", ActionInterruptedError)]
+    _assert_reported_as_time_limit(redis_client, gevent_timeout)

@@ -253,19 +253,22 @@ class Middleware(ABC):
         action itself sees `asyncio.CancelledError` in the latter case. An execution the executor
         ends from outside (a hard time limit, a termination, a lost process) ends its process:
         `call_next()` raises `SystemExit` where the process is stopped with SIGTERM and has time to
-        unwind, and nothing at all where it is killed. `on_transition()` reports it either way.
+        unwind, and nothing at all where it is killed. `on_transition()` reports it either way. In a
+        gevent pool a hard time limit ends the execution only and reaches `call_next()` as
+        `ActionInterruptedError`.
         """
         return await call_next()
 
     async def executor_started(self) -> None:
         """
         Optional hook for setting up an executor's process (`celery_viewset_server`), e.g. the
-        clients a middleware uses there. A process runs executions on one event loop and
-        `on_transition()` calls on another; the hook is awaited once on each loop the process
-        uses, before its first execution or its first `on_transition()` call. Every entry of
+        clients a middleware uses there. A process runs `on_transition()` calls on an event loop of
+        their own and executions on the loop of the thread that runs them (one loop per pool thread
+        in a threads pool); the hook is awaited once on each loop the process uses, before the
+        loop's first execution or its first `on_transition()` call. Every entry of
         `settings.viewsets_command_middleware` that defines it is awaited, in list order. An
         exception before an execution fails that execution with `ActionFailedError` (reason
-        `executor`) and the hook runs again before the next one; an exception before an
+        `executor`) and the hook runs again before the loop's next one; an exception before an
         `on_transition()` call is logged. The default does nothing.
         """
         return None

@@ -52,7 +52,9 @@ def test_celery_viewset_server_decorator_registration():
 def test_celery_viewset_server_registers_tasks_with_ignore_result():
     """celery_viewset_client never reads Celery's own result backend (it awaits the redis_client
     queue in client.py instead) - ignore_result=True must be set so Celery does not also try to
-    JSON-serialize/store the raw return value (which may be a Pydantic model)."""
+    JSON-serialize/store the raw return value (which may be a Pydantic model). acks_late=False and
+    reject_on_worker_lost=False override the application's settings, so a call is never delivered a
+    second time; store_errors_even_if_ignored=False stores no failure in the unused backend."""
     celery_app = MagicMock()
     task_decorator = MagicMock()
     celery_app.task.return_value = task_decorator
@@ -64,7 +66,17 @@ def test_celery_viewset_server_registers_tasks_with_ignore_result():
 
     calls = celery_app.task.call_args_list
     assert calls
-    assert all(call.kwargs.get("ignore_result") is True for call in calls)
+    for call in calls:
+        options = {
+            name: call.kwargs.get(name)
+            for name in ("ignore_result", "acks_late", "reject_on_worker_lost", "store_errors_even_if_ignored")
+        }
+        assert options == {
+            "ignore_result": True,
+            "acks_late": False,
+            "reject_on_worker_lost": False,
+            "store_errors_even_if_ignored": False,
+        }
 
 
 def test_celery_viewset_server_execution():

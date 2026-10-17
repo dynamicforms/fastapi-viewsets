@@ -51,7 +51,7 @@ that fixup rather than reimplementing it — nothing on this library's side is i
 Setup a command middleware needs in each worker process (a client it creates, a connection it
 opens) goes in
 [`Middleware.executor_started()`](./command-middleware#setting-up-the-worker-middleware-executor-started),
-which runs in every pool type before the process's first execution, rather than in a handler of
+which runs in every pool type before the first execution on each of the process's event loops, rather than in a handler of
 Celery's `worker_process_init`, which only the `prefork` and `solo` pools send.
 
 ## `autodiscover_tasks` for non-conventional task locations

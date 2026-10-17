@@ -348,9 +348,26 @@ that may never answer.
 
 ### `on_transition()` in the worker is bounded by a constant, not a setting
 
-Each call runs on the supervisor's own transition loop with a 5 second bound
+Each call runs on the process's own transition loop with a 5 second bound
 (`server.TRANSITION_LISTENER_TIMEOUT`). A listener that needs longer belongs on a queue of its own;
 a setting would invite making the supervisor wait.
+
+### The gevent pool's hard time limit is recognised by class
+
+Under the gevent pool, any `gevent.Timeout` that leaves the action, a `call_next()` or the execution
+is taken for the pool's hard time limit: it reaches `execute()` as `ActionInterruptedError`, the
+caller receives reason `time_limit`, and the `gevent.Timeout` is re-raised to Celery, which handles
+the time limit only when that exception reaches it. The pool's `Timeout` instance is local to
+Celery's `apply_timeout` and cannot be told apart from one the application raises itself, so a
+middleware's own `gevent.Timeout` around `call_next()` arrives translated as well. The action body
+sees the `gevent.Timeout` itself where it is running.
+
+### Transitions pending at shutdown are awaited for a bounded time
+
+A process waits up to `server.TRANSITION_DRAIN_TIMEOUT` (10 s) for the transitions it has not
+reported yet, on Celery's `worker_shutdown` (warm shutdown) and `worker_process_shutdown` (a pool
+child, which exits without running `atexit`), and at interpreter exit (cold shutdown, which sends
+neither signal). A longer wait would hold the worker's shutdown on a slow listener.
 
 ### A worker process shutting down is not reported
 

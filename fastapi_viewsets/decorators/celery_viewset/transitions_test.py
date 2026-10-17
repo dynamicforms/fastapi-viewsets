@@ -1,6 +1,9 @@
 """What the worker's supervisor reports for a call it ends, or never runs, outside the execution."""
 
+import asyncio
+import concurrent.futures
 import json
+import threading
 import uuid
 
 from types import SimpleNamespace
@@ -212,6 +215,41 @@ def test_the_receivers_are_connected_to_celerys_signals():
     assert server._receivers_connected
     assert any(receiver is server._on_task_failure for _key, receiver in _live(signals.task_failure))
     assert any(receiver is server._on_task_unknown for _key, receiver in _live(signals.task_unknown))
+
+
+@pytest.mark.usefixtures("jobs")
+def test_the_transitions_not_reported_yet_are_awaited_when_the_process_shuts_down(log, monkeypatch):
+    from celery import signals
+
+    release = threading.Event()
+
+    class Slow(Listener):
+        async def on_transition(self, transition):
+            await asyncio.get_running_loop().run_in_executor(None, release.wait, 5)
+            await super().on_transition(transition)
+
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [Slow(log)])
+    future = server._on_task_internal_error(sender=TASK, kwargs=_kwargs())
+    threading.Timer(0.1, release.set).start()
+    server._drain_transitions()
+    assert future.done()
+    assert len(_transitions(log)) == 2
+    for celery_signal in (signals.worker_shutdown, signals.worker_process_shutdown):
+        assert any(receiver is server._drain_transitions for _key, receiver in _live(celery_signal))
+
+
+def test_draining_without_transitions_returns_at_once(monkeypatch):
+    monkeypatch.setattr(server, "_transition_loop", None)
+    server._drain_transitions()
+
+
+def test_a_transition_not_reported_in_time_is_logged(monkeypatch, caplog):
+    monkeypatch.setattr(server, "TRANSITION_DRAIN_TIMEOUT", 0.01)
+    transition_loop = server._TransitionLoop()
+    monkeypatch.setattr(server, "_transition_loop", transition_loop)
+    monkeypatch.setattr(transition_loop, "pending", lambda: [concurrent.futures.Future()])
+    server._drain_transitions()
+    assert "not reported" in caplog.text
 
 
 def _live(celery_signal):

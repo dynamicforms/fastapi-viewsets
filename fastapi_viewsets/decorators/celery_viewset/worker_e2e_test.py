@@ -1,10 +1,11 @@
 """
-`celery_viewset` against a real prefork Celery worker and the Redis named by
-FASTAPI_VIEWSETS_TEST_REDIS_URL (skipped without it), called over HTTP: what a caller receives, and
-what `execute()`, `executor_started()` and `on_transition()` observe, when the executor interrupts
-an execution or never runs it.
+`celery_viewset` against a real Celery worker (prefork, and gevent where gevent is installed) and
+the Redis named by FASTAPI_VIEWSETS_TEST_REDIS_URL (skipped without it), called over HTTP: what a
+caller receives, and what `execute()`, `executor_started()` and `on_transition()` observe, when the
+executor interrupts an execution or never runs it.
 """
 
+import importlib.util
 import json
 import os
 import pathlib
@@ -56,6 +57,9 @@ WORKER_MODULE = textwrap.dedent(
     app.conf.worker_prefetch_multiplier = 1
     app.conf.worker_lost_wait = 1.0
     app.conf.broker_connection_retry_on_startup = True
+    # the tasks' own acks_late=False and reject_on_worker_lost=False override it
+    app.conf.task_acks_late = True
+    app.conf.task_reject_on_worker_lost = True
 
 
     class Probe(Middleware):
@@ -63,7 +67,7 @@ WORKER_MODULE = textwrap.dedent(
             return await call_next()
 
         async def executor_started(self):
-            probe.rpush(f"{KEY}:started", os.getpid())
+            probe.rpush(f"{KEY}:started", json.dumps([os.getpid(), id(asyncio.get_running_loop())]))
 
         async def execute(self, execution, call_next):
             try:
@@ -99,6 +103,11 @@ WORKER_MODULE = textwrap.dedent(
             time.sleep(seconds)
             return "done"
 
+        @__router.post("/hard_suspended")
+        async def hard_suspended(self, seconds: float) -> str:
+            await asyncio.sleep(seconds)
+            return "done"
+
         @__router.post("/long")
         async def long(self, seconds: float) -> str:
             await asyncio.sleep(seconds)
@@ -126,9 +135,30 @@ def redis_url() -> str:
     return url
 
 
+POOLS = {"prefork": ["-P", "prefork", "-c", "1"], "gevent": ["-P", "gevent", "-c", "1"]}
+
+
 @pytest.fixture(scope="module")
-def key() -> str:
-    return f"e2e-{uuid.uuid4().hex[:8]}"
+def pool(request) -> str:
+    return getattr(request, "param", "prefork")
+
+
+in_gevent_pool = pytest.mark.parametrize(
+    "pool",
+    [
+        pytest.param(
+            "gevent",
+            marks=pytest.mark.skipif(importlib.util.find_spec("gevent") is None, reason="gevent is not installed"),
+        )
+    ],
+    indirect=True,
+    scope="module",
+)
+
+
+@pytest.fixture(scope="module")
+def key(pool) -> str:
+    return f"e2e-{pool}-{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture(scope="module")
@@ -152,16 +182,16 @@ def celery_app(redis_url, key):
 
 
 @pytest.fixture(scope="module")
-def worker(tmp_path_factory, redis_url, key, celery_app):
+def worker(tmp_path_factory, redis_url, key, celery_app, pool):
     directory = tmp_path_factory.mktemp("worker")
     (directory / "e2e_worker.py").write_text(WORKER_MODULE)
     env = {
         **os.environ,
         "E2E_REDIS_URL": redis_url,
         "E2E_KEY": key,
-        "PYTHONPATH": os.pathsep.join([str(REPOSITORY), str(directory)]),
+        "PYTHONPATH": os.pathsep.join(filter(None, [str(REPOSITORY), str(directory), os.environ.get("PYTHONPATH")])),
     }
-    command = [sys.executable, "-m", "celery", "-A", "e2e_worker", "worker", "-P", "prefork", "-c", "1"]
+    command = [sys.executable, "-m", "celery", "-A", "e2e_worker", "worker", *POOLS[pool]]
     log = (directory / "worker.log").open("w")
     process = subprocess.Popen(  # noqa: S603 - the interpreter running the tests
         [*command, "--loglevel=INFO", "-n", f"{key}@%h"], cwd=directory, env=env, stdout=log, stderr=subprocess.STDOUT
@@ -207,6 +237,10 @@ def client(worker, redis_url, key, celery_app):
         @action_configuration({TimeLimits: TimeLimits(hard=1)})
         @__router.post("/hard")
         async def hard(self, seconds: float) -> str: ...
+
+        @action_configuration({TimeLimits: TimeLimits(hard=1)})
+        @__router.post("/hard_suspended")
+        async def hard_suspended(self, seconds: float) -> str: ...
 
         @__router.post("/long")
         async def long(self, seconds: float) -> str: ...
@@ -321,8 +355,28 @@ def test_an_unknown_task(client, probe, key):
 
 def test_executor_started_runs_once_in_each_process(client, probe, key, worker):
     assert client.post("/jobs/quick").json() == "quick"
-    started = [int(pid) for pid in probe.lrange(f"{key}:started", 0, -1)]
+    started = [pid for pid, _loop in _entries(probe, key, "started")]
     assert len(started) == len(set(started))
     assert worker.pid in started
     # the supervisor, the first child, and a new child after each child the executor ended
     assert len(started) >= 3
+
+
+# The gevent pool raises its hard time limit, `gevent.Timeout`, inside the execution's greenlet.
+
+
+@in_gevent_pool
+@pytest.mark.parametrize("action", ["hard", "hard_suspended"])
+def test_a_hard_time_limit_in_the_gevent_pool(client, probe, key, action):
+    assert _error(client.post(f"/jobs/{action}", params={"seconds": 5})) == (504, "action_interrupted", "time_limit")
+    assert [action, "ActionInterruptedError", "time_limit"] in _entries(probe, key, "execute")
+    assert _eventually(lambda: ["interrupted", action, "time_limit"] in _entries(probe, key, "transitions"))
+    assert client.post("/jobs/quick").json() == "quick"
+
+
+@in_gevent_pool
+def test_executor_started_runs_once_on_each_loop_of_the_gevent_pool(client, probe, key, worker):
+    assert client.post("/jobs/quick").json() == "quick"
+    started = [tuple(entry) for entry in _entries(probe, key, "started")]
+    assert {pid for pid, _loop in started} == {worker.pid}
+    assert len(started) == len(set(started))
