@@ -52,8 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A muxws proxy whose `peer` is a function called it once for its lifetime. It calls it again after
   the peer closed for good, and after the function threw or its promise rejected.
 - A refused `subscribe` of a topic the socket held left the old subscription in place; it removes
-  it for a status from 400 to 499 other than 429, and keeps it for a 429 or 5xx. A poll over muxws that refuses a topic with a status from 400 to 499 other than 429 removes the
-  socket's subscription to it; a 429 or a status of 500 or above keeps it.
+  it for a status from 400 to 499 other than 429, and keeps it for a 429 or 5xx. A poll over muxws
+  that refuses a topic with a status from 400 to 499 other than 429 removes the socket's subscription
+  to it; a 429 or a status of 500 or above keeps it.
 - `route_viewset` on a subclass of a routed class reused the parent's endpoints, which then carried
   the subclass as `__viewset_class__`; the subclass gets endpoints of its own.
 - The muxws endpoint examples check `Origin` before `accept()`.
