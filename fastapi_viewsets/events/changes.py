@@ -163,7 +163,7 @@ class ChangeEvents(Middleware):
                 context.set(TOPIC_CONTEXT_KEY, topic)
             cls = viewset if isinstance(viewset, type) else type(viewset)
             scope = scope_of(cls)
-            if scope is not None and context._action_name in _OPS:
+            if scope is not None and context.action_name in _OPS:
                 options = self.options_for(context)
                 if options is not None and "topic" not in options:
                     context.set(SCOPE_CONTEXT_KEY, _Deferred(lambda: _scope_entry(scope, request, context)))

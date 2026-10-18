@@ -74,6 +74,14 @@ await anything. Django hit the exact same wall with async views and added `reque
 explicit async accessor rather than trying to make `request.user` transparently async - `context`
 follows the same pattern: one explicit `await`, and from then on you're holding the real object.
 
+### `context.action_name`
+
+`context.action_name` is the name of the action the context represents (`"create"`, `"list_items"`,
+the method name of a custom endpoint), the name `configuration_for()` resolves `ByAction` values
+against; `None` for a context built without one. It is a read-only property and is not awaited. As
+an attribute it takes precedence over a context value named `action_name`; `context["action_name"]`
+reads that value.
+
 ### Custom endpoints
 
 Hand-written `__router` endpoints (see [Custom Endpoints](./custom-endpoints)) can opt into the

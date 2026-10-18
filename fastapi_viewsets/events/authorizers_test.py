@@ -242,7 +242,7 @@ async def test_viewset_topics_resolves_the_action_configuration_of_the_viewset()
     seen = []
 
     async def admin_only(_request, cls, context):
-        seen.append((cls, context._action_name))
+        seen.append((cls, context.action_name))
         return await context.user == "admin"
 
     router, cls = music_router()

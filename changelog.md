@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fastapi_viewsets.mux_ws.origin_allowed(connection, allowed_origins=None)`, the `Origin` check of
   a WebSocket endpoint before `accept()`.
 - `fastapi_viewsets.routing.GATE_RUN_SCOPE_KEY`.
+- `Context.action_name`, the read-only name of the action a context represents.
 - FE: `WatchOptions.topic` and `ProxyBaseOptions.topic`, the client topic `watch()` subscribes;
   `EventClientOptions.headers`, the headers of the event client's calls; `EventClient.refresh(topic?)`;
   `EventMeta.scope`; the scope rules of the event client (held scope per topic, `scopes` in every

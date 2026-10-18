@@ -259,6 +259,14 @@ class Context:
     def __len__(self) -> int:
         return len(self._data)
 
+    @property
+    def action_name(self) -> "str | None":
+        """The name of the action this context represents, the name `configuration_for` resolves
+        `ByAction` values against; None for a context built without one. Read-only. As an attribute
+        it takes precedence over a context value named `action_name`, which `context["action_name"]`
+        reads."""
+        return self._action_name
+
     def raw(self) -> dict[str, Any]:
         """The underlying plain dict - for serialize_context()/deserialize_context() to walk."""
         return self._data

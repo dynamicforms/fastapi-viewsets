@@ -533,6 +533,20 @@ async def test_clone_for_command_defaults_to_the_same_action_name():
     assert clone.configuration_for("perm") == "read"
 
 
+def test_action_name_is_a_read_only_property_ahead_of_a_context_value_of_that_name():
+    ctx = Context({"action_name": "value"}, action_name="create")
+    assert ctx.action_name == "create"
+    assert Context({}).action_name is None
+    with pytest.raises(AttributeError):
+        ctx.action_name = "update"
+
+
+@pytest.mark.asyncio
+async def test_a_context_value_named_action_name_is_read_by_key():
+    assert await Context({"action_name": "value"}, action_name="create")["action_name"] == "value"
+    assert (await Context({}, action_name="create").clone_for_command("update")).action_name == "update"
+
+
 # ---------------------------------------------------------------------------
 # build_context
 # ---------------------------------------------------------------------------
