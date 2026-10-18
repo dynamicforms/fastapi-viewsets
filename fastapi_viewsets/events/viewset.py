@@ -170,8 +170,9 @@ class EventsViewSet:
         a topic of neither form, 403 `event_topic_refused`, or the status of the authorizer's
         `HTTPException`, for a topic the authorizers do not admit, 403 `event_scope_missing` for a
         scoped topic whose resolver answers None, 409 `event_subscriptions_exceeded` for a socket
-        that already holds `settings.viewsets_event_max_subscriptions` topics. A refused subscribe
-        removes the socket's subscription to the topic, if it holds one. A command served by
+        that already holds `settings.viewsets_event_max_subscriptions` topics. A subscribe refused
+        with a status from 400 to 499 other than 429 removes the socket's subscription to the topic,
+        if it holds one; any other error, a 429 or 5xx included, leaves it as it is. A command served by
         `process_command` without `peer=` raises `RuntimeError`.
         """
         peer = _peer_of(request, "subscribe")
@@ -181,8 +182,9 @@ class EventsViewSet:
         try:
             await authorize_topic(request, context, topic)
             resolved = await resolve_topic(request, topic)
-        except Exception:
-            await delivery.unsubscribe(peer, topic)
+        except Exception as error:
+            if delivery._is_refusal(error):
+                await delivery.unsubscribe(peer, topic)
             raise
         reauthorize = _reauthorizer(request, topic) if resolved.scope is not None else None
         await delivery.subscribe(

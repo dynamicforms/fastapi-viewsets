@@ -325,7 +325,8 @@ A WebSocket authenticated by a cookie has no CSRF protection; the endpoint check
    the `HTTPException` an authorizer raised;
 4. resolves the store topic: the topic itself, or for a [scoped](#scoped-topics) topic
    `@{name}:{key}` from the gate run; a resolver that answers `None` is 403 `event_scope_missing`;
-   a refusal of step 3 or 4 removes the socket's subscription to the topic, if it holds one;
+   a refusal of step 3 or 4 with a status from 400 to 499 other than 429 removes the socket's
+   subscription to the topic, if it holds one; a 429 or 5xx leaves it as it is;
 5. subscribes the socket to the store topic; a socket that already holds
    `settings.viewsets_event_max_subscriptions` other topics (default `256`) is 409
    `event_subscriptions_exceeded`;

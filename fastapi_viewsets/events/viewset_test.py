@@ -171,6 +171,25 @@ async def test_subscribe_refuses_a_topic_no_authorizer_admits(application):
     assert topics_of(peer) == []
 
 
+@pytest.mark.parametrize(("status", "kept"), [(429, True), (503, True), (403, False), (404, False)])
+@pytest.mark.asyncio
+async def test_a_failed_subscribe_removes_the_held_subscription_only_on_a_refusal(application, status, kept):
+    failing = False
+
+    async def flaky(_request, _context, _topic):
+        if failing:
+            raise HTTPException(status_code=status)
+        return True
+
+    settings.viewsets_event_authorizers = [flaky]
+    peer = FakePeer()
+    assert (await application.command("/events/subscribe", {"topic": "/api/music"}, peer)).status == 200
+
+    failing = True
+    assert (await application.command("/events/subscribe", {"topic": "/api/music"}, peer)).status == status
+    assert topics_of(peer) == (["/api/music"] if kept else [])
+
+
 @pytest.mark.asyncio
 async def test_unsubscribe_answers_204_also_for_a_topic_not_held(application):
     settings.viewsets_event_authorizers = [allow_all]
