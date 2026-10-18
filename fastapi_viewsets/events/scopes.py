@@ -13,9 +13,10 @@ A client subscribes to and polls a viewset's routed base path, as for any viewse
 that carries `@event_scope` the server stores and delivers the topic's events under the store topic
 `@{scope.name}:{key}`, where `key` is what the scope's resolver answers: on a subscribe and a poll,
 in a gate run of the subscribing request (everything a `GET` of the viewset's gate action by that
-caller runs before the action executes); on a write, in the call that writes. Every routed path of the
-class and of its subclasses whose resolver answers the same key shares one store topic, and a
-subscriber of another key never receives its events.
+caller runs before the action executes); on a write, in the call that writes, for a
+`celery_viewset` action a request called in the web process before the dispatch. Every routed path
+of the class and of its subclasses whose resolver answers the same key shares one store topic, and
+a subscriber of another key never receives its events.
 
 The resolver is the scope's authorization point: it answers a key only for a scope the caller may
 read, and raises `HTTPException` or answers None otherwise. It reads a value a check in the gate run
@@ -56,10 +57,12 @@ caller without one. An `HTTPException` it raises refuses the caller with that ex
 """
 
 SCOPE_CONTEXT_KEY = "fastapi_viewsets.events.scope"
-"""The context key under which `ChangeEvents.__call__` stores the scope of a write call of a class
-with `@event_scope`, in the web process: an awaitable resolved after the whole command chain, which
-answers `{"name": str, "key": str}`, or None for a key of None. The worker of a `celery_viewset`
-action reads the resolved value from the context it is handed."""
+"""The context key under which `ChangeEvents.__call__` stores the scope of a call of a class with
+`@event_scope`, in the web process, for every action but a write action configured `False` or with
+a `topic`: an awaitable resolved after the whole command chain, which answers
+`{"name": str, "key": str}`, or None for a key of None. `celery_viewset_client` resolves it before
+the dispatch; the worker reads the resolved value from the context it is handed and does not call
+the resolver, in `ChangeEvents.execute()` and in `write_topic()` alike."""
 
 _GATE_CACHE_SCOPE_KEY = "fastapi_viewsets.events.gate_cache"
 

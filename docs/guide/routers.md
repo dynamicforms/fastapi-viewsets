@@ -326,7 +326,7 @@ execution as its `parent`. A call made outside any call carries an empty context
 
 A call whose arguments cannot be serialized raises `ActionDispatchError` (503,
 `action_dispatch_failed`, reason `serialization`), and a call whose task cannot be sent raises it with
-reason `send`; the error that prevented the dispatch is its `__cause__`. The scope key of a write
+reason `send`; the error that prevented the dispatch is its `__cause__`. The scope key of a call
 of a [scoped class](./events#scoped-classes) is resolved before the arguments are serialized; an
 exception of its resolver propagates unchanged and no task is sent.
 

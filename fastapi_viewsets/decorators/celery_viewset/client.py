@@ -120,7 +120,7 @@ def _patch_method(
     `current_call()`; a `context` the caller passes replaces the call's. The action's `TimeLimits`
     configuration is sent as the task's time limits. Arguments that cannot be serialized raise
     `ActionDispatchError` (reason `serialization`), a send that fails raises it with reason `send`.
-    A deferred context value (`ChangeEvents`'s scope of a write) is computed before the arguments
+    A deferred context value (`ChangeEvents`'s scope of a call) is computed before the arguments
     are serialized; its exception propagates unchanged and nothing is sent.
     Once the task is sent, `Middleware.on_transition()` of the action's effective middlewares
     receives `dispatched`. The action's name joins the class's `DEFERRED_ACTIONS_ATTRIBUTE`."""

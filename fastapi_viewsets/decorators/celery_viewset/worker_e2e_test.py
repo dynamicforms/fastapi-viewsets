@@ -2,8 +2,8 @@
 `celery_viewset` against a real Celery worker (prefork, and gevent where gevent is installed) and
 the Redis named by FASTAPI_VIEWSETS_TEST_REDIS_URL (skipped without it), called over HTTP: what a
 caller receives, and what `execute()`, `executor_started()` and `on_transition()` observe, when the
-executor interrupts an execution or never runs it; and the event a write of a scoped class publishes
-from the worker.
+executor interrupts an execution or never runs it; and the events a standard and a custom write of
+a scoped class publish from the worker.
 """
 
 import asyncio
@@ -45,11 +45,12 @@ WORKER_MODULE = textwrap.dedent(
     import redis.asyncio
 
     from celery import Celery
-    from fastapi import APIRouter
+    from fastapi import APIRouter, Request
 
     from fastapi_viewsets.conf import settings
+    from fastapi_viewsets.context import Context
     from fastapi_viewsets.decorators import celery_viewset_server
-    from fastapi_viewsets.events import ChangeEvents, event_scope
+    from fastapi_viewsets.events import Change, ChangeEvents, event_scope, publish, RecordsChanged, write_topic
     from fastapi_viewsets.events.redis import RedisEventStore
     from fastapi_viewsets.middleware import Middleware
 
@@ -147,6 +148,11 @@ WORKER_MODULE = textwrap.dedent(
         @__router.post("")
         async def create(self, title: str) -> dict:
             return {"id": 7, "title": title}
+
+        @__router.post("/{pk}/archive")
+        async def archive(self, request: Request, context: Context, pk: int) -> None:
+            topic = await write_topic(self, request, context)
+            await publish(topic, RecordsChanged(op="deleted", changes=[Change(pk=pk)]))
 
 
     celery_viewset_server(app, f"{KEY}-things", redis_client=redis.Redis.from_url(URL))(Things)
@@ -432,7 +438,7 @@ def test_a_process_exit_in_the_solo_pool(client, probe, key, worker):
     worker.wait(timeout=15)
 
 
-def test_a_write_of_a_scoped_class_publishes_from_the_worker_to_a_web_process_subscriber(
+def test_writes_of_a_scoped_class_publish_from_the_worker_to_a_web_process_subscriber(
     worker, redis_url, key, celery_app, probe, monkeypatch
 ):
     import redis.asyncio
@@ -454,6 +460,9 @@ def test_a_write_of_a_scoped_class_publishes_from_the_worker_to_a_web_process_su
 
         @__router.post("")
         async def create(self, title: str) -> dict: ...
+
+        @__router.post("/{pk}/archive")
+        async def archive(self, pk: int) -> None: ...
 
     reader_client = redis.asyncio.Redis.from_url(redis_url)
 
@@ -481,8 +490,10 @@ def test_a_write_of_a_scoped_class_publishes_from_the_worker_to_a_web_process_su
             await subscribe(stranger, Context({}), "/things", store_topic=f"@things-{key}:8", scope="8")
             response = await asyncio.to_thread(client.post, "/things", params={"title": "x"}, headers={"x-org": "7"})
             assert response.json() == {"id": 7, "title": "x"}
+            response = await asyncio.to_thread(client.post, "/things/3/archive", headers={"x-org": "7"})
+            assert response.status_code == 200
             deadline = time.monotonic() + 10
-            while not member.pushes and time.monotonic() < deadline:
+            while len(member.pushes) < 2 and time.monotonic() < deadline:
                 await asyncio.sleep(0.05)
             return member, stranger
         finally:
@@ -491,10 +502,12 @@ def test_a_write_of_a_scoped_class_publishes_from_the_worker_to_a_web_process_su
 
     with TestClient(app) as client:
         member, stranger = asyncio.run(scenario(client))
-    [(payload, headers)] = member.pushes
-    assert payload == {"op": "created", "changes": [{"pk": 7}]}
-    assert (headers[":topic"], headers[":scope"]) == ("/things", "7")
+    assert [payload for payload, _headers in member.pushes] == [
+        {"op": "created", "changes": [{"pk": 7}]},
+        {"op": "deleted", "changes": [{"pk": 3}]},
+    ]
+    assert [(headers[":topic"], headers[":scope"]) for _payload, headers in member.pushes] == [("/things", "7")] * 2
     assert stranger.pushes == []
-    assert [entry for entry in _entries(probe, key, "execute") if entry[0] == "create"] == []
+    assert [entry for entry in _entries(probe, key, "execute") if entry[0] in ("create", "archive")] == []
     for stored in probe.scan_iter(match=f"{key}:events:*"):
         probe.delete(stored)

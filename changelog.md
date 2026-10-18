@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   events under the store topic `@{name}:{key}`, the key resolved by the server from the request: on
   `subscribe` and `poll` in a gate run of the subscribing request (route dependencies, context
   processors, `depends()` and `__call__` of the middleware chain of the gate action, then the
-  resolver), on a write by `ChangeEvents`, after the whole command chain (before the dispatch of a
-  `celery_viewset` action, whose task carries the key). One class and its subclasses on several routes (a header
+  resolver), on a write by `ChangeEvents`, after the whole command chain (before the dispatch of
+  every `celery_viewset` action, custom endpoints included, whose task carries the key; the worker,
+  `write_topic()` included, does not call the resolver). One class and its subclasses on several routes (a header
   route and a path-parameter route) share the store topic of a key; a subscriber of another key
   receives nothing. New in `fastapi_viewsets.events`: `EventScope`, `ResolvedTopic`, `ScopeKey`,
   `ScopeResolver`, `GATE_RUN_SCOPE_KEY`, `SCOPE_CONTEXT_KEY`, `event_scope`, `scope_of`,

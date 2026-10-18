@@ -27,7 +27,7 @@ from ..mux_ws.registry import reset_registry
 from ..mux_ws.server import process_command
 from ..mux_ws.server_test import FakeStream
 from .authorizers import find_viewset
-from .changes import Change, ChangeEvents, RecordsChanged, routed_base_path, TOPIC_CONTEXT_KEY
+from .changes import Change, ChangeEvents, RecordsChanged, routed_base_path, TOPIC_CONTEXT_KEY, write_topic
 from .event import Event
 from .scopes import event_scope, reset_event_scopes, SCOPE_CONTEXT_KEY
 from .sources import publish
@@ -830,4 +830,63 @@ def test_a_celery_action_of_a_scoped_class_publishes_in_the_worker_to_the_key_of
     assert calls == ["7"]
     assert logged("@things:7") == [("records_changed", {"op": "created", "changes": changes(7)})]
     assert logged("/api/things") == []
+    reset_event_scopes()
+
+
+def _custom_celery_pair(monkeypatch, resolver):
+    """A scoped celery_viewset pair whose custom action `archive` publishes to `write_topic()`."""
+    executor = _Executor(monkeypatch)
+
+    @event_scope(resolver, name="things")
+    class Base:
+        __router = APIRouter()
+
+        @__router.post("/{pk}/archive")
+        async def archive(self, request: Request, context: Context, pk: int) -> None:
+            topic = await write_topic(self, request, context)
+            if topic is not None:
+                await publish(topic, RecordsChanged(op="deleted", changes=[Change(pk=pk)]))
+
+    celery_viewset_server(celery_app=executor.server_app, task_prefix="things", redis_client=MagicMock())(
+        type("Worker", (Base,), {})
+    )
+    client = celery_viewset_client(celery_app=executor.client_app, task_prefix="things", redis_client=MagicMock())(
+        type("Client", (Base,), {})
+    )
+    router = APIRouter()
+    route_viewset(router, "/things", pk_field_name="id")(client)
+    return executor, TestClient(app_for(router, prefix="/api"))
+
+
+@pytest.mark.parametrize("org", ["7", None], ids=["key", "no-key"])
+def test_a_custom_celery_action_of_a_scoped_class_publishes_to_the_key_of_the_web_process(monkeypatch, org):
+    reset_event_scopes()
+    calls: list[str | None] = []
+
+    def resolver(request, context):
+        calls.append(request.headers.get("x-org") if request is not None else None)
+        return context.raw().get("org_id")
+
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [ChangeEvents(), SelectOrg()])
+    executor, client = _custom_celery_pair(monkeypatch, resolver)
+    response = client.post("/api/things/3/archive", headers={"x-org": org} if org else {})
+    assert response.status_code == 200
+    carried = {"name": "things", "key": org} if org else None
+    assert executor.sent[0]["_context"][SCOPE_CONTEXT_KEY] == carried
+    assert calls == [org]
+    assert logged("@things:7") == ([("records_changed", {"op": "deleted", "changes": changes(3)})] if org else [])
+    reset_event_scopes()
+
+
+def test_write_topic_in_a_worker_without_a_carried_scope_answers_none_without_the_resolver(monkeypatch):
+    reset_event_scopes()
+
+    def resolver(_request, _context):
+        raise AssertionError("the worker calls no resolver")
+
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [])
+    executor, client = _custom_celery_pair(monkeypatch, resolver)
+    assert client.post("/api/things/3/archive").status_code == 200
+    assert SCOPE_CONTEXT_KEY not in executor.sent[0]["_context"]
+    assert logged("@things:7") == []
     reset_event_scopes()

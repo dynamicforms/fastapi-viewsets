@@ -641,7 +641,7 @@ drop_subscriptions(lambda s: s.scope == str(org_id) and s.context.raw().get("use
 | Case | Behaviour |
 |------|-----------|
 | Resolver answers `None` | subscribe 403 `event_scope_missing`; poll `error: event_scope_missing`, `status: 403`; a write runs and publishes nothing, with a warning |
-| Resolver raises on a write | the write is refused before the action; the resolver runs after the whole command chain |
+| Resolver raises on a write | the write is refused before the action; the resolver runs after the whole command chain. A `celery_viewset` call of any action is refused the same way, before the dispatch |
 | Membership revoked | the next subscribe or poll refuses the topic and removes the server subscription; pushes are gated again after `viewsets_event_reauthorize_after`; `drop_subscriptions(where)` removes them at once |
 | Scope change of a client (header, domain) | the client calls `refresh()`; it refreshes a topic itself on a push after its `headers()` changed; a poll's `scopes` that differ resync the topic and subscribe it again |
 | Client sends `@...` | 422, or poll `event_topic_invalid` |
@@ -791,7 +791,7 @@ argument, passed by keyword or by position, and needs no pk field.
 `ChangeEvents.__call__` runs in the web process on every action of the viewsets it applies to. It
 stores the routed base path of the call's viewset in the context under
 `"fastapi_viewsets.events.topic"` (`TOPIC_CONTEXT_KEY`); for a [scoped class](#scoped-classes) it
-also stores the deferred resolution of the scope key of a write. `routed_base_path(request)` computes
+also stores the deferred resolution of the scope key of the call. `routed_base_path(request)` computes
 the routed base path:
 the request's path, relative to the application's `root_path`, with as many trailing segments
 removed as the action's path in `__viewset_metadata__["paths"]` has. Each path parameter of that
@@ -819,12 +819,14 @@ does not run.
 
 For a class with [`@event_scope`](#scoped-topics):
 
-- `__call__` stores, for each write action (the eight of the table), the deferred resolution of the
-  key with the call's request and context under `"fastapi_viewsets.events.scope"`
-  (`SCOPE_CONTEXT_KEY`). It does not for an action configured `False` or with a `topic`.
-- The resolver runs once, after the whole command chain, wherever `ChangeEvents` sits in it: in
-  `execute()` for an action that executes in the web process, and in the web process before the
-  dispatch for a `celery_viewset` action. The dispatched context then carries
+- `__call__` stores, for every action of the class, custom endpoints included, the deferred
+  resolution of the key with the call's request and context under `"fastapi_viewsets.events.scope"`
+  (`SCOPE_CONTEXT_KEY`). It does not for a write action (the eight of the table) configured `False`
+  or with a `topic`.
+- The resolver runs once, after the whole command chain, wherever `ChangeEvents` sits in it: for an
+  action that executes in the web process, on the first read of the entry (`execute()` of a write
+  action, `write_topic()`), and not at all for an action that reads neither; in the web process
+  before the dispatch for every `celery_viewset` action. The dispatched context then carries
   `{"name": scope.name, "key": key}`, or `None` for a key of `None`, and the worker does not call the
   resolver. An exception of the resolver refuses the call before the action; a `celery_viewset`
   task is not sent.
@@ -871,7 +873,7 @@ a subclass is used for every class, scoped ones included, and may return a scope
 | Part | In-process action | `celery_viewset` action |
 |------|-------------------|-------------------------|
 | `__call__`, which stores the topic | FastAPI process | FastAPI process |
-| the resolver of a scoped write | FastAPI process, in `execute()` | FastAPI process, before the dispatch |
+| the resolver of a scoped class | FastAPI process, in `execute()` or `write_topic()` | FastAPI process, before the dispatch |
 | `execute()`, which publishes | FastAPI process | Celery worker |
 
 The worker therefore needs `ChangeEvents` in its `settings.viewsets_command_middleware` and a
@@ -910,11 +912,13 @@ async def archive(self, request: Request, context: Context, pk: int) -> None:
 
 | Class | Topic |
 |-------|-------|
-| with `@event_scope` | `@{name}:{key}` of the key the resolver answers with `request` and `context`; `None` for a key of `None`; an exception of the resolver propagates |
+| with `@event_scope` | `@{name}:{key}` of the key under `SCOPE_CONTEXT_KEY`, which `ChangeEvents.__call__` stores for every action of the class, else of the key the resolver answers with `request` and `context`; `None` for a key of `None`; an exception of the resolver propagates |
 | without | the routed base path under `TOPIC_CONTEXT_KEY`, else `__viewset_metadata__["base_path"]`, else `None` |
 
-In a `celery_viewset` worker the resolver of a custom endpoint runs with the dispatched context and
-the rebuilt request.
+In a `celery_viewset` worker `write_topic` does not call the resolver: the key is the one the web
+process resolved before the dispatch, carried in the dispatched context. A context without an entry
+of the class's scope (an action dispatched outside any call, or in the execution of an action of
+another scoped class) answers `None`.
 
 ---
 

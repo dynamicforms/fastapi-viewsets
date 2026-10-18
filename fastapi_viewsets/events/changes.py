@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from ..action_configuration import resolve_action_configuration
 from ..context import _Deferred, Context
+from ..decorators.lifecycle_runner import execution_translator
 from ..middleware import ActionExecution, Middleware, ViewSetResult
 from .event import Event
 from .scopes import EventScope, resolve_scope, SCOPE_CONTEXT_KEY, scope_of
@@ -113,15 +114,17 @@ class ChangeEvents(Middleware):
     module's table). An action that raises publishes nothing; any other action publishes nothing.
 
     `__call__` runs in the web process and stores `routed_base_path(request)` in the context under
-    `TOPIC_CONTEXT_KEY`, on every action. For a write action of a class with `@event_scope` (see
-    `fastapi_viewsets.events.scopes`) it also stores under `SCOPE_CONTEXT_KEY` the deferred
-    resolution of the scope's key with the call's request and context. The resolver runs after the
-    whole command chain, wherever `ChangeEvents` sits in it: in `execute()` for an action that
-    executes in the web process, before the dispatch for a `celery_viewset` action, which then
-    carries `{"name": ..., "key": ...}`, or None for a key of None, to the worker. An exception of
-    the resolver refuses the call before the action. `execute()` runs where the action executes and
-    publishes after `call_next()` returns. An exception of the publish,
-    `store.append` failing included, propagates from `execute()` after the action has run.
+    `TOPIC_CONTEXT_KEY`, on every action. For every action of a class with `@event_scope` (see
+    `fastapi_viewsets.events.scopes`) but a write action configured `False` or with a `topic`, it
+    also stores under `SCOPE_CONTEXT_KEY` the deferred resolution of the scope's key with the call's
+    request and context. The resolver runs after the whole command chain, wherever `ChangeEvents`
+    sits in it: in the web process, on the first `await` of the entry (`execute()` of a write action,
+    `write_topic()`) for an action that executes there, and before the dispatch for every
+    `celery_viewset` action, which then carries `{"name": ..., "key": ...}`, or None for a key of
+    None, to the worker. An exception of the resolver refuses the call before the action.
+    `execute()` runs where the action executes and publishes after `call_next()` returns. An
+    exception of the publish, `store.append` failing included, propagates from `execute()` after the
+    action has run.
 
     The topic `execute()` publishes to:
 
@@ -163,11 +166,17 @@ class ChangeEvents(Middleware):
                 context.set(TOPIC_CONTEXT_KEY, topic)
             cls = viewset if isinstance(viewset, type) else type(viewset)
             scope = scope_of(cls)
-            if scope is not None and context.action_name in _OPS:
-                options = self.options_for(context)
-                if options is not None and "topic" not in options:
-                    context.set(SCOPE_CONTEXT_KEY, _Deferred(lambda: _scope_entry(scope, request, context)))
+            if scope is not None and self._carries_scope(context):
+                context.set(SCOPE_CONTEXT_KEY, _Deferred(lambda: _scope_entry(scope, request, context)))
         return await call_next()
+
+    def _carries_scope(self, context: Context) -> bool:
+        """Whether `__call__` stores the scope of the call: for every action but a write action
+        configured `False` or with a `topic`."""
+        if context.action_name not in _OPS:
+            return True
+        options = self.options_for(context)
+        return options is not None and "topic" not in options
 
     def config_from(self, context: Context) -> Any:
         """The value configured under this instance as the key, else under its class."""
@@ -312,19 +321,35 @@ async def _scope_entry(scope: EventScope, request: "Request | None", context: Co
     return None if key is None else {"name": scope.name, "key": key}
 
 
+_NOT_CARRIED = object()
+
+
+async def _carried_topic(scope: EventScope, context: Context) -> Any:
+    """The store topic of the entry under `SCOPE_CONTEXT_KEY` when the context holds one of `scope`
+    (None for an entry of a key of None), else `_NOT_CARRIED`."""
+    raw = context.raw()
+    if SCOPE_CONTEXT_KEY not in raw:
+        return _NOT_CARRIED
+    carried = raw[SCOPE_CONTEXT_KEY]
+    if isinstance(carried, _Deferred):
+        carried = await carried
+    if carried is None:
+        return None
+    if isinstance(carried, dict) and carried.get("name") == scope.name and isinstance(carried.get("key"), str):
+        return scoped_topic(scope.name, carried["key"])
+    return _NOT_CARRIED
+
+
 async def _scoped_write_topic(
     scope: EventScope, request: "Request | None", context: Context, carries: bool
 ) -> str | None:
     """The store topic of a write of a class with `scope`: from the entry under `SCOPE_CONTEXT_KEY`
     when `carries` and the context holds one of this scope, else from the key the resolver answers
     with `request` and `context`; None for a key of None."""
-    carried = context.raw().get(SCOPE_CONTEXT_KEY) if carries else None
-    if isinstance(carried, _Deferred):
-        carried = await carried
-        if carried is None:
-            return None
-    if isinstance(carried, dict) and carried.get("name") == scope.name and isinstance(carried.get("key"), str):
-        return scoped_topic(scope.name, carried["key"])
+    if carries:
+        carried = await _carried_topic(scope, context)
+        if carried is not _NOT_CARRIED:
+            return carried
     key = await resolve_scope(scope, request, context)
     return None if key is None else scoped_topic(scope.name, key)
 
@@ -333,14 +358,20 @@ async def write_topic(viewset: Any, request: "Request | None", context: Context)
     """
     The topic a write of the current call of `viewset` (a viewset class or instance) publishes to,
     for an endpoint that writes outside the eight actions and publishes itself. For a class with
-    `@event_scope`, the store topic `@{name}:{key}` of the key the scope's resolver answers with
-    `request` and `context` (the carried key of a write action, see `SCOPE_CONTEXT_KEY`), None for a
-    key of None; an exception of the resolver propagates. For a class without it, the topic under
+    `@event_scope`, the store topic `@{name}:{key}` of the key under `SCOPE_CONTEXT_KEY` when the
+    context holds an entry of this scope (`ChangeEvents.__call__` stores one for every action of the
+    class), else of the key the scope's resolver answers with `request` and `context`; None for a key
+    of None; an exception of the resolver propagates. In a `celery_viewset` worker the resolver is
+    never called: the key is the one the web process resolved before the dispatch, and a context
+    without an entry of this scope answers None. For a class without it, the topic under
     `TOPIC_CONTEXT_KEY`, else `__viewset_metadata__["base_path"]`, else None.
     """
     cls = viewset if isinstance(viewset, type) else type(viewset)
     scope = scope_of(cls)
     if scope is not None:
+        if execution_translator.get() is not None:
+            carried = await _carried_topic(scope, context)
+            return None if carried is _NOT_CARRIED else carried
         return await _scoped_write_topic(scope, request, context, True)
     routed = context.raw().get(TOPIC_CONTEXT_KEY)
     if routed is not None:
