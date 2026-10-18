@@ -1333,6 +1333,46 @@ describe('failures and malformed arrivals', () => {
     await expect(sub.ready).resolves.toBeUndefined();
   });
 
+  it.each([
+    ['429', (call: SentCall) => call.answer({ detail: 'slow down' }, 429)],
+    ['503', (call: SentCall) => call.answer({ detail: 'unavailable' }, 503)],
+    ['no status', (call: SentCall) => call.fail(new Error('stream reset'))],
+  ])('a subscribe that fails with %s is sent again on the next rung over the open peer', async (_case, failWith) => {
+    const t = makeTransport();
+    const c = track(client(t));
+    const h = handlers();
+    const sub = c.subscribe('a', Changed, h);
+    failWith(t.take()[0]);
+    await flush();
+    await vi.advanceTimersByTimeAsync(400);
+    const [poll, subscribe] = t.take();
+    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll' });
+    expect(subscribe).toMatchObject({ via: 'peer', path: '/events/subscribe', body: { topic: 'a' } });
+    subscribe.answer({ rev: 2 });
+    poll.answer({ topics: { a: { rev: 2, events: [] } } });
+    await expect(sub.ready).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(t.take()).toEqual([]);
+    expect(h.onError).not.toHaveBeenCalled();
+  });
+
+  it('a subscribe sent again and refused is reported through onError and removes the subscription', async () => {
+    const t = makeTransport();
+    const c = track(client(t));
+    const h = handlers();
+    const sub = c.subscribe('a', Changed, h);
+    t.take()[0].answer({ detail: 'unavailable' }, 503);
+    await flush();
+    await vi.advanceTimersByTimeAsync(400);
+    const [poll, subscribe] = t.take();
+    subscribe.answer({ detail: 'refused', detail_code: 'event_topic_refused' }, 401);
+    await expect(sub.ready).rejects.toMatchObject({ response: { status: 401 } });
+    expect(h.onError).toHaveBeenCalledWith(expect.any(ViewSetRequestError));
+    poll.answer({ topics: { a: { rev: 2, events: [] } } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(t.take()).toEqual([]);
+  });
+
   it('ignores a push without a usable rev or prev, and every push after close()', async () => {
     const t = makeTransport();
     const { c, h } = await followed(t);
@@ -1780,6 +1820,24 @@ describe('scoped topics', () => {
     const [poll] = t.take();
     expect(poll.body).toEqual({ cursors: { '/t': 10 }, scopes: { '/t': '7' } });
     expect(h.onEvent).not.toHaveBeenCalled();
+  });
+
+  it('a refresh whose subscribe is answered 503 keeps the subscription and subscribes again', async () => {
+    const t = makeTransport();
+    const { c, h } = await scoped(t);
+    c.refresh?.('/t');
+    t.take()[0].answer({ detail: 'unavailable' }, 503);
+    await flush();
+    await vi.advanceTimersByTimeAsync(400);
+    const [poll, subscribe] = t.take();
+    expect(poll.body).toEqual({ cursors: { '/t': 10 }, scopes: { '/t': '7' } });
+    expect(subscribe).toMatchObject({ path: '/events/subscribe', body: { topic: '/t' } });
+    subscribe.answer({ rev: 10, scope: '7' });
+    poll.answer({ topics: { '/t': { rev: 10, events: [], scope: '7' } } });
+    await flush();
+    t.pushScoped('/t', '7', 11, 10);
+    expect(payloads(h)).toEqual([{ n: 11 }]);
+    expect(h.onError).not.toHaveBeenCalled();
   });
 
   it('refresh() without an open peer polls at once', async () => {

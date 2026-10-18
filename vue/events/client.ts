@@ -265,7 +265,8 @@ function statusOf(error: unknown): number | undefined {
 /**
  * A status that does not refuse a topic: 429, rate limiting, and every status of 500 or above, a
  * server or gateway failure. A call or a topic answered with one is sent again: a poll on the next
- * rung, a subscribe on the next reconnect, with the topic polled meanwhile.
+ * rung, a subscribe on the next rung while the peer is open and on the next reconnect, with the
+ * topic polled meanwhile.
  */
 function isTransientStatus(status: number): boolean {
   return status === 429 || status >= 500;
@@ -1026,7 +1027,9 @@ class EventClientImpl implements EventClient {
     let revChanged = false;
     let pollAfterMs: number | null = null;
     try {
-      const { data: answer, headersKey } = await this.call<WirePollAnswer>('poll', this.pollBody(sent));
+      const polled = this.call<WirePollAnswer>('poll', this.pollBody(sent));
+      this.resubscribe();
+      const { data: answer, headersKey } = await polled;
       if (this.closed) return;
       pollAfterMs = typeof answer?.poll_after_ms === 'number' ? answer.poll_after_ms : null;
       for (const { state, cursor } of sent) {
@@ -1049,6 +1052,16 @@ class EventClientImpl implements EventClient {
     // `anyActive: true`: the client cannot tell whether anything on a topic is active.
     else delay = this.ladder.next({ anyActive: true, anyDialogOpen: false, revChanged, pollAfterMs });
     this.schedule(delay);
+  }
+
+  /**
+   * Sends `subscribe` again, over the open peer, for every topic not subscribed on its socket and
+   * without a subscribe in flight: a topic whose subscribe failed with a 429, a status of 500 or
+   * above, or without a status. The ladder calls it on every rung, so the retries follow its delays.
+   */
+  private resubscribe(): void {
+    if (!this.peerOpen()) return;
+    for (const state of this.topics.values()) if (state.socket === 'none') this.sendSubscribe(state);
   }
 
   // -- the check poll ----------------------------------------------------------------

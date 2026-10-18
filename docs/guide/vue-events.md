@@ -197,8 +197,8 @@ topic: each answered topic is subscribed again over the open peer, or polled at 
 and its pushes are held until the answer. An answer under another key resyncs the topic and applies
 the held pushes of the new key above the answer's rev; an answer under the same key applies the held
 pushes. A `subscribe` of a refresh that fails without a refusal drops the held pushes and leaves the
-topic to the ladder. A push of a scoped topic that arrives after `headers()` changed since the topic
-was answered refreshes that topic itself.
+topic to the ladder, which sends the `subscribe` again. A push of a scoped topic that arrives after
+`headers()` changed since the topic was answered refreshes that topic itself.
 
 ```ts
 watch(() => session.orgSlug, () => {
@@ -240,8 +240,9 @@ options replace its constants and its jitter draw.
 
 A `subscribe` or `poll` that fails with a status from 400 to 499 refuses the topics it carried,
 except 429. 429, every status of 500 or above, and a failure without a status refuse nothing and
-are sent again: a poll on the next rung, a subscribe on the next reconnect, with the topic polled
-meanwhile. A topic of a poll answer is classified by the answer's `status`, else by the status its
+are sent again: a poll on the next rung, a subscribe on each rung while the peer is open and on the
+next reconnect, with the topic polled meanwhile. The subscription stays, and its `onError` is called
+only for a refusal. A topic of a poll answer is classified by the answer's `status`, else by the status its
 `error` code stands for (`rate_limited` 429, `event_topic_invalid` 422, `session_expired` 401, any
 other 403): a topic answered `rate_limited`, or with a `status` of 500 or above, stays followed and is
 polled on the next rung. A gap poll that fails this way, or whose answer leaves the topic out, starts the

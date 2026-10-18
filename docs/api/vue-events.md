@@ -178,8 +178,9 @@ A refusal is reported with:
 | `rate_limited` | 429 |
 | any other code | 403 |
 
-A status of 429 or of 500 and above is not a refusal: the topic stays and is polled on the next
-rung.
+A status of 429 or of 500 and above is not a refusal: the topic stays, is polled on the next
+rung, and a failed `subscribe` of it is sent again (see [Calls](#calls)). `onError` is not called
+and `ready` does not settle for it.
 
 A poll refused with a status refuses every topic it carried.
 
@@ -189,7 +190,7 @@ The client sends three calls, each as one POST to `{basePath}/{name}`:
 
 | Call | Body | Answer | Sent |
 |------|------|--------|------|
-| `subscribe` | `{ topic }` | `{ rev, scope? }` | Over an open peer only: for the first subscription of a topic, for every followed topic on `onReconnect`, on `refresh()`, and after a poll answered a subscribed topic under another scope |
+| `subscribe` | `{ topic }` | `{ rev, scope? }` | Over an open peer only: for the first subscription of a topic, for every followed topic on `onReconnect`, on `refresh()`, after a poll answered a subscribed topic under another scope, and on every rung for a topic whose `subscribe` failed without refusing |
 | `unsubscribe` | `{ topic }` | — | Over an open peer only, for a topic subscribed on its socket: on the last subscription's `unsubscribe()`, on a refusal of the topic, and on `close()`, also once a `subscribe` in flight at `close()` is answered. Its failure is not reported |
 | `poll` | `{ cursors: { [topic]: rev \| null }, scopes: { [topic]: scope } }`, `scopes` holding the topics of the poll with a scope (`{}` for none) | `{ topics: { [topic]: { rev, events, error?, status?, scope? } }, poll_after_ms }`, each event `{ rev, prev, event, version, payload }` | Over an open peer, otherwise over axios |
 
@@ -209,8 +210,10 @@ topic once the closed client's `unsubscribe` of it is answered.
 A failure with a status from 400 to 499 refuses, except 429. 429, every status of 500 or above, and
 a failure without a status (`ConnectionLost`, a network error) are not reported: a failed rung `poll`
 is sent again on the next rung, a failed gap `poll` leaves the topic to the ladder (see
-[below](#push-gap-poll-and-resync)), and a failed `subscribe` is sent again on the next reconnect,
-with the topic polled meanwhile.
+[below](#push-gap-poll-and-resync)), and a failed `subscribe` is sent again on each rung of the
+[ladder](#polling-ladder) while the peer is open, and on the next reconnect, with the topic polled
+meanwhile; the subscription stays. A `subscribe` sent again that is refused reports the refusal as
+any other.
 
 ## Push, gap, poll and resync
 
@@ -238,7 +241,7 @@ Per topic the client holds `rev`, the rev of the last event it applied or of the
 | subscribe or poll answer | the topic holds no rev yet | the topic also takes the answer's `scope`; held pushes of another scope are dropped |
 | subscribe or poll answer | `scope` differs from the held one | `onResync`; the held rev and scope become the answer's; held pushes of the new scope above that rev are received again; a poll answer also sends `subscribe` for a topic subscribed on the open socket |
 | subscribe or poll answer | the topic is refreshing, same `scope` | the answer as above, then the held pushes are received again |
-| refresh `subscribe` | fails without refusing | the held pushes are dropped; the ladder polls the topic |
+| refresh `subscribe` | fails without refusing | the held pushes are dropped; the ladder polls the topic and sends `subscribe` again |
 
 A topic answer without a numeric `rev` and without `error` is ignored. `events: null` is not a
 resync when pushes applied while the poll was in flight moved the held rev to at least the answer's
@@ -264,7 +267,7 @@ unscoped and keeps the rules above unchanged.
 | Peer state | The client |
 |------------|------------|
 | open, every followed topic subscribed on its socket | holds the ladder; sends a check poll once per `checkIntervalMs` |
-| open, a topic not subscribed on its socket (a `subscribe` in flight, or one that failed without refusing), or a topic whose gap poll or check poll failed without refusing or left the topic unanswered | runs the ladder over the peer |
+| open, a topic not subscribed on its socket (a `subscribe` in flight, or one that failed without refusing), or a topic whose gap poll or check poll failed without refusing or left the topic unanswered | runs the ladder over the peer; each rung sends `subscribe` again for a topic whose `subscribe` failed |
 | `onClose` fired | drops every socket subscription and resumes the ladder on its base rung over axios; without axios it waits for `onReconnect` |
 | `onReconnect` fired | sends `subscribe` for every followed topic, runs the ladder over the peer until every one is answered, then holds it |
 

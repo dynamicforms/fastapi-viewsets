@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `route_viewset` on a subclass of a routed class reused the parent's endpoints, which then carried
   the subclass as `__viewset_class__`; the subclass gets endpoints of its own.
 - The muxws endpoint examples check `Origin` before `accept()`.
+- FE: a `subscribe` that failed with 429, a status of 500 or above, or without a status was sent
+  again only on the next reconnect, while the peer stayed open the topic was only polled. It is sent
+  again on every rung of the ladder while the peer is open; the subscription stays, and a refusal of
+  the repeated `subscribe` is reported through `onError` and `ready`.
 
 ## [0.11.1] - Unreleased
 
