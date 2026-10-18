@@ -8,11 +8,22 @@ from typing import Any
 
 import pytest
 
+from starlette.exceptions import HTTPException
+
 from ..conf import settings
 from ..context import Context
-from ..exceptions import EventSubscriptionsExceededError
+from ..exceptions import EventScopeMissingError, EventSubscriptionsExceededError
 from .conftest import ConnectionLost, FakePeer
-from .delivery import deliver, drop_peer, subscribe, subscriptions, topics_of, unsubscribe, wait_for_pushes
+from .delivery import (
+    deliver,
+    drop_peer,
+    drop_subscriptions,
+    subscribe,
+    subscriptions,
+    topics_of,
+    unsubscribe,
+    wait_for_pushes,
+)
 from .store import MemoryEventStore
 
 
@@ -364,3 +375,142 @@ def test_the_events_package_imports_neither_muxws_nor_redis():
     )
     root = Path(__file__).resolve().parents[2]
     subprocess.run([sys.executable, "-c", code], cwd=root, check=True)  # noqa: S603
+
+
+# store topics and scopes
+
+
+@pytest.mark.asyncio
+async def test_two_client_topics_on_one_store_topic_get_one_push_each_with_their_own_topic():
+    peer = FakePeer()
+    await subscribe(peer, Context({}), "/api/v1/tags", store_topic="@tags:7", scope="7")
+    await subscribe(peer, Context({}), "/orgs/7/tags", store_topic="@tags:7", scope="7")
+    assert sorted(topics_of(peer)) == ["/api/v1/tags", "/orgs/7/tags"]
+    await deliver_and_wait("@tags:7")
+    assert sorted((headers[":topic"], headers[":scope"]) for _payload, headers in peer.pushes) == [
+        ("/api/v1/tags", "7"),
+        ("/orgs/7/tags", "7"),
+    ]
+    await deliver_and_wait("/api/v1/tags", rev=3, prev=2)
+    assert len(peer.pushes) == 2
+
+
+@pytest.mark.asyncio
+async def test_subscribing_again_under_another_store_topic_moves_the_subscription():
+    peer = FakePeer()
+    await subscribe(peer, Context({}), "/api/v1/tags", store_topic="@tags:7", scope="7")
+    moved = await subscribe(peer, Context({}), "/api/v1/tags", store_topic="@tags:8", scope="8")
+    assert subscriptions("@tags:7") == []
+    assert subscriptions("@tags:8") == [moved]
+    await unsubscribe(peer, "/api/v1/tags")
+    assert subscriptions("@tags:8") == []
+    assert topics_of(peer) == []
+
+
+@pytest.mark.asyncio
+async def test_the_limit_counts_client_topics_and_drop_peer_drops_every_store_topic():
+    settings.viewsets_event_max_subscriptions = 2
+    peer = FakePeer()
+    await subscribe(peer, Context({}), "/a", store_topic="@s:1", scope="1")
+    await subscribe(peer, Context({}), "/b", store_topic="@s:1", scope="1")
+    with pytest.raises(EventSubscriptionsExceededError):
+        await subscribe(peer, Context({}), "/c", store_topic="@s:1", scope="1")
+    drop_peer(peer)
+    assert subscriptions("@s:1") == []
+
+
+@pytest.mark.asyncio
+async def test_drop_subscriptions_removes_the_subscriptions_it_selects():
+    ana, bor = FakePeer(), FakePeer()
+    await subscribe(ana, Context({"user": "ana"}), "/t", store_topic="@s:7", scope="7")
+    await subscribe(bor, Context({"user": "bor"}), "/t", store_topic="@s:7", scope="7")
+    await subscribe(ana, Context({"user": "ana"}), "imports")
+    assert drop_subscriptions(lambda s: s.scope == "7" and s.context.raw()["user"] == "ana") == 1
+    assert [s.peer for s in subscriptions("@s:7")] == [bor]
+    assert topics_of(ana) == ["imports"]
+
+
+def reauthorizer(*answers):
+    """A `reauthorize` answering `answers` in turn (an exception is raised), counting its calls."""
+    calls = []
+
+    async def reauthorize():
+        calls.append(None)
+        await asyncio.sleep(0)
+        answer = answers[min(len(calls), len(answers)) - 1]
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    return reauthorize, calls
+
+
+@pytest.mark.asyncio
+async def test_a_due_reauthorization_that_answers_the_store_topic_keeps_the_subscription():
+    settings.viewsets_event_reauthorize_after = 0.0
+    reauthorize, calls = reauthorizer("@s:7")
+    peer = FakePeer()
+    held = await subscribe(peer, Context({}), "/t", store_topic="@s:7", scope="7", reauthorize=reauthorize)
+    await deliver_and_wait("@s:7")
+    assert len(peer.pushes) == 1
+    assert calls == [None]
+    [renewed] = subscriptions("@s:7")
+    assert renewed is not held
+    assert renewed.authorized_at >= held.authorized_at
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [HTTPException(403, "gone"), EventScopeMissingError("/t"), "@s:8"],
+    ids=["refused", "no-scope", "another-store-topic"],
+)
+async def test_a_refusing_reauthorization_removes_the_subscription_and_skips_the_push(answer):
+    settings.viewsets_event_reauthorize_after = 0.0
+    reauthorize, _calls = reauthorizer(answer)
+    peer = FakePeer()
+    await subscribe(peer, Context({}), "/t", store_topic="@s:7", scope="7", reauthorize=reauthorize)
+    await deliver_and_wait("@s:7")
+    assert peer.pushes == []
+    assert topics_of(peer) == []
+    assert subscriptions("@s:7") == []
+
+
+@pytest.mark.asyncio
+async def test_a_failing_reauthorization_skips_the_push_and_keeps_the_subscription():
+    settings.viewsets_event_reauthorize_after = 0.0
+    reauthorize, calls = reauthorizer(RuntimeError("the database is down"), "@s:7")
+    peer = FakePeer()
+    held = await subscribe(peer, Context({}), "/t", store_topic="@s:7", scope="7", reauthorize=reauthorize)
+    await deliver_and_wait("@s:7")
+    assert peer.pushes == []
+    assert subscriptions("@s:7") == [held]
+    await deliver_and_wait("@s:7", rev=3, prev=2)
+    assert len(peer.pushes) == 1
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_pushes_share_one_reauthorization():
+    settings.viewsets_event_reauthorize_after = 0.0
+    reauthorize, calls = reauthorizer("@s:7")
+    peer = FakePeer()
+    await subscribe(peer, Context({}), "/t", store_topic="@s:7", scope="7", reauthorize=reauthorize)
+    await deliver("@s:7", 2, 1, "records_changed", {}, 1)
+    await deliver("@s:7", 3, 2, "records_changed", {}, 1)
+    await wait_for_pushes()
+    assert len(peer.pushes) == 2
+    assert calls == [None]
+
+
+@pytest.mark.asyncio
+async def test_no_reauthorization_before_it_is_due_or_with_the_setting_none():
+    reauthorize, calls = reauthorizer(HTTPException(403, "gone"))
+    peer = FakePeer()
+    await subscribe(peer, Context({}), "/t", store_topic="@s:7", scope="7", reauthorize=reauthorize)
+    settings.viewsets_event_reauthorize_after = 3600.0
+    await deliver_and_wait("@s:7")
+    settings.viewsets_event_reauthorize_after = None
+    await deliver_and_wait("@s:7", rev=3, prev=2)
+    assert len(peer.pushes) == 2
+    assert calls == []

@@ -130,16 +130,33 @@ let capturing: { key?: string } | null = null;
  * `request()`, synchronously.
  *
  * Reports the call to the `onCallActivity` listeners: `start` at once, `settle` when `promise`
- * settles. `background` is passed on in `start`.
+ * settles. `background` is passed on in `start`, true also inside `inBackground`.
  */
 export function issueCall<R>(promise: Promise<R>, key: string, background = false): ViewSetCall<R> {
   if (capturing && capturing.key === undefined) capturing.key = key;
-  emit({ type: 'start', key, background });
+  emit({ type: 'start', key, background: background || backgroundDepth > 0 });
   promise.then(
     () => emit({ type: 'settle', key, ok: true }),
-    () => emit({ type: 'settle', key, ok: false }),
+    (error: unknown) => emit({ type: 'settle', key, ok: false, error }),
   );
   return withKey(promise, key);
+}
+
+/** The number of `inBackground` calls running synchronously around the current code. */
+let backgroundDepth = 0;
+
+/**
+ * Runs `fn` and returns what it returns; every call a proxy issues while `fn` runs synchronously is
+ * reported as `background: true`, as with `RequestOptions.background`. A call issued after an
+ * `await` inside `fn` is not.
+ */
+export function inBackground<R>(fn: () => R): R {
+  backgroundDepth += 1;
+  try {
+    return fn();
+  } finally {
+    backgroundDepth -= 1;
+  }
 }
 
 function withKey<R>(promise: Promise<R>, key: string): ViewSetCall<R> {
@@ -209,11 +226,13 @@ function keyedMethod(method: (...args: unknown[]) => unknown): (...args: unknown
 /**
  * What happens to a call issued through a proxy, as `onCallActivity` reports it.
  *
- * - `start`: the call was issued. `background` is `RequestOptions.background`.
+ * - `start`: the call was issued. `background` is `RequestOptions.background`, or true for a call
+ *   issued inside `inBackground`.
  * - `retry`: an attempt ended without an answer and is repeated. `failure` is how it ended,
  *   `attempt` the number of the attempt that ended (1 for the first), `delayMs` the wait before the
  *   repeat is sent.
- * - `settle`: the call settled; `ok` is false when it rejected.
+ * - `settle`: the call settled; `ok` is false when it rejected, and `error` is then the rejection
+ *   reason, the same value the call's promise rejects with.
  */
 export type CallEvent =
   | { readonly type: 'start'; readonly key: string; readonly background: boolean }
@@ -224,7 +243,7 @@ export type CallEvent =
       readonly attempt: number;
       readonly delayMs: number;
     }
-  | { readonly type: 'settle'; readonly key: string; readonly ok: boolean };
+  | { readonly type: 'settle'; readonly key: string; readonly ok: boolean; readonly error?: unknown };
 
 /** A call issued through a proxy that has not settled, as `pendingCalls()` lists it. */
 export interface PendingCall {

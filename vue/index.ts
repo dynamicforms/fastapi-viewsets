@@ -38,6 +38,7 @@ export type { CallEvent, PendingCall, RepeatOptions, ViewSetActionCall, ViewSetC
 export {
   IDEMPOTENCY_KEY_HEADER,
   idempotencyKeyHeader,
+  inBackground,
   issueCall,
   newCallKey,
   onCallActivity,

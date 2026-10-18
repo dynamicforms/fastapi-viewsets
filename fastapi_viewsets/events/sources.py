@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from .event import Event
 from .store import get_store
-from .topics import SOURCE_NAME_PATTERN, validate_topic
+from .topics import _validate_published_topic, SOURCE_NAME_PATTERN, validate_topic
 
 if TYPE_CHECKING:
     from .authorizers import EventAuthorizer
@@ -18,12 +18,14 @@ async def publish(topic: str, event: Event) -> tuple[int, int]:
     """
     Publishes `event` to `topic` and returns the `(rev, prev)` the store assigned to it.
 
-    Raises `ValueError` for a topic of neither form; the form is all that is checked. Records the
+    `topic` is a viewset topic, a custom topic, or a scoped topic `@{name}:{key}` (a store topic,
+    see `fastapi_viewsets.events.scopes`). Raises `ValueError` for a topic of none of these forms;
+    the form is all that is checked. Records the
     event's `event_name`, payload and `event_version` with `store.append`, then carries them to
     every process whose store is started with `store.publish`. An exception of `store.publish` is
     logged and not raised: the event is recorded, and a frontend learns of it on its next poll.
     """
-    validate_topic(topic)
+    _validate_published_topic(topic)
     if not isinstance(event, Event):
         raise TypeError(f"publish() takes an Event, not {type(event).__name__}")
     name = type(event).event_name

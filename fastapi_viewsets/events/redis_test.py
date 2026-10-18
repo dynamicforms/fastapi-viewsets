@@ -280,3 +280,27 @@ async def test_a_reconnect_subscribes_the_events_channel_again():
         assert [payload for payload, _headers in peer.pushes] == [{"n": 1}]
     finally:
         await store.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_event_published_in_another_process_reaches_every_client_form_of_its_scope():
+    redis = FakeRedis()
+    web, worker = RedisEventStore(redis), RedisEventStore(redis)
+    settings.viewsets_event_store = web
+    await web.start()
+    try:
+        by_header, by_path, other = FakePeer(), FakePeer(), FakePeer()
+        await subscribe(by_header, Context({}), "/api/v1/tags", store_topic="@tags:7", scope="7")
+        await subscribe(by_path, Context({}), "/orgs/7/tags", store_topic="@tags:7", scope="7")
+        await subscribe(other, Context({}), "/orgs/8/tags", store_topic="@tags:8", scope="8")
+        settings.viewsets_event_store = worker
+        rev, prev = await publish("@tags:7", Ping(n=1))
+        await settle()
+        assert [headers for _payload, headers in by_header.pushes] == [
+            {":event": "ping", ":version": 1, ":topic": "/api/v1/tags", ":rev": rev, ":prev": prev, ":scope": "7"}
+        ]
+        assert [headers[":topic"] for _payload, headers in by_path.pushes] == ["/orgs/7/tags"]
+        assert other.pushes == []
+        assert await web.revs(["@tags:7", "/api/v1/tags"]) == {"@tags:7": rev, "/api/v1/tags": 0}
+    finally:
+        await web.stop()

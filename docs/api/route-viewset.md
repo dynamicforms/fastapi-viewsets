@@ -54,6 +54,18 @@ carry `"schema"`.
 
 Applied as `@route_viewset(...)` on the class or called as `route_viewset(...)(SomeViewSet)`.
 
+A class serves one route set. Decorating a class again replaces its `__viewset_metadata__` and its
+muxws registration. To serve one viewset on a second route, decorate a subclass, which gets
+endpoints, a singleton instance and metadata of its own:
+
+```python
+class OrgTagsViewSet(TagsViewSet):
+    pass
+
+
+route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")(OrgTagsViewSet)
+```
+
 ## Behaviour
 
 - Collects the `__router` each class in the MRO declares for itself and rebases its routes onto `base_path`.

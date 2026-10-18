@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type CallEvent, onCallActivity } from './call';
+import { createEventClient } from './events/client';
 import { BulkViewSetMixin, LookupMixin } from './mixins';
 import { type MuxwsPeerLike, MuxwsProxyImpl, route_muxws } from './muxws-proxy';
 import { ListShapeMismatchError, ViewSetRequestError } from './proxy-base';
@@ -606,5 +607,125 @@ describe('MuxwsProxyImpl — repeats', () => {
     await vi.advanceTimersByTimeAsync(0);
     await settled;
     expect(flaky.opened).toHaveLength(1);
+  });
+
+  function proxyFrom(source: () => MuxwsPeerLike | Promise<MuxwsPeerLike>) {
+    return new MuxwsProxyImpl<number, Item, 'id'>({
+      basePath: '/items',
+      pkFieldName: 'id',
+      peer: source,
+      validateSchema: false,
+    });
+  }
+
+  it('calls a peer source again after its peer has closed for good', async () => {
+    const first = makeFlakyPeer([]);
+    const second = makeFlakyPeer([]);
+    const source = vi.fn().mockReturnValueOnce(first.peer).mockReturnValueOnce(Promise.resolve(second.peer));
+    const proxy = proxyFrom(source);
+    await proxy.retrieve(1);
+    first.drop();
+    first.reconnect();
+    await proxy.retrieve(1);
+    expect(source).toHaveBeenCalledTimes(1);
+    first.closeForGood();
+    await proxy.retrieve(1);
+    await proxy.retrieve(1);
+    expect(source).toHaveBeenCalledTimes(2);
+    expect([first.opened.length, second.opened.length]).toEqual([2, 2]);
+  });
+
+  it('calls a peer source again after it threw or rejected', async () => {
+    const flaky = makeFlakyPeer([]);
+    const source = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('not logged in');
+      })
+      .mockImplementationOnce(() => Promise.reject(new Error('connect failed')))
+      .mockReturnValue(flaky.peer);
+    const proxy = proxyFrom(source);
+    await expect(proxy.retrieve(1)).rejects.toThrow('not logged in');
+    await expect(proxy.retrieve(1)).rejects.toThrow('connect failed');
+    await expect(proxy.retrieve(1)).resolves.toEqual(MOCK_ITEM);
+    expect(source).toHaveBeenCalledTimes(3);
+  });
+
+  it('opens the first call synchronously on a peer the source returns synchronously, also a replacement', async () => {
+    const first = makeFlakyPeer([]);
+    const second = makeFlakyPeer([]);
+    const source = vi.fn().mockReturnValueOnce(first.peer).mockReturnValueOnce(second.peer);
+    const proxy = proxyFrom(source);
+    const call = proxy.retrieve(1);
+    expect(first.opened).toHaveLength(1);
+    await call;
+    first.closeForGood();
+    const replaced = proxy.retrieve(1);
+    expect(second.opened).toHaveLength(1);
+    await replaced;
+  });
+
+  it('a repeat waiting for a reconnect rejects on the final close and does not move to the new peer', async () => {
+    const first = makeFlakyPeer([muxwsError('ConnectionLost')]);
+    const second = makeFlakyPeer([]);
+    const source = vi.fn().mockReturnValueOnce(first.peer).mockReturnValueOnce(second.peer);
+    const proxy = proxyFrom(source);
+    const call = proxy.create(MOCK_ITEM);
+    const settled = expect(call).rejects.toMatchObject({
+      name: 'ConnectionClosed',
+    });
+    first.drop();
+    await vi.advanceTimersByTimeAsync(1000);
+    first.closeForGood();
+    await vi.advanceTimersByTimeAsync(0);
+    await settled;
+    expect(second.opened).toHaveLength(0);
+    await proxy.retrieve(1);
+    expect(second.opened).toHaveLength(1);
+  });
+
+  it('keeps a bare peer after its final close', async () => {
+    const flaky = makeFlakyPeer([]);
+    const proxy = proxyOn(flaky.peer);
+    await proxy.retrieve(1);
+    flaky.closeForGood();
+    await expect(proxy.retrieve(1)).rejects.toMatchObject({
+      name: 'ConnectionClosed',
+    });
+  });
+
+  it('calls a source that keeps returning the same closed peer on every call', async () => {
+    const flaky = makeFlakyPeer([]);
+    const source = vi.fn(() => flaky.peer);
+    const proxy = proxyFrom(source);
+    await proxy.retrieve(1);
+    flaky.closeForGood();
+    await expect(proxy.retrieve(1)).rejects.toMatchObject({
+      name: 'ConnectionClosed',
+    });
+    await expect(proxy.retrieve(1)).rejects.toMatchObject({
+      name: 'ConnectionClosed',
+    });
+    expect(source).toHaveBeenCalledTimes(3);
+  });
+
+  it('watch() follows the replacement peer to its event client', async () => {
+    const first = makeFlakyPeer([]);
+    const second = makeFlakyPeer([], { rev: 0 });
+    const source = vi.fn().mockReturnValueOnce(first.peer).mockReturnValueOnce(second.peer);
+    const proxy = proxyFrom(source);
+    await proxy.retrieve(1);
+    first.closeForGood();
+    const events = createEventClient({
+      basePath: '/events',
+      peer: second.peer,
+    });
+    try {
+      const subscription = proxy.watch({ onChange() {}, onResync() {} });
+      await subscription.ready;
+      expect(second.opened.map((stream) => stream.headers[':path'])).toEqual(['/events/subscribe']);
+    } finally {
+      events.close();
+    }
   });
 });

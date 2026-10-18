@@ -3,6 +3,7 @@
  * create, update and destroy action, and what a ViewSet does with it: `watch()` and `applyChanges()`.
  */
 
+import { inBackground } from '../call';
 import type { CursorPage, KeyType, PaginatedList } from '../mixins';
 
 import {
@@ -61,12 +62,19 @@ export interface WatchOptions<T, K extends KeyType = KeyType> {
    * `retrieve` that `fetch` sent and that failed with anything but a 404; `onResync()` follows the latter.
    */
   onError?: (error: unknown) => void;
+  /**
+   * The client topic to subscribe: the BE path of the viewset relative to the application's
+   * `root_path`, without a Starlette `Mount` prefix. Default `ProxyBaseOptions.topic`, else the
+   * ViewSet's `basePath`.
+   */
+  topic?: string;
 }
 
 /** `watch()`, which every ViewSet has. */
 export interface ViewSetWatch<T, K extends KeyType = KeyType> {
   /**
-   * Subscribes the ViewSet's `basePath` to `records_changed` and returns the subscription. Uses the
+   * Subscribes the ViewSet's topic (`WatchOptions.topic`, else `ProxyBaseOptions.topic`, else
+   * `basePath`) to `records_changed` and returns the subscription. Uses the
    * `events` client of the ViewSet's options; without one, a muxws ViewSet uses the client
    * registered for its peer (`eventsOf`), and a REST ViewSet throws.
    */
@@ -139,7 +147,8 @@ export interface WatchTarget<T, K extends KeyType> {
 
 /**
  * `watch()` of a ViewSet: subscribes `target.topic` to `records_changed` on `client`, or on the
- * client `client` resolves to.
+ * client `client` resolves to. The retrieves of `fetch` are issued inside `inBackground`, so call
+ * activity reports them as background calls.
  *
  * `onChange` and `onResync` are called in the order their events arrived, also while `fetch` is
  * waiting for a `retrieve`. An event whose version is not 1 has a payload `RecordsChanged` does not
@@ -166,7 +175,7 @@ export function watchRecords<T, K extends KeyType>(
       change.changes.map(async (item): Promise<Change<T, K> | typeof gone | null> => {
         if (item.record !== undefined && item.record !== null) return item;
         try {
-          return { pk: item.pk, record: await target.retrieve(item.pk) };
+          return { pk: item.pk, record: await inBackground(() => target.retrieve(item.pk)) };
         } catch (error) {
           if ((error as { response?: { status?: unknown } } | null)?.response?.status === 404) return gone;
           failed ??= error;

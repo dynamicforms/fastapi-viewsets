@@ -478,3 +478,34 @@ def test_the_middleware_dependency_is_the_last_of_every_route_and_carries_the_ma
         *application, bridge = route.dependencies
         assert getattr(bridge.dependency, MIDDLEWARE_DEPENDS_ATTRIBUTE) is True
         assert [depends.dependency for depends in application] == [own]
+
+
+def test_a_subclass_of_a_routed_class_is_routed_with_endpoints_of_its_own():
+    from fastapi.testclient import TestClient
+
+    class Note(BaseModel):
+        id: int = Field(json_schema_extra={"autoinc_int": True})
+        title: str
+
+    records = {1: Note(id=1, title="one")}
+    first_router, second_router = APIRouter(), APIRouter(prefix="/orgs/{org_slug}")
+
+    @route_viewset(first_router, "/notes", pk_field_name="id")
+    class NotesViewSet(CollectionViewSet[int, Note], ViewSetMixin[int, Note]):
+        def __init__(self):
+            super().__init__(container=records, pk_field="id")
+
+    class OrgNotesViewSet(NotesViewSet):
+        pass
+
+    route_viewset(second_router, "/notes", pk_field_name="id")(OrgNotesViewSet)
+    app = FastAPI()
+    app.include_router(first_router)
+    app.include_router(second_router)
+    assert {route.endpoint.__viewset_class__ for route in first_router.routes} == {NotesViewSet}
+    assert {route.endpoint.__viewset_class__ for route in second_router.routes} == {OrgNotesViewSet}
+    assert OrgNotesViewSet.__viewset_metadata__["router"] is second_router
+    assert NotesViewSet.__viewset_metadata__["router"] is first_router
+    client = TestClient(app)
+    assert client.get("/notes/1").json() == {"id": 1, "title": "one"}
+    assert client.get("/orgs/7/notes/1").json() == {"id": 1, "title": "one"}

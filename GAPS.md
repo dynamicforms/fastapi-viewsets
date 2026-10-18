@@ -336,6 +336,29 @@ bytes, and `ViewsetTopics` does not see row-level filtering in `get_queryset`; `
 Any connected client can name any topic, so an empty `viewsets_event_authorizers` admits nothing.
 `allow_all` admits every topic when listed explicitly.
 
+### Event scopes: the server derives the store topic from the subscriber's request; the client never names a scope
+
+A tenant may be selected by a path parameter, by a header or a domain that a middleware validates,
+or by both while an application moves from one to the other, so one viewset's events for one tenant
+are reachable under several client topics, and one client topic (`/api/v1/tags` with a header)
+carries the events of every tenant. The client keeps subscribing to its routed path; the server
+resolves the scope key in a gate run of the subscribing request, which runs the viewset's own
+route dependencies, context processors and middleware chain, and stores and delivers the events
+under `@{name}:{key}`.
+
+A client that named its own scope (`/api/v1/tags@7`) would be admitted by whatever check the server
+ran for that name; a check that only reads what the client sent admits every scope the client names,
+and a check that re-runs the membership rules duplicates them outside the viewset. Refusing the
+routed paths of scoped viewsets in favour of a scope topic would break the clients that follow the
+path form. The resolver is the scope's authorization point: it reads what the gate run established,
+so the rules that admit a `GET` of the viewset are the rules that admit its events.
+
+The cost is a context build and one run of the middleware chain per subscribe and per poll of each
+(class, route, path parameter values), and the requirement that a middleware with side effects
+recognise a gate run. A subscription is gated again on a push after
+`viewsets_event_reauthorize_after`, which bounds how long a revoked membership keeps receiving pks
+and ops without a per-push gate run.
+
 ## Executor outcomes
 
 ### A call whose outcome is unknown is stored by `Idempotency`

@@ -34,6 +34,8 @@ interface RestProxyOptions {
   repeat?: RepeatOptions;
   /** The event client watch() subscribes on; without it, watch() throws. */
   events?: EventClient;
+  /** The client topic watch() subscribes; default basePath. */
+  topic?: string;
   /** Optional: existing axios instance. Defaults to the global axios. */
   axiosInstance?: AxiosInstance;
   /** The timeout of one attempt in milliseconds, passed to axios as `timeout`; 0 for none. */
@@ -52,6 +54,7 @@ interface RestProxyOptions {
 | `attemptTimeoutMs` | `number` | Options object only. Timeout of one attempt in milliseconds, default `30000`, `0` for none |
 | `repeat` | [`RepeatOptions`](./idempotency#repeatoptions) | Options object only. Default `{ withinMs: 600000, delayMs: 1000 }` |
 | `events` | `EventClient` | Options object only. The event client [`watch()`](./vue-mixins#watch) subscribes on; without it, `watch()` throws |
+| `topic` | `string` | Options object only. The client topic `watch()` subscribes: the BE path relative to the application's `root_path`, without a Starlette `Mount` prefix. Default `basePath` |
 
 ## Return value
 

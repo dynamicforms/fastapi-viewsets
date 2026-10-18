@@ -74,6 +74,14 @@ rejected from `depends()`, before the request body is parsed.
   first answer. With `redis_client` the body is stored as `jsonable_encoder` encodes it (a model by
   its aliases), which the response model validates again on a repeat; an outcome that cannot be
   encoded is not stored.
+- **A `Response` body.** A result whose body is a starlette `Response` with a buffered body
+  (`Response`, `JSONResponse`, `HTMLResponse`, ...) is recorded as that response: its status, its
+  headers (without `content-length`) and its body bytes; with `redis_client` the body is stored in
+  base64. A repeat receives a new `Response` with the recorded status, headers and body, one
+  `content-length`, and no background task. The response's own status is the status of the answer,
+  as on the first call; a `status_code` the chain set on the `ViewSetResult` does not replace it. A
+  `StreamingResponse`, a `FileResponse` or any other `Response` without a buffered body is not
+  stored, and a repeat runs the action again.
 - **Error outcomes are stored too.** An `HTTPException` is raised again on a repeat with its status
   code, `detail` and headers, a `DfViewSetError` with its `code` and `params`, and with its class when
   `fastapi_viewsets.exceptions` defines it (an `ActionInterruptedError` is replayed as one). A
@@ -86,9 +94,9 @@ rejected from `depends()`, before the request body is parsed.
   - `POST`, `PUT`, `PATCH`, `DELETE`: the outcome is stored.
   - `GET`, `HEAD`: the outcome is stored only when a repeat attached to the call while it ran. A
     repeat of a finished `GET` whose outcome was not stored runs again.
-  - An outcome with a cookie or a `set-cookie` header is not stored, whatever the method: its record
-    is deleted when the action completes, and a repeat runs the action again, an attached repeat
-    included.
+  - An outcome with a cookie or a `set-cookie` header, a `Response` body's own included, is not
+    stored, whatever the method: its record is deleted when the action completes, and a repeat runs
+    the action again, an attached repeat included.
 - **A stored outcome expires** `settings.viewsets_idempotency_ttl` seconds after it was stored.
 - **A running record is extended while the call runs.** The process running the call extends it to
   `settings.viewsets_idempotency_lock_ttl` seconds every third of that time, so a call that runs
@@ -214,9 +222,11 @@ closes for good (`onClose` with `willRetry` false) ends the wait, and the call r
 
 `onCallActivity(listener)` reports every call issued through a proxy, over REST and muxws: `start`
 when it is issued, `retry` for each repeat, with how the attempt ended and the delay before the
-repeat, and `settle` when its promise settles. Each event carries the call's `key`. A busy indicator
-or a connectivity notice builds on it; `RequestOptions.background: true` marks a call such an
-indicator leaves out, and the startup schema check is sent with it. `pendingCalls()` lists the calls
+repeat, and `settle` when its promise settles, with `error`, the rejection reason, when it rejected.
+Each event carries the call's `key`. A busy indicator, a connectivity notice or a central error
+report builds on it; `RequestOptions.background: true` marks a call such an indicator leaves out, and
+the startup schema check is sent with it. `inBackground(fn)` marks every call a proxy issues while
+`fn` runs synchronously; `watch({ fetch: true })` issues its retrieves that way. `pendingCalls()` lists the calls
 that have not settled, oldest first, with when each was issued and how many of its attempts went
 unanswered; `pendingCallCount()` counts them, background calls left out. `retryNow()` sends every
 waiting repeat at once, for a "try again now" button.
@@ -227,7 +237,10 @@ import { onCallActivity, retryNow } from '@dynamicforms/fastapi-viewsets';
 const failures = new Map<string, number>();
 const stop = onCallActivity((event) => {
   if (event.type === 'retry') failures.set(event.key, event.attempt);
-  if (event.type === 'settle') failures.delete(event.key);
+  if (event.type === 'settle') {
+    failures.delete(event.key);
+    if (!event.ok) reportError(event.error);
+  }
 });
 ```
 

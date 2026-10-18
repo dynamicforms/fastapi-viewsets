@@ -104,7 +104,8 @@ def action_openapi_extra(action_name: str, openapi_extra: dict | None) -> dict:
 def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, disable_response_model=False):
     """
     Builds __router (APIRouter with all routes from mixins) and __app (FastAPI instance),
-    and attaches them to the class. Idempotent: if already called, returns immediately.
+    and attaches them to the class. Idempotent: if already called for `cls` itself, returns
+    immediately; a subclass of a class it was called for gets routes of its own.
     If get_wrapper is None, only __router is built (no FastAPI app, no endpoint wrapping).
 
     disable_response_model: pass True when a configured command middleware declares
@@ -117,7 +118,8 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
     default) leaves the endpoint's declared return type in place, both in the OpenAPI docs and for
     FastAPI's own response validation.
     """
-    if hasattr(cls, "__router") and (get_wrapper is None or getattr(cls, "__router_full", False)):
+    own = vars(cls)
+    if "__router" in own and (get_wrapper is None or own.get("__router_full", False)):
         return
 
     celery_mode = get_wrapper is None

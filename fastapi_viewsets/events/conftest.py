@@ -23,6 +23,7 @@ EVENT_SETTINGS = (
     "viewsets_event_push_timeout",
     "viewsets_event_max_subscriptions",
     "viewsets_event_poll_after_ms",
+    "viewsets_event_reauthorize_after",
 )
 
 

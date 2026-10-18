@@ -157,15 +157,15 @@ async def test_allow_authenticated_admits_a_caller_with_a_user():
 async def test_declared_sources_asks_the_source_authorizer():
     received = []
 
-    async def club_member(_request, _context, topic):
+    async def org_member(_request, _context, topic):
         received.append(topic)
-        return topic == "clubs:7"
+        return topic == "orgs:7"
 
-    source("clubs", authorizer=club_member)
+    source("orgs", authorizer=org_member)
     authorizer = DeclaredSources()
-    assert await authorizer(FakeRequest(), Context({}), "clubs:7") is True
-    assert await authorizer(FakeRequest(), Context({}), "clubs:8") is False
-    assert received == ["clubs:7", "clubs:8"]
+    assert await authorizer(FakeRequest(), Context({}), "orgs:7") is True
+    assert await authorizer(FakeRequest(), Context({}), "orgs:8") is False
+    assert received == ["orgs:7", "orgs:8"]
 
 
 @pytest.mark.asyncio
@@ -304,11 +304,11 @@ async def test_viewset_topics_runs_a_middleware_the_configuration_adds():
 @pytest.mark.asyncio
 async def test_a_topic_matches_a_routed_base_path_with_path_parameters():
     router, cls = music_router()
-    app = app_with(router, prefix="/clubs/{club_id:int}")
-    found = match_viewset(app, "/clubs/7/music")
-    assert (found.viewset_class, found.action, found.path_params) == (cls, "list_items", {"club_id": 7})
-    assert find_viewset(app, "/clubs/7/music") == (cls, "list_items")
-    for topic in ("/clubs/seven/music", "/clubs/7/music/1", "/clubs/music"):
+    app = app_with(router, prefix="/orgs/{org_id:int}")
+    found = match_viewset(app, "/orgs/7/music")
+    assert (found.viewset_class, found.action, found.path_params) == (cls, "list_items", {"org_id": 7})
+    assert find_viewset(app, "/orgs/7/music") == (cls, "list_items")
+    for topic in ("/orgs/seven/music", "/orgs/7/music/1", "/orgs/music"):
         assert match_viewset(app, topic) is None, topic
 
 
@@ -325,10 +325,10 @@ async def test_viewset_topics_hands_depends_the_path_parameters_of_the_topic():
 
     settings.viewsets_command_middleware = [Recording()]
     router, _cls = music_router()
-    app = app_with(router, prefix="/clubs/{club_id}")
+    app = app_with(router, prefix="/orgs/{org_id}")
     request = Request({"type": "http", "method": "POST", "path": "/events/poll", "headers": [], "app": app})
-    assert await ViewsetTopics()(request, Context({}), "/clubs/7/music") is True
-    assert received == [{"club_id": "7"}]
+    assert await ViewsetTopics()(request, Context({}), "/orgs/7/music") is True
+    assert received == [{"org_id": "7"}]
     assert request.path_params == {}
 
 

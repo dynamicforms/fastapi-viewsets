@@ -66,10 +66,12 @@ export interface MuxwsPeerLike {
 
 /**
  * Where the peer comes from. A bare peer is the simple case; a function is for the common shape
- * where the proxy is constructed at module scope but `connect()` has not resolved yet. The
- * function is called once and its result cached — a muxws Peer survives its own reconnects, so
- * there is nothing to re-resolve afterwards. Once the peer has resolved, `request()` opens its
- * stream synchronously.
+ * where the proxy is constructed at module scope but `connect()` has not resolved yet, and for an
+ * application that replaces its peer (a new `connect()` after logout and login). The function's
+ * result is kept while the peer lives — a muxws Peer survives its own reconnects — and the function
+ * is called again by the first call after the peer has closed for good (`onClose` with
+ * `willRetry: false`), and after it threw or its promise rejected. A call in progress keeps the
+ * peer it started on. Once the peer has resolved, `request()` opens its stream synchronously.
  */
 export type MuxwsPeerSource = MuxwsPeerLike | (() => MuxwsPeerLike | Promise<MuxwsPeerLike>);
 
@@ -130,12 +132,31 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
     this.initSchemaValidation();
   }
 
+  /**
+   * The peer: the source's result, kept until a function source's peer has closed for good; the
+   * source is called again then, and after it threw or rejected. A bare peer is never replaced.
+   */
   private peer(): Promise<MuxwsPeerLike> {
+    const source = this.peerSource;
+    if (typeof source === 'function' && this.resolvedPeer && peerWatches.get(this.resolvedPeer)?.closed) {
+      this.resolvedPeer = undefined;
+      this.peerPromise = undefined;
+    }
     if (!this.peerPromise) {
-      const source = this.peerSource;
-      const peer = typeof source === 'function' ? source() : source;
-      if (isPeer(peer)) this.adoptPeer(peer);
-      this.peerPromise = Promise.resolve(peer).then((resolved) => this.adoptPeer(resolved));
+      let result: MuxwsPeerLike | Promise<MuxwsPeerLike>;
+      try {
+        result = typeof source === 'function' ? source() : source;
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      if (isPeer(result)) this.adoptPeer(result);
+      const promise: Promise<MuxwsPeerLike> = Promise.resolve(result).then((resolved) =>
+        this.peerPromise === promise ? this.adoptPeer(resolved) : resolved,
+      );
+      this.peerPromise = promise;
+      promise.catch(() => {
+        if (this.peerPromise === promise) this.peerPromise = undefined;
+      });
     }
     return this.peerPromise;
   }
@@ -152,7 +173,7 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
   }
 
   private adoptPeer(peer: MuxwsPeerLike): MuxwsPeerLike {
-    if (!this.resolvedPeer) {
+    if (this.resolvedPeer !== peer) {
       this.resolvedPeer = peer;
       watchPeer(peer);
     }

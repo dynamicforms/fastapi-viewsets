@@ -27,6 +27,10 @@ PEER_SCOPE_KEY = "fastapi_viewsets.peer"
 """The ASGI scope key `mux_ws.process_command` writes its `peer` argument under: the muxws peer of the
 socket the command arrived on, or None when the caller passed none. Absent from a REST request."""
 
+GATE_RUN_SCOPE_KEY = "fastapi_viewsets.events.gate"
+"""The ASGI scope key present on the request of an events gate run; its value is the gate action's
+name. Re-exported as `fastapi_viewsets.events.GATE_RUN_SCOPE_KEY`."""
+
 REST = "rest"
 MUXWS = "muxws"
 

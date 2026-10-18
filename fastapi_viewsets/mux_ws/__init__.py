@@ -16,10 +16,15 @@ Server side:
     from fastapi import FastAPI, WebSocket
     from muxws import accept
 
-    from fastapi_viewsets.mux_ws import process_command
+    from fastapi_viewsets.mux_ws import origin_allowed, process_command
 
     @app.websocket("/ws")
     async def muxws_endpoint(websocket: WebSocket) -> None:
+        # A cookie-authenticated WebSocket has no CSRF protection: refuse a foreign Origin before
+        # accept(), which the server answers with HTTP 403.
+        if not origin_allowed(websocket):
+            await websocket.close(code=1008)
+            return
         # Do not call websocket.accept() yourself - muxws performs the upgrade, because only it
         # knows which muxws.v1.<codec> subprotocol to select.
         peer = await accept(websocket)
@@ -33,6 +38,7 @@ Which viewsets get registered is decided at three levels, each able to defer to 
 `settings.viewsets_register_muxws` globally (default True).
 """
 
+from .origin import origin_allowed
 from .protocol import METHOD_KEY, PATH_KEY, QUERY_KEY, STATUS_KEY
 from .registry import (
     is_registered,
@@ -52,6 +58,7 @@ __all__ = [
     "QUERY_KEY",
     "STATUS_KEY",
     "is_registered",
+    "origin_allowed",
     "process_command",
     "register_viewset",
     "registered_viewsets",

@@ -6,6 +6,7 @@
 import type { AxiosInstance } from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { type CallEvent, onCallActivity } from '../call';
 import { ViewSetRequestError } from '../errors';
 import { ReadOnlyViewSetMixin, RetrieveMixin } from '../mixins';
 import { type MuxwsPeerLike, MuxwsProxyImpl, route_muxws } from '../muxws-proxy';
@@ -274,6 +275,25 @@ describe('watch() on a REST ViewSet', () => {
     expect(onError).toHaveBeenCalledWith(error);
   });
 
+  it('subscribes WatchOptions.topic, else ProxyBaseOptions.topic, else basePath', () => {
+    const { client, subscriptions } = fakeClient();
+    const options = {
+      basePath: '/app/items',
+      pkFieldName: 'id',
+      validateSchema: false,
+      events: client,
+    };
+    const plain = new RestProxyImpl<number, Item, 'id'>(options);
+    const mounted = new RestProxyImpl<number, Item, 'id'>({
+      ...options,
+      topic: '/items',
+    });
+    plain.watch({ onChange() {}, onResync() {} });
+    mounted.watch({ onChange() {}, onResync() {} });
+    mounted.watch({ onChange() {}, onResync() {}, topic: '/orgs/7/items' });
+    expect(subscriptions.map(({ topic }) => topic)).toEqual(['/app/items', '/items', '/orgs/7/items']);
+  });
+
   describe('fetch: true', () => {
     function build(get: (url: string) => Promise<{ data: unknown }>) {
       const { client, subscriptions } = fakeClient();
@@ -292,6 +312,51 @@ describe('watch() on a REST ViewSet', () => {
       const { onEvent } = subscriptions[0].handlers;
       return { http, onChange, onResync, onError, emit: (payload: unknown) => onEvent(payload, meta()) };
     }
+
+    it('issues the retrieves as background calls, also through a retrieve override', async () => {
+      const events: CallEvent[] = [];
+      const stop = onCallActivity((event) => events.push(event));
+      try {
+        const w = build((url) =>
+          Promise.resolve({
+            data: { id: Number(url.split('/').pop()), name: 'fetched' },
+          }),
+        );
+        w.emit({ op: 'created', changes: [{ pk: 4 }] });
+        await flush();
+
+        const { client, subscriptions } = fakeClient();
+        class Overriding extends RestProxyImpl<number, Item, 'id'> {
+          override retrieve(pk: number) {
+            return super.retrieve(pk).then((item) => ({ ...item, name: 'overridden' }));
+          }
+        }
+        const http = mockAxios((url) =>
+          Promise.resolve({
+            data: { id: Number(url.split('/').pop()), name: 'x' },
+          }),
+        );
+        const onChange = vi.fn();
+        new Overriding({
+          basePath: '/items',
+          pkFieldName: 'id',
+          validateSchema: false,
+          axiosInstance: http,
+          events: client,
+        }).watch({ fetch: true, onChange, onResync() {} });
+        subscriptions[0].handlers.onEvent({ op: 'updated', changes: [{ pk: 5 }] }, meta());
+        await flush();
+        expect(onChange.mock.calls[0][0].changes[0].record).toEqual({
+          id: 5,
+          name: 'overridden',
+        });
+      } finally {
+        stop();
+      }
+      const starts = events.filter((event) => event.type === 'start');
+      expect(starts).toHaveLength(2);
+      for (const start of starts) expect(start).toMatchObject({ background: true });
+    });
 
     it('completes a created or updated change without record with retrieve(pk)', async () => {
       const w = build((url) => Promise.resolve({ data: { id: Number(url.split('/').pop()), name: 'fetched' } }));

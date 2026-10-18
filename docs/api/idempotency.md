@@ -30,7 +30,16 @@ A [`Middleware`](../guide/command-middleware#class-based-middleware-middleware).
 | Method | Description |
 |--------|-------------|
 | `async depends(request, cls, context) -> None` | Raises `IdempotencyKeyInvalidError` for an invalid `Idempotency-Key` |
-| `async __call__(request, viewset, context, call_next) -> ViewSetResult` | Runs `call_next()` under the key, attaches to the running call or returns the stored outcome; raises `IdempotencyKeyReusedError` for a key recorded with a different fingerprint, and raises a stored error outcome again |
+| `async __call__(request, viewset, context, call_next) -> ViewSetResult` | Runs `call_next()` under the key, attaches to the running call or returns the stored outcome; raises `IdempotencyKeyReusedError` for a key recorded with a different fingerprint, and raises a stored error outcome again. An events [gate run](../guide/events#the-gate-run) passes through |
+
+A result whose `body` is a starlette `Response` with a buffered `body` (`Response`, `JSONResponse`,
+`HTMLResponse`, `PlainTextResponse`, ...) is recorded as its status, raw headers without
+`content-length` and body; with `redis_client` it is stored as
+`{"response": {"status_code", "headers": [[name, value], ...], "body": <base64>}, "headers", "status_code"}`
+under `result`. A repeat, an attached one included, receives a new `Response` with that status, those
+headers, one `content-length` and the body, and no background task. A `StreamingResponse`, a
+`FileResponse` and any other `Response` without a buffered body is not stored; a repeat runs the
+action again. A recorded `set-cookie` header is a cookie: the outcome is not stored.
 
 `modifies_response_shape` is `False`.
 
@@ -66,6 +75,7 @@ import {
   type CallEvent,
   IDEMPOTENCY_KEY_HEADER,
   idempotencyKeyHeader,
+  inBackground,
   issueCall,
   newCallKey,
   onCallActivity,
@@ -130,14 +140,14 @@ one attempt.
 type CallEvent =
   | { readonly type: 'start'; readonly key: string; readonly background: boolean }
   | { readonly type: 'retry'; readonly key: string; readonly failure: 'timeout' | 'lost'; readonly attempt: number; readonly delayMs: number }
-  | { readonly type: 'settle'; readonly key: string; readonly ok: boolean };
+  | { readonly type: 'settle'; readonly key: string; readonly ok: boolean; readonly error?: unknown };
 ```
 
 | Event | When | Fields |
 |-------|------|--------|
-| `start` | The call is issued, synchronously in `request()` | `background`: `RequestOptions.background` |
+| `start` | The call is issued, synchronously in `request()` | `background`: `RequestOptions.background`, or `true` inside `inBackground` |
 | `retry` | An attempt ended without an answer and a repeat will be sent | `failure`: how it ended; `attempt`: the number of the attempt that ended, 1 for the first; `delayMs`: the wait before the repeat |
-| `settle` | The call's promise settled | `ok`: false when it rejected |
+| `settle` | The call's promise settled | `ok`: false when it rejected; `error`: the rejection reason, the value the call's promise rejects with (an `AxiosError`, a `ViewSetRequestError`, a muxws error), present when `ok` is false |
 
 ### PendingCall
 
@@ -160,7 +170,8 @@ interface PendingCall {
 | `IDEMPOTENCY_KEY_HEADER` | `'Idempotency-Key'` |
 | `newCallKey(): string` | A version 4 UUID: `crypto.randomUUID()`, or built from `crypto.getRandomValues()` where `randomUUID` is absent (an insecure context) |
 | `idempotencyKeyHeader(key: string): string` | `key` as a Structured Field string: quoted, `"` and `\` escaped. Throws `TypeError` for an empty key or one with a character outside printable ASCII |
-| `issueCall<R>(promise: Promise<R>, key: string, background = false): ViewSetCall<R>` | Sets `key` on `promise` and returns it. Called synchronously from a transport's `request()`, it also gives `key` to the promise of the proxy method running around it. Reports `start` (with `background`) to the `onCallActivity` listeners at once and `settle` when `promise` settles |
+| `issueCall<R>(promise: Promise<R>, key: string, background = false): ViewSetCall<R>` | Sets `key` on `promise` and returns it. Called synchronously from a transport's `request()`, it also gives `key` to the promise of the proxy method running around it. Reports `start` (with `background`, `true` also inside `inBackground`) to the `onCallActivity` listeners at once and `settle` (with the rejection reason as `error`) when `promise` settles |
+| `inBackground<R>(fn: () => R): R` | Runs `fn` and returns what it returns. Every call a proxy issues while `fn` runs synchronously reports `background: true`; a call issued after an `await` inside `fn` does not. Calls nest |
 | `onCallActivity(listener: (event: CallEvent) => void): () => void` | Calls `listener` for every `CallEvent` of every call issued through a proxy, REST and muxws alike; returns the function that removes it. A listener that throws is logged with `console.error` and affects neither the call nor the other listeners |
 | `pendingCalls(): readonly PendingCall[]` | Every call issued through a proxy that has not settled, oldest first; a snapshot |
 | `pendingCallCount(includeBackground = false): number` | The number of unsettled calls issued through a proxy; background calls are counted only with `includeBackground` |

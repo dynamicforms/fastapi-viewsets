@@ -34,6 +34,8 @@ interface MuxwsProxyOptions {
   repeat?: RepeatOptions;
   /** The event client watch() subscribes on; without it, the client registered for the peer. */
   events?: EventClient;
+  /** The client topic watch() subscribes; default basePath. */
+  topic?: string;
   peer: MuxwsPeerSource;
   /** Per-attempt timeout in milliseconds, the wait for the reply headers included. */
   timeoutMs?: number;
@@ -44,11 +46,16 @@ interface MuxwsProxyOptions {
 
 | Option | Description |
 |--------|-------------|
-| `peer` | A muxws `Peer`, or a function returning one or a promise of one; the function is called once and its result cached |
+| `peer` | A muxws `Peer`, or a function returning one or a promise of one. A function's result is kept while its peer lives, reconnects included; the first call after the peer closed for good (`onClose` with `willRetry: false`) calls the function again, as does the first call after it threw or its promise rejected. A call in progress keeps the peer it started on, and a repeat waiting for a reconnect rejects on the final close. A bare peer is kept after its final close. A function that returns its peer synchronously lets the first call open its stream synchronously |
+| `topic` | The client topic [`watch()`](./vue-mixins#watch) subscribes: the BE path relative to the application's `root_path`, without a Starlette `Mount` prefix. Default `basePath` |
 | `timeoutMs` | Bounds an attempt from opening the stream to the last byte of the reply; muxws resets the stream with `TIMEOUT` and the call is repeated at once, or rejects with that `StreamTimeout` when it is not repeated. Unset, an attempt has no timeout |
 | `headers` | Sent on every call; a pseudo-header (`:method`, `:path`, `:query`) and `Idempotency-Key` (in any letter case) cannot be overridden |
 | `repeat` | [`RepeatOptions`](./idempotency#repeatoptions); default `{ withinMs: 600000, delayMs: 1000 }` |
-| `events` | The event client [`watch()`](./vue-mixins#watch) subscribes on. Without it, `watch()` uses `eventsOf(peer)`, and throws for a peer without a client; before a function `peer` has resolved, the subscription is made once it has; for a peer without a client its `ready` rejects, and the error goes to `onError`, or is rethrown in a microtask without one |
+| `events` | The event client [`watch()`](./vue-mixins#watch) subscribes on. Without it, `watch()` uses `eventsOf(peer)` of the current peer, and throws for a peer without a client; before a function `peer` has resolved, the subscription is made once it has; for a peer without a client its `ready` rejects, and the error goes to `onError`, or is rethrown in a microtask without one |
+
+On logout and login an application replaces its peer: it `close()`s the old peer's event client,
+connects, calls `createEventClient` for the new peer, and calls `watch()` again; a ViewSet whose
+`peer` is a function returning the current peer follows it once the old peer has closed for good.
 
 ## Peer types
 

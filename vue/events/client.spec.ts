@@ -87,12 +87,13 @@ function makeTransport() {
   };
 
   const axios = {
-    post: vi.fn((path: string, body: unknown) => {
+    post: vi.fn((path: string, body: unknown, config?: { headers?: Record<string, string> }) => {
       const response = deferred<{ data: any }>();
       calls.push({
         via: 'axios',
         path,
         body,
+        headers: config?.headers,
         answer(data, status = 200) {
           if (status >= 400) response.reject(Object.assign(new Error('axios'), { response: { status, data } }));
           else response.resolve({ data });
@@ -129,6 +130,18 @@ function makeTransport() {
       return handleEventStream(peer, payload, {
         headers: { ':event': event, ':version': version, ':topic': topic, ':rev': rev, ':prev': prev },
       });
+    },
+    /** A push of a scoped topic carrying `:scope`. */
+    pushScoped(topic: string, scope: string, rev: number, prev: number, payload: unknown = { n: rev }) {
+      const headers = {
+        ':event': 'changed',
+        ':version': 1,
+        ':topic': topic,
+        ':rev': rev,
+        ':prev': prev,
+        ':scope': scope,
+      };
+      return handleEventStream(peer, payload, { headers });
     },
   };
 }
@@ -315,7 +328,7 @@ describe('subscribing over an open peer', () => {
     await flush();
     await vi.advanceTimersByTimeAsync(400);
     const [poll] = t.take();
-    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: null } } });
+    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: null }, scopes: {} } });
     poll.answer({ topics: { a: { rev: 3, events: [] } }, poll_after_ms: 0 });
     await expect(sub.ready).resolves.toBeUndefined();
   });
@@ -356,7 +369,7 @@ describe('push, gap, poll and resync', () => {
     t.push('a', 13, 12, 'changed', { n: 13 });
     const calls = t.take();
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: 10 } } });
+    expect(calls[0]).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: 10 }, scopes: {} } });
 
     calls[0].answer({
       topics: {
@@ -400,7 +413,7 @@ describe('push, gap, poll and resync', () => {
     });
     await flush();
     const [second] = t.take();
-    expect(second.body).toEqual({ cursors: { a: 13 } });
+    expect(second.body).toEqual({ cursors: { a: 13 }, scopes: {} });
     second.answer({
       topics: {
         a: {
@@ -474,7 +487,7 @@ describe('push, gap, poll and resync', () => {
     // Rev 11 was refused by a delivery filter: the push of 12 carries prev 11.
     t.push('a', 12, 11, 'changed', { n: 12 });
     const [poll] = t.take();
-    expect(poll.body).toEqual({ cursors: { a: 10 } });
+    expect(poll.body).toEqual({ cursors: { a: 10 }, scopes: {} });
     poll.answer({
       topics: { a: { rev: 12, events: [{ rev: 12, prev: 10, event: 'changed', version: 1, payload: { n: 12 } }] } },
     });
@@ -715,8 +728,8 @@ describe('polling', () => {
     const sub = c.subscribe('a', Changed, handlers());
     await flush();
     const [poll] = t.take();
-    expect(poll).toMatchObject({ via: 'axios', path: '/events/poll', body: { cursors: { a: null } } });
-    expect(t.axios.post).toHaveBeenCalledWith('/events/poll', { cursors: { a: null } });
+    expect(poll).toMatchObject({ via: 'axios', path: '/events/poll', body: { cursors: { a: null }, scopes: {} } });
+    expect(t.axios.post).toHaveBeenCalledWith('/events/poll', { cursors: { a: null }, scopes: {} });
     poll.answer({ topics: { a: { rev: 7, events: [] } }, poll_after_ms: 0 });
     await expect(sub.ready).resolves.toBeUndefined();
   });
@@ -730,11 +743,11 @@ describe('polling', () => {
     await flush();
     const calls = t.take();
     expect(calls).toHaveLength(1);
-    expect(calls[0].body).toEqual({ cursors: { a: null, b: null } });
+    expect(calls[0].body).toEqual({ cursors: { a: null, b: null }, scopes: {} });
     calls[0].answer({ topics: { a: { rev: 1, events: [] }, b: { rev: 2, events: [] } } });
     await flush();
     await vi.advanceTimersByTimeAsync(400);
-    expect(t.take().map((call) => call.body)).toEqual([{ cursors: { a: 1, b: 2 } }]);
+    expect(t.take().map((call) => call.body)).toEqual([{ cursors: { a: 1, b: 2 }, scopes: {} }]);
   });
 
   it('polls from the answer rev after an answer whose events were all left out', async () => {
@@ -747,12 +760,12 @@ describe('polling', () => {
     await flush();
     await vi.advanceTimersByTimeAsync(400);
     const [second] = t.take();
-    expect(second.body).toEqual({ cursors: { a: 7 } });
+    expect(second.body).toEqual({ cursors: { a: 7 }, scopes: {} });
     second.answer({ topics: { a: { rev: 9, events: [] } }, poll_after_ms: 0 });
     await flush();
     // The rev moved, so the ladder stays on its 400 ms base.
     await vi.advanceTimersByTimeAsync(400);
-    expect(t.take().map((call) => call.body)).toEqual([{ cursors: { a: 9 } }]);
+    expect(t.take().map((call) => call.body)).toEqual([{ cursors: { a: 9 }, scopes: {} }]);
     expect(h.onEvent).not.toHaveBeenCalled();
     expect(h.onResync).not.toHaveBeenCalled();
   });
@@ -804,7 +817,7 @@ describe('polling', () => {
     await flush();
     await vi.advanceTimersByTimeAsync(400);
     const [again] = t.take();
-    expect(again.body).toEqual({ cursors: { a: null } });
+    expect(again.body).toEqual({ cursors: { a: null }, scopes: {} });
     again.answer({ topics: { a: { rev: 1, events: [] } } });
     await expect(sub.ready).resolves.toBeUndefined();
   });
@@ -819,7 +832,7 @@ describe('polling', () => {
     expect(h.onError).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(400);
     const [again] = t.take();
-    expect(again.body).toEqual({ cursors: { a: null } });
+    expect(again.body).toEqual({ cursors: { a: null }, scopes: {} });
     again.answer({ topics: { a: { rev: 1, events: [] } } });
     await expect(sub.ready).resolves.toBeUndefined();
   });
@@ -839,7 +852,7 @@ describe('polling', () => {
     // No rev moved: the ladder climbs to 600 ms.
     await vi.advanceTimersByTimeAsync(600);
     const [again] = t.take();
-    expect(again.body).toEqual({ cursors: { a: 3 } });
+    expect(again.body).toEqual({ cursors: { a: 3 }, scopes: {} });
     again.answer({
       topics: { a: { rev: 4, events: [{ rev: 4, prev: 3, event: 'changed', version: 1, payload: { n: 4 } }] } },
     });
@@ -886,7 +899,7 @@ describe('polling', () => {
     a.unsubscribe();
     await vi.advanceTimersByTimeAsync(400);
     const [poll] = t.take();
-    expect(poll.body).toEqual({ cursors: { b: 1 } });
+    expect(poll.body).toEqual({ cursors: { b: 1 }, scopes: {} });
     poll.answer({ topics: { b: { rev: 1, events: [] } } });
     await flush();
     b.unsubscribe();
@@ -905,7 +918,7 @@ describe('polling', () => {
     first.answer({ topics: { a: { rev: 1, events: [] } } });
     await flush();
     const [second] = t.take();
-    expect(second.body).toEqual({ cursors: { a: 1, b: null } });
+    expect(second.body).toEqual({ cursors: { a: 1, b: null }, scopes: {} });
     second.answer({ topics: { a: { rev: 1, events: [] }, b: { rev: 2, events: [] } } });
     await expect(b.ready).resolves.toBeUndefined();
   });
@@ -940,7 +953,7 @@ describe('the peer: ladder held, lost and reconnected', () => {
     expect(t.take()).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     const [poll] = t.take();
-    expect(poll).toMatchObject({ via: 'axios', path: '/events/poll', body: { cursors: { a: 10 } } });
+    expect(poll).toMatchObject({ via: 'axios', path: '/events/poll', body: { cursors: { a: 10 }, scopes: {} } });
   });
 
   it('losing the peer while a rung polls over it resumes on the base rung', async () => {
@@ -960,7 +973,7 @@ describe('the peer: ladder held, lost and reconnected', () => {
     await vi.advanceTimersByTimeAsync(399);
     expect(t.take()).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
-    expect(t.take()).toMatchObject([{ via: 'axios', body: { cursors: { a: 1 } } }]);
+    expect(t.take()).toMatchObject([{ via: 'axios', body: { cursors: { a: 1 }, scopes: {} } }]);
   });
 
   it('losing the peer while the ladder waits restarts it on the base rung', async () => {
@@ -977,7 +990,7 @@ describe('the peer: ladder held, lost and reconnected', () => {
     await vi.advanceTimersByTimeAsync(399);
     expect(t.take()).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
-    expect(t.take()).toMatchObject([{ via: 'axios', body: { cursors: { a: 1 } } }]);
+    expect(t.take()).toMatchObject([{ via: 'axios', body: { cursors: { a: 1 }, scopes: {} } }]);
   });
 
   it('drops a subscribe answer from the lost socket, and polls a topic without a rev at once', async () => {
@@ -988,7 +1001,7 @@ describe('the peer: ladder held, lost and reconnected', () => {
     t.close();
     subscribe.answer({ rev: 99 });
     await flush();
-    expect(t.take()).toMatchObject([{ via: 'axios', body: { cursors: { a: null } } }]);
+    expect(t.take()).toMatchObject([{ via: 'axios', body: { cursors: { a: null }, scopes: {} } }]);
   });
 
   it('a client without axios waits for the reconnect', async () => {
@@ -1038,7 +1051,7 @@ describe('the peer: ladder held, lost and reconnected', () => {
     t.take()[0].answer({ rev: 12 });
     await flush();
     const [poll] = t.take();
-    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: 10 } } });
+    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: 10 }, scopes: {} } });
     poll.answer({
       topics: {
         a: {
@@ -1103,11 +1116,11 @@ describe('the check poll', () => {
     expect(t.take()).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     const [poll] = t.take();
-    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: 10 } } });
+    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: 10 }, scopes: {} } });
     poll.answer({ topics: { a: { rev: 10, events: [] } } });
     await flush();
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(t.take()).toMatchObject([{ via: 'peer', body: { cursors: { a: 10 } } }]);
+    expect(t.take()).toMatchObject([{ via: 'peer', body: { cursors: { a: 10 }, scopes: {} } }]);
   });
 
   it('applies the events a lost push left out', async () => {
@@ -1140,7 +1153,7 @@ describe('the check poll', () => {
     t.take()[0].fail(new Error('no status'));
     await flush();
     await vi.advanceTimersByTimeAsync(400);
-    expect(t.take()).toMatchObject([{ via: 'peer', body: { cursors: { a: 10 } } }]);
+    expect(t.take()).toMatchObject([{ via: 'peer', body: { cursors: { a: 10 }, scopes: {} } }]);
   });
 
   it('a refused check is reported through onError and removes the subscription', async () => {
@@ -1204,7 +1217,7 @@ describe('failures and malformed arrivals', () => {
     expect(t.take()).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     const [poll] = t.take();
-    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: 10 } } });
+    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: 10 }, scopes: {} } });
     poll.answer({
       topics: {
         a: {
@@ -1269,7 +1282,7 @@ describe('failures and malformed arrivals', () => {
     t.take()[0].answer({ rev: 13 });
     await flush();
     const [gap] = t.take();
-    expect(gap.body).toEqual({ cursors: { a: 10 } });
+    expect(gap.body).toEqual({ cursors: { a: 10 }, scopes: {} });
     gap.answer({ detail: 'rate limited', detail_code: 'rate_limited' }, 429);
     await flush();
     await catchUp(t, h);
@@ -1315,7 +1328,7 @@ describe('failures and malformed arrivals', () => {
     expect(h.onError).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(400);
     const [poll] = t.take();
-    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: null } } });
+    expect(poll).toMatchObject({ via: 'peer', path: '/events/poll', body: { cursors: { a: null }, scopes: {} } });
     poll.answer({ topics: { a: { rev: 2, events: [] } } });
     await expect(sub.ready).resolves.toBeUndefined();
   });
@@ -1593,7 +1606,7 @@ describe('the axios fallback', () => {
     t.take()[0].fail(Object.assign(new Error('lost'), { name: 'ConnectionLost' }));
     t.close();
     await vi.advanceTimersByTimeAsync(400);
-    expect(t.take().map((call) => [call.via, call.body])).toEqual([['axios', { cursors: { a: 10 } }]]);
+    expect(t.take().map((call) => [call.via, call.body])).toEqual([['axios', { cursors: { a: 10 }, scopes: {} }]]);
   });
 
   it('sends a gap poll over axios at once while the peer is closed', async () => {
@@ -1606,10 +1619,294 @@ describe('the axios fallback', () => {
     t.close();
     await flush();
     const [first] = t.take();
-    expect(first).toMatchObject({ via: 'axios', body: { cursors: { a: null } } });
+    expect(first).toMatchObject({ via: 'axios', body: { cursors: { a: null }, scopes: {} } });
     first.answer({ topics: { a: { rev: 10, events: [] } } });
     await flush();
     // The held push 12 (prev 11) is a gap against rev 10, and is polled without waiting for a rung.
-    expect(t.take()).toMatchObject([{ via: 'axios', path: '/events/poll', body: { cursors: { a: 10 } } }]);
+    expect(t.take()).toMatchObject([{ via: 'axios', path: '/events/poll', body: { cursors: { a: 10 }, scopes: {} } }]);
+  });
+});
+
+describe('scoped topics', () => {
+  /** A client following the scoped topic `/t` at rev 10 under scope `7` over an open peer. */
+  async function scoped(t: Transport, options: Partial<EventClientOptions> = {}) {
+    const c = track(client(t, { axios: t.axios, ...options }));
+    const h = handlers();
+    const sub = c.subscribe('/t', Changed, h);
+    t.take()[0].answer({ rev: 10, scope: '7' });
+    await sub.ready;
+    return { c, h };
+  }
+
+  it('follows the scope of the first answer and applies only the pushes of that scope', async () => {
+    const t = makeTransport();
+    const { h } = await scoped(t);
+    t.pushScoped('/t', '8', 11, 10);
+    t.push('/t', 11, 10, 'changed', { n: 0 });
+    expect(h.onEvent).not.toHaveBeenCalled();
+    t.pushScoped('/t', '7', 11, 10);
+    expect(h.onEvent).toHaveBeenCalledWith({ n: 11 }, { topic: '/t', rev: 11, prev: 10, version: 1, scope: '7' });
+  });
+
+  it('an unscoped topic has no scope in its meta', async () => {
+    const t = makeTransport();
+    const c = track(client(t));
+    const h = handlers();
+    c.subscribe('a', Changed, h);
+    t.take()[0].answer({ rev: 1 });
+    await flush();
+    t.push('a', 2, 1, 'changed', { n: 2 });
+    expect(h.onEvent.mock.calls[0][1]).toEqual({
+      topic: 'a',
+      rev: 2,
+      prev: 1,
+      version: 1,
+    });
+  });
+
+  it('drops the pushes held before the first answer that carry another scope', async () => {
+    const t = makeTransport();
+    const c = track(client(t));
+    const h = handlers();
+    c.subscribe('/t', Changed, h);
+    t.pushScoped('/t', '8', 11, 10);
+    t.pushScoped('/t', '7', 11, 10, { n: 7 });
+    t.take()[0].answer({ rev: 10, scope: '7' });
+    await flush();
+    expect(payloads(h)).toEqual([{ n: 7 }]);
+  });
+
+  it('sends the held scopes with every poll', async () => {
+    const t = makeTransport();
+    const c = track(
+      createEventClient({
+        basePath: '/events',
+        axios: t.axios,
+        draw: () => 0.5,
+      }),
+    );
+    c.subscribe('a', Changed, handlers());
+    c.subscribe('/t', Changed, handlers());
+    await flush();
+    const [first] = t.take();
+    expect(first.body).toEqual({
+      cursors: { a: null, '/t': null },
+      scopes: {},
+    });
+    first.answer({
+      topics: {
+        a: { rev: 1, events: [] },
+        '/t': { rev: 5, events: [], scope: '7' },
+      },
+      poll_after_ms: 0,
+    });
+    await vi.advanceTimersByTimeAsync(10000);
+    const [second] = t.take();
+    expect(second.body).toEqual({
+      cursors: { a: 1, '/t': 5 },
+      scopes: { '/t': '7' },
+    });
+  });
+
+  it('a poll answer under another scope resyncs the topic and subscribes it again', async () => {
+    const t = makeTransport();
+    const { h } = await scoped(t);
+    t.pushScoped('/t', '7', 15, 12);
+    const [gap] = t.take();
+    expect(gap.body).toEqual({ cursors: { '/t': 10 }, scopes: { '/t': '7' } });
+    gap.answer({
+      topics: { '/t': { rev: 20, events: null, scope: '8' } },
+      poll_after_ms: 0,
+    });
+    await flush();
+    expect(h.onResync).toHaveBeenCalledTimes(1);
+    const [subscribe] = t.take();
+    expect(subscribe).toMatchObject({
+      via: 'peer',
+      path: '/events/subscribe',
+      body: { topic: '/t' },
+    });
+    subscribe.answer({ rev: 20, scope: '8' });
+    await flush();
+    t.pushScoped('/t', '7', 21, 20);
+    t.pushScoped('/t', '8', 21, 20);
+    expect(h.onEvent).toHaveBeenCalledTimes(1);
+    expect(h.onEvent.mock.calls[0][1]).toMatchObject({ rev: 21, scope: '8' });
+  });
+
+  it('refresh() holds the pushes until the subscribe answers; a new scope applies them after the resync', async () => {
+    const t = makeTransport();
+    const { c, h } = await scoped(t);
+    c.refresh?.('/t');
+    const [subscribe] = t.take();
+    expect(subscribe.path).toBe('/events/subscribe');
+    t.pushScoped('/t', '7', 11, 10);
+    t.pushScoped('/t', '8', 32, 31);
+    t.pushScoped('/t', '8', 31, 30);
+    t.pushScoped('/t', '8', 29, 28);
+    expect(h.onEvent).not.toHaveBeenCalled();
+    subscribe.answer({ rev: 30, scope: '8' });
+    await flush();
+    expect(h.onResync).toHaveBeenCalledTimes(1);
+    expect(h.onEvent.mock.calls.map(([, meta]) => [meta.rev, meta.scope])).toEqual([
+      [31, '8'],
+      [32, '8'],
+    ]);
+    expect(h.onResync.mock.invocationCallOrder[0]).toBeLessThan(h.onEvent.mock.invocationCallOrder[0]);
+  });
+
+  it('refresh() answered under the same scope applies the held pushes', async () => {
+    const t = makeTransport();
+    const { c, h } = await scoped(t);
+    c.refresh?.();
+    const [subscribe] = t.take();
+    t.pushScoped('/t', '7', 11, 10);
+    expect(h.onEvent).not.toHaveBeenCalled();
+    subscribe.answer({ rev: 10, scope: '7' });
+    await flush();
+    expect(payloads(h)).toEqual([{ n: 11 }]);
+    expect(h.onResync).not.toHaveBeenCalled();
+  });
+
+  it('a refresh whose subscribe fails without a refusal drops the held pushes and polls the topic', async () => {
+    const t = makeTransport();
+    const { c, h } = await scoped(t);
+    c.refresh?.('/t');
+    const [subscribe] = t.take();
+    t.pushScoped('/t', '7', 11, 10);
+    subscribe.fail(Object.assign(new Error('lost'), { name: 'ConnectionLost' }));
+    await flush();
+    await vi.advanceTimersByTimeAsync(400);
+    const [poll] = t.take();
+    expect(poll.body).toEqual({ cursors: { '/t': 10 }, scopes: { '/t': '7' } });
+    expect(h.onEvent).not.toHaveBeenCalled();
+  });
+
+  it('refresh() without an open peer polls at once', async () => {
+    const t = makeTransport();
+    const c = track(
+      createEventClient({
+        basePath: '/events',
+        axios: t.axios,
+        draw: () => 0.5,
+      }),
+    );
+    const h = handlers();
+    c.subscribe('/t', Changed, h);
+    await flush();
+    t.take()[0].answer({
+      topics: { '/t': { rev: 5, events: [], scope: '7' } },
+      poll_after_ms: 0,
+    });
+    await flush();
+    c.refresh?.();
+    await flush();
+    const [poll] = t.take();
+    expect(poll.body).toEqual({ cursors: { '/t': 5 }, scopes: { '/t': '7' } });
+    poll.answer({
+      topics: { '/t': { rev: 9, events: null, scope: '8' } },
+      poll_after_ms: 0,
+    });
+    await flush();
+    expect(h.onResync).toHaveBeenCalledTimes(1);
+  });
+
+  it('a push after headers() changed refreshes the topic with the new headers', async () => {
+    const t = makeTransport();
+    let headers: Record<string, string> = { 'X-Org': '7' };
+    const c = track(client(t, { headers: () => headers }));
+    const h = handlers();
+    c.subscribe('/t', Changed, h);
+    const [first] = t.take();
+    expect(first.headers).toMatchObject({
+      'X-Org': '7',
+      ':method': 'POST',
+      ':path': '/events/subscribe',
+    });
+    first.answer({ rev: 10, scope: '7' });
+    await flush();
+    headers = { 'x-org': '7' };
+    t.pushScoped('/t', '7', 11, 10);
+    expect(payloads(h)).toEqual([{ n: 11 }]);
+    expect(t.take()).toEqual([]);
+
+    headers = { 'X-Org': '8' };
+    t.pushScoped('/t', '7', 12, 11);
+    const [again] = t.take();
+    expect(again).toMatchObject({
+      path: '/events/subscribe',
+      headers: { 'X-Org': '8' },
+    });
+    again.answer({ rev: 40, scope: '8' });
+    await flush();
+    expect(payloads(h)).toEqual([{ n: 11 }]);
+    expect(h.onResync).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the headers with every call over axios, and none without the option', async () => {
+    const t = makeTransport();
+    const c = track(
+      createEventClient({
+        basePath: '/events',
+        axios: t.axios,
+        draw: () => 0.5,
+        headers: { 'X-Org': '7' },
+      }),
+    );
+    c.subscribe('a', Changed, handlers());
+    await flush();
+    expect(t.axios.post).toHaveBeenCalledWith(
+      '/events/poll',
+      { cursors: { a: null }, scopes: {} },
+      {
+        headers: { 'X-Org': '7' },
+      },
+    );
+  });
+
+  it('classifies a topic error by its status: event_scope_missing refuses, 503 is transient', async () => {
+    const t = makeTransport();
+    const c = track(
+      createEventClient({
+        basePath: '/events',
+        axios: t.axios,
+        draw: () => 0.5,
+      }),
+    );
+    const missing = handlers();
+    const unavailable = handlers();
+    const unauthorized = handlers();
+    const subMissing = c.subscribe('/m', Changed, missing);
+    c.subscribe('/u', Changed, unavailable);
+    const subUnauthorized = c.subscribe('/a', Changed, unauthorized);
+    await flush();
+    t.take()[0].answer({
+      topics: {
+        '/m': { rev: null, events: null, error: 'event_scope_missing' },
+        '/u': {
+          rev: null,
+          events: null,
+          error: 'event_topic_refused',
+          status: 503,
+        },
+        '/a': {
+          rev: null,
+          events: null,
+          error: 'event_topic_refused',
+          status: 401,
+        },
+      },
+      poll_after_ms: 0,
+    });
+    await expect(subMissing.ready).rejects.toMatchObject({
+      response: { status: 403 },
+    });
+    await expect(subUnauthorized.ready).rejects.toMatchObject({
+      response: { status: 401 },
+    });
+    expect(missing.onError).toHaveBeenCalledWith(expect.any(ViewSetRequestError));
+    expect(unavailable.onError).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(t.take()[0].body).toEqual({ cursors: { '/u': null }, scopes: {} });
   });
 });
