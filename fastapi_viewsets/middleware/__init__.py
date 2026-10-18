@@ -253,7 +253,9 @@ class Middleware(ABC):
         action itself sees `asyncio.CancelledError` in the latter case. An execution the executor
         ends from outside (a hard time limit, a termination, a lost process) ends its process:
         `call_next()` raises `SystemExit` where the process is stopped with SIGTERM and has time to
-        unwind, and nothing at all where it is killed. `on_transition()` reports it either way. In a
+        unwind, whether the action was running or suspended at an `await`, and nothing at all where it
+        is killed. `on_transition()` reports it either way: the supervisor of a prefork pool child, or
+        the exiting process itself where no supervisor outlives it. In a
         gevent pool a hard time limit ends the execution only and reaches `call_next()` as
         `ActionInterruptedError`.
         """

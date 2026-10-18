@@ -200,16 +200,21 @@ class _Run:
     One execution in this process. Maps the exceptions the executor raises into it to this
     package's: a soft time limit and the gevent pool's hard time limit (`gevent.Timeout`) to
     `ActionInterruptedError`, any other celery, billiard or kombu exception to `ActionFailedError`, and
-    the `asyncio.CancelledError` of an execution an interruption cancelled to that interruption.
+    the `asyncio.CancelledError` of an execution an interruption cancelled to that interruption, or
+    to the `SystemExit` / `KeyboardInterrupt` of a process exit.
     """
 
     def __init__(self, task: str):
         self.task = task
-        self.interruption: ActionInterruptedError | None = None
+        self.interruption: BaseException | None = None
         self._interrupting: BaseException | None = None
 
     def interrupted(self, error: BaseException) -> None:
         """Records `error`, which interrupted the loop while the execution was suspended."""
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            self.interruption = error
+            self._interrupting = error
+            return
         translated = self.translate(error)
         if isinstance(translated, ActionInterruptedError):
             self.interruption = translated
@@ -284,6 +289,13 @@ def _event_loop() -> asyncio.AbstractEventLoop:
 
         nest_asyncio.apply()
     return loop
+
+
+def _supervised() -> bool:
+    """Whether this process is a pool child that billiard started, whose supervisor outlives it."""
+    from billiard.process import current_process
+
+    return getattr(current_process(), "_parent_pid", None) is not None
 
 
 _started_pid: int | None = None
@@ -564,7 +576,8 @@ def celery_viewset_server(
     one as `ActionFailedError`. The
     worker's supervisor reports what ends an execution from outside it (a hard time limit, a
     termination, a lost process) and a call that never runs (revoked, expired, unknown, rejected)
-    to the caller and to `Middleware.on_transition()`.
+    to the caller and to `Middleware.on_transition()`; a process no supervisor outlives (any pool but
+    `prefork`) reports its own exit as `interrupted` with reason `terminated`.
     """
     if redis_client is None:
         raise ValueError("redis_client is required for celery_viewset_server")
@@ -641,6 +654,10 @@ def celery_viewset_server(
             translated error, or a process exit as it is. An `HTTPException` the action raised is its
             answer and is not re-raised.
 
+            A process exit is reported as `interrupted` with reason `terminated` where no supervisor
+            outlives the process (any process but a prefork pool child); a prefork pool child's
+            supervisor reports it.
+
             The gevent pool's hard time limit is reported here as the supervisor reports another
             pool's, as `interrupted` with reason `time_limit`, and its `gevent.Timeout` is re-raised
             as it is: the pool handles the time limit only when that exception reaches it."""
@@ -678,7 +695,9 @@ def celery_viewset_server(
                     pushed.status_code,
                     pushed.detail,
                 )
-            if correlation_id and result_queue_key:
+            if process_exit and not _supervised():
+                _report("interrupted", task_name, call, lambda _t: pushed)
+            elif correlation_id and result_queue_key:
                 push_payload(redis_client, result_queue_key, error_payload(correlation_id, task_name, pushed))
             if process_exit:
                 raise caught

@@ -117,6 +117,10 @@ WORKER_MODULE = textwrap.dedent(
         async def exit(self) -> None:
             os._exit(1)
 
+        @__router.post("/system_exit")
+        async def system_exit(self) -> None:
+            raise SystemExit(1)
+
         @__router.post("/quick")
         async def quick(self) -> str:
             return "quick"
@@ -135,7 +139,11 @@ def redis_url() -> str:
     return url
 
 
-POOLS = {"prefork": ["-P", "prefork", "-c", "1"], "gevent": ["-P", "gevent", "-c", "1"]}
+POOLS = {
+    "prefork": ["-P", "prefork", "-c", "1"],
+    "gevent": ["-P", "gevent", "-c", "1"],
+    "solo": ["-P", "solo"],
+}
 
 
 @pytest.fixture(scope="module")
@@ -248,6 +256,9 @@ def client(worker, redis_url, key, celery_app):
         @__router.post("/exit")
         async def exit(self) -> None: ...
 
+        @__router.post("/system_exit")
+        async def system_exit(self) -> None: ...
+
         @__router.post("/quick")
         async def quick(self) -> str: ...
 
@@ -333,6 +344,12 @@ def test_a_terminated_execution(client, probe, key, celery_app):
     thread.join(timeout=20)
     assert _error(outcome["response"]) == (503, "action_interrupted", "terminated")
     assert _eventually(lambda: ["interrupted", "long", "terminated"] in _entries(probe, key, "transitions"))
+    # the suspended execution unwinds as the SystemExit of SIGTERM, and only the supervisor reports it
+    assert ["long", "SystemExit", None] in _entries(probe, key, "execute")
+    time.sleep(1)
+    assert [entry for entry in _entries(probe, key, "transitions") if entry[1] == "long"] == [
+        ["interrupted", "long", "terminated"]
+    ]
 
 
 def test_a_call_revoked_before_it_started(client, probe, key, celery_app):
@@ -380,3 +397,13 @@ def test_executor_started_runs_once_on_each_loop_of_the_gevent_pool(client, prob
     started = [tuple(entry) for entry in _entries(probe, key, "started")]
     assert {pid for pid, _loop in started} == {worker.pid}
     assert len(started) == len(set(started))
+
+
+# A process no supervisor outlives reports its own exit.
+
+
+@pytest.mark.parametrize("pool", ["solo"], indirect=True, scope="module")
+def test_a_process_exit_in_the_solo_pool(client, probe, key, worker):
+    assert _error(client.post("/jobs/system_exit")) == (503, "action_interrupted", "terminated")
+    assert _eventually(lambda: ["interrupted", "system_exit", "terminated"] in _entries(probe, key, "transitions"))
+    worker.wait(timeout=15)
