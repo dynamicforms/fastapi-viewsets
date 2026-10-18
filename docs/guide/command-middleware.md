@@ -337,7 +337,8 @@ time limit) reaches `call_next()` as `ActionInterruptedError` (reason `time_limi
 action was running or suspended at an `await`; the action itself sees `asyncio.CancelledError` in
 the latter case. `execute()` runs to its end before the task fails. An execution the worker ends from
 outside (a hard time limit, a termination, a lost process) ends its process: `call_next()` raises
-`SystemExit` only where the process has time to unwind, and
+`SystemExit` only where the process has time to unwind, whether the action was running or suspended
+at an `await` (the action itself sees `asyncio.CancelledError` in the latter case), and
 [`on_transition()`](#transitions-outside-the-execution-middleware-on-transition) reports it.
 
 In `__call__`, a `celery_viewset` action's `call_next()` returns the result the worker sent back or
@@ -407,7 +408,7 @@ injects). `ActionTransition` (in `fastapi_viewsets.middleware`) is a frozen data
 |--------|------|-------|---------|
 | `dispatched` | The call was sent to the broker | FastAPI process | `None` |
 | `not_run` | The worker will not run the call: revoked or expired before it started, unknown task, rejected message | Worker's supervisor | `ActionDispatchError` |
-| `interrupted` | The worker ended the execution from outside: hard time limit, termination, lost process | Worker's supervisor | `ActionInterruptedError` |
+| `interrupted` | The worker ended the execution from outside: hard time limit, termination, lost process | Worker's supervisor; for a process exit in a process no supervisor outlives (any pool but `prefork`), that process | `ActionInterruptedError` |
 | `failed` | The worker's own machinery failed around the execution | Worker process | `ActionFailedError` |
 
 In the worker, `on_transition()` runs after the caller was sent `transition.error`, on an event loop

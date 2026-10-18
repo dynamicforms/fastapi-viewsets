@@ -6,6 +6,17 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - Unreleased
+
+### Fixed
+
+- An execution suspended at an `await` when its process exits reaches `Middleware.execute()` as
+  `SystemExit` (or `KeyboardInterrupt`) from `call_next()`, as one running synchronous code does,
+  instead of as `asyncio.CancelledError`. The action itself still sees `asyncio.CancelledError`.
+- A process exit in a worker process no supervisor outlives (any pool but `prefork`, e.g. `solo`)
+  is reported to `Middleware.on_transition()` as `interrupted` with reason `terminated`. A prefork
+  pool child leaves its exit to the supervisor, as before.
+
 ## [0.11.0] - Unreleased
 
 ### Added

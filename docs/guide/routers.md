@@ -344,6 +344,7 @@ errors (see [Error Codes](./error-codes#executor-outcomes)):
 | Hard time limit | `ActionInterruptedError` (504, reason `time_limit`) | `on_transition("interrupted")`; in a `gevent` pool also `execute()` (`ActionInterruptedError` from `call_next()`) |
 | `revoke(..., terminate=True)` | `ActionInterruptedError` (503, reason `terminated`) | `on_transition("interrupted")` |
 | The worker process exits | `ActionInterruptedError` (503, reason `lost`) | `on_transition("interrupted")` |
+| `SystemExit` or `KeyboardInterrupt` ends the execution in a process no supervisor outlives (any pool but `prefork`) | `ActionInterruptedError` (503, reason `terminated`) | `execute()` (`SystemExit` / `KeyboardInterrupt` from `call_next()`), then `on_transition("interrupted")` from that process |
 | Revoked or expired before it started | `ActionDispatchError` (503, reason `revoked` / `expired`) | `on_transition("not_run")` |
 | The worker has no task of that name under a registered `task_prefix` | `ActionDispatchError` (503, reason `unknown_task`) | `on_transition("not_run")` |
 | The worker rejects the message | `ActionDispatchError` (503, reason `rejected`) | `on_transition("not_run")` |

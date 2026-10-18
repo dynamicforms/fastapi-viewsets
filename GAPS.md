@@ -394,8 +394,12 @@ class.
 
 `SystemExit` and `KeyboardInterrupt` are re-raised as they are, so the process still exits, and
 the caller is sent `ActionInterruptedError` (reason `terminated`). For a hard time limit the
-supervisor has already sent `time_limit`, and the reader drops the second payload; for a cold
-shutdown of a `solo` worker it is the only report.
+supervisor has already sent `time_limit`, and the reader drops the second payload. A process
+that is not a billiard pool child (`billiard.process.current_process()._parent_pid` is None: a
+`solo`, `threads` or `gevent` worker) has no supervisor to report the exit, so it also submits the
+`interrupted` transition itself; a prefork child leaves the transition to its supervisor, which
+reports the real reason (`time_limit`, `terminated`). The check reads a private billiard attribute
+that every billiard release so far sets on the child's process object.
 
 ### Time limits apply to executor-run actions only
 

@@ -71,6 +71,15 @@ CALL = {"_correlation_id": "c1", "_result_queue_key": "celery_viewset_results:jo
 
 
 @pytest.fixture
+def submitted(monkeypatch):
+    """The transitions this process submits, in place of running their listeners."""
+    monkeypatch.setattr(server, "_reported", OrderedDict())
+    transitions = []
+    monkeypatch.setattr(server, "_submit_transition", transitions.append)
+    return transitions
+
+
+@pytest.fixture
 def soft_limit_signal():
     """Billiard's soft time limit handler on SIGUSR1, as a prefork pool child has it; `send(delay)`
     signals this process after `delay` seconds."""
@@ -208,7 +217,7 @@ def test_a_base_exception_is_pushed_and_raised_as_action_failed():
     assert _pushed(redis_client)["error"]["class"] == "ActionFailedError"
 
 
-def test_a_process_exit_is_pushed_as_terminated_and_raised_as_it_is():
+def test_a_process_exit_is_pushed_and_reported_as_terminated_and_raised_as_it_is(submitted):
     async def body():
         raise SystemExit(1)
 
@@ -216,6 +225,51 @@ def test_a_process_exit_is_pushed_as_terminated_and_raised_as_it_is():
     with pytest.raises(SystemExit):
         tasks["jobs.run"](**CALL)
     assert _pushed(redis_client)["error"]["params"] == {"task": "jobs.run", "reason": "terminated"}
+    assert [(t.kind, t.action, t.error.params["reason"]) for t in submitted] == [("interrupted", "run", "terminated")]
+
+
+def test_a_process_exit_in_a_prefork_pool_child_is_left_to_its_supervisor(submitted, monkeypatch):
+    monkeypatch.setattr(server, "_supervised", lambda: True)
+
+    async def body():
+        raise SystemExit(1)
+
+    tasks, redis_client = _worker(_state_recording_viewset(body, []))
+    with pytest.raises(SystemExit):
+        tasks["jobs.run"](**CALL)
+    assert _pushed(redis_client)["error"]["params"] == {"task": "jobs.run", "reason": "terminated"}
+    assert submitted == []
+
+
+def test_a_process_exit_while_suspended_cancels_the_action_and_reaches_execute_as_itself(events, submitted):
+    def exit_process(_signum, _frame):
+        raise SystemExit(1)
+
+    previous = signal.signal(signal.SIGUSR2, exit_process)
+    timer = threading.Timer(0.05, os.kill, (os.getpid(), signal.SIGUSR2))
+    seen, saved = [], []
+
+    async def body():
+        try:
+            await asyncio.sleep(5)
+        except BaseException as error:
+            seen.append(error)
+            raise
+
+    tasks, redis_client = _worker(_state_recording_viewset(body, saved))
+    timer.start()
+    try:
+        with pytest.raises(SystemExit) as raised:
+            tasks["jobs.run"](**CALL)
+    finally:
+        timer.cancel()
+        signal.signal(signal.SIGUSR2, previous)
+
+    assert isinstance(seen[0], asyncio.CancelledError)
+    assert saved == [True]
+    assert events == [("execute", raised.value)]
+    assert _pushed(redis_client)["error"]["params"] == {"task": "jobs.run", "reason": "terminated"}
+    assert [(t.kind, t.error.params["reason"]) for t in submitted] == [("interrupted", "terminated")]
 
 
 def test_an_http_exception_is_the_answer_and_a_package_error_keeps_its_class():
@@ -346,11 +400,8 @@ class Timeout(BaseException):
 
 
 @pytest.fixture
-def gevent_timeout(monkeypatch):
+def gevent_timeout(monkeypatch, submitted):
     monkeypatch.setitem(sys.modules, "gevent", SimpleNamespace(Timeout=Timeout))
-    monkeypatch.setattr(server, "_reported", OrderedDict())
-    submitted = []
-    monkeypatch.setattr(server, "_submit_transition", submitted.append)
     return submitted
 
 
