@@ -28,7 +28,7 @@ attributes once, before any viewset class is decorated with `route_viewset`.
 | `viewsets_event_push_timeout` | `float` | `2.0` | Seconds the delivery filters and `peer.notify()` of one push to one socket may take together; `notify()` queues the push and does not wait for the socket |
 | `viewsets_event_max_subscriptions` | `int` | `256` | Topics one socket may hold, and cursors one poll may carry |
 | `viewsets_event_poll_after_ms` | `int` | `0` | `poll_after_ms` of every poll answer, the shortest interval a client polls at |
-| `viewsets_event_reauthorize_after` | `float \| None` | `300.0` | Seconds after which a push to a subscription of a scoped topic runs the topic's gate again with the subscribing request: the push is sent when the gate answers the subscription's store topic, a refusal or another store topic removes the subscription and skips the push, another exception skips the push. `None` never; unscoped topics are not affected |
+| `viewsets_event_reauthorize_after` | `float \| None` | `300.0` | Seconds after which a push to a subscription of a scoped topic runs the topic's gate again with the subscribing request: the push is sent when the gate answers the subscription's store topic, a refusal (an `HTTPException` of a status from 400 to 499 other than 429) or another store topic removes the subscription and skips the push, another exception, a 429 or 5xx included, skips the push. `None` never; unscoped topics are not affected |
 
 `ContextProcessor` is `Callable[[Request, Any], Awaitable[dict[str, Any]]]`; a processor may also
 take a `config` keyword, see [Action Configuration](../guide/action-configuration).

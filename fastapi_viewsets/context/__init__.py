@@ -184,6 +184,24 @@ class LazyObject(SerializableObject, ABC):
         raise NotImplementedError
 
 
+class _Deferred:
+    """
+    A context value computed once, on its first `await`, by `compute()`. `serialize_context()`
+    awaits it like any bare awaitable; `celery_viewset_client` awaits every `_Deferred` of the
+    call's context before it serializes the arguments, so an exception of `compute()` propagates
+    from the call unchanged.
+    """
+
+    def __init__(self, compute: Any) -> None:
+        self._compute = compute
+        self._future: asyncio.Future | None = None
+
+    def __await__(self):
+        if self._future is None:
+            self._future = asyncio.ensure_future(self._compute())
+        return self._future.__await__()
+
+
 class Context:
     """
     Wraps the per-request context dict produced by running settings.viewsets_context_processors.

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from muxws.frames import ABSENT
 from pydantic import BaseModel, Field
@@ -682,6 +682,22 @@ def _celery_pair(monkeypatch, decorators=()):
     return executor, worker, client
 
 
+def test_a_resolver_that_raises_before_the_dispatch_refuses_the_call_and_sends_nothing(monkeypatch):
+    def refuse(_request, _context):
+        raise HTTPException(403, "read only")
+
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [ChangeEvents(), SelectOrg()])
+    executor, _worker, client = _celery_pair(monkeypatch, decorators=[event_scope(refuse, name="things")])
+    router = APIRouter()
+    route_viewset(router, "/things", pk_field_name="id")(client)
+    response = TestClient(app_for(router, prefix="/api")).post(
+        "/api/things", json={"title": "Seven"}, headers={"x-org": "7"}
+    )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "read only"}
+    assert executor.sent == []
+
+
 def _orders_calling(client) -> APIRouter:
     """A viewset at /orders whose action `place` creates a thing through the celery client."""
     router = APIRouter()
@@ -781,21 +797,28 @@ async def test_a_nested_execution_resolves_the_key_from_its_context():
     assert await ChangeEvents()._resolve_topic(empty) is None
 
 
-def test_a_celery_action_of_a_scoped_class_publishes_in_the_worker_to_the_key_of_the_web_process(monkeypatch):
+class SelectOrg(Middleware):
+    async def __call__(self, request, _viewset, context, call_next):
+        if request is not None and request.headers.get("x-org"):
+            context.set("org_id", request.headers["x-org"])
+        return await call_next()
+
+
+@pytest.mark.parametrize("change_events_first", [False, True], ids=["after-the-inputs", "before-the-inputs"])
+def test_a_celery_action_of_a_scoped_class_publishes_in_the_worker_to_the_key_of_the_web_process(
+    monkeypatch, change_events_first
+):
     reset_event_scopes()
     calls: list[str | None] = []
 
     def resolver(request, context):
         calls.append(request.headers.get("x-org") if request is not None else None)
-        return context.raw().get("org_id")
+        if "org_id" not in context:
+            raise HTTPException(403, "no organisation")
+        return context.raw()["org_id"]
 
-    class SelectOrg(Middleware):
-        async def __call__(self, request, _viewset, context, call_next):
-            if request is not None and request.headers.get("x-org"):
-                context.set("org_id", request.headers["x-org"])
-            return await call_next()
-
-    monkeypatch.setattr(settings, "viewsets_command_middleware", [SelectOrg(), ChangeEvents()])
+    chain = [ChangeEvents(), SelectOrg()] if change_events_first else [SelectOrg(), ChangeEvents()]
+    monkeypatch.setattr(settings, "viewsets_command_middleware", chain)
     executor, _worker, client = _celery_pair(monkeypatch, decorators=[event_scope(resolver, name="things")])
     router = APIRouter()
     route_viewset(router, "/things", pk_field_name="id")(client)

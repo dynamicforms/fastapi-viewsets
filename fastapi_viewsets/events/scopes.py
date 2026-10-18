@@ -56,9 +56,10 @@ caller without one. An `HTTPException` it raises refuses the caller with that ex
 """
 
 SCOPE_CONTEXT_KEY = "fastapi_viewsets.events.scope"
-"""The context key under which `ChangeEvents.__call__` stores `{"name": str, "key": str}` for a write
-call of a class with `@event_scope`, in the web process. The worker of a `celery_viewset` action
-reads the key from the context it is handed."""
+"""The context key under which `ChangeEvents.__call__` stores the scope of a write call of a class
+with `@event_scope`, in the web process: an awaitable resolved after the whole command chain, which
+answers `{"name": str, "key": str}`, or None for a key of None. The worker of a `celery_viewset`
+action reads the resolved value from the context it is handed."""
 
 _GATE_CACHE_SCOPE_KEY = "fastapi_viewsets.events.gate_cache"
 
@@ -103,24 +104,40 @@ def event_scope(resolver: ScopeResolver, *, name: str | None = None) -> Callable
 
     Raises `ValueError` for a name that is empty or holds whitespace, a control character or `:`,
     and for a name another class already declared, unless the class is that class, a subclass of
-    it, or a class of the same module and qualified name (a reloaded module), which takes the name
-    over.
+    it, or a class of the same module and qualified name whose qualified name has no `<locals>`
+    part (the class of a reloaded module), which takes the name over. Classes a function defines
+    share their module and qualified name, so each needs a `name` of its own.
     """
 
     def decorator(cls: type[T]) -> type[T]:
         scope_name = _scope_name(name if name is not None else f"{cls.__module__}.{cls.__qualname__}")
         holder = _names.get(scope_name)
-        if holder is None or (cls.__module__, cls.__qualname__) == (holder.__module__, holder.__qualname__):
+        if holder is None or _reloaded(cls, holder):
             _names[scope_name] = cls
         elif cls is not holder and not issubclass(cls, holder):
+            hint = "; a class defined in a function needs event_scope(name=...)" if _is_local(cls) else ""
             raise ValueError(
                 f"the event scope {scope_name!r} is declared by {holder.__module__}.{holder.__qualname__}; "
-                f"{cls.__module__}.{cls.__qualname__} is not a subclass of it"
+                f"{cls.__module__}.{cls.__qualname__} is not a subclass of it{hint}"
             )
         cls.__event_scope__ = EventScope(scope_name, resolver)
         return cls
 
     return decorator
+
+
+def _is_local(cls: type) -> bool:
+    return "<locals>" in cls.__qualname__.split(".")
+
+
+def _reloaded(cls: type, holder: type) -> bool:
+    """Whether `cls` replaces `holder` as the class of a reloaded module: another class of the same
+    module and qualified name, declared outside any function."""
+    return (
+        cls is not holder
+        and (cls.__module__, cls.__qualname__) == (holder.__module__, holder.__qualname__)
+        and not _is_local(cls)
+    )
 
 
 def scope_of(cls: type) -> EventScope | None:

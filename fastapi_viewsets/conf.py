@@ -111,9 +111,10 @@ class Settings:
         """
         Seconds after which a push to a subscription of a scoped viewset topic first runs the
         topic's gate again with the request the subscription was made with. The push is sent when the
-        gate answers the subscription's store topic; a refusal or another store topic removes the
-        subscription and skips the push; any other failure skips the push and keeps the subscription
-        for the next push to try again. None never runs it. Subscriptions of unscoped topics are not
+        gate answers the subscription's store topic; a refusal (an `HTTPException` of a status from
+        400 to 499 other than 429) or another store topic removes the subscription and skips the
+        push; any other failure, a 429 or 5xx included, skips the push and keeps the subscription for
+        the next push to try again. None never runs it. Subscriptions of unscoped topics are not
         affected.
         """
         self.viewsets_event_poll_after_ms: int = 0

@@ -14,16 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   events under the store topic `@{name}:{key}`, the key resolved by the server from the request: on
   `subscribe` and `poll` in a gate run of the subscribing request (route dependencies, context
   processors, `depends()` and `__call__` of the middleware chain of the gate action, then the
-  resolver), on a write by `ChangeEvents`. One class and its subclasses on several routes (a header
+  resolver), on a write by `ChangeEvents`, after the whole command chain (before the dispatch of a
+  `celery_viewset` action, whose task carries the key). One class and its subclasses on several routes (a header
   route and a path-parameter route) share the store topic of a key; a subscriber of another key
   receives nothing. New in `fastapi_viewsets.events`: `EventScope`, `ResolvedTopic`, `ScopeKey`,
   `ScopeResolver`, `GATE_RUN_SCOPE_KEY`, `SCOPE_CONTEXT_KEY`, `event_scope`, `scope_of`,
   `resolve_scope`, `resolve_topic`, `reset_event_scopes`, `scoped_topic`, `is_scoped_topic`,
-  `split_scoped_topic`, `drop_subscriptions`.
+  `split_scoped_topic`, `drop_subscriptions`, `write_topic` (the topic of a custom endpoint that
+  publishes itself). Classes a function defines need `event_scope(name=...)` each.
 - `Subscription.store_topic`, `.scope`, `.authorized_at`, `.reauthorize`; `subscribe()` takes
   `store_topic=`, `scope=` and `reauthorize=`. Delivery filters receive the client topic.
 - `settings.viewsets_event_reauthorize_after` (default `300.0` seconds): a push to a subscription of
-  a scoped topic runs its gate again once that long has passed.
+  a scoped topic runs its gate again once that long has passed. A refusal (an `HTTPException` of a
+  status from 400 to 499 other than 429) removes the subscription; a 429 or 5xx keeps it.
 - Wire: `SubscribeAnswer.scope`, `PollRequest.scopes`, `TopicAnswer.status` (on every error answer)
   and `TopicAnswer.scope`, the push header `:scope`. Unscoped success answers are unchanged.
 - `EventScopeMissingError` (403, `event_scope_missing`): a scoped topic whose resolver answers
@@ -47,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A muxws proxy whose `peer` is a function called it once for its lifetime. It calls it again after
   the peer closed for good, and after the function threw or its promise rejected.
 - A refused `subscribe` of a topic the socket held left the old subscription in place; it removes
-  it. A poll over muxws that refuses a topic removes the socket's subscription to it.
+  it. A poll over muxws that refuses a topic with a status from 400 to 499 other than 429 removes the
+  socket's subscription to it; a 429 or a status of 500 or above keeps it.
 - `route_viewset` on a subclass of a routed class reused the parent's endpoints, which then carried
   the subclass as `__viewset_class__`; the subclass gets endpoints of its own.
 - The muxws endpoint examples check `Origin` before `accept()`.

@@ -386,7 +386,9 @@ A poll carrying more than `settings.viewsets_event_max_subscriptions` cursors is
 Every answer of a scoped topic carries `scope`, its scope key; an unscoped topic's answer has none.
 `error`, `status` and `scope` are left out of an answer that has none. A refused or invalid topic
 does not affect the other topics. The authorizers run for every topic of every poll. A poll over
-muxws that refuses a topic removes the socket's subscription to it. In `events`, each event's `prev`
+muxws that refuses a topic with a status from 400 to 499 other than 429 removes the socket's
+subscription to it; a 429 or a status of 500 or above is transient and keeps it, as the frontend's
+event client counts these statuses. In `events`, each event's `prev`
 is the rev of the event before it in the answer, the cursor for the first. `rev` is never lower than
 the rev of any event after the cursor, also when an event is appended while the poll is answered,
 and covers the events the delivery filters left out.
@@ -516,7 +518,18 @@ class TagsViewSet(ViewSetMixin[int, Tag]): ...
 `name` defaults to `f"{cls.__module__}.{cls.__qualname__}"` and holds no whitespace, control
 character or `:`. Subclasses inherit the scope and its name. The decorator applies before or after
 `route_viewset`. A name another class declared raises `ValueError`, unless the class is a subclass
-of that class, or has the same module and qualified name (a reloaded module).
+of that class, or has the same module and qualified name without a `<locals>` part (the class of a
+reloaded module). Classes a function defines share their module and qualified name
+(`make.<locals>.TagsViewSet`), so each one passes a `name` of its own:
+
+```python
+def make_viewset(router: APIRouter, model: type[BaseModel], name: str) -> type:
+    @event_scope(org_scope, name=f"app.{name}")
+    @route_viewset(router, f"/{name}", pk_field_name="id")
+    class ModelViewSet(ViewSetMixin[int, model]): ...
+
+    return ModelViewSet
+```
 
 ### The two names of a topic
 
@@ -528,7 +541,8 @@ of that class, or has the same module and qualified name (a reloaded module).
 A client never names a store topic. The server resolves the key:
 
 - on `subscribe` and on every `poll`, in a [gate run](#the-gate-run) of the calling request;
-- on a write, in the call that writes (see [ChangeEvents](#scoped-classes)).
+- on a write, in the call that writes, after its whole command chain (see
+  [ChangeEvents](#scoped-classes)).
 
 A write through any route of the class or of a subclass, whose resolver answers `7`, publishes to
 `@name:7`, and every subscription whose store topic is `@name:7` receives the event, each with its
@@ -609,9 +623,10 @@ with a narrower read rule declares a scope of its own, `@event_scope(resolver, n
 A push to a subscription of a scoped topic first runs the topic's gate again with the request the
 subscription was made with, once `settings.viewsets_event_reauthorize_after` seconds (default
 `300.0`) have passed since the subscribe or the last reauthorization. A gate run that answers the
-subscription's store topic sends the push and renews the subscription; a refusal, `event_scope_missing`
-included, or another store topic removes the subscription and skips the push; any other exception
-skips the push and keeps the subscription for the next push to try again. Concurrent pushes share one
+subscription's store topic sends the push and renews the subscription; a refusal (an `HTTPException`
+of a status from 400 to 499 other than 429, `event_scope_missing` included) or another store topic
+removes the subscription and skips the push; any other exception, a 429 or a status of 500 or above
+included, skips the push and keeps the subscription for the next push to try again. Concurrent pushes share one
 gate run, and the push timeout bounds the wait for it. `None` turns it off. An application that
 revokes a membership removes the subscriptions at once:
 
@@ -626,12 +641,13 @@ drop_subscriptions(lambda s: s.scope == str(org_id) and s.context.raw().get("use
 | Case | Behaviour |
 |------|-----------|
 | Resolver answers `None` | subscribe 403 `event_scope_missing`; poll `error: event_scope_missing`, `status: 403`; a write runs and publishes nothing, with a warning |
-| Resolver raises on a write | the write is refused before the action |
+| Resolver raises on a write | the write is refused before the action; the resolver runs after the whole command chain |
 | Membership revoked | the next subscribe or poll refuses the topic and removes the server subscription; pushes are gated again after `viewsets_event_reauthorize_after`; `drop_subscriptions(where)` removes them at once |
 | Scope change of a client (header, domain) | the client calls `refresh()`; it refreshes a topic itself on a push after its `headers()` changed; a poll's `scopes` that differ resync the topic and subscribe it again |
 | Client sends `@...` | 422, or poll `event_topic_invalid` |
 | Frontend before 0.11.2 against a scoped topic | subscribe works and `:scope` is ignored; a poll without `scopes` trusts the cursor. Scoped topics need the frontend of 0.11.2 or later |
 | Action configuration differs between the gate action and a write | the keys can differ, and the event goes to a store topic no subscriber holds; the resolver's inputs are set for both the gate action and the write actions |
+| Endpoint that writes outside the eight actions | publishes to `await write_topic(self, request, context)` (see [Custom endpoints](#custom-endpoints)) |
 | Write outside a request | `await publish(scope_of(TagsViewSet).topic(key), RecordsChanged(...))` |
 | Unscoped viewsets, custom sources | unchanged |
 
@@ -775,7 +791,8 @@ argument, passed by keyword or by position, and needs no pk field.
 `ChangeEvents.__call__` runs in the web process on every action of the viewsets it applies to. It
 stores the routed base path of the call's viewset in the context under
 `"fastapi_viewsets.events.topic"` (`TOPIC_CONTEXT_KEY`); for a [scoped class](#scoped-classes) it
-also resolves the scope key of a write. `routed_base_path(request)` computes it:
+also stores the deferred resolution of the scope key of a write. `routed_base_path(request)` computes
+the routed base path:
 the request's path, relative to the application's `root_path`, with as many trailing segments
 removed as the action's path in `__viewset_metadata__["paths"]` has. Each path parameter of that
 path matches one segment; a `{name:path}` parameter is not supported. Path parameters of the prefix
@@ -802,23 +819,21 @@ does not run.
 
 For a class with [`@event_scope`](#scoped-topics):
 
-- `__call__` resolves the key of each write action (the eight of the table) with the call's request
-  and context, and stores `{"name": scope.name, "key": key}` under
-  `"fastapi_viewsets.events.scope"` (`SCOPE_CONTEXT_KEY`) when the key is not `None`. It does not for
-  an action configured `False` or with a `topic`. An exception of the resolver refuses the call
-  before the action.
+- `__call__` stores, for each write action (the eight of the table), the deferred resolution of the
+  key with the call's request and context under `"fastapi_viewsets.events.scope"`
+  (`SCOPE_CONTEXT_KEY`). It does not for an action configured `False` or with a `topic`.
+- The resolver runs once, after the whole command chain, wherever `ChangeEvents` sits in it: in
+  `execute()` for an action that executes in the web process, and in the web process before the
+  dispatch for a `celery_viewset` action. The dispatched context then carries
+  `{"name": scope.name, "key": key}`, or `None` for a key of `None`, and the worker does not call the
+  resolver. An exception of the resolver refuses the call before the action; a `celery_viewset`
+  task is not sent.
 - `execute()` publishes to `topic_for(execution)` of a subclass that overrides `topic_for`; else, for
   an execution a request called, `@{name}:{key}` of the key under `SCOPE_CONTEXT_KEY`; else
   `@{name}:{key}` of the key the resolver answers in `execute()` with the execution's request and
-  context. A key of `None` publishes nothing and logs a warning naming the class, the action and the
-  scope.
+  context (an execution dispatched outside any call or in the execution of another action). A key of
+  `None` publishes nothing and logs a warning naming the class, the action and the scope.
 - A `topic` option raises `TypeError`: the scope and the option exclude each other.
-
-`ChangeEvents` listed after the middleware that sets the resolver's inputs resolves the key in the web
-process, and a `celery_viewset` worker reads it from the context it is handed: the worker does not
-call the resolver. Listed before, `execute()` resolves the key where the action runs, from the
-dispatched context and the rebuilt request (headers, path parameters); in a worker only the values
-that survive the context's serialization are there.
 
 ### Configuration
 
@@ -856,6 +871,7 @@ a subclass is used for every class, scoped ones included, and may return a scope
 | Part | In-process action | `celery_viewset` action |
 |------|-------------------|-------------------------|
 | `__call__`, which stores the topic | FastAPI process | FastAPI process |
+| the resolver of a scoped write | FastAPI process, in `execute()` | FastAPI process, before the dispatch |
 | `execute()`, which publishes | FastAPI process | Celery worker |
 
 The worker therefore needs `ChangeEvents` in its `settings.viewsets_command_middleware` and a
@@ -875,17 +891,30 @@ from the store. With `Idempotency` in the chain, a repeat of the call with the s
 
 ### Custom endpoints
 
-An endpoint that writes outside the eight actions publishes itself, to the topic `__call__` stored:
+An endpoint that writes outside the eight actions publishes itself, to the topic `write_topic`
+answers:
 
 ```python
-from fastapi_viewsets.events import TOPIC_CONTEXT_KEY, Change, RecordsChanged, publish
+from fastapi_viewsets.events import Change, RecordsChanged, publish, write_topic
 
 
 @__router.post("/{pk}/archive")
-async def archive(self, context: Context, pk: int) -> None:
+async def archive(self, request: Request, context: Context, pk: int) -> None:
     await self.perform_archive(context, pk)
-    await publish(await context[TOPIC_CONTEXT_KEY], RecordsChanged(op="deleted", changes=[Change(pk=pk)]))
+    topic = await write_topic(self, request, context)
+    if topic is not None:
+        await publish(topic, RecordsChanged(op="deleted", changes=[Change(pk=pk)]))
 ```
+
+`await write_topic(viewset, request, context)`, `viewset` a class or an instance:
+
+| Class | Topic |
+|-------|-------|
+| with `@event_scope` | `@{name}:{key}` of the key the resolver answers with `request` and `context`; `None` for a key of `None`; an exception of the resolver propagates |
+| without | the routed base path under `TOPIC_CONTEXT_KEY`, else `__viewset_metadata__["base_path"]`, else `None` |
+
+In a `celery_viewset` worker the resolver of a custom endpoint runs with the dispatched context and
+the rebuilt request.
 
 ---
 

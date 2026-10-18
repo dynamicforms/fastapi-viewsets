@@ -12,6 +12,7 @@ from ..conf import settings
 from . import store as store_module
 from .delivery import reset_subscriptions
 from .redis import _APPEND_SCRIPT
+from .scopes import reset_event_scopes
 from .sources import reset_sources
 
 EVENT_SETTINGS = (
@@ -34,12 +35,14 @@ def _reset_events():
     settings.viewsets_event_delivery_filters = []
     reset_subscriptions()
     reset_sources()
+    reset_event_scopes()
     store_module._default_store = None
     yield
     for name, value in saved.items():
         setattr(settings, name, value)
     reset_subscriptions()
     reset_sources()
+    reset_event_scopes()
     store_module._default_store = None
 
 

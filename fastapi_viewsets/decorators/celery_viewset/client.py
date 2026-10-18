@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, TypeVar
 from pydantic import BaseModel
 
 from ...action_configuration import resolve_action_configuration, TimeLimits
-from ...context import Context, SerializableObject, serialize_context, to_jsonable
+from ...context import _Deferred, Context, SerializableObject, serialize_context, to_jsonable
 from ...exceptions import ActionDispatchError, ResultTimeoutError
 from ...middleware import ActionTransition, run_transition_listeners
 from ..build_schema import build_schema
@@ -120,6 +120,8 @@ def _patch_method(
     `current_call()`; a `context` the caller passes replaces the call's. The action's `TimeLimits`
     configuration is sent as the task's time limits. Arguments that cannot be serialized raise
     `ActionDispatchError` (reason `serialization`), a send that fails raises it with reason `send`.
+    A deferred context value (`ChangeEvents`'s scope of a write) is computed before the arguments
+    are serialized; its exception propagates unchanged and nothing is sent.
     Once the task is sent, `Middleware.on_transition()` of the action's effective middlewares
     receives `dispatched`. The action's name joins the class's `DEFERRED_ACTIONS_ATTRIBUTE`."""
     method_name = original_endpoint.__name__
@@ -142,6 +144,9 @@ def _patch_method(
             parent = call.parent_of_dispatch() if call is not None else None
             action_configuration = resolve_action_configuration(cls, method_name)
             bound_context = Context(context.raw(), action_configuration=action_configuration, action_name=method_name)
+            for value in list(context.raw().values()):
+                if isinstance(value, _Deferred):
+                    await value
             try:
                 serializable_args = [await _serialize_value(v) for v in args]
                 serializable_kwargs = {

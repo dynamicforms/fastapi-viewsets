@@ -22,7 +22,7 @@ from ..mux_ws.registry import reset_registry
 from ..mux_ws.server import process_command
 from . import scopes as scopes_module
 from .authorizers import allow_all, allow_authenticated, DeclaredSources, ViewsetTopics
-from .changes import ChangeEvents
+from .changes import Change, ChangeEvents, RecordsChanged, write_topic
 from .conftest import FakePeer
 from .delivery import subscriptions, topics_of, wait_for_pushes
 from .scopes import (
@@ -95,6 +95,25 @@ def test_a_reloaded_class_takes_its_scope_name_over():
     event_scope(lambda _request, _context: "1", name="reloaded")(first)
     event_scope(lambda _request, _context: "1", name="reloaded")(second)
     assert scopes_module._names["reloaded"] is second
+    event_scope(lambda _request, _context: "1")(first)
+    event_scope(lambda _request, _context: "1")(second)
+    assert scope_of(second).name == "reloaded.module.Reloaded"
+
+
+def test_classes_a_function_defines_need_a_scope_name_each():
+    def make(name: str | None = None) -> type:
+        @event_scope(lambda _request, _context: 7, name=name)
+        class VS:
+            pass
+
+        return VS
+
+    first = make()
+    with pytest.raises(ValueError, match=r"needs event_scope\(name=\.\.\.\)"):
+        make()
+    assert scopes_module._names[scope_of(first).name] is first
+    tags, members = make("tags"), make("members")
+    assert scope_of(tags).topic(7) != scope_of(members).topic(7)
 
 
 @pytest.mark.asyncio
@@ -567,7 +586,116 @@ async def test_a_poll_over_the_socket_that_refuses_a_topic_unsubscribes_it():
     assert topics_of(peer) == []
 
 
+class FailingGate(Middleware):
+    """Raises `HTTPException(status)` in every gate run while `status` is set."""
+
+    def __init__(self):
+        self.status: int | None = None
+
+    async def __call__(self, request, _viewset, _context, call_next):
+        if self.status is not None and request is not None and request.scope.get(GATE_RUN_SCOPE_KEY):
+            raise HTTPException(self.status, "the gate failed")
+        return await call_next()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "kept"), [(429, True), (500, True), (503, True), (401, False), (403, False)])
+async def test_a_poll_over_the_socket_unsubscribes_a_topic_on_a_refusal_only(status, kept):
+    failing = FailingGate()
+    app = Scoped(middleware=[failing, SelectedOrg(), ChangeEvents()])
+    peer = FakePeer()
+    await app.subscribe("/orgs/7/tags", peer, **user("ana"))
+    failing.status = status
+    stream = await app.command("/events/poll", {"cursors": {"/orgs/7/tags": 0}}, peer, **user("ana"))
+    assert stream.payload["topics"]["/orgs/7/tags"]["status"] == status
+    assert topics_of(peer) == (["/orgs/7/tags"] if kept else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "kept"), [(429, True), (503, True), (403, False)])
+async def test_a_poll_over_the_socket_keeps_an_unscoped_topic_an_authorizer_fails_transiently(status, kept):
+    app = Scoped()
+    failing: list[int] = []
+
+    async def authorizer(_request, _context, _topic):
+        if failing:
+            raise HTTPException(failing[0], "the authorizer failed")
+        return True
+
+    settings.viewsets_event_authorizers = [authorizer]
+    peer = FakePeer()
+    assert (await app.subscribe("imports", peer)).payload == {"rev": 0}
+    failing.append(status)
+    stream = await app.command("/events/poll", {"cursors": {"imports": 0}}, peer)
+    assert stream.payload["topics"]["imports"]["status"] == status
+    assert topics_of(peer) == (["imports"] if kept else [])
+
+
+@pytest.mark.asyncio
+async def test_a_route_dependency_that_does_not_validate_refuses_the_topic_in_the_gate_run():
+    from fastapi import Depends, Header
+
+    def org_header(x_tenant: int = Header()) -> int:
+        return x_tenant
+
+    app = Scoped()
+    router = APIRouter(dependencies=[Depends(org_header)])
+
+    @event_scope(lambda _request, _context: "everyone", name="notes")
+    @route_viewset(router, "/notes", pk_field_name="id")
+    class NotesViewSet(CollectionViewSet[int, Tag], ViewSetMixin[int, Tag]):
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+    app.app.include_router(router)
+    stream = await app.subscribe("/notes", FakePeer(), **user("ana"))
+    assert stream.status == 403
+    assert stream.payload["detail_code"] == "event_topic_refused"
+    admitted = await app.subscribe("/notes", FakePeer(), **user("ana"), **{"x-tenant": "3"})
+    assert admitted.payload == {"rev": 0, "scope": "everyone"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_topic_raises_the_kept_refusal_for_a_topic_of_the_same_gate_run():
+    app = Scoped()
+    request = Request(
+        {
+            "type": "http",
+            "app": app.app,
+            "headers": [(b"x-user", b"bor")],
+            "path": "/events/poll",
+            "method": "POST",
+            "query_string": b"",
+        }
+    )
+    with pytest.raises(HTTPException) as first:
+        await resolve_topic(request, "/orgs/7/tags")
+    with pytest.raises(HTTPException) as second:
+        await resolve_topic(request, "/orgs/7/tags")
+    assert second.value is first.value
+    assert len(app.selected.gate_scopes) == 1
+
+
 # reauthorization
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "kept"), [(429, True), (503, True), (403, False)])
+async def test_a_reauthorization_removes_the_subscription_on_a_refusal_only(status, kept):
+    failing = FailingGate()
+    app = Scoped(middleware=[failing, SelectedOrg(), ChangeEvents()])
+    settings.viewsets_event_reauthorize_after = 0.0
+    peer = FakePeer()
+    await app.subscribe("/orgs/7/tags", peer, **user("ana"))
+    failing.status = status
+    await app.rest("/orgs/7/tags", {"title": "jazz"}, **user("ana"))
+    await wait_for_pushes()
+    assert peer.pushes == []
+    assert topics_of(peer) == (["/orgs/7/tags"] if kept else [])
+    failing.status = None
+    await app.rest("/orgs/7/tags", {"title": "blues"}, **user("ana"))
+    await wait_for_pushes()
+    assert len(peer.pushes) == (1 if kept else 0)
 
 
 @pytest.mark.asyncio
@@ -614,7 +742,7 @@ async def test_change_events_carries_the_key_resolved_in_the_web_process():
 
     settings.viewsets_command_middleware.append(Spy())
     await app.rest("/orgs/7/tags", {"title": "jazz"}, **user("ana"))
-    assert keys == [{"name": "tags", "key": "7"}]
+    assert [await key for key in keys] == [{"name": "tags", "key": "7"}]
     assert calls == ["POST"]
     assert await _store_rev("@tags:7") > 0
 
@@ -634,6 +762,60 @@ async def test_change_events_ahead_of_the_scope_s_inputs_resolves_the_key_in_exe
     await app.rest("/orgs/7/tags", {"title": "jazz"}, **user("ana"))
     await wait_for_pushes()
     assert pushed(peer) == [("/orgs/7/tags", "7", "created")]
+
+
+@pytest.mark.asyncio
+async def test_change_events_ahead_of_a_strict_resolver_s_inputs_resolves_the_key_after_the_chain():
+    def strict(_request, context):
+        if "org_id" not in context:
+            raise HTTPException(403, "no organisation")
+        return context.raw()["org_id"]
+
+    app = Scoped(resolver=strict, middleware=[ChangeEvents(), SelectedOrg()])
+    by_path, by_header = FakePeer(), FakePeer()
+    await app.subscribe("/orgs/7/tags", by_path, **user("ana"))
+    await app.subscribe("/api/v1/tags", by_header, **user("ana", "7"))
+    assert (await app.rest("/orgs/7/tags", {"title": "jazz"}, **user("ana"))).status_code == 200
+    assert (await app.rest("/api/v1/tags", {"title": "blues"}, **user("ana", "7"))).status_code == 200
+    await wait_for_pushes()
+    assert pushed(by_path) == [("/orgs/7/tags", "7", "created")] * 2
+    assert pushed(by_header) == [("/api/v1/tags", "7", "created")] * 2
+
+
+@pytest.mark.asyncio
+async def test_a_custom_endpoint_publishes_to_the_write_topic_of_its_scope():
+    app = Scoped()
+
+    class ArchivingTags(app.org_tags):
+        __router = APIRouter()
+
+        @__router.post("/{pk}/archive")
+        async def archive(self, request: Request, context: Context, pk: int) -> None:
+            topic = await write_topic(self, request, context)
+            await publish(topic, RecordsChanged(op="deleted", changes=[Change(pk=pk)]))
+
+    archive_router = APIRouter(prefix="/archive/{org_slug}")
+    route_viewset(archive_router, "/tags", pk_field_name="id")(ArchivingTags)
+    app.app.include_router(archive_router)
+    by_header, other = FakePeer(), FakePeer()
+    await app.subscribe("/api/v1/tags", by_header, **user("ana", "7"))
+    await app.subscribe("/orgs/8/tags", other, **user("bor"))
+    response = await app.rest("/archive/7/tags/3/archive", None, **user("ana"))
+    assert response.status_code == 200, response.text
+    await wait_for_pushes()
+    assert pushed(by_header) == [("/api/v1/tags", "7", "deleted")]
+    assert other.pushes == []
+
+
+@pytest.mark.asyncio
+async def test_write_topic_of_an_unscoped_class_is_the_routed_topic():
+    class Plain:
+        __viewset_metadata__ = {"base_path": "/plain"}
+
+    assert await write_topic(Plain, None, Context({"fastapi_viewsets.events.topic": "/api/plain"})) == "/api/plain"
+    assert await write_topic(Plain(), None, Context({})) == "/plain"
+    assert await write_topic(object, None, Context({})) is None
+    assert await write_topic(type("Keyless", (), {}), None, Context({})) is None
 
 
 @pytest.mark.asyncio

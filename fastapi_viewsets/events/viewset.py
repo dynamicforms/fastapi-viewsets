@@ -210,7 +210,8 @@ class EventsViewSet:
         `HTTPException` an authorizer raised, FastAPI's or Starlette's, `event_topic_refused` for one
         without a `code`) and `status` with its HTTP status, and `event_topic_invalid` with 422 for a
         topic of neither form, and the other topics are unaffected. A poll over muxws that refuses a
-        topic removes the socket's subscription to it. A None cursor answers the topic's current rev
+        topic with a status from 400 to 499 other than 429 removes the socket's subscription to it;
+        a 429 or a status of 500 or above keeps it. A None cursor answers the topic's current rev
         and no events, a cursor equal to it `[]`, and any other cursor the events since it, or
         `events: null` when the log holds no event whose `prev` is the cursor. When the request
         carries `scopes`, a cursor of a topic whose entry in `scopes` (absent for none) differs from
@@ -241,7 +242,7 @@ class EventsViewSet:
                 resolved = await resolve_topic(request, topic)
             except HTTPException as error:
                 answers[topic] = TopicAnswer(rev=None, events=None, error=_error_code(error), status=error.status_code)
-                if peer is not None:
+                if peer is not None and delivery._is_refusal(error):
                     await delivery.unsubscribe(peer, topic)
                 continue
             admitted.append(resolved)

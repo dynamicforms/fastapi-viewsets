@@ -226,14 +226,18 @@ async def passes_filters(
 
 
 def _is_refusal(error: BaseException) -> bool:
-    return isinstance(error, HTTPException)
+    """Whether `error` refuses a topic for good: an `HTTPException` of a status from 400 to 499 other
+    than 429. A 429 and a status of 500 or above are transient, as the frontend's event client
+    counts them."""
+    return isinstance(error, HTTPException) and 400 <= error.status_code < 500 and error.status_code != 429
 
 
 async def _reauthorized(subscription: Subscription) -> bool:
     """
     Runs `subscription.reauthorize()` once for every push that needs it at the same time. True when
     it answers the subscription's store topic; the subscription's `authorized_at` is renewed. A
-    refusal or another store topic removes the subscription; any other failure keeps it as it is.
+    refusal (`_is_refusal`) or another store topic removes the subscription; any other failure,
+    a 429 or 5xx `HTTPException` included, keeps it as it is and skips the push.
     """
     key = (id(subscription.peer), subscription.topic, id(subscription))
     task = _reauth_tasks.get(key)

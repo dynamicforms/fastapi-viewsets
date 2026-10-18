@@ -26,7 +26,7 @@ from .authorizers import (
     EventAuthorizer,
     ViewsetTopics,
 )
-from .changes import Change, ChangeEvents, RecordsChanged, routed_base_path, TOPIC_CONTEXT_KEY
+from .changes import Change, ChangeEvents, RecordsChanged, routed_base_path, TOPIC_CONTEXT_KEY, write_topic
 from .delivery import (
     deliver,
     DeliveryFilter,
@@ -129,4 +129,5 @@ __all__ = [
     "unsubscribe",
     "validate_topic",
     "wait_for_pushes",
+    "write_topic",
 ]
