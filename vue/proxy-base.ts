@@ -277,9 +277,9 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    *       static declares = [ReadOnlyViewSetMixin, LookupMixin];
    *     }
    *
-   * Left undefined, the ViewSet is not checked against the BE schema at all. That is deliberate:
-   * a ViewSet that never said what it has cannot be caught contradicting itself, and guessing on
-   * its behalf is what made the check report actions nobody ever claimed.
+   * Left undefined, the ViewSet is not checked against the BE schema at all: with no declared
+   * mixins there is nothing to compare, and checking every standard action would report actions
+   * the ViewSet does not have.
    */
   static declares?: readonly ViewSetMixinDeclaration[];
 
@@ -338,8 +338,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    *
    * The comparison is against `static declares`, not against which methods exist on the object:
    * every action is implemented unconditionally on this class, so `typeof this[action]` is true for
-   * every ViewSet and answers a question nobody asked. `declares` is the only place the FE says
-   * anything a BE viewset could disagree with.
+   * every ViewSet.
    *
    * Non-critical: errors during fetch or parsing are silently ignored. Note that the schema is
    * fetched over this proxy's own transport, so a muxws proxy validates against the muxws
@@ -380,9 +379,8 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
         } else if (suffix.startsWith('{') && !suffix.includes('/')) {
           pathType = 'pk';
         } else {
-          // A custom endpoint. Here - and only here - asking whether the proxy has a method of that
-          // name is honest: the base implements no custom actions, so whatever answers is something
-          // this ViewSet's own author wrote. The name is the BE method's, from the operation's
+          // A custom endpoint: the base implements no custom actions, so a method of that name is one
+          // the ViewSet defines. The name is the BE method's, from the operation's
           // `x-viewset-action`; an operation without it is not checked.
           for (const verb of verbs) {
             const action = (pathItem[verb] as { [ACTION_EXTENSION]?: unknown } | undefined)?.[ACTION_EXTENSION];

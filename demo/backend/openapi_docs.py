@@ -1,14 +1,13 @@
 """
 A "Try it in Swagger UI" link on every operation, for the ReDoc page.
 
-ReDoc renders the API beautifully and cannot execute a single request; Swagger UI executes requests
-and reads less well. Rather than pick one, the schema carries a deep link from each operation to
-its Swagger UI entry, and each page hides what belongs to the other.
+ReDoc cannot execute requests; Swagger UI can. The schema carries a deep link from each operation
+to its Swagger UI entry, and each page hides what belongs to the other.
 
 Both pages render the *same* schema, so the link cannot be added for one and omitted for the
 other - it is emitted once and hidden with CSS in Swagger UI, where it would only point at itself.
 
-Adapted from the same mechanism in a production application; the fiddly parts are load-bearing:
+Constraints:
 
 * The class goes on a wrapping `<div>`, never on the `<a>`. Swagger UI's markdown sanitiser strips
   `class` from anchors specifically, so a `<a class="...">` arrives unstyled and unhideable.

@@ -146,7 +146,7 @@ def celery_viewset(
 | `task_prefix` | `str` | — | Prefix for all registered Celery task names, e.g. `"items"` |
 | `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle on the worker side (same semantics as `route_viewset` — see [ViewSet Lifecycle](./lifecycle)) |
 | `redis_client` | `redis.Redis \| None` | `None` | Redis client used to pass results back to FastAPI. Required in both modes; without it the decorator raises `ValueError`. |
-| `result_timeout` | `float \| None` | `3600.0` | Client mode: seconds a call waits for its result before it raises `ResultTimeoutError` (504, `result_timeout`). `None` waits without a limit. Ignored in worker mode. |
+| `result_timeout` | `float \| None` | `3600.0` (`DEFAULT_RESULT_TIMEOUT`) | Client mode: seconds a call waits for its result before it raises `ResultTimeoutError` (504, `result_timeout`). `None` waits without a limit. Ignored in worker mode. |
 
 ### Usage
 
@@ -302,7 +302,7 @@ from fastapi_viewsets.decorators.celery_viewset import celery_viewset_client, ce
 | `get_process_queue_key(queue_key)` | The Redis list this process receives a queue key's results on |
 | `get_registered_queue_keys()` | Every queue key a `celery_viewset_client` registered |
 | `get_running_queue_keys()` | The queue keys that have a running reader task |
-| `push_result(redis_client, queue_key, correlation_id, result=None, error=None, task=None)` | Pushes a result or an error for one call to `queue_key`, the `_result_queue_key` the task carries, and renews the list's expiry. An `HTTPException` error reaches the caller as it is; any other error as `ActionFailedError` naming `task` |
+| `push_result(redis_client, queue_key, correlation_id, result=None, error=None, task=None)` | Pushes a result or an error for one call to `queue_key`, the `_result_queue_key` the task carries, and renews the list's expiry. An `HTTPException` error reaches the caller as it is, a `RequestValidationError` as a 422 with its errors as `detail`; any other error as `ActionFailedError` naming `task` |
 
 ### Call data in the worker
 
@@ -340,6 +340,7 @@ errors (see [Error Codes](./error-codes#executor-outcomes)):
 |---|---|---|
 | The action returns | its result | `execute()` |
 | The action raises an `HTTPException` | that exception: a `DfViewSetError` of a class `fastapi_viewsets.exceptions` defines keeps its class, `code`, `params` and headers, any other one is rebuilt as `HTTPException` or `DfViewSetError` with the same fields | `execute()` |
+| The worker finds the request invalid (`RequestValidationError`, e.g. a filter value that does not convert) | `HTTPException` (422) with the errors as `detail` | `execute()` |
 | The action raises anything else (a Celery `Retry`, `Ignore` or `Reject` included), or a model argument fails validation in the worker | `ActionFailedError` (500, reason `error`); the original error is logged in the worker | `execute()` |
 | The result cannot be serialized, or deserialized by the caller | `ActionFailedError` (500, reason `result`) | — |
 | Soft time limit | `ActionInterruptedError` (504, reason `time_limit`) | `execute()` (`ActionInterruptedError` from `call_next()`) |

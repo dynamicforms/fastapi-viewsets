@@ -107,6 +107,7 @@ the constructor options.
 | `validateSchema` | both | Set `false` to skip the startup schema check |
 | `repeat` | both | [`RepeatOptions`](../api/idempotency#repeatoptions) of a call whose attempt ended without an answer; default `{ withinMs: 600000, delayMs: 1000 }` |
 | `events` | both | The event client [`watch()`](#following-changes-watch) subscribes on; without it, a `muxwsViewSet` uses the client registered for its peer and a `restViewSet` throws from `watch()` |
+| `topic` | both | The client topic `watch()` subscribes: the BE path relative to the app's `root_path`, without a Starlette `Mount` prefix; default `basePath` |
 | `axiosInstance` | `restViewSet` | Custom axios instance; defaults to the global one |
 | `attemptTimeoutMs` | `restViewSet` | Timeout of one attempt in milliseconds; default `30000`, `0` for none |
 | `peer` | `muxwsViewSet` | The muxws peer, or a function returning one (required) |
@@ -125,8 +126,9 @@ one transport only.
 ### Following changes: watch()
 
 Every ViewSet has `watch(options)` besides its declared actions, whichever mixins it declares. It
-subscribes the ViewSet's `basePath` to the backend's `records_changed` event and calls `onChange`
-once per create, update or destroy action on that viewset:
+subscribes the ViewSet's topic (`options.topic`, else the `topic` constructor option, else
+`basePath`) to the backend's `records_changed` event and calls `onChange` once per create, update or
+destroy action on that viewset:
 
 ```ts
 const watching = api.watch({
@@ -165,8 +167,8 @@ class ItemDbApi extends restViewSet<Item>()('id', [CursorListMixin]) {}
 ```
 
 Subclassing the wider ViewSet and restating `static declares` does not work: a factory-built class
-pins the list to the tuple the factory was given, and the subclass is TS2417. The separate class is
-also the honest type — it has `listCursor` and nothing else.
+pins the list to the tuple the factory was given, and the subclass is TS2417. The separate class's
+type has `listCursor` and nothing else.
 
 ### route_rest
 
@@ -211,9 +213,11 @@ async function retrieveOrNull(id: number): Promise<Item | null> {
 }
 ```
 
-A muxws call whose socket dies mid-flight rejects with muxws' `ConnectionLost`, not with
-`ViewSetRequestError`: it carries no `response`, so the check above sends it down the same branch as
-an `AxiosError` that never got a reply. See [reconnection](./muxws#reconnection).
+A muxws call whose socket dies mid-flight is repeated once the peer reconnects (see
+[Idempotent Calls](./idempotency#frontend)). Once `repeat.withinMs` has passed, or the peer has
+closed for good, it rejects with muxws' `ConnectionLost`, not with `ViewSetRequestError`: it carries
+no `response`, so the check above sends it down the same branch as an `AxiosError` that never got a
+reply. See [reconnection](./muxws#reconnection).
 
 `list()`, `listPage()` and `listCursor()` on either transport reject with `ListShapeMismatchError`
 when a successful reply is in another list shape than the one the method requested. It carries no

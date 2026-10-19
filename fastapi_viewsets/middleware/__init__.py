@@ -216,16 +216,14 @@ class Middleware(ABC):
         the onion chain below, exactly as if this method didn't exist.
 
         `cls` is always the viewset *class*, never an instance - for `per-request`/`instance-key`
-        lifecycles no instance exists yet this early (uniform across all 3 lifecycle modes, rather
-        than sometimes a real instance and sometimes not, depending on which one). `context` is
-        real and usable here (see `fastapi_viewsets.context.get_shared_context`) - built as early as
-        this method can possibly run, which for `per-request`/`instance-key` lifecycles is *before*
-        `load_state()`; no shipped context processor reads viewset instance state.
+        lifecycles no instance exists yet this early. `context` is real and usable here (see
+        `fastapi_viewsets.context.get_shared_context`) - built as early as this method can possibly
+        run, which for `per-request`/`instance-key` lifecycles is *before* `load_state()`; no shipped
+        context processor reads viewset instance state.
 
-        Put here *only* logic that might actually reject - there's no benefit to running
-        unconditional work (e.g. enriching context with no reject path - see
-        `middleware.auth.authorization.Authorization`, which splits across both methods for exactly
-        this reason) before body parsing, so that kind of work stays in `__call__` as it does today.
+        Put here *only* logic that may reject. Unconditional work (e.g. enriching context with no
+        reject path) belongs in `__call__`; `middleware.auth.authorization.Authorization` splits
+        across both methods this way.
         For middleware whose entire job is reject-or-allow with nothing unconditional (`Session`,
         `RateLimiter`), `__call__` is `return await call_next()`: `depends()` makes the only
         decision, and if it rejects, `__call__`/the onion chain is not reached (the exception

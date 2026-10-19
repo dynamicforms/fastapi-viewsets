@@ -211,8 +211,7 @@ class CollectionViewSet(AsyncCollectionViewSet[K, T]):
 
         for field_name, field_info in data.__class__.model_fields.items():
             if field_info.json_schema_extra and field_info.json_schema_extra.get("autoinc_int"):
-                # If the field is already set and is not 0 or None, we leave it (unless this is the desired behavior)
-                # However, we usually want autoinc only if the value is not yet set
+                # a truthy value is kept; 0 or None gets the next value after the container's maximum
                 current_val = getattr(data, field_name, None)
                 if current_val:
                     continue

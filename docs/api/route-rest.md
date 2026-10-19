@@ -116,5 +116,6 @@ first attempt's `config` after the request interceptors, other than `Accept`, `A
 | `bulkDestroy(pks[])` | `DELETE` | `{basePath}/bulk` (body: pk array) |
 | `lookup()` | `GET` | `{basePath}/lookup` |
 
-`watch(options)` sends no request to `{basePath}`: it subscribes the topic `basePath` on the
-ViewSet's event client; see [`watch()`](./vue-mixins#watch).
+`watch(options)` sends no request to `{basePath}`: it subscribes the topic `options.topic`, else
+the `topic` option, else `basePath`, on the ViewSet's event client; see
+[`watch()`](./vue-mixins#watch).

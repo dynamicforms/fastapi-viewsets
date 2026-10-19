@@ -1,15 +1,13 @@
 """
 The request/response envelope carried over a muxws stream.
 
-muxws deliberately does no routing of its own - SPEC WSM-AUT-004 forbids it from looking at the
-opening payload to pick a handler - so the addressing has to come from us. Rather than invent a
-vocabulary, we mirror HTTP/2, which muxws already models: an `open` frame carries `headers` plus a
-`payload`, exactly as HTTP/2 carries a HEADERS frame followed by DATA.
+muxws does no routing (SPEC WSM-AUT-004: it does not look at the opening payload to pick a
+handler), so the open frame carries the address. The envelope follows HTTP/2: an `open` frame
+carries `headers` plus a `payload`, as HTTP/2 carries a HEADERS frame followed by DATA.
 
-Method, path and query string therefore travel as pseudo-headers, `:`-prefixed the way HTTP/2
-prefixes its own. The prefix is not decoration - it is what keeps them from colliding with real
-HTTP headers, since a header field name may not contain a colon. Everything in the open frame's
-headers that is *not* `:`-prefixed is passed through as an ordinary HTTP header.
+Method, path and query string travel as HTTP/2-style pseudo-headers, `:`-prefixed. They cannot
+collide with HTTP headers, because a header field name may not contain a colon. Every header of
+the open frame that is not `:`-prefixed is passed through as an ordinary HTTP header.
 
     peer.open(
         payload={"title": "Kind of Blue"},          # the request body

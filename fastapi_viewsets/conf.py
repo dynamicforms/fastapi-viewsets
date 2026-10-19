@@ -40,8 +40,9 @@ class Settings:
         """
         self.viewsets_idempotency_lock_ttl: float = 600
         """
-        Seconds a running record of `Idempotency` is kept after it was written, unless the action
-        finishes first. Once it expires, a repeat runs the action again.
+        Seconds a running record of `Idempotency` is kept after it was last extended; the process
+        running the call extends it every third of this time. Once it expires, a repeat runs the
+        action again.
         """
         self.viewsets_auth_processors: list[AuthBackend] = []
         self.default_action_configuration: dict[Any, Any] = {}
@@ -82,8 +83,9 @@ class Settings:
         """
         self.viewsets_event_delivery_filters: list[DeliveryFilter] = []
         """
-        The functions that decide, per subscription and per event, whether a push is sent. A filter
-        that answers False skips that socket; a filter that raises counts as True.
+        The functions that decide, per subscription and per event, whether a push is sent, and per
+        poll and per event whether the poll answers the event. A filter that answers False skips that
+        socket or leaves the event out of the poll answer; a filter that raises counts as True.
         """
         self.viewsets_event_log_size: int = 32
         """

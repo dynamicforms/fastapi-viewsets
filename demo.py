@@ -9,7 +9,7 @@ task through Redis and waiting for a worker dwarfs the difference between an HTT
 WebSocket frame. With `--celery` that path is exercised instead, at the cost of the benchmark
 measuring the queue.
 
-Ctrl-C stops everything, in order, quietly. Two things make that work, and neither is incidental:
+Ctrl-C stops everything, in order, quietly. Shutdown relies on two settings:
 
 * Each child gets its **own session** (`start_new_session=True`). Otherwise Ctrl-C goes to the
   whole foreground process group at once - every process gets the signal simultaneously, each
@@ -17,8 +17,8 @@ Ctrl-C stops everything, in order, quietly. Two things make that work, and neith
   hands you the prompt back. With their own session they hear nothing until this process tells
   them, one at a time.
 * Each is stopped by **process group**, not by pid. `npm run` is a shell that spawns node; killing
-  the shell leaves the dev server holding the port, which is the "node server does not stop" that
-  makes the next run fail on an address already in use.
+  the shell leaves the dev server holding the port, and the next run fails with address already in
+  use.
 """
 
 import argparse
@@ -79,8 +79,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Read at import time by demo.backend.viewsets, so it has to be set before the app is imported
-    # - which uvicorn does inside its own event loop, later than it looks.
+    # Read at import time by demo.backend.viewsets, so it has to be set before the app is imported;
+    # uvicorn imports it inside its own event loop.
     env = {"DEMO_CELERY": "1"} if args.celery else {}
 
     children: list[tuple[str, subprocess.Popen]] = [

@@ -649,7 +649,7 @@ drop_subscriptions(lambda s: s.scope == str(org_id) and s.context.raw().get("use
 | Action configuration differs between the gate action and a write | the keys can differ, and the event goes to a store topic no subscriber holds; the resolver's inputs are set for both the gate action and the write actions |
 | Endpoint that writes outside the eight actions | publishes to `await write_topic(self, request, context)` (see [Custom endpoints](#custom-endpoints)) |
 | Write outside a request | `await publish(scope_of(TagsViewSet).topic(key), RecordsChanged(...))` |
-| Unscoped viewsets, custom sources | unchanged |
+| Unscoped viewsets, custom sources | the client topic is its own store topic; no gate run |
 
 `resolve_topic(request, topic)` answers `ResolvedTopic(topic, store_topic, scope)` for any client
 topic and is what `subscribe` and `poll` use; `scope_of(cls)` answers a class's `EventScope`;
@@ -943,7 +943,7 @@ Every one is read on use. See [settings](../api/settings).
 | Code | Status | Class | Raised when |
 |------|--------|-------|-------------|
 | `event_topic_invalid` | 422 | `EventTopicInvalidError(topic)` | `subscribe` with a topic of neither form |
-| `event_topic_refused` | 403 | `EventTopicRefusedError(topic)` | No authorizer admitted the topic, or a gate run did not reach the resolver |
+| `event_topic_refused` | 403 | `EventTopicRefusedError(topic)` | No authorizer admitted the topic; or in a gate run a route dependency did not validate, the command chain did not reach the resolver, or it answered a status of 400 or above |
 | `event_scope_missing` | 403 | `EventScopeMissingError(topic)` | The scope resolver of a scoped topic answered `None` for the caller |
 | `event_subscriptions_exceeded` | 409 | `EventSubscriptionsExceededError(limit)` | The socket already holds `viewsets_event_max_subscriptions` topics |
 | `event_cursors_exceeded` | 422 | `EventCursorsExceededError(count, limit)` | A poll carries more cursors than `viewsets_event_max_subscriptions` |

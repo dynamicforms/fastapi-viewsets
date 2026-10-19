@@ -233,8 +233,9 @@ rules and the options are in [Idempotent Calls](./idempotency#frontend).
 | `bulkDestroy(pks[])` | `DELETE /items/bulk` |
 | `lookup()` | `GET /items/lookup` |
 
-`watch(options)` sends no request to `/items`: it subscribes the topic `/items` on the proxy's
-`events` client; see [Events (Vue)](./vue-events#watch-on-a-viewset).
+`watch(options)` sends no request to `/items`: it subscribes the topic `/items` (or `options.topic`,
+or the `topic` option, when set) on the proxy's `events` client; see
+[Events (Vue)](./vue-events#watch-on-a-viewset).
 
 ## Schema validation
 

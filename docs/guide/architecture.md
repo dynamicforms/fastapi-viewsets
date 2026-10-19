@@ -306,4 +306,5 @@ context.
 - Need the backend to tell the frontend that something changed? See [Events](./events).
 - Moving execution to a background worker? See the `celery_viewset` section in [Routers & Decorators](./routers).
 - Want to see all built-in middleware/processor implementations this library ships (not just the mechanisms behind
-  them)? See [Authentication](./authentication), [Authorization](./authorization), and [Rate Limiter](./rate-limiter).
+  them)? See [Authentication](./authentication), [Authorization](./authorization), [Rate Limiter](./rate-limiter),
+  [Idempotent Calls](./idempotency) and [ChangeEvents](./events#changeevents).
