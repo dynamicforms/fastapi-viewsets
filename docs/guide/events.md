@@ -172,15 +172,22 @@ command.
 `settings.viewsets_event_store` holds the store. `None`, the default, is one `MemoryEventStore` per
 process, created on first use.
 
-| | `MemoryEventStore()` | `RedisEventStore(redis_client, key_prefix="events:")` |
-|-|----------------------|--------------------------------------------------------|
+| | `MemoryEventStore()` | `RedisEventStore.from_url(url)`, `RedisEventStore(redis_client)` |
+|-|----------------------|-------------------------------------------------------------------|
 | Reach | the process | every process that reaches the Redis |
 | `append` | one synchronous step without an `await` | one Lua script |
 | `publish` | `deliver()` in the same process | `PUBLISH` on `{prefix}events`; the reader of every started process calls `deliver()` |
 | `start` / `stop` | no-op | `SUBSCRIBE` of `{prefix}events` and the reader / closes the reader |
 
-`redis_client` is a `redis.asyncio.Redis` the application constructs. `RedisEventStore` lives in
-`fastapi_viewsets.events.redis`, the only module of the package that uses `redis`. Its keys:
+`RedisEventStore.from_url(url, **options)` builds one `redis.asyncio.Redis` client per event loop
+(`PerLoopRedis`). A `redis.asyncio` connection belongs to the loop it was opened on, and a process
+uses the store on several loops: the server's, the loops of a Celery worker's executions, and the
+loop `async_to_sync()` opens for a call without a running loop to hand it to (WSGI, management
+commands, plain threads). `options` are `Redis.from_url` options; unless given, a connect may take 2
+seconds and a command 5 (`socket_connect_timeout`, `socket_timeout`). `RedisEventStore(redis_client)`
+takes one `redis.asyncio.Redis` the application constructs, for a process that uses the store on
+one loop only. `RedisEventStore` lives in `fastapi_viewsets.events.redis`, the only module of the
+package that uses `redis`. Its keys:
 
 | Key | Content |
 |-----|---------|
@@ -215,13 +222,11 @@ each one polls, finds no event with its `prev`, and re-reads its state.
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from redis.asyncio import Redis
-
 from fastapi_viewsets.conf import settings
 from fastapi_viewsets.events import check_events, start_events, stop_events
 from fastapi_viewsets.events.redis import RedisEventStore
 
-settings.viewsets_event_store = RedisEventStore(Redis.from_url("redis://localhost"))
+settings.viewsets_event_store = RedisEventStore.from_url("redis://localhost")
 
 
 @asynccontextmanager
@@ -237,13 +242,15 @@ async def lifespan(app: FastAPI):
 has a reader and the reader does not run; otherwise it returns `True`.
 
 `RedisEventStore.start()` subscribes one pub/sub connection to `{prefix}events` and returns once
-Redis has confirmed it; the reader, one task on that connection, then calls `deliver()` for every
-event. `deliver()` pushes an event to the sockets of the process that hold its topic and leaves out a
-topic without one, so every process receives every event and no event reaches a socket that does
-not hold its topic. A failed read is logged and retried after one second; a message that cannot be
-delivered is logged and skipped. When redis-py reconnects the connection it subscribes the channel
-again; an event published while it is down does not reach the process, and the event client finds
-it by poll, on the topic's next push or its check poll.
+Redis has confirmed it, within `subscribe_timeout` seconds (default `5.0`); the reader, one task on
+that connection, then calls `deliver()` for every event. `start()` and `stop()` run on the loop the
+reader runs on, the server's. `deliver()` pushes an event to the sockets of the process that hold
+its topic and leaves out a topic without one, so every process receives every event and no event
+reaches a socket that does not hold its topic. A failed read is logged and retried after
+`read_timeout` seconds (default `1.0`); a message that cannot be delivered is logged and skipped.
+When redis-py reconnects the connection it subscribes the channel again; an event published while
+it is down does not reach the process, and the event client finds it by poll, on the topic's next
+push or its check poll.
 
 ### Processes
 

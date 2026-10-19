@@ -1,13 +1,16 @@
 """
 `RedisEventStore`: the event store shared by every process that reaches one Redis.
 
-The only module of `fastapi_viewsets.events` that uses `redis`. It takes a `redis.asyncio.Redis`
-client the application constructs, and imports the `redis` package for type checking only.
+The only module of `fastapi_viewsets.events` that uses `redis`. `RedisEventStore` takes a
+`redis.asyncio.Redis` client the application constructs, or builds one client per event loop from a
+URL (`RedisEventStore.from_url`, `PerLoopRedis`); the `redis` package is imported by `PerLoopRedis`
+only.
 """
 
 import asyncio
 import json
 import logging
+import threading
 
 from typing import Any, TYPE_CHECKING
 
@@ -47,10 +50,78 @@ return {rev_text, prev_text}
 """
 
 # Seconds the reader waits for a message before it checks again, and waits after a failed read.
-_READ_TIMEOUT = 1.0
+DEFAULT_READ_TIMEOUT = 1.0
 
 # Seconds `start` waits for Redis to confirm the SUBSCRIBE of the events channel.
-_SUBSCRIBE_TIMEOUT = 5.0
+DEFAULT_SUBSCRIBE_TIMEOUT = 5.0
+
+# The `redis.asyncio.Redis.from_url` options `PerLoopRedis` sets unless given: seconds a connect and
+# a single command may take.
+DEFAULT_CLIENT_OPTIONS: dict[str, Any] = {"socket_connect_timeout": 2.0, "socket_timeout": 5.0}
+
+
+class PerLoopRedis:
+    """
+    Stands in for a `redis.asyncio.Redis`: every attribute whose name does not start with `_` is
+    read off the client of the running event loop, created with
+    `Redis.from_url(url, **(DEFAULT_CLIENT_OPTIONS | options))` on its first use in that loop. A
+    `redis.asyncio` connection belongs to the loop it was opened on, and one process runs the store
+    on several loops: the server's, the loops of a Celery worker's executions, and the loop
+    `asgiref`'s `async_to_sync()` opens for a call without a running loop to hand it to (WSGI,
+    management commands, plain threads).
+
+    A loop's client is closed and forgotten when the loop's tasks are cancelled at its end, as
+    `asyncio.run()` does. A client used on that loop by another task's cancellation cleanup may be
+    closed already. The client of a loop closed without that, and of a loop alive at process exit, is
+    not closed: it is forgotten by the next call that creates a client, and its connections close
+    when it is garbage-collected.
+    """
+
+    def __init__(self, url: str, **options: Any):
+        from redis.asyncio import Redis
+
+        self.url = url
+        self.options = DEFAULT_CLIENT_OPTIONS | options
+        self._redis_class = Redis
+        self._clients: dict[asyncio.AbstractEventLoop, Redis] = {}
+        self._lock = threading.Lock()
+
+    def client(self) -> "Redis":
+        """The client of the running loop. Raises `RuntimeError` outside a running loop."""
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            client = self._clients.get(loop)
+            if client is not None:
+                return client
+            for closed in [held for held in self._clients if held.is_closed()]:
+                del self._clients[closed]
+            client = self._clients[loop] = self._redis_class.from_url(self.url, **self.options)
+        closer = loop.create_task(self._close_with_loop(loop, client), name="PerLoopRedis: close with the loop")
+        # A loop that ends without cancelling its tasks destroys this one without a warning.
+        closer._log_destroy_pending = False  # type: ignore[attr-defined]
+        return client
+
+    async def _close_with_loop(self, loop: asyncio.AbstractEventLoop, client: "Redis") -> None:
+        try:
+            await loop.create_future()
+        except asyncio.CancelledError:
+            self._forget(loop, client)
+            await client.aclose()
+            raise
+        except GeneratorExit:
+            # The task is destroyed with its loop: there is no loop to close the client on.
+            self._forget(loop, client)
+            raise
+
+    def _forget(self, loop: asyncio.AbstractEventLoop, client: "Redis") -> None:
+        with self._lock:
+            if self._clients.get(loop) is client:
+                del self._clients[loop]
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self.client(), name)
 
 
 class RedisEventStore:
@@ -67,18 +138,51 @@ class RedisEventStore:
     `append` is one Lua script. `start()` SUBSCRIBEs the events channel on one pub/sub connection,
     returns once Redis has confirmed it, and runs the reader, a task that calls `deliver()` for each
     message; `deliver()` pushes the event to the subscriptions of its topic in this process and
-    leaves out a topic without one. `stop()` closes the connection.
+    leaves out a topic without one. `stop()` closes the connection. `start()` and `stop()` run on
+    one loop, the loop the reader runs on.
+
+    `subscribe_timeout` is the seconds `start()` waits for Redis to confirm the SUBSCRIBE;
+    `read_timeout` the seconds the reader waits for a message before it checks again, and waits after
+    a failed read.
 
     When redis-py reconnects the pub/sub connection it SUBSCRIBEs the channel again. An event
     published while the connection is down does not reach this process; the event client finds it
     by poll, on the topic's next push or its check poll.
     """
 
-    def __init__(self, redis_client: "Redis", key_prefix: str = "events:"):
+    def __init__(
+        self,
+        redis_client: "Redis | PerLoopRedis",
+        key_prefix: str = "events:",
+        *,
+        subscribe_timeout: float = DEFAULT_SUBSCRIBE_TIMEOUT,
+        read_timeout: float = DEFAULT_READ_TIMEOUT,
+    ):
         self.redis_client = redis_client
         self.key_prefix = key_prefix
+        self.subscribe_timeout = subscribe_timeout
+        self.read_timeout = read_timeout
         self._pubsub: Any = None
         self._reader: asyncio.Task | None = None
+
+    @classmethod
+    def from_url(
+        cls,
+        url: str,
+        key_prefix: str = "events:",
+        *,
+        subscribe_timeout: float = DEFAULT_SUBSCRIBE_TIMEOUT,
+        read_timeout: float = DEFAULT_READ_TIMEOUT,
+        **options: Any,
+    ) -> "RedisEventStore":
+        """A store on `PerLoopRedis(url, **options)`: one client per event loop. `options` are
+        `redis.asyncio.Redis.from_url` options over `DEFAULT_CLIENT_OPTIONS`."""
+        return cls(
+            PerLoopRedis(url, **options),
+            key_prefix,
+            subscribe_timeout=subscribe_timeout,
+            read_timeout=read_timeout,
+        )
 
     def rev_key(self, topic: str) -> str:
         return f"{self.key_prefix}rev:{topic}"
@@ -99,25 +203,24 @@ class RedisEventStore:
     async def start(self) -> None:
         """
         SUBSCRIBEs the events channel and starts the reader once Redis has confirmed the SUBSCRIBE.
-        Raises `asyncio.TimeoutError` when the confirmation does not arrive within 5 seconds, and
-        the error of the connection when it fails; the store is then not started.
+        Raises `asyncio.TimeoutError` when the confirmation does not arrive within `subscribe_timeout`
+        seconds, and the error of the connection when it fails; the store is then not started.
         """
         if self.reader_running:
             return
         pubsub = self.redis_client.pubsub()
         try:
             await pubsub.subscribe(self.channel)
-            await asyncio.wait_for(self._confirmed(pubsub), _SUBSCRIBE_TIMEOUT)
+            await asyncio.wait_for(self._confirmed(pubsub), self.subscribe_timeout)
         except BaseException:
             await _close(pubsub)
             raise
         self._pubsub = pubsub
         self._reader = asyncio.create_task(self._read())
 
-    @staticmethod
-    async def _confirmed(pubsub: Any) -> None:
+    async def _confirmed(self, pubsub: Any) -> None:
         while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=False, timeout=_READ_TIMEOUT)
+            message = await pubsub.get_message(ignore_subscribe_messages=False, timeout=self.read_timeout)
             if message is not None and message.get("type") == "subscribe":
                 return
 
@@ -185,12 +288,12 @@ class RedisEventStore:
     async def _read(self) -> None:
         while True:
             try:
-                message = await self._pubsub.get_message(ignore_subscribe_messages=True, timeout=_READ_TIMEOUT)
+                message = await self._pubsub.get_message(ignore_subscribe_messages=True, timeout=self.read_timeout)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("events: reading the events channel failed")
-                await asyncio.sleep(_READ_TIMEOUT)
+                await asyncio.sleep(self.read_timeout)
                 continue
             if message is None or message.get("type") != "message":
                 continue
