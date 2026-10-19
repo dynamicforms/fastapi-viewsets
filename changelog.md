@@ -6,7 +6,7 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.11.4] - Unreleased
+## [0.11.4] - 2026-10-19
 
 ### Added
 
@@ -57,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Requires `muxws` ≥ 0.4.2 (Python extra `muxws`, npm peer dependency).
 
-## [0.11.2] - Unreleased
+## [0.11.2] - 2026-10-19
 
 ### Added
 
@@ -114,7 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again on every rung of the ladder while the peer is open; the subscription stays, and a refusal of
   the repeated `subscribe` is reported through `onError` and `ready`.
 
-## [0.11.1] - Unreleased
+## [0.11.1] - 2026-10-18
 
 ### Fixed
 
@@ -125,7 +125,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is reported to `Middleware.on_transition()` as `interrupted` with reason `terminated`. A prefork
   pool child leaves its exit to the supervisor, as before.
 
-## [0.11.0] - Unreleased
+## [0.11.0] - 2026-10-17
 
 ### Added
 
@@ -182,7 +182,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is pushed to the caller; `SystemExit` and `KeyboardInterrupt` are pushed as
   `ActionInterruptedError` (reason `terminated`) and still end the process.
 
-## [0.10.0] - 2026-10-16
+## [0.10.0] - 2026-10-17
 
 ### Added
 
