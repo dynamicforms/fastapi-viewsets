@@ -77,6 +77,7 @@ export type {
   EventHandlers,
   EventMeta,
   EventPeerLike,
+  EventPeerSource,
   EventStreamHandler,
   EventStreamLike,
   EventSubscription,

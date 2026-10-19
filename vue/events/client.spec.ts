@@ -126,6 +126,11 @@ function makeTransport() {
       peer.isOpen = true;
       for (const handler of reconnectHandlers) handler();
     },
+    closeForGood() {
+      peer.isOpen = false;
+      Object.assign(peer, { isClosed: true });
+      for (const handler of closeHandlers) handler({ willRetry: false });
+    },
     push(topic: string, rev: number, prev: number, event: string, payload: unknown, version: unknown = 1) {
       return handleEventStream(peer, payload, {
         headers: { ':event': event, ':version': version, ':topic': topic, ':rev': rev, ':prev': prev },
@@ -2051,5 +2056,176 @@ describe('scoped topics', () => {
     expect(unavailable.onError).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(10000);
     expect(t.take()[0].body).toEqual({ cursors: { '/u': null }, scopes: {} });
+  });
+});
+
+describe('peer source', () => {
+  /** Peers handed out one at a time; `next` is the transport the source returns next. */
+  function source() {
+    const made: Transport[] = [];
+    const fn = vi.fn(() => {
+      const t = makeTransport();
+      made.push(t);
+      return t.peer;
+    });
+    return { fn, made };
+  }
+
+  it('calls the source on the first subscription and subscribes on the peer it returns', async () => {
+    const { fn, made } = source();
+    const c = track(createEventClient({ basePath: '/events', peer: fn, draw: () => 0.5, checkIntervalMs: 0 }));
+    expect(fn).not.toHaveBeenCalled();
+    const h = handlers();
+    const sub = c.subscribe('/t', Changed, h);
+    c.subscribe('/u', Changed, handlers());
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(1);
+    const [t] = made;
+    expect(eventsOf(t.peer)).toBe(c);
+    const [first, second] = t.take();
+    expect([first.path, first.body, second.body]).toEqual(['/events/subscribe', { topic: '/t' }, { topic: '/u' }]);
+    first.answer({ rev: 10 });
+    await expect(sub.ready).resolves.toBeUndefined();
+    t.push('/t', 11, 10, 'changed', { n: 11 });
+    expect(payloads(h)).toEqual([{ n: 11 }]);
+  });
+
+  it('polls over axios after the peer closes for good and moves every topic to the next peer', async () => {
+    const { fn, made } = source();
+    const http = makeTransport();
+    const c = track(
+      createEventClient({ basePath: '/events', peer: fn, axios: http.axios, draw: () => 0.5, checkIntervalMs: 0 }),
+    );
+    const h = handlers();
+    c.subscribe('/t', Changed, h);
+    await flush();
+    const [first] = made;
+    const [subscribed, polled] = first.take();
+    subscribed.answer({ rev: 10 });
+    polled.answer({ topics: { '/t': { rev: 10, events: [] } }, poll_after_ms: 0 });
+    await flush();
+
+    first.closeForGood();
+    expect(eventsOf(first.peer)).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(60000);
+    const [poll] = http.take();
+    expect(poll).toMatchObject({ via: 'axios', path: '/events/poll', body: { cursors: { '/t': 10 }, scopes: {} } });
+    expect(fn).toHaveBeenCalledTimes(2);
+    const second = made[1];
+    expect(eventsOf(second.peer)).toBe(c);
+    const [subscribe] = second.take();
+    expect(subscribe.body).toEqual({ topic: '/t' });
+    subscribe.answer({ rev: 10 });
+    poll.answer({ topics: { '/t': { rev: 10, events: [] } }, poll_after_ms: 0 });
+    await flush();
+
+    first.reconnect();
+    first.push('/t', 11, 10, 'changed', { n: 0 });
+    expect(first.take()).toEqual([]);
+    second.push('/t', 11, 10, 'changed', { n: 11 });
+    expect(payloads(h)).toEqual([{ n: 11 }]);
+    expect(h.onResync).not.toHaveBeenCalled();
+  });
+
+  it('does not adopt again a peer that closed for good, and calls the source on a later rung', async () => {
+    const dead = makeTransport();
+    const live = makeTransport();
+    const fn = vi.fn(() => (fn.mock.calls.length <= 2 ? dead.peer : live.peer));
+    const c = track(createEventClient({ basePath: '/events', peer: fn, draw: () => 0.5, checkIntervalMs: 0 }));
+    c.subscribe('/t', Changed, handlers());
+    await flush();
+    expect(eventsOf(dead.peer)).toBe(c);
+    dead.take();
+    dead.closeForGood();
+    for (let i = 0; i < 20 && fn.mock.calls.length < 3; i += 1) await vi.advanceTimersByTimeAsync(10000);
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(eventsOf(dead.peer)).toBeUndefined();
+    expect(eventsOf(live.peer)).toBe(c);
+    expect(dead.take()).toEqual([]);
+    expect(live.take().filter((call) => call.path === '/events/subscribe')).toHaveLength(1);
+  });
+
+  it('does not adopt a peer whose isClosed is true', async () => {
+    const dead = makeTransport();
+    const live = makeTransport();
+    Object.assign(dead.peer, { isOpen: false, isClosed: true });
+    const fn = vi.fn(() => (fn.mock.calls.length === 1 ? dead.peer : live.peer));
+    const c = track(createEventClient({ basePath: '/events', peer: fn, draw: () => 0.5, checkIntervalMs: 0 }));
+    c.subscribe('/t', Changed, handlers());
+    for (let i = 0; i < 20 && fn.mock.calls.length < 2; i += 1) await vi.advanceTimersByTimeAsync(10000);
+    expect(eventsOf(dead.peer)).toBeUndefined();
+    expect(eventsOf(live.peer)).toBe(c);
+  });
+
+  it('keeps the peer through a close it retries', async () => {
+    const { fn, made } = source();
+    const c = track(createEventClient({ basePath: '/events', peer: fn, draw: () => 0.5, checkIntervalMs: 0 }));
+    c.subscribe('/t', Changed, handlers());
+    await flush();
+    const [t] = made;
+    t.take()[0].answer({ rev: 10 });
+    await flush();
+    t.close();
+    await vi.advanceTimersByTimeAsync(60000);
+    t.reconnect();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(t.take().map((call) => call.body)).toEqual([{ topic: '/t' }]);
+  });
+
+  it('calls a source that rejected or threw again on a later rung, also without axios', async () => {
+    let attempt = 0;
+    const t = makeTransport();
+    const fn = vi.fn(() => {
+      attempt += 1;
+      if (attempt === 1) throw new Error('not yet');
+      if (attempt === 2) return Promise.reject(new Error('not yet'));
+      return Promise.resolve(t.peer);
+    });
+    const c = track(createEventClient({ basePath: '/events', peer: fn, draw: () => 0.5, checkIntervalMs: 0 }));
+    c.subscribe('/t', Changed, handlers());
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 20 && fn.mock.calls.length < 3; i += 1) await vi.advanceTimersByTimeAsync(10000);
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(
+      t
+        .take()
+        .filter((call) => call.path === '/events/subscribe')
+        .map((call) => call.body),
+    ).toEqual([{ topic: '/t' }]);
+    expect(eventsOf(t.peer)).toBe(c);
+  });
+
+  it('does not adopt a peer that has another client', async () => {
+    const t = makeTransport();
+    const other = track(client(t));
+    const thrown: unknown[] = [];
+    const queue = vi.spyOn(globalThis, 'queueMicrotask').mockImplementation((task) => {
+      try {
+        task();
+      } catch (error) {
+        thrown.push(error);
+      }
+    });
+    try {
+      const c = track(createEventClient({ basePath: '/events', peer: () => t.peer, draw: () => 0.5 }));
+      c.subscribe('/t', Changed, handlers());
+      await flush();
+    } finally {
+      queue.mockRestore();
+    }
+    expect(thrown.length).toBeGreaterThan(0);
+    for (const error of thrown) expect(error).toEqual(new Error('This peer already has an event client'));
+    expect(eventsOf(t.peer)).toBe(other);
+    expect(t.take()).toEqual([]);
+  });
+
+  it('close() unregisters the client from the peer it adopted', async () => {
+    const { fn, made } = source();
+    const c = createEventClient({ basePath: '/events', peer: fn, draw: () => 0.5, checkIntervalMs: 0 });
+    c.subscribe('/t', Changed, handlers());
+    await flush();
+    c.close();
+    expect(eventsOf(made[0].peer)).toBeUndefined();
   });
 });

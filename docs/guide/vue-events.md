@@ -267,6 +267,37 @@ from the client's rev. Once every topic has answered, the ladder is held again. 
 backend refuses on the new socket, for instance after the user's access was withdrawn, calls the
 subscription's `onError` and removes it.
 
+### Replacing the peer
+
+A muxws peer reconnects by itself, but it closes for good when the application closes it, for
+instance on logout, and the next socket is a new peer. `peer` may be a function that returns the
+current peer, or a promise of it, like the peer source of a muxws ViewSet; one client then lives as
+long as the application and follows its topics across peers:
+
+```ts
+async function currentPeer(): Promise<Peer> {
+  const peer = await connect('wss://example.test/ws');   // or the application's shared socket
+  attachEvents(peer);
+  return peer;
+}
+
+const events = createEventClient({ basePath: '/events', peer: currentPeer, axios });
+```
+
+The client calls the function on its first subscription. When the peer it returned closes for good
+(`onClose` with `willRetry: false`), the client unregisters from it, polls over `axios` from the revs
+it holds, and calls the function again on the ladder's next rung; a function that throws or rejects
+is called again on each later rung, also without `axios`. Every followed topic is subscribed on the
+socket of the new peer, and the client is registered for it, so `eventsOf(peer)` returns it. The
+function attaches the stream handler (`attachEvents` or `handleEventStream`) to the peers it
+returns. A peer whose `isClosed` is `true` is not adopted, and the function is called again on the
+next rung. A peer that already has another client is not adopted either: the client reports
+`Error('This peer already has an event client')` outside its call stack and calls the function again
+on the next rung.
+
+A ViewSet's `watch()` finds the client by its peer only once the client has adopted that peer; a
+ViewSet built on the same peer source passes the client in its `events` option.
+
 ## `watch()` on a ViewSet
 
 Every ViewSet has `watch(options)`. It subscribes the ViewSet's topic to `records_changed`, the

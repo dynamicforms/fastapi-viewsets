@@ -60,6 +60,8 @@ export interface MuxwsStreamLike {
 export interface MuxwsPeerLike {
   open(payload?: unknown, options?: { headers?: Record<string, unknown>; end?: boolean }): MuxwsStreamLike;
   readonly isOpen?: boolean;
+  /** True once the peer has closed for good. */
+  readonly isClosed?: boolean;
   onReconnect?(handler: (...args: any[]) => void): void;
   onClose?(handler: (reason: { readonly willRetry: boolean }) => void): void;
 }
@@ -70,8 +72,8 @@ export interface MuxwsPeerLike {
  * application that replaces its peer (a new `connect()` after logout and login). The function's
  * result is kept while the peer lives — a muxws Peer survives its own reconnects — and the function
  * is called again by the first call after the peer has closed for good (`onClose` with
- * `willRetry: false`), and after it threw or its promise rejected. A call in progress keeps the
- * peer it started on. Once the peer has resolved, `request()` opens its stream synchronously.
+ * `willRetry: false`, or `isClosed`), and after it threw or its promise rejected. A call in progress
+ * keeps the peer it started on. Once the peer has resolved, `request()` opens its stream synchronously.
  */
 export type MuxwsPeerSource = MuxwsPeerLike | (() => MuxwsPeerLike | Promise<MuxwsPeerLike>);
 
@@ -138,7 +140,8 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
    */
   private peer(): Promise<MuxwsPeerLike> {
     const source = this.peerSource;
-    if (typeof source === 'function' && this.resolvedPeer && peerWatches.get(this.resolvedPeer)?.closed) {
+    const held = this.resolvedPeer;
+    if (typeof source === 'function' && held && (held.isClosed === true || peerWatches.get(held)?.closed)) {
       this.resolvedPeer = undefined;
       this.peerPromise = undefined;
     }

@@ -21,8 +21,8 @@ function createEventClient(options: EventClientOptions): EventClient;
 interface EventClientOptions {
   /** The path the BE's `register_events` serves, e.g. `/events`. */
   basePath: string;
-  /** Carries pushes and, while open, the client's calls. */
-  peer?: EventPeerLike;
+  /** Carries pushes and, while open, the client's calls; a function is called for the peer. */
+  peer?: EventPeerSource;
   /** Carries the client's polls while there is no open peer. */
   axios?: EventAxiosLike;
   /** The ladder's constants. */
@@ -35,13 +35,15 @@ interface EventClientOptions {
   headers?: Record<string, string> | (() => Record<string, string>);
 }
 
+type EventPeerSource = EventPeerLike | (() => EventPeerLike | Promise<EventPeerLike>);
+
 const DEFAULT_CHECK_INTERVAL_MS = 60000;
 ```
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `basePath` | `string` | — | The path of the BE's events viewset. One trailing slash is stripped. |
-| `peer` | `EventPeerLike` | — | A muxws `Peer`. Carries pushes, and the client's calls while it is [open](#the-peer). The client registers one `onClose` and one `onReconnect` handler on it. |
+| `peer` | `EventPeerSource` | — | A muxws `Peer`, or a function that returns one or a promise of one ([peer source](#peer-source)). Carries pushes, and the client's calls while it is [open](#the-peer). The client registers one `onClose` and one `onReconnect` handler on each peer it holds. |
 | `axios` | `EventAxiosLike` | — | An `AxiosInstance`, or the `axios` module. Carries `poll` while there is no open peer. |
 | `pollSettings` | [`PollSettings`](#pollsettings) | `DEFAULT_POLL_SETTINGS` | The constants of the polling ladder. |
 | `draw` | [`Draw`](#draw) | `Math.random` | The jitter draw of the polling ladder. |
@@ -49,11 +51,13 @@ const DEFAULT_CHECK_INTERVAL_MS = 60000;
 | `headers` | `Record<string, string> \| () => Record<string, string>` | — | Headers of every `subscribe`, `unsubscribe` and `poll` call: stream headers over the peer, request headers over axios. A function is called once per call. The BE resolves the scope of a [scoped topic](#scoped-topics) from the calling request. |
 
 The client is registered for its `peer` until [`close()`](#eventclient); `eventsOf(peer)` returns it.
+A client with a peer source is registered for each peer it adopts, until that peer closes for good
+or `close()`.
 
 | Throws `Error` | When |
 |----------------|------|
 | `createEventClient needs a peer, axios, or both` | Neither `peer` nor `axios` is given |
-| `This peer already has an event client` | `peer` has a registered client that is not closed |
+| `This peer already has an event client` | `peer` is a peer that has a registered client that is not closed |
 
 ## eventsOf
 
@@ -284,6 +288,22 @@ not open or the ladder runs sends nothing.
 A `subscribe` refused on the new socket refuses the topic. An answer from a socket that has since
 closed is dropped. The peer counts as open while `peer.isOpen` is not `false`; a peer without
 `isOpen` counts as open until `onClose` and again from `onReconnect`.
+
+### Peer source
+
+| Event | The client with a function `peer` |
+|-------|-----------------------------------|
+| first `subscribe` | calls the function |
+| the function returns a peer, or its promise resolves to one | adopts the peer: registers for it, sends `subscribe` for every followed topic while the peer is open, starts the check timer |
+| the function throws or its promise rejects | stays without a peer; the ladder runs, polling over axios when there is one, and each rung calls the function again |
+| the returned peer's `isClosed` is `true` | does not adopt it; the next rung calls the function again |
+| the returned peer has another client | does not adopt it; `Error('This peer already has an event client')` is thrown from a microtask, and the next rung calls the function again |
+| the peer's `onClose` with `willRetry: false` | drops every socket subscription, unregisters from the peer, stops the check timer, and calls the function on the next rung |
+| `onClose` with `willRetry: true`, `onReconnect` | as for a bare peer |
+| a handler of a peer the client no longer holds | does nothing |
+
+A call of the function in flight is not repeated. `close()` unregisters the client from the peer it
+holds.
 
 ## attachEvents and handleEventStream
 

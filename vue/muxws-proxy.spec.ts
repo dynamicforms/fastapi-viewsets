@@ -635,6 +635,18 @@ describe('MuxwsProxyImpl — repeats', () => {
     expect([first.opened.length, second.opened.length]).toEqual([2, 2]);
   });
 
+  it('calls a peer source again once its peer reports isClosed', async () => {
+    const first = makeFlakyPeer([]);
+    const second = makeFlakyPeer([]);
+    const source = vi.fn().mockReturnValueOnce(first.peer).mockReturnValueOnce(second.peer);
+    const proxy = proxyFrom(source);
+    await proxy.retrieve(1);
+    Object.defineProperty(first.peer, 'isClosed', { value: true });
+    await proxy.retrieve(1);
+    expect(source).toHaveBeenCalledTimes(2);
+    expect([first.opened.length, second.opened.length]).toEqual([1, 1]);
+  });
+
   it('calls a peer source again after it threw or rejected', async () => {
     const flaky = makeFlakyPeer([]);
     const source = vi
