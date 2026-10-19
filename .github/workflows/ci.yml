@@ -46,6 +46,8 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      # the packed declarations, as every moduleResolution of an ES module consumer resolves them
+      - run: npm run types:check
       - run: npm run docs:build
 
   coverage:
