@@ -296,21 +296,20 @@ A subscription names a socket. `subscribe` and `unsubscribe` read it from
 `request.scope["fastapi_viewsets.peer"]`, which `process_command` sets from its `peer` argument:
 
 ```python
-from fastapi_viewsets.mux_ws import origin_allowed, process_command
+from fastapi_viewsets.mux_ws import process_command
+
+ALLOWED_ORIGINS = ["https://app.example"]
 
 
 @app.websocket("/ws")
 async def muxws_endpoint(websocket: WebSocket) -> None:
-    if not origin_allowed(websocket):
-        await websocket.close(code=1008)  # before accept(): the handshake is answered with HTTP 403
-        return
-    peer = await accept(websocket)
+    peer = await accept(websocket, allowed_origins=ALLOWED_ORIGINS)
     peer.on_stream(lambda payload, stream: process_command(payload, stream, connection=websocket, peer=peer))
     await peer.serve()
 ```
 
-A WebSocket authenticated by a cookie has no CSRF protection; the endpoint checks `Origin` before
-`accept()` (see [muxws](./muxws#authentication)).
+A WebSocket authenticated by a cookie has no CSRF protection; `allowed_origins` makes `accept()`
+refuse a foreign `Origin` (see [muxws](./muxws#authentication)).
 
 `subscribe` or `unsubscribe` served without `peer=` raises `RuntimeError` naming
 `process_command(..., peer=peer)`; the caller receives a 500, and the log carries the message.

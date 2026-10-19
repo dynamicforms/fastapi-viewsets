@@ -76,10 +76,7 @@ async def process_command(
 
         @app.websocket("/ws")
         async def endpoint(websocket: WebSocket) -> None:
-            if not origin_allowed(websocket):
-                await websocket.close(code=1008)  # before accept(): the handshake is answered with HTTP 403
-                return
-            peer = await accept(websocket)
+            peer = await accept(websocket, allowed_origins=["https://app.example"])
 
             async def on_stream(payload, stream):
                 if await process_command(payload, stream, connection=websocket, peer=peer):
