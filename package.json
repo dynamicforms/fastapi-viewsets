@@ -30,7 +30,8 @@
     "docs:build": "npm run docs:build -w docs",
     "docs:preview": "npm run docs:preview -w docs",
     "demo:dev": "npm run dev -w demo-frontend",
-    "test:e2e": "npm run test:e2e -w demo-e2e"
+    "test:e2e": "npm run test:e2e -w demo-e2e",
+    "types:check": "attw --pack . --profile esm-only"
   },
   "keywords": [
     "vue",
@@ -49,6 +50,7 @@
     "muxws": "^0.4.2"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@types/node": "^26",
     "@vitejs/plugin-vue": "^6",
     "@vitest/coverage-v8": "^4",
