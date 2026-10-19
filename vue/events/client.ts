@@ -150,11 +150,22 @@ export interface EventPeerLike extends MuxwsPeerLike {
   onStream?(handler: EventStreamHandler): void;
 }
 
+/**
+ * Where the client's peer comes from: a peer, or a function that returns one. The client calls the
+ * function on its first subscription, and again on the ladder's next rung after the peer it returned
+ * has closed for good (`onClose` with `willRetry: false`), threw, or rejected; until a peer is
+ * adopted the client polls over axios.
+ */
+export type EventPeerSource = EventPeerLike | (() => EventPeerLike | Promise<EventPeerLike>);
+
 export interface EventClientOptions {
   /** The path the BE's `register_events` serves, e.g. `/events`. */
   basePath: string;
-  /** Carries pushes and, while open, the client's calls. */
-  peer?: EventPeerLike;
+  /**
+   * Carries pushes and, while open, the client's calls. A function is called for a peer when the
+   * client needs one; see `EventPeerSource`.
+   */
+  peer?: EventPeerSource;
   /** Carries the client's polls while there is no open peer. */
   axios?: EventAxiosLike;
   /** The ladder's constants. Default `DEFAULT_POLL_SETTINGS`. */
@@ -433,7 +444,14 @@ class TopicState {
 class EventClientImpl implements EventClient {
   readonly basePath: string;
 
-  private readonly peer?: EventPeerLike;
+  /** The adopted peer: the bare `peer` option, or the last peer the source returned until it closed for good. */
+  private peer?: EventPeerLike;
+
+  /** The `peer` option when it is a function. */
+  private readonly peerSource?: () => EventPeerLike | Promise<EventPeerLike>;
+
+  /** A call of `peerSource` has not settled. */
+  private peerRequested = false;
 
   private readonly http?: EventAxiosLike;
 
@@ -469,15 +487,14 @@ class EventClientImpl implements EventClient {
 
   constructor(options: EventClientOptions) {
     this.basePath = options.basePath.replace(/\/$/, '');
-    this.peer = options.peer;
     this.http = options.axios;
     this.headersOption = options.headers;
     this.pollSettings = options.pollSettings ?? DEFAULT_POLL_SETTINGS;
     this.draw = options.draw ?? Math.random;
     this.ladder = new PollLadder(this.pollSettings, this.draw);
     this.checkIntervalMs = options.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
-    this.peer?.onClose?.(() => this.onPeerClose());
-    this.peer?.onReconnect?.(() => this.onPeerReconnect());
+    if (typeof options.peer === 'function') this.peerSource = options.peer;
+    else if (options.peer) this.watchPeer(options.peer);
   }
 
   // -- subscriptions --------------------------------------------------------
@@ -489,6 +506,7 @@ class EventClientImpl implements EventClient {
       state = new TopicState(topic);
       this.topics.set(topic, state);
       if (this.peerOpen()) this.sendSubscribe(state);
+      else this.requestPeer();
     }
     const sub = new Subscription(state, event.name, handlers, this);
     state.subs.add(sub);
@@ -983,22 +1001,24 @@ class EventClientImpl implements EventClient {
 
   /**
    * Whether the ladder runs: there is a topic, and either the peer is open and some topic is not
-   * subscribed on its socket or is `behind`, or the peer is not open and there is axios to poll over.
+   * subscribed on its socket or is `behind`, or the peer is not open and there is axios to poll over
+   * or a peer source to call.
    */
   private shouldPoll(): boolean {
     if (this.closed || this.topics.size === 0) return false;
     if (this.peerOpen()) {
       return [...this.topics.values()].some((state) => state.socket !== 'subscribed' || state.behind);
     }
-    return this.http !== undefined;
+    return this.http !== undefined || (this.peerSource !== undefined && this.peer === undefined);
   }
 
   /**
    * A topic without a rev that no poll has carried, and a topic refreshed since the last poll, are
-   * polled at once when there is no open peer to subscribe them on.
+   * polled at once over axios when there is no open peer to subscribe them on.
    */
   private pollNow(): boolean {
     return (
+      this.http !== undefined &&
       !this.peerOpen() &&
       [...this.topics.values()].some((state) => (state.rev === null && state.unpolled) || state.refreshUnpolled)
     );
@@ -1035,10 +1055,19 @@ class EventClientImpl implements EventClient {
     }
   }
 
-  /** One rung: one poll of every followed topic, then the next rung's delay from the ladder. */
+  /**
+   * One rung: a call of the peer source when the client has no peer, one poll of every followed
+   * topic, then the next rung's delay from the ladder. Without an open peer and without axios the
+   * rung polls nothing.
+   */
   private async rung(): Promise<void> {
     if (!this.shouldPoll()) {
       this.loop = 'idle';
+      return;
+    }
+    this.requestPeer();
+    if (!this.peerOpen() && !this.http) {
+      this.schedule(this.ladder.next({ anyActive: true, anyDialogOpen: false, revChanged: false, pollAfterMs: null }));
       return;
     }
     this.loop = 'polling';
@@ -1156,6 +1185,79 @@ class EventClientImpl implements EventClient {
 
   // -- the peer --------------------------------------------------------------------
 
+  /**
+   * Calls the peer source when the client has none and no call is in flight. A peer it returns is
+   * adopted; a call that throws or rejects leaves the client without a peer until the next rung.
+   */
+  private requestPeer(): void {
+    const source = this.peerSource;
+    if (!source || this.peer || this.peerRequested || this.closed) return;
+    let result: EventPeerLike | Promise<EventPeerLike>;
+    try {
+      result = source();
+    } catch {
+      return;
+    }
+    this.peerRequested = true;
+    Promise.resolve(result).then(
+      (peer) => {
+        this.peerRequested = false;
+        if (this.closed || this.peer) return;
+        this.adoptPeer(peer);
+      },
+      () => {
+        this.peerRequested = false;
+      },
+    );
+  }
+
+  /**
+   * Registers the client for `peer` and subscribes every followed topic on its socket. A peer whose
+   * `isClosed` is true is not adopted, and the next rung calls the source again; a peer with another
+   * client is not adopted, and the error is rethrown outside the client.
+   */
+  private adoptPeer(peer: EventPeerLike): void {
+    if (peer.isClosed === true) return;
+    const other = registry.get(peer);
+    if (other && other !== this) {
+      rethrowLater(new Error('This peer already has an event client'));
+      return;
+    }
+    registry.set(peer, this);
+    this.watchPeer(peer);
+    this.trackedOpen = peer.isOpen ?? true;
+    this.socketGeneration += 1;
+    if (this.peerOpen()) for (const state of this.topics.values()) this.sendSubscribe(state);
+    this.ensureLoop();
+    this.scheduleCheck();
+  }
+
+  /**
+   * Makes `peer` the client's peer and installs its `onClose` and `onReconnect` handlers; a handler
+   * of a peer the client no longer holds does nothing. A peer from the source that closes for good
+   * is dropped, and the source is called on the next rung.
+   */
+  private watchPeer(peer: EventPeerLike): void {
+    this.peer = peer;
+    peer.onClose?.((reason) => {
+      if (this.peer !== peer) return;
+      this.onPeerClose();
+      if (this.peerSource && reason?.willRetry === false) this.dropPeer(peer);
+    });
+    peer.onReconnect?.(() => {
+      if (this.peer === peer) this.onPeerReconnect();
+    });
+  }
+
+  /** Unregisters the client from `peer`, which closed for good, and leaves the client without a peer. */
+  private dropPeer(peer: EventPeerLike): void {
+    if (registry.get(peer) === this) registry.delete(peer);
+    socketCalls.get(peer)?.clear();
+    this.peer = undefined;
+    this.clearCheckTimer();
+    this.ensureLoop();
+  }
+
   /** Every socket subscription is gone; the ladder resumes on its base rung. */
   private onPeerClose(): void {
     // A closed client keeps tracking the socket, for the `unsubscribe` of a subscribe in flight.
@@ -1230,13 +1332,16 @@ const socketCalls = new WeakMap<object, Map<string, Promise<void>>>();
 
 /**
  * Builds an event client. Throws without `peer` and without `axios`, and for a `peer` that already
- * has a client; the client is registered for its `peer` until `close()`.
+ * has a client; the client is registered for its `peer` until `close()`. A client whose `peer` is a
+ * function is registered for each peer it adopts, until that peer closes for good or `close()`.
  */
 export function createEventClient(options: EventClientOptions): EventClient {
-  if (!options.peer && !options.axios) throw new Error('createEventClient needs a peer, axios, or both');
-  if (options.peer && registry.has(options.peer)) throw new Error('This peer already has an event client');
+  const { peer } = options;
+  if (!peer && !options.axios) throw new Error('createEventClient needs a peer, axios, or both');
+  if (peer && typeof peer !== 'function' && registry.has(peer))
+    throw new Error('This peer already has an event client');
   const client = new EventClientImpl(options);
-  if (options.peer) registry.set(options.peer, client);
+  if (peer && typeof peer !== 'function') registry.set(peer, client);
   return client;
 }
 
