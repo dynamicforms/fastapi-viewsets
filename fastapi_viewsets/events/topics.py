@@ -5,6 +5,10 @@ A viewset topic is the routed base path of a viewset, the `include_router` prefi
 `base_path`, and starts with `/`. A custom topic is a source name, `[a-z0-9_.-]+`, optionally
 followed by `:` and a key. Neither form contains whitespace or a control character. The two forms
 cannot name the same topic.
+
+A scoped topic, `@{name}:{key}`, is a store topic only: the server derives it from the subscriber's
+request for a viewset carrying `@event_scope` (see `fastapi_viewsets.events.scopes`). It has
+neither client form, and `is_valid_topic` and `validate_topic` refuse it.
 """
 
 import re
@@ -16,6 +20,9 @@ SOURCE_NAME_PATTERN = re.compile(r"[a-z0-9_.-]+")
 
 _VIEWSET_TOPIC = re.compile(r"/[^\s\x00-\x1f\x7f]*")
 _CUSTOM_TOPIC = re.compile(r"([a-z0-9_.-]+)(?::([^\s\x00-\x1f\x7f]+))?")
+_SCOPED_TOPIC = re.compile(r"@([^\s\x00-\x1f\x7f:]+):([^\s\x00-\x1f\x7f]+)")
+_SCOPE_NAME = re.compile(r"[^\s\x00-\x1f\x7f:]+")
+_SCOPE_KEY = re.compile(r"[^\s\x00-\x1f\x7f]+")
 
 
 def is_viewset_topic(topic: Any) -> bool:
@@ -45,3 +52,59 @@ def split_custom_topic(topic: str) -> tuple[str, str | None] | None:
     if match is None:
         return None
     return match.group(1), match.group(2)
+
+
+def _scope_key_text(key: Any) -> str:
+    """
+    `key` as the text of a scope key: an `int` (not a `bool`) as `str(key)`, a `str` as it is.
+    Raises `ValueError` for a `str` that is empty or holds whitespace or a control character, and
+    `TypeError` for any other type, `bool` included.
+    """
+    if isinstance(key, bool) or not isinstance(key, (int, str)):
+        raise TypeError(f"a scope key is a str or an int, not {type(key).__name__}")
+    text = str(key)
+    if _SCOPE_KEY.fullmatch(text) is None:
+        raise ValueError(f"{key!r} is not a scope key: a non-empty string without whitespace or control characters")
+    return text
+
+
+def scoped_topic(name: str, key: "str | int") -> str:
+    """
+    The store topic `@{name}:{key}` of the scope `name` and the key `key`. Raises `ValueError` for a
+    name that is empty or holds whitespace, a control character or `:`, and for a key `_scope_key_text`
+    refuses with `ValueError`; `TypeError` for a key of another type.
+    """
+    return f"@{_scope_name(name)}:{_scope_key_text(key)}"
+
+
+def _scope_name(name: Any) -> str:
+    """Returns `name`; raises `ValueError` when it is not a non-empty string without whitespace,
+    control characters or `:`."""
+    if not isinstance(name, str) or _SCOPE_NAME.fullmatch(name) is None:
+        raise ValueError(
+            f"{name!r} is not a scope name: a non-empty string without whitespace, control characters or ':'"
+        )
+    return name
+
+
+def is_scoped_topic(topic: Any) -> bool:
+    """Whether `topic` has the scoped form `@{name}:{key}`."""
+    return isinstance(topic, str) and _SCOPED_TOPIC.fullmatch(topic) is not None
+
+
+def split_scoped_topic(topic: str) -> tuple[str, str] | None:
+    """`(name, key)` of a scoped topic; None for a topic of any other form."""
+    match = _SCOPED_TOPIC.fullmatch(topic) if isinstance(topic, str) else None
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _validate_published_topic(topic: Any) -> str:
+    """Returns `topic`; raises `ValueError` when it has neither client form nor the scoped form."""
+    if not (is_valid_topic(topic) or is_scoped_topic(topic)):
+        raise ValueError(
+            f"{topic!r} is not a topic: neither a path starting with /, a source name with an optional key, "
+            f"nor a scoped topic @name:key"
+        )
+    return topic

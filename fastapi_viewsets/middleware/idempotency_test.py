@@ -2,11 +2,15 @@ import asyncio
 import fnmatch
 import time
 
+from typing import Any
+
 import pytest
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
+from starlette.responses import FileResponse, Response, StreamingResponse
 
 from ..conf import settings
 from ..context import Context
@@ -571,3 +575,110 @@ async def test_redis_an_outcome_that_cannot_be_encoded_is_not_stored_and_release
     assert chain.calls == 2
     assert time.monotonic() - started < 1
     assert redis.values == {}
+
+
+# a Response body
+
+
+def buffered_response(background: list | None = None) -> Response:
+    task = BackgroundTask(background.append, "ran") if background is not None else None
+    response = Response(content=b"%PDF-1.7", status_code=201, media_type="application/pdf", background=task)
+    response.headers["x-report"] = "7"
+    return response
+
+
+def assert_replayed_response(result: ViewSetResult, original: Response) -> None:
+    replayed = result.body
+    assert isinstance(replayed, Response)
+    assert replayed is not original
+    assert replayed.status_code == 201
+    assert replayed.body == b"%PDF-1.7"
+    assert replayed.headers["content-type"] == "application/pdf"
+    assert replayed.headers["x-report"] == "7"
+    assert [name for name, _value in replayed.raw_headers].count(b"content-length") == 1
+    assert replayed.headers["content-length"] == "8"
+    assert replayed.background is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["memory", "redis"])
+async def test_a_buffered_response_is_replayed_as_a_new_response(backend):
+    redis = FakeRedis() if backend == "redis" else None
+    background: list = []
+    original = buffered_response(background)
+    chain = Counter(result=ViewSetResult(body=original, headers={"x-chain": "1"}))
+    middleware = Idempotency(redis_client=redis)
+    first = await call(middleware, chain)
+    assert first.body is original
+    for repeat_middleware in (middleware, Idempotency(redis_client=redis)) if redis else (middleware,):
+        repeat = await call(repeat_middleware, chain)
+        assert_replayed_response(repeat, original)
+        assert repeat.headers == {"x-chain": "1"}
+        again = await call(repeat_middleware, chain)
+        assert again.body is not repeat.body
+    assert chain.calls == 1
+    assert background == []
+
+
+@pytest.mark.asyncio
+async def test_repeats_attached_to_a_call_answering_a_response_get_new_responses():
+    original = buffered_response()
+    middleware, chain = Idempotency(), Counter(delay=0.05, result=ViewSetResult(body=original))
+    first, second, third = await asyncio.gather(*(call(middleware, chain) for _ in range(3)))
+    assert first.body is original
+    assert_replayed_response(second, original)
+    assert_replayed_response(third, original)
+    assert second.body is not third.body
+    assert chain.calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        lambda: StreamingResponse(iter([b"a", b"b"])),
+        lambda: FileResponse(__file__),
+    ],
+    ids=["streaming", "file"],
+)
+async def test_a_response_without_a_buffered_body_is_not_stored(response):
+    middleware, chain = Idempotency(), Counter(result=ViewSetResult(body=response()))
+    await call(middleware, chain)
+    await call(middleware, chain)
+    assert chain.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_a_response_that_sets_a_cookie_is_not_stored():
+    original = buffered_response()
+    original.set_cookie("session", "abc")
+    middleware, chain = Idempotency(), Counter(result=ViewSetResult(body=original))
+    await call(middleware, chain)
+    await call(middleware, chain)
+    assert chain.calls == 2
+
+
+def test_a_repeated_post_answering_a_response_answers_it_again():
+    settings.viewsets_command_middleware = [Idempotency()]
+    runs: list = []
+    router = APIRouter()
+
+    @route_viewset(router, "/reports")
+    class ReportViewSet:
+        __router = APIRouter()
+
+        @__router.post("")
+        async def create(self) -> Any:
+            runs.append(None)
+            return buffered_response()
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    first = client.post("/reports", headers={"Idempotency-Key": KEY})
+    repeat = client.post("/reports", headers={"Idempotency-Key": KEY})
+    for response in (first, repeat):
+        assert (response.status_code, response.content) == (201, b"%PDF-1.7")
+        assert response.headers["x-report"] == "7"
+        assert response.headers["content-type"] == "application/pdf"
+    assert len(runs) == 1

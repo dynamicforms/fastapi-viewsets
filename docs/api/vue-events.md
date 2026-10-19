@@ -31,6 +31,8 @@ interface EventClientOptions {
   draw?: Draw;
   /** Milliseconds between the check polls over the open peer; `0` sends none. */
   checkIntervalMs?: number;
+  /** Headers added to every subscribe, unsubscribe and poll call, read per call. */
+  headers?: Record<string, string> | (() => Record<string, string>);
 }
 
 const DEFAULT_CHECK_INTERVAL_MS = 60000;
@@ -44,6 +46,7 @@ const DEFAULT_CHECK_INTERVAL_MS = 60000;
 | `pollSettings` | [`PollSettings`](#pollsettings) | `DEFAULT_POLL_SETTINGS` | The constants of the polling ladder. |
 | `draw` | [`Draw`](#draw) | `Math.random` | The jitter draw of the polling ladder. |
 | `checkIntervalMs` | `number` | `DEFAULT_CHECK_INTERVAL_MS` (60000) | The interval of the [check poll](#the-peer), jittered by `pollSettings.jitterFraction` and drawn with `draw`. `0`, a negative and a non-finite value send none. |
+| `headers` | `Record<string, string> \| () => Record<string, string>` | — | Headers of every `subscribe`, `unsubscribe` and `poll` call: stream headers over the peer, request headers over axios. A function is called once per call. The BE resolves the scope of a [scoped topic](#scoped-topics) from the calling request. |
 
 The client is registered for its `peer` until [`close()`](#eventclient); `eventsOf(peer)` returns it.
 
@@ -68,6 +71,7 @@ interface EventClient {
   readonly basePath: string;
   subscribe<P>(topic: string, event: EventDefinition<P>, handlers: EventHandlers<NoInfer<P>>): EventSubscription;
   close(): void;
+  refresh?(topic?: string): void;
 }
 ```
 
@@ -76,6 +80,7 @@ interface EventClient {
 | `basePath` | `EventClientOptions.basePath` without its trailing slash. |
 | `subscribe(topic, event, handlers)` | Subscribes `handlers` to the events named `event.name` on `topic`. The client holds one server subscription and one rev per topic, and counts the subscriptions on it: the first subscription of a topic sends `subscribe` over an open peer, or adds the topic to the next poll; a further one sends nothing, and its `ready` resolves at once when the topic already holds a rev. `P` is read off `event` only. Throws `Error('The event client is closed')` after `close()`. |
 | `close()` | Clears the client's timer, sends `unsubscribe` for every topic subscribed on an open peer, and for every topic whose `subscribe` is in flight once it is answered on the same socket, rejects every `ready` that has not settled with `Error('The event client is closed')`, ignores every later answer and push, and unregisters the client from its peer, which may then be given a new client. It calls no handler. A second call does nothing. |
+| `refresh(topic?)` | Optional member; the client of `createEventClient` has it. For `topic`, or every followed topic, that holds a rev: sends `subscribe` over the open peer, or polls at once over axios without one, so that the BE resolves the topic's scope anew; the topic's pushes are held until the answer. See [Scoped topics](#scoped-topics). A topic without a rev is left as it is; after `close()` it does nothing. |
 
 ## defineEvent
 
@@ -124,6 +129,7 @@ interface EventMeta {
   readonly rev: number;
   readonly prev: number;
   readonly version: number;
+  readonly scope?: string;
 }
 ```
 
@@ -133,6 +139,7 @@ interface EventMeta {
 | `rev` | The event's rev on its topic. |
 | `prev` | The rev the client held for the topic before it applied the event: the push's `:prev`, or the poll answer entry's `prev`, which chains the events of the answer. |
 | `version` | The backend event's `event_version`, an integer of at least 1: the push's `:version` header, or the poll answer entry's `version`. |
+| `scope` | The scope key the client holds for a [scoped topic](#scoped-topics); absent for an unscoped topic. |
 
 One frozen object per applied event, passed to every subscription the event is dispatched to.
 `version` does not narrow the type of the payload.
@@ -159,16 +166,21 @@ A refusal is reported with:
 |---------|-------|
 | `subscribe` or `poll` answered over the peer with a [refusing status](#calls) | `ViewSetRequestError(status, body, headers)` |
 | `poll` answered over axios with a refusing status | the `AxiosError` axios throws |
-| a topic of a poll answer carries `error` | `ViewSetRequestError` with `response.data` `{ detail, detail_code: error, detail_params: { topic } }` and the status below |
+| a topic of a poll answer carries `error` | `ViewSetRequestError` with `response.data` `{ detail, detail_code: error, detail_params: { topic } }` and the answer's `status`, or for an answer without one the status below |
 
-| Topic `error` | `response.status` |
+| Topic `error` | `response.status` without `status` |
 |---------------|-------------------|
 | `event_topic_invalid` | 422 |
 | `event_topic_refused` | 403 |
+| `event_scope_missing` | 403 |
 | `not_authorized` | 403 |
 | `session_expired` | 401 |
-| `rate_limited` | 429, not a refusal: the topic stays and is polled on the next rung |
+| `rate_limited` | 429 |
 | any other code | 403 |
+
+A status of 429 or of 500 and above is not a refusal: the topic stays, is polled on the next
+rung, and a failed `subscribe` of it is sent again (see [Calls](#calls)). `onError` is not called
+and `ready` does not settle for it.
 
 A poll refused with a status refuses every topic it carried.
 
@@ -178,14 +190,16 @@ The client sends three calls, each as one POST to `{basePath}/{name}`:
 
 | Call | Body | Answer | Sent |
 |------|------|--------|------|
-| `subscribe` | `{ topic }` | `{ rev }` | Over an open peer only: for the first subscription of a topic, and for every followed topic on `onReconnect` |
+| `subscribe` | `{ topic }` | `{ rev, scope? }` | Over an open peer only: for the first subscription of a topic, for every followed topic on `onReconnect`, on `refresh()`, after a poll answered a subscribed topic under another scope, and on every rung for a topic whose `subscribe` failed without refusing |
 | `unsubscribe` | `{ topic }` | — | Over an open peer only, for a topic subscribed on its socket: on the last subscription's `unsubscribe()`, on a refusal of the topic, and on `close()`, also once a `subscribe` in flight at `close()` is answered. Its failure is not reported |
-| `poll` | `{ cursors: { [topic]: rev \| null } }` | `{ topics: { [topic]: { rev, events, error? } }, poll_after_ms }`, each event `{ rev, prev, event, version, payload }` | Over an open peer, otherwise over axios |
+| `poll` | `{ cursors: { [topic]: rev \| null }, scopes: { [topic]: scope } }`, `scopes` holding the topics of the poll with a scope (`{}` for none) | `{ topics: { [topic]: { rev, events, error?, status?, scope? } }, poll_after_ms }`, each event `{ rev, prev, event, version, payload }` | Over an open peer, otherwise over axios |
 
-Over the peer a call is one stream, `peer.open(body, { headers: { ':method': 'POST', ':path': path },
-end: true })`, and its status is the reply's `:status` header, 200 when absent. Over axios it is
-`axios.post(path, body)`. No call carries `Idempotency-Key`, and no call is repeated by the
-[repeat machinery](./idempotency#frontend) of the proxies.
+Over the peer a call is one stream, `peer.open(body, { headers: { ...headers, ':method': 'POST',
+':path': path }, end: true })`, and its status is the reply's `:status` header, 200 when absent. Over
+axios it is `axios.post(path, body, { headers })`, or `axios.post(path, body)` without the `headers`
+option. `headers` is `EventClientOptions.headers`, read once per call. No call carries
+`Idempotency-Key`, and no call is repeated by the [repeat machinery](./idempotency#frontend) of the
+proxies.
 
 The `subscribe` and `unsubscribe` calls of one topic on one peer are sent one at a time, whichever
 client of the peer sends them: a call is opened once the one before it is answered. The backend
@@ -196,8 +210,10 @@ topic once the closed client's `unsubscribe` of it is answered.
 A failure with a status from 400 to 499 refuses, except 429. 429, every status of 500 or above, and
 a failure without a status (`ConnectionLost`, a network error) are not reported: a failed rung `poll`
 is sent again on the next rung, a failed gap `poll` leaves the topic to the ladder (see
-[below](#push-gap-poll-and-resync)), and a failed `subscribe` is sent again on the next reconnect,
-with the topic polled meanwhile.
+[below](#push-gap-poll-and-resync)), and a failed `subscribe` is sent again on each rung of the
+[ladder](#polling-ladder) while the peer is open, and on the next reconnect, with the topic polled
+meanwhile; the subscription stays. A `subscribe` sent again that is refused reports the refusal as
+any other.
 
 ## Push, gap, poll and resync
 
@@ -219,6 +235,13 @@ Per topic the client holds `rev`, the rev of the last event it applied or of the
 | subscribe answer | `rev` above the held rev | one `poll` of that topic from the held rev |
 | gap poll | fails without refusing the topic, or its answer does not answer the topic | the ladder runs, also over an open peer, and polls the topic until a poll answers it |
 | any | a topic the client does not follow | ignored |
+| push | the topic is scoped, holds a rev, and `headers()` changed since the topic's last answer | `refresh(topic)`, and the push is held |
+| push | `:scope` differs from the scope the topic holds | ignored |
+| push | the topic is refreshing | held until the answer |
+| subscribe or poll answer | the topic holds no rev yet | the topic also takes the answer's `scope`; held pushes of another scope are dropped |
+| subscribe or poll answer | `scope` differs from the held one | `onResync`; the held rev and scope become the answer's; held pushes of the new scope above that rev are received again; a poll answer also sends `subscribe` for a topic subscribed on the open socket |
+| subscribe or poll answer | the topic is refreshing, same `scope` | the answer as above, then the held pushes are received again |
+| refresh `subscribe` | fails without refusing | the held pushes are dropped; the ladder polls the topic and sends `subscribe` again |
 
 A topic answer without a numeric `rev` and without `error` is ignored. `events: null` is not a
 resync when pushes applied while the poll was in flight moved the held rev to at least the answer's
@@ -230,12 +253,21 @@ that arrives while a gap poll of the topic is in flight is polled again after it
 has not reached that gap's `rev` by then. A gap poll is not sent for a topic the client no longer
 follows, also when a handler of a held push replayed before it ended the following.
 
+## Scoped topics
+
+A [scoped viewset topic](../guide/events#scoped-topics) answers `scope`, the key the BE resolved
+from the calling request, with every `subscribe` and poll answer, and carries it in each push as
+`:scope`. The client holds it per topic, applies only pushes of the held scope, sends it in the
+`scopes` of every poll, and resyncs a topic answered under another scope (see the table above).
+`refresh(topic?)` asks the BE to resolve the scope anew. A topic without `scope` in its answers is
+unscoped and keeps the rules above unchanged.
+
 ## The peer
 
 | Peer state | The client |
 |------------|------------|
 | open, every followed topic subscribed on its socket | holds the ladder; sends a check poll once per `checkIntervalMs` |
-| open, a topic not subscribed on its socket (a `subscribe` in flight, or one that failed without refusing), or a topic whose gap poll or check poll failed without refusing or left the topic unanswered | runs the ladder over the peer |
+| open, a topic not subscribed on its socket (a `subscribe` in flight, or one that failed without refusing), or a topic whose gap poll or check poll failed without refusing or left the topic unanswered | runs the ladder over the peer; each rung sends `subscribe` again for a topic whose `subscribe` failed |
 | `onClose` fired | drops every socket subscription and resumes the ladder on its base rung over axios; without axios it waits for `onReconnect` |
 | `onReconnect` fired | sends `subscribe` for every followed topic, runs the ladder over the peer until every one is answered, then holds it |
 

@@ -33,6 +33,13 @@
  * The client's own calls (`subscribe`, `unsubscribe`, `poll`) carry no `Idempotency-Key` and are
  * never repeated by the proxies' repeat machinery: a repeat of `subscribe` answered from a stored
  * outcome would not subscribe the socket the repeat travelled on.
+ *
+ * A scoped viewset topic (the BE's `@event_scope`) answers its scope key, which the BE resolves from
+ * the calling request: its headers (`EventClientOptions.headers`), its path, its session. The client
+ * holds the key per topic, applies only pushes carrying that key in `:scope`, and sends it per topic
+ * with every poll in `scopes`. An answer under another key resyncs the topic. `refresh()` subscribes
+ * a topic again so that the BE resolves its key anew, and a push of a scoped topic arriving after
+ * `headers()` changed since the topic was answered calls it for that topic.
  */
 
 import { ViewSetRequestError } from '../errors';
@@ -79,6 +86,8 @@ export interface EventMeta {
    * The push's `:version` header, or the poll answer entry's `version`.
    */
   readonly version: number;
+  /** The scope key of a scoped viewset topic, as the BE resolved it for this client; absent otherwise. */
+  readonly scope?: string;
 }
 
 /**
@@ -122,7 +131,7 @@ export interface EventSubscription {
 
 /** The axios method the client uses; an `AxiosInstance` is one. */
 export interface EventAxiosLike {
-  post<R = unknown>(url: string, data?: unknown): Promise<{ data: R }>;
+  post<R = unknown>(url: string, data?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: R }>;
 }
 
 /** A stream the remote opened, as `handleEventStream` and `attachEvents` read it. */
@@ -157,6 +166,12 @@ export interface EventClientOptions {
    * none. Default `DEFAULT_CHECK_INTERVAL_MS`.
    */
   checkIntervalMs?: number;
+  /**
+   * Headers added to every `subscribe`, `unsubscribe` and `poll` call, read per call: as stream
+   * headers over the peer, as request headers over axios. A function is called once per call. The BE
+   * resolves the scope of a scoped topic from the calling request, and these headers are part of it.
+   */
+  headers?: Record<string, string> | (() => Record<string, string>);
 }
 
 /** 60 s: the default `EventClientOptions.checkIntervalMs`. */
@@ -176,6 +191,13 @@ export interface EventClient {
    * its peer, which may then be given a new client.
    */
   close(): void;
+  /**
+   * Subscribes `topic`, or every followed topic, again so that the BE resolves its scope anew: over an
+   * open peer with a `subscribe` call, otherwise with a poll at once. Until the answer the topic's
+   * pushes are held; an answer under another scope key resyncs the topic and applies the held pushes
+   * of the new key. A topic that has not been answered yet is left as it is.
+   */
+  refresh?(topic?: string): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +218,10 @@ interface WireTopicAnswer {
   rev: number | null;
   events: WireEvent[] | null;
   error?: string;
+  /** The HTTP status of the refusal `error` names. */
+  status?: number;
+  /** The scope key of a scoped topic. */
+  scope?: string;
 }
 
 interface WirePollAnswer {
@@ -205,15 +231,23 @@ interface WirePollAnswer {
 
 interface WireSubscribeAnswer {
   rev: number;
+  scope?: string;
+}
+
+/** The answer of one call, with the key of the headers it was sent with; see `headersKeyOf`. */
+interface CallAnswer<R> {
+  data: R;
+  headersKey: string;
 }
 
 /**
- * The status a topic error of a poll answer stands for: the status of the BE error whose `code` the
- * answer carries. A code not listed here stands for 403.
+ * The status a topic error of a poll answer stands for when the answer carries no `status`: the
+ * status of the BE error whose `code` the answer carries. A code not listed here stands for 403.
  */
 const TOPIC_ERROR_STATUS: Readonly<Record<string, number>> = {
   event_topic_invalid: 422,
   event_topic_refused: 403,
+  event_scope_missing: 403,
   not_authorized: 403,
   session_expired: 401,
   rate_limited: 429,
@@ -231,7 +265,8 @@ function statusOf(error: unknown): number | undefined {
 /**
  * A status that does not refuse a topic: 429, rate limiting, and every status of 500 or above, a
  * server or gateway failure. A call or a topic answered with one is sent again: a poll on the next
- * rung, a subscribe on the next reconnect, with the topic polled meanwhile.
+ * rung, a subscribe on the next rung while the peer is open and on the next reconnect, with the
+ * topic polled meanwhile.
  */
 function isTransientStatus(status: number): boolean {
   return status === 429 || status >= 500;
@@ -285,6 +320,8 @@ interface Arrival {
   event: string;
   version: number;
   payload: unknown;
+  /** The push's `:scope`; for a poll answer entry, the answer's scope. */
+  scope: string | null;
 }
 
 class Subscription implements EventSubscription {
@@ -374,6 +411,15 @@ class TopicState {
    */
   behind = false;
 
+  /** The scope key of the topic's last answer; `null` for an unscoped topic and before the first answer. */
+  scope: string | null = null;
+
+  /** A `refresh()` of the topic waits for its answer; pushes are held in `pending` meanwhile. */
+  refreshing = false;
+
+  /** The headers key of the call whose answer the topic last applied; `null` before that answer. */
+  sentHeaders: string | null = null;
+
   constructor(readonly topic: string) {}
 }
 
@@ -383,6 +429,8 @@ class EventClientImpl implements EventClient {
   private readonly peer?: EventPeerLike;
 
   private readonly http?: EventAxiosLike;
+
+  private readonly headersOption?: Record<string, string> | (() => Record<string, string>);
 
   private readonly ladder: PollLadder;
 
@@ -416,6 +464,7 @@ class EventClientImpl implements EventClient {
     this.basePath = options.basePath.replace(/\/$/, '');
     this.peer = options.peer;
     this.http = options.axios;
+    this.headersOption = options.headers;
     this.pollSettings = options.pollSettings ?? DEFAULT_POLL_SETTINGS;
     this.draw = options.draw ?? Math.random;
     this.ladder = new PollLadder(this.pollSettings, this.draw);
@@ -469,6 +518,28 @@ class EventClientImpl implements EventClient {
     if (this.peer && registry.get(this.peer) === this) registry.delete(this.peer);
   }
 
+  refresh(topic?: string): void {
+    if (this.closed) return;
+    for (const state of [...this.topics.values()]) {
+      if (topic === undefined || state.topic === topic) this.refreshState(state);
+    }
+  }
+
+  /**
+   * Refreshes one answered topic: holds its pushes until the answer of a `subscribe` over the open
+   * peer, or of a poll at once over axios.
+   */
+  private refreshState(state: TopicState): void {
+    if (state.rev === null || this.topics.get(state.topic) !== state) return;
+    state.refreshing = true;
+    if (this.peerOpen()) {
+      this.sendSubscribe(state);
+      return;
+    }
+    state.behind = true;
+    if (this.http && this.loop !== 'polling') this.schedule(0);
+  }
+
   /** Removes the topic and reports `error` to every subscription on it. */
   private refuse(state: TopicState, error: unknown): void {
     if (this.topics.get(state.topic) !== state) return;
@@ -481,10 +552,15 @@ class EventClientImpl implements EventClient {
 
   // -- the rev rules ---------------------------------------------------------
 
-  /** Sets the first rev of a topic, replays the pushes held for it and resolves its subscriptions. */
-  private follow(state: TopicState, rev: number): void {
+  /**
+   * Sets the first rev and scope of a topic, replays the pushes held for it under that scope and
+   * resolves its subscriptions.
+   */
+  private follow(state: TopicState, rev: number, scope: string | null): void {
     state.rev = rev;
-    const pending = state.pending;
+    state.scope = scope;
+    state.refreshing = false;
+    const pending = state.pending.filter((arrival) => arrival.scope === scope);
     state.pending = [];
     for (const sub of state.subs) sub.resolve();
     for (const arrival of pending) {
@@ -507,6 +583,7 @@ class EventClientImpl implements EventClient {
         rev: arrival.rev,
         prev: arrival.prev,
         version: arrival.version,
+        ...(state.scope !== null ? { scope: state.scope } : {}),
       });
       for (const sub of [...state.subs]) {
         if (sub.active && sub.event === arrival.event) runHandler(() => sub.handlers.onEvent(arrival.payload, meta));
@@ -516,13 +593,53 @@ class EventClientImpl implements EventClient {
     return arrival.rev <= held ? 'ignored' : 'gap';
   }
 
-  /** A pushed event: held until the topic has a rev, then applied, ignored or answered with a gap poll. */
+  /**
+   * A pushed event: held until the topic has a rev and while it is refreshing, then applied, ignored or
+   * answered with a gap poll. A push of a scoped topic arriving after `headers()` changed since the
+   * topic was answered refreshes the topic and is held; a push under another scope key is ignored.
+   */
   private receive(state: TopicState, arrival: Arrival): void {
-    if (state.rev === null) {
+    if (state.rev === null || state.refreshing) {
       state.pending.push(arrival);
       return;
     }
+    if (state.scope !== null && state.sentHeaders !== null && this.currentHeadersKey() !== state.sentHeaders) {
+      this.refreshState(state);
+      state.pending.push(arrival);
+      return;
+    }
+    if (arrival.scope !== state.scope) return;
     if (this.apply(state, arrival) === 'gap') this.gapPoll(state, arrival.rev);
+  }
+
+  /**
+   * A later answer of `state` under another scope key: the topic resyncs to `rev`, and the held pushes
+   * of the new key above `rev` are applied after it. A scope change seen by a poll subscribes the topic
+   * again on an open socket, so that the BE's subscription follows the new key.
+   */
+  private scopeChange(state: TopicState, scope: string | null, rev: number, viaPoll: boolean): void {
+    const held = state.pending.filter((arrival) => arrival.scope === scope && arrival.rev > rev);
+    held.sort((a, b) => a.rev - b.rev);
+    state.scope = scope;
+    state.refreshing = false;
+    this.resync(state, rev);
+    for (const arrival of held) {
+      if (this.topics.get(state.topic) !== state) return;
+      this.receive(state, arrival);
+    }
+    if (viaPoll && state.socket === 'subscribed' && this.topics.get(state.topic) === state) this.sendSubscribe(state);
+  }
+
+  /** Ends a refresh answered under the same scope key: the held pushes are received again. */
+  private endRefresh(state: TopicState): void {
+    if (!state.refreshing) return;
+    state.refreshing = false;
+    const held = state.pending;
+    state.pending = [];
+    for (const arrival of held) {
+      if (this.topics.get(state.topic) !== state) return;
+      this.receive(state, arrival);
+    }
   }
 
   /** Calls `onResync` on every subscription of the topic; the held rev becomes `rev`. */
@@ -552,6 +669,9 @@ class EventClientImpl implements EventClient {
    *   held rev becomes the answer's rev when that is larger: the BE leaves out of an answer the
    *   events its delivery filters refuse, and the answer's rev covers them.
    *
+   * - An answer under another scope key than the held one resyncs the topic to the answer's rev (see
+   *   `scopeChange`).
+   *
    * Returns `'moved'` when the held rev moved, `'answered'` when the answer answered the topic
    * without moving it, and `'unanswered'` for a transient error and for an answer without a rev.
    */
@@ -559,9 +679,14 @@ class EventClientImpl implements EventClient {
     state: TopicState,
     cursor: number | null,
     answer: WireTopicAnswer,
+    headersKey: string,
   ): 'moved' | 'answered' | 'unanswered' {
     if (typeof answer.error === 'string' && answer.error) {
-      const error = topicError(state.topic, answer.error);
+      const error = topicError(
+        state.topic,
+        answer.error,
+        typeof answer.status === 'number' ? answer.status : undefined,
+      );
       if (isTransientStatus(error.response.status)) return 'unanswered';
       this.refuse(state, error);
       return 'answered';
@@ -569,11 +694,29 @@ class EventClientImpl implements EventClient {
     const rev = revOf(answer.rev);
     if (rev === null) return 'unanswered';
     state.behind = false;
+    state.sentHeaders = headersKey;
+    const scope = typeof answer.scope === 'string' ? answer.scope : null;
     if (state.rev === null) {
-      this.follow(state, rev);
+      this.follow(state, rev, scope);
       return 'answered';
     }
-    const held = state.rev;
+    if (scope !== state.scope) {
+      this.scopeChange(state, scope, rev, true);
+      return 'moved';
+    }
+    const outcome = this.applyEvents(state, cursor, rev, answer);
+    this.endRefresh(state);
+    return outcome;
+  }
+
+  /** The events of a poll answer under the held scope key; see `applyTopicAnswer`. */
+  private applyEvents(
+    state: TopicState,
+    cursor: number | null,
+    rev: number,
+    answer: WireTopicAnswer,
+  ): 'moved' | 'answered' {
+    const held = state.rev as number;
     if (!Array.isArray(answer.events)) {
       if (held !== cursor && rev <= held) return 'answered';
       this.resync(state, rev);
@@ -584,20 +727,21 @@ class EventClientImpl implements EventClient {
       return 'moved';
     }
     for (const event of answer.events) {
-      const arrival = toArrival(event);
-      if (arrival === null || this.apply(state, chained(arrival, state.rev)) === 'gap') {
+      const arrival = toArrival(event, state.scope);
+      if (arrival === null || this.apply(state, chained(arrival, state.rev as number)) === 'gap') {
         this.resync(state, rev);
         return 'moved';
       }
     }
     // The answer covers every event up to its rev; the ones it leaves out were not for this client.
-    if (rev > state.rev) state.rev = rev;
+    if (rev > (state.rev as number)) state.rev = rev;
     return state.rev !== held ? 'moved' : 'answered';
   }
 
   /**
    * Receives a pushed event; see `handleEventStream`. A push without a string `:topic` and `:event`,
-   * or without a usable `:rev`, `:prev` or `:version`, is ignored.
+   * or without a usable `:rev`, `:prev` or `:version`, is ignored. A string `:scope` is the push's
+   * scope key.
    */
   push(headers: Record<string, unknown>, payload: unknown): void {
     const topic = headers[':topic'];
@@ -610,7 +754,8 @@ class EventClientImpl implements EventClient {
     }
     const state = this.topics.get(topic);
     if (!state) return;
-    this.receive(state, { rev, prev, event, version, payload });
+    const scope = typeof headers[':scope'] === 'string' ? headers[':scope'] : null;
+    this.receive(state, { rev, prev, event, version, payload, scope });
   }
 
   // -- calls -------------------------------------------------------------------
@@ -620,24 +765,59 @@ class EventClientImpl implements EventClient {
     return this.peer.isOpen ?? this.trackedOpen;
   }
 
+  /** `EventClientOptions.headers`, read now. */
+  private resolveHeaders(): Record<string, string> {
+    const option = this.headersOption;
+    return (typeof option === 'function' ? option() : option) ?? {};
+  }
+
+  /** The headers key of `EventClientOptions.headers` now; `null` when reading them throws. */
+  private currentHeadersKey(): string | null {
+    try {
+      return headersKeyOf(this.resolveHeaders());
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * One call to `{basePath}/{name}`: one muxws stream while the peer is open, one axios POST
-   * otherwise. `subscribe` and `unsubscribe` exist on the socket only and are refused without one.
+   * otherwise, with `EventClientOptions.headers` read once for the call. `subscribe` and
+   * `unsubscribe` exist on the socket only and are refused without one.
    */
-  private async call<R>(name: 'subscribe' | 'unsubscribe' | 'poll', body: unknown): Promise<R> {
+  private async call<R>(name: 'subscribe' | 'unsubscribe' | 'poll', body: unknown): Promise<CallAnswer<R>> {
     const path = `${this.basePath}/${name}`;
+    const headers = this.resolveHeaders();
+    const headersKey = headersKeyOf(headers);
     if (this.peer && this.peerOpen()) {
-      const stream = this.peer.open(body, { headers: { ':method': 'POST', ':path': path }, end: true });
+      const stream = this.peer.open(body, { headers: { ...headers, ':method': 'POST', ':path': path }, end: true });
       const result = stream.result();
       await Promise.race([stream.replyHeadersArrived, result]);
       const status = readStatus(stream.replyHeaders);
       const data = await result;
       if (status >= 400) throw new ViewSetRequestError(status, data, readHeaders(stream.replyHeaders));
-      return data as R;
+      return { data: data as R, headersKey };
     }
     if (name !== 'poll' || !this.http) throw new Error(`The event client has no transport for '${name}'`);
-    const response = await this.http.post<R>(path, body);
-    return response.data;
+    const response =
+      this.headersOption === undefined
+        ? await this.http.post<R>(path, body)
+        : await this.http.post<R>(path, body, { headers });
+    return { data: response.data, headersKey };
+  }
+
+  /** The body of a poll of `sent`: the cursors, and the scope key held for every scoped topic. */
+  private pollBody(sent: readonly { state: TopicState; cursor: number | null }[]): {
+    cursors: Record<string, number | null>;
+    scopes: Record<string, string>;
+  } {
+    const cursors: Record<string, number | null> = {};
+    const scopes: Record<string, string> = {};
+    for (const { state, cursor } of sent) {
+      cursors[state.topic] = cursor;
+      if (state.scope !== null) scopes[state.topic] = state.scope;
+    }
+    return { cursors, scopes };
   }
 
   /**
@@ -676,13 +856,22 @@ class EventClientImpl implements EventClient {
     this.onSocket(topic, async () => {
       if (this.closed || generation !== this.socketGeneration || this.topics.get(topic) !== state) return;
       let answer: WireSubscribeAnswer;
+      let headersKey: string;
       try {
-        answer = await this.call<WireSubscribeAnswer>('subscribe', { topic });
+        ({ data: answer, headersKey } = await this.call<WireSubscribeAnswer>('subscribe', { topic }));
       } catch (error) {
         if (this.closed || generation !== this.socketGeneration || this.topics.get(topic) !== state) return;
         state.socket = 'none';
-        if (isRefusal(error)) this.refuse(state, error);
-        else this.ensureLoop();
+        if (isRefusal(error)) {
+          this.refuse(state, error);
+          return;
+        }
+        if (state.refreshing) {
+          state.refreshing = false;
+          state.pending = [];
+          state.behind = true;
+        }
+        this.ensureLoop();
         return;
       }
       if (generation !== this.socketGeneration) return;
@@ -694,9 +883,15 @@ class EventClientImpl implements EventClient {
       state.socket = 'subscribed';
       const rev = revOf(answer?.rev);
       if (rev !== null) {
-        if (state.rev === null) this.follow(state, rev);
-        else if (rev > state.rev) this.gapPoll(state, rev);
-        else state.behind = false;
+        state.sentHeaders = headersKey;
+        const scope = typeof answer?.scope === 'string' ? answer.scope : null;
+        if (state.rev === null) this.follow(state, rev, scope);
+        else if (scope !== state.scope) this.scopeChange(state, scope, rev, false);
+        else {
+          if (rev > state.rev) this.gapPoll(state, rev);
+          else state.behind = false;
+          this.endRefresh(state);
+        }
       }
       this.ensureLoop();
     });
@@ -734,12 +929,12 @@ class EventClientImpl implements EventClient {
     if (!this.peerOpen() && !this.http) return;
     state.gapInFlight = true;
     const cursor = state.rev;
-    void this.call<WirePollAnswer>('poll', { cursors: { [state.topic]: cursor } }).then(
-      (answer) => {
+    void this.call<WirePollAnswer>('poll', this.pollBody([{ state, cursor }])).then(
+      ({ data: answer, headersKey }) => {
         state.gapInFlight = false;
         if (this.closed || this.topics.get(state.topic) !== state) return;
         const entry = answer?.topics?.[state.topic];
-        if (entry && this.applyTopicAnswer(state, cursor, entry) !== 'unanswered') this.gapAgain(state);
+        if (entry && this.applyTopicAnswer(state, cursor, entry, headersKey) !== 'unanswered') this.gapAgain(state);
         else this.fallBehind(state);
       },
       (error: unknown) => {
@@ -827,22 +1022,20 @@ class EventClientImpl implements EventClient {
     }
     this.loop = 'polling';
     const sent = [...this.topics.values()].map((state) => ({ state, cursor: state.rev }));
-    const cursors: Record<string, number | null> = {};
-    for (const { state, cursor } of sent) {
-      cursors[state.topic] = cursor;
-      state.unpolled = false;
-    }
+    for (const { state } of sent) state.unpolled = false;
 
     let revChanged = false;
     let pollAfterMs: number | null = null;
     try {
-      const answer = await this.call<WirePollAnswer>('poll', { cursors });
+      const polled = this.call<WirePollAnswer>('poll', this.pollBody(sent));
+      this.resubscribe();
+      const { data: answer, headersKey } = await polled;
       if (this.closed) return;
       pollAfterMs = typeof answer?.poll_after_ms === 'number' ? answer.poll_after_ms : null;
       for (const { state, cursor } of sent) {
         if (this.topics.get(state.topic) !== state) continue;
         const entry = answer?.topics?.[state.topic];
-        if (entry && this.applyTopicAnswer(state, cursor, entry) === 'moved') revChanged = true;
+        if (entry && this.applyTopicAnswer(state, cursor, entry, headersKey) === 'moved') revChanged = true;
       }
     } catch (error) {
       if (this.closed) return;
@@ -859,6 +1052,16 @@ class EventClientImpl implements EventClient {
     // `anyActive: true`: the client cannot tell whether anything on a topic is active.
     else delay = this.ladder.next({ anyActive: true, anyDialogOpen: false, revChanged, pollAfterMs });
     this.schedule(delay);
+  }
+
+  /**
+   * Sends `subscribe` again, over the open peer, for every topic not subscribed on its socket and
+   * without a subscribe in flight: a topic whose subscribe failed with a 429, a status of 500 or
+   * above, or without a status. The ladder calls it on every rung, so the retries follow its delays.
+   */
+  private resubscribe(): void {
+    if (!this.peerOpen()) return;
+    for (const state of this.topics.values()) if (state.socket === 'none') this.sendSubscribe(state);
   }
 
   // -- the check poll ----------------------------------------------------------------
@@ -900,15 +1103,15 @@ class EventClientImpl implements EventClient {
       return;
     }
     const generation = this.socketGeneration;
-    const cursors: Record<string, number | null> = {};
-    for (const { state, cursor } of sent) cursors[state.topic] = cursor;
     try {
-      const answer = await this.call<WirePollAnswer>('poll', { cursors });
+      const { data: answer, headersKey } = await this.call<WirePollAnswer>('poll', this.pollBody(sent));
       if (this.closed) return;
       for (const { state, cursor } of sent) {
         if (this.topics.get(state.topic) !== state) continue;
         const entry = answer?.topics?.[state.topic];
-        if (!entry || this.applyTopicAnswer(state, cursor, entry) === 'unanswered') this.checkBehind(state, generation);
+        if (!entry || this.applyTopicAnswer(state, cursor, entry, headersKey) === 'unanswered') {
+          this.checkBehind(state, generation);
+        }
       }
     } catch (error) {
       if (this.closed) return;
@@ -961,22 +1164,35 @@ function chained(arrival: Arrival, held: number): Arrival {
   return arrival.prev < held && arrival.rev > held ? { ...arrival, prev: held } : arrival;
 }
 
-/** A poll answer entry as an `Arrival`; `null` for an entry without a usable rev, prev, event name or version. */
-function toArrival(event: WireEvent): Arrival | null {
+/**
+ * A poll answer entry as an `Arrival` under `scope`; `null` for an entry without a usable rev, prev,
+ * event name or version.
+ */
+function toArrival(event: WireEvent, scope: string | null): Arrival | null {
   const rev = revOf(event?.rev);
   const prev = revOf(event?.prev);
   const version = versionOf(event?.version);
   if (rev === null || prev === null || version === null || typeof event.event !== 'string') return null;
-  return { rev, prev, event: event.event, version, payload: event.payload };
+  return { rev, prev, event: event.event, version, payload: event.payload, scope };
 }
 
-/** A topic error of a poll answer, as the `ViewSetRequestError` it is reported with. */
-function topicError(topic: string, code: string): ViewSetRequestError {
-  return new ViewSetRequestError(TOPIC_ERROR_STATUS[code] ?? 403, {
+/**
+ * A topic error of a poll answer, as the `ViewSetRequestError` it is reported with: `status`, else the
+ * status `TOPIC_ERROR_STATUS` lists for `code`, else 403.
+ */
+function topicError(topic: string, code: string, status?: number): ViewSetRequestError {
+  return new ViewSetRequestError(status ?? TOPIC_ERROR_STATUS[code] ?? 403, {
     detail: `The poll of topic '${topic}' answered ${code}`,
     detail_code: code,
     detail_params: { topic },
   });
+}
+
+/** `headers` as a key that compares equal for the same names (case-insensitively) and values. */
+function headersKeyOf(headers: Record<string, string>): string {
+  const entries = Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value] as const);
+  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return JSON.stringify(entries);
 }
 
 // ---------------------------------------------------------------------------

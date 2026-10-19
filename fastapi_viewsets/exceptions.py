@@ -205,6 +205,14 @@ class EventTopicRefusedError(DfViewSetError):
         super().__init__(403, f"Topic {topic} is not admitted", "event_topic_refused", {"topic": topic})
 
 
+class EventScopeMissingError(DfViewSetError):
+    """A scoped viewset topic whose scope resolver returned None for the caller."""
+
+    def __init__(self, topic: str):
+        message = f"Topic {topic} has no event scope for this caller"
+        super().__init__(403, message, "event_scope_missing", {"topic": topic})
+
+
 class EventSubscriptionsExceededError(DfViewSetError):
     """A subscription on a socket that already holds `settings.viewsets_event_max_subscriptions` topics."""
 

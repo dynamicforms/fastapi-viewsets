@@ -220,6 +220,11 @@ export interface ProxyBaseOptions {
    * for its peer; a REST ViewSet without it throws from `watch()`.
    */
   events?: EventClient;
+  /**
+   * The client topic `watch()` subscribes: the BE path relative to the app's `root_path`, without a
+   * Mount prefix. Default `basePath`.
+   */
+  topic?: string;
 }
 
 /**
@@ -295,6 +300,9 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   /** `ProxyBaseOptions.events`. */
   protected readonly eventClientOption?: EventClient;
 
+  /** `ProxyBaseOptions.topic`. */
+  protected readonly topicOption?: string;
+
   /**
    * Binds every method of the class chain to set the `key` of the call it issues on the promise it
    * returns (see call.ts's `bindCallKeys`). The methods are bound per instance, here, so a subclass's
@@ -307,6 +315,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     this.declaredMixins = options.declares;
     this.repeatOptions = options.repeat;
     this.eventClientOption = options.events;
+    this.topicOption = options.topic;
     bindCallKeys(this, Object.prototype);
   }
 
@@ -435,12 +444,13 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   }
 
   /**
-   * Subscribes `basePath` to `records_changed`; see `WatchOptions`. With `fetch`, a change without
-   * `record` is completed with `retrieve(pk)`.
+   * Subscribes the ViewSet's topic to `records_changed`: `options.topic`, else
+   * `ProxyBaseOptions.topic`, else `basePath`; see `WatchOptions`. With `fetch`, a change without
+   * `record` is completed with `retrieve(pk)`, issued as a background call.
    */
   watch(options: WatchOptions<T, K>): EventSubscription {
     return watchRecords<T, K>(
-      { topic: this.basePath, retrieve: (pk) => this.retrieve(pk) },
+      { topic: options.topic ?? this.topicOption ?? this.basePath, retrieve: (pk) => this.retrieve(pk) },
       this.eventClient(),
       options,
     );

@@ -171,6 +171,25 @@ async def test_subscribe_refuses_a_topic_no_authorizer_admits(application):
     assert topics_of(peer) == []
 
 
+@pytest.mark.parametrize(("status", "kept"), [(429, True), (503, True), (403, False), (404, False)])
+@pytest.mark.asyncio
+async def test_a_failed_subscribe_removes_the_held_subscription_only_on_a_refusal(application, status, kept):
+    failing = False
+
+    async def flaky(_request, _context, _topic):
+        if failing:
+            raise HTTPException(status_code=status)
+        return True
+
+    settings.viewsets_event_authorizers = [flaky]
+    peer = FakePeer()
+    assert (await application.command("/events/subscribe", {"topic": "/api/music"}, peer)).status == 200
+
+    failing = True
+    assert (await application.command("/events/subscribe", {"topic": "/api/music"}, peer)).status == status
+    assert topics_of(peer) == (["/api/music"] if kept else [])
+
+
 @pytest.mark.asyncio
 async def test_unsubscribe_answers_204_also_for_a_topic_not_held(application):
     settings.viewsets_event_authorizers = [allow_all]
@@ -317,7 +336,7 @@ async def test_poll_answers_every_cursor(application, transport):
     settings.viewsets_event_authorizers = [ViewsetTopics(), DeclaredSources()]
     settings.viewsets_event_poll_after_ms = 250
     source("imports", authorizer=allow_all)
-    source("clubs")
+    source("orgs")
     first, _ = await publish("/api/music", TrackAdded(title="Blue Train"))
     second, _ = await publish("/api/music", TrackAdded(title="Giant Steps"))
     third, _ = await publish("/api/music", TrackAddedV2(title="Naima", seconds=261))
@@ -328,7 +347,7 @@ async def test_poll_answers_every_cursor(application, transport):
             "/api/music": first,
             "imports:7": None,
             "imports:8": None,
-            "clubs:9": 3,
+            "orgs:9": 3,
             "imports": imported,
             "Not A Topic": None,
         }
@@ -364,9 +383,9 @@ async def test_poll_answers_every_cursor(application, transport):
             },
             "imports:7": {"rev": imported, "events": []},
             "imports:8": {"rev": 0, "events": []},
-            "clubs:9": {"rev": None, "events": None, "error": "event_topic_refused"},
+            "orgs:9": {"rev": None, "events": None, "error": "event_topic_refused", "status": 403},
             "imports": {"rev": 0, "events": None},
-            "Not A Topic": {"rev": None, "events": None, "error": "event_topic_invalid"},
+            "Not A Topic": {"rev": None, "events": None, "error": "event_topic_invalid", "status": 422},
         },
         "poll_after_ms": 250,
     }
@@ -501,11 +520,11 @@ async def test_poll_refuses_each_topic_with_its_own_code(application):
 
     anonymous = (await application.rest("/events/poll", body)).json()["topics"]
     assert anonymous == {
-        "/api/music": {"rev": None, "events": None, "error": "session_expired"},
+        "/api/music": {"rev": None, "events": None, "error": "session_expired", "status": 401},
         "/open": {"rev": 0, "events": []},
     }
     member = (await application.rest("/events/poll", body, **{"x-user": "jure"})).json()["topics"]
-    assert member["/api/music"] == {"rev": None, "events": None, "error": "not_authorized"}
+    assert member["/api/music"] == {"rev": None, "events": None, "error": "not_authorized", "status": 403}
     admin = (await application.rest("/events/poll", body, **{"x-user": "admin"})).json()["topics"]
     assert admin["/api/music"] == {"rev": 0, "events": []}
 
@@ -520,7 +539,7 @@ async def test_poll_counts_one_call_of_the_viewset_action_per_topic(application)
 
     assert (await application.rest("/events/poll", body)).json()["topics"]["/api/music"]["rev"] == 0
     second = (await application.rest("/events/poll", body)).json()["topics"]["/api/music"]
-    assert second == {"rev": None, "events": None, "error": "rate_limited"}
+    assert second == {"rev": None, "events": None, "error": "rate_limited", "status": 429}
 
 
 @pytest.mark.asyncio
@@ -567,7 +586,7 @@ async def test_the_events_viewset_has_a_schema_on_each_transport(application):
     assert "/events/poll" in document["paths"]
     assert "/events/subscribe" not in document["paths"]
     answer = document["components"]["schemas"]["TopicAnswer"]
-    assert set(answer["properties"]) == {"rev", "events", "error"}
+    assert set(answer["properties"]) == {"rev", "events", "error", "status", "scope"}
     assert answer["required"] == ["rev", "events"]
     polled = document["components"]["schemas"]["PolledEvent"]
     assert set(polled["properties"]) == {"rev", "prev", "event", "version", "payload"}
@@ -617,17 +636,17 @@ async def test_a_repeated_subscribe_answered_by_idempotency_does_not_subscribe_i
 
 @pytest.mark.asyncio
 async def test_poll_answers_a_starlette_http_exception_of_an_authorizer_in_its_topic(application):
-    async def refusing_clubs(_request, _context, topic):
-        if topic.startswith("clubs"):
+    async def refusing_orgs(_request, _context, topic):
+        if topic.startswith("orgs"):
             raise StarletteHTTPException(403)
         return True
 
-    settings.viewsets_event_authorizers = [refusing_clubs]
-    response = await application.rest("/events/poll", {"cursors": {"imports": None, "clubs:9": None}})
+    settings.viewsets_event_authorizers = [refusing_orgs]
+    response = await application.rest("/events/poll", {"cursors": {"imports": None, "orgs:9": None}})
     assert response.status_code == 200
     assert response.json()["topics"] == {
         "imports": {"rev": 0, "events": []},
-        "clubs:9": {"rev": None, "events": None, "error": "event_topic_refused"},
+        "orgs:9": {"rev": None, "events": None, "error": "event_topic_refused", "status": 403},
     }
 
 
@@ -670,7 +689,9 @@ async def test_viewset_topics_runs_the_dependencies_of_include_router(include_kw
     assert stream.status == (403 if guarded else 200)
     member = (await application.rest("/events/poll", body)).json()["topics"]["/admin/secrets"]
     assert member == (
-        {"rev": None, "events": None, "error": "event_topic_refused"} if guarded else {"rev": 0, "events": []}
+        {"rev": None, "events": None, "error": "event_topic_refused", "status": 403}
+        if guarded
+        else {"rev": 0, "events": []}
     )
     admin = (await application.rest("/events/poll", body, **{"x-user": "admin"})).json()["topics"]["/admin/secrets"]
     assert admin == {"rev": 0, "events": []}
@@ -678,16 +699,16 @@ async def test_viewset_topics_runs_the_dependencies_of_include_router(include_kw
 
 @pytest.mark.asyncio
 async def test_viewset_topics_refuses_a_topic_whose_dependency_parameters_do_not_validate():
-    async def club_exists(club_id: int = Path()) -> int:
-        return club_id
+    async def org_exists(org_id: int = Path()) -> int:
+        return org_id
 
-    application = secrets_application(prefix="/clubs/{club_id}", dependencies=[Depends(club_exists)])
+    application = secrets_application(prefix="/orgs/{org_id}", dependencies=[Depends(org_exists)])
     settings.viewsets_event_authorizers = [ViewsetTopics(), allow_all]
-    body = {"cursors": {"/clubs/7/secrets": None, "/clubs/seven/secrets": None}}
+    body = {"cursors": {"/orgs/7/secrets": None, "/orgs/seven/secrets": None}}
     topics = (await application.rest("/events/poll", body)).json()["topics"]
     assert topics == {
-        "/clubs/7/secrets": {"rev": 0, "events": []},
-        "/clubs/seven/secrets": {"rev": None, "events": None, "error": "event_topic_refused"},
+        "/orgs/7/secrets": {"rev": 0, "events": []},
+        "/orgs/seven/secrets": {"rev": None, "events": None, "error": "event_topic_refused", "status": 403},
     }
 
 
@@ -695,39 +716,39 @@ async def test_viewset_topics_refuses_a_topic_whose_dependency_parameters_do_not
 async def test_a_viewset_under_a_parametrised_prefix_is_followed_on_the_path_with_its_values():
     members = {"7": {"ana"}, "9": {"bor"}}
 
-    async def club_member(request, _cls, context):
-        return await context.user in members[request.path_params["club_id"]]
+    async def org_member(request, _cls, context):
+        return await context.user in members[request.path_params["org_id"]]
 
     application = Application()
     router = APIRouter()
 
     @route_viewset(router, base_path="/tracks", pk_field_name="id")
-    class ClubTracksViewSet(CollectionViewSet[int, Track], ViewSetMixin[int, Track]):
+    class OrgTracksViewSet(CollectionViewSet[int, Track], ViewSetMixin[int, Track]):
         def __init__(self):
             super().__init__(container={1: Track(id=1, title="Blue Train")}, pk_field="id")
 
-    application.app.include_router(router, prefix="/clubs/{club_id}")
+    application.app.include_router(router, prefix="/orgs/{org_id}")
     settings.viewsets_command_middleware = [Authorization(), ChangeEvents()]
     settings.viewsets_event_authorizers = [ViewsetTopics(), allow_authenticated]
-    action_configuration({Authorization: club_member})(ClubTracksViewSet)
+    action_configuration({Authorization: org_member})(OrgTracksViewSet)
     action_configuration({Authorization: False})(application.events)
 
     peer = FakePeer()
-    stream = await application.command("/events/subscribe", {"topic": "/clubs/7/tracks"}, peer, **{"x-user": "ana"})
+    stream = await application.command("/events/subscribe", {"topic": "/orgs/7/tracks"}, peer, **{"x-user": "ana"})
     assert stream.status == 200
     refused = await application.command(
-        "/events/subscribe", {"topic": "/clubs/7/tracks"}, FakePeer(), **{"x-user": "bor"}
+        "/events/subscribe", {"topic": "/orgs/7/tracks"}, FakePeer(), **{"x-user": "bor"}
     )
     assert refused.status == 403
     assert refused.payload["detail_code"] == "not_authorized"
 
-    deleted = await application.rest("/clubs/7/tracks/1", None, method="DELETE", **{"x-user": "ana"})
+    deleted = await application.rest("/orgs/7/tracks/1", None, method="DELETE", **{"x-user": "ana"})
     assert deleted.status_code == 200
     await wait_for_pushes()
-    assert [headers[":topic"] for _payload, headers in peer.pushes] == ["/clubs/7/tracks"]
+    assert [headers[":topic"] for _payload, headers in peer.pushes] == ["/orgs/7/tracks"]
 
-    body = {"cursors": {"/clubs/7/tracks": 0}}
+    body = {"cursors": {"/orgs/7/tracks": 0}}
     outsider = (await application.rest("/events/poll", body, **{"x-user": "bor"})).json()["topics"]
-    assert outsider["/clubs/7/tracks"]["error"] == "not_authorized"
+    assert outsider["/orgs/7/tracks"]["error"] == "not_authorized"
     member = (await application.rest("/events/poll", body, **{"x-user": "ana"})).json()["topics"]
-    assert [event["payload"]["op"] for event in member["/clubs/7/tracks"]["events"]] == ["deleted"]
+    assert [event["payload"]["op"] for event in member["/orgs/7/tracks"]["events"]] == ["deleted"]

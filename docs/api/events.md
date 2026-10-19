@@ -15,8 +15,12 @@ from fastapi_viewsets.events import (
     allow_all,
     allow_authenticated,
     check_events,
+    drop_subscriptions,
+    event_scope,
     publish,
     register_events,
+    resolve_topic,
+    scope_of,
     source,
     start_events,
     stop_events,
@@ -50,7 +54,7 @@ assignment or as a `ClassVar`; a subclass that annotates either one as a field
 
 | Name | Description |
 |------|-------------|
-| `async publish(topic: str, event: Event) -> tuple[int, int]` | Validates `topic`, records the event's `event_name`, payload and `event_version` with `store.append`, carries it to every process with `store.publish`, and returns `(rev, prev)`. Raises `ValueError` for a topic of neither form and `TypeError` for an `event` that is not an `Event`; an exception of `store.publish` is logged at warning level and not raised. `OverflowError` of `store.append` propagates |
+| `async publish(topic: str, event: Event) -> tuple[int, int]` | Validates `topic`, records the event's `event_name`, payload and `event_version` with `store.append`, carries it to every process with `store.publish`, and returns `(rev, prev)`. Raises `ValueError` for a topic that is neither a viewset topic, a custom topic nor a scoped topic `@{name}:{key}`, and `TypeError` for an `event` that is not an `Event`; an exception of `store.publish` is logged at warning level and not raised. `OverflowError` of `store.append` propagates |
 | `source(name: str, authorizer: EventAuthorizer \| None = None) -> Source` | `Source(name, authorizer)` |
 | `declared_source(name: str) -> Source \| None` | The source declared as `name` in this process |
 | `reset_sources() -> None` | Forgets every declared source; for tests |
@@ -82,6 +86,44 @@ process; a name that does not match `[a-z0-9_.-]+`, or one already declared, rai
 | `is_valid_topic(topic: Any) -> bool` | Whether `topic` has the viewset form or the custom form, `name` or `name:key` with a non-empty `key` without whitespace or control characters |
 | `validate_topic(topic: Any) -> str` | `topic`; raises `ValueError` when it has neither form |
 | `split_custom_topic(topic: str) -> tuple[str, str \| None] \| None` | `(name, key)` of a custom topic, `key` `None` without one; `None` for a topic of any other form |
+| `scoped_topic(name: str, key: str \| int) -> str` | The store topic `@{name}:{key}`. Raises `ValueError` for a name that is empty or holds whitespace, a control character or `:`, and for a key `resolve_scope` refuses with `ValueError`; `TypeError` for a key that is neither `str` nor `int`, `bool` included |
+| `is_scoped_topic(topic: Any) -> bool` | Whether `topic` has the scoped form `@{name}:{key}`. `is_valid_topic` and `validate_topic` refuse it |
+| `split_scoped_topic(topic: str) -> tuple[str, str] \| None` | `(name, key)` of a scoped topic; `None` for a topic of any other form |
+
+## Scopes
+
+In `fastapi_viewsets.events.scopes`, re-exported from `fastapi_viewsets.events`. The behaviour is
+described in [Scoped topics](../guide/events#scoped-topics).
+
+```python
+ScopeKey = str | int
+ScopeResolver = Callable[[Request | None, Context], ScopeKey | None | Awaitable[ScopeKey | None]]
+
+
+@dataclass(frozen=True)
+class EventScope:
+    name: str
+    resolver: ScopeResolver
+
+    def topic(self, key: ScopeKey) -> str: ...      # scoped_topic(self.name, key)
+
+
+@dataclass(frozen=True)
+class ResolvedTopic:
+    topic: str          # the client topic
+    store_topic: str    # the topic the events are stored and delivered under
+    scope: str | None   # the key as text; None for an unscoped topic
+```
+
+| Name | Description |
+|------|-------------|
+| `event_scope(resolver: ScopeResolver, *, name: str \| None = None)` | Class decorator: sets `cls.__event_scope__ = EventScope(name, resolver)`, `name` defaulting to `f"{cls.__module__}.{cls.__qualname__}"`. Subclasses inherit it. Raises `ValueError` for a name that is empty or holds whitespace, a control character or `:`, and for a name another class declared, unless the class is that class, a subclass of it, or has its module and qualified name without a `<locals>` part (the class of a reloaded module, which takes the name over). Classes a function defines need a `name` each |
+| `scope_of(cls: type) -> EventScope \| None` | The scope `cls` carries or inherits |
+| `async resolve_scope(scope: EventScope, request: Request \| None, context: Context) -> str \| None` | Calls the resolver, awaiting an awaitable answer. `None` stays `None`, an `int` (not a `bool`) becomes `str(key)`, a `str` is kept; a `str` that is empty or holds whitespace or a control character raises `ValueError`, any other type `TypeError`. An exception of the resolver propagates |
+| `async resolve_topic(request: Request, topic: str) -> ResolvedTopic` | The store topic of the client topic `topic` for the caller of `request`. A topic that is not a viewset topic, one no viewset on `request.app` has, and one of a class without a scope are their own store topic. For a scoped class the gate run answers the key; it raises `EventTopicRefusedError` when a route dependency does not validate, the chain does not reach the resolver or answers a status of 400 or above, `EventScopeMissingError` when the resolver answers `None`, and what a check or the resolver raised. One gate run answers every topic of one request with the same class, gate action, route and path parameter values; its answer or exception is kept in `request.scope` |
+| `reset_event_scopes() -> None` | Forgets the scope names declared in this process; the classes keep their scope. For tests |
+| `GATE_RUN_SCOPE_KEY` | `"fastapi_viewsets.events.gate"`, the ASGI scope key present on the request of a gate run, its value the gate action's name. Defined in `fastapi_viewsets.routing` |
+| `SCOPE_CONTEXT_KEY` | `"fastapi_viewsets.events.scope"`, the context key under which `ChangeEvents.__call__` stores the scope of a call of a scoped class, for every action but a write action configured `False` or with a `topic`: in the web process an awaitable, resolved once after the whole command chain, answering `{"name": str, "key": str}` or `None` for a key of `None`; in a `celery_viewset` worker that answer, resolved before the dispatch |
 
 ## The store
 
@@ -200,12 +242,21 @@ class Subscription:
     peer: Any | None
     context: Context
     topic: str
+    store_topic: str | None = None
+    scope: str | None = None
+    authorized_at: float = 0.0
+    reauthorize: Callable[[], Awaitable[str]] | None = None
 ```
 
 One socket following one topic. `peer` is the muxws peer of the socket, `context` the context of the
-`subscribe` call that made the subscription. For the delivery filters of a `poll`, the poll of one
-topic: `peer` is the socket the poll arrived on, `None` for a poll over REST, and `context` the
-context of the `poll` call.
+`subscribe` call that made the subscription, `topic` the client topic. `store_topic` is the topic its
+events are delivered under, `None` meaning `topic`; `scope` the scope key of a scoped topic, else
+`None`. `authorized_at` is the `time.monotonic()` of the subscribe or of the last reauthorization;
+`reauthorize` runs the topic's gate again and returns the store topic it answers, raising
+`HTTPException` on a refusal, `None` for a subscription that is not reauthorized. For the delivery
+filters of a `poll`, the poll of one topic: `peer` is the socket the poll arrived on, `None` for a
+poll over REST, `context` the context of the `poll` call, and `store_topic` and `scope` those the
+poll resolved.
 
 ### DeliveryFilter
 
@@ -213,8 +264,8 @@ context of the `poll` call.
 DeliveryFilter = Callable[[Subscription, str, int, str, Any, int], bool | Awaitable[bool]]
 ```
 
-`filter(subscription, topic, rev, event_name, payload, version)`, sync or async; `version` is the
-event's `event_version`. The filters run on every push and on every event a `poll` answers after the
+`filter(subscription, topic, rev, event_name, payload, version)`, sync or async; `topic` is the client
+topic, `version` the event's `event_version`. The filters run on every push and on every event a `poll` answers after the
 cursor. A result that `is False` skips the push to the subscription's socket, or leaves the event
 out of the poll answer; any other result passes; an exception counts as `True` and is logged at
 debug level. On a `poll` over REST, `subscription.peer` is `None`.
@@ -223,13 +274,14 @@ debug level. On a `poll` over REST, `subscription.peer` is `None`.
 
 | Name | Description |
 |------|-------------|
-| `async deliver(topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None` | Starts one task per subscription of `topic` in this process and returns without waiting. A task runs the delivery filters, then `peer.notify(payload, headers={":event": name, ":version": version, ":topic": topic, ":rev": rev, ":prev": prev})`, together bounded by `settings.viewsets_event_push_timeout` seconds; muxws's `notify()` queues the push and does not wait for the socket. A `ConnectionLost` (matched by class name) drops every subscription of its socket; any other failure is logged at debug level |
+| `async deliver(topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None` | Starts one task per subscription delivered under the store topic `topic` in this process and returns without waiting. A task runs the subscription's reauthorization when `settings.viewsets_event_reauthorize_after` has passed (a refusal, an `HTTPException` of a status from 400 to 499 other than 429, or another store topic removes the subscription and skips the push, another exception skips the push), the delivery filters with the client topic, then `peer.notify(payload, headers={":event": name, ":version": version, ":topic": subscription.topic, ":rev": rev, ":prev": prev})`, with `":scope": subscription.scope` for a scoped topic, together bounded by `settings.viewsets_event_push_timeout` seconds; muxws's `notify()` queues the push and does not wait for the socket. A `ConnectionLost` (matched by class name) drops every subscription of its socket; any other failure is logged at debug level |
 | `async passes_filters(subscription: Subscription, topic: str, rev: int, name: str, payload: Any, version: int) -> bool` | Runs `settings.viewsets_event_delivery_filters` in order and returns `False` once one of them returns a result that `is False`; a filter that raises counts as `True` and is logged at debug level. `deliver` and `poll` call it |
-| `async subscribe(peer: Any, context: Context, topic: str) -> Subscription` | Subscribes the socket to `topic` and returns the subscription; `deliver()` pushes the topic's events to the socket from then on. A topic the socket holds is subscribed again with `context` and counts once. Raises `EventSubscriptionsExceededError` when the socket already holds `settings.viewsets_event_max_subscriptions` other topics. The first subscription of a socket installs one `peer.on_close` handler, which calls `drop_peer(peer)`. For a socket whose `is_open` is false it returns the subscription without entering it in the table |
-| `async unsubscribe(peer: Any, topic: str) -> None` | Removes the socket's subscription to `topic`, if it holds one |
+| `async subscribe(peer: Any, context: Context, topic: str, *, store_topic: str \| None = None, scope: str \| None = None, reauthorize: Callable[[], Awaitable[str]] \| None = None) -> Subscription` | Subscribes the socket to the client topic `topic` and returns the subscription; `deliver()` pushes the events of `store_topic` (`None`: `topic`) to the socket from then on. A topic the socket holds is subscribed again with the new arguments, replacing the old subscription, and counts once. Raises `EventSubscriptionsExceededError` when the socket already holds `settings.viewsets_event_max_subscriptions` other topics. The first subscription of a socket installs one `peer.on_close` handler, which calls `drop_peer(peer)`. For a socket whose `is_open` is false it returns the subscription without entering it in the table |
+| `async unsubscribe(peer: Any, topic: str) -> None` | Removes the socket's subscription to the client topic `topic`, if it holds one |
 | `drop_peer(peer: Any) -> None` | Removes every subscription of the socket |
-| `subscriptions(topic: str) -> list[Subscription]` | The subscriptions of `topic` in this process |
-| `topics_of(peer: Any) -> list[str]` | The topics the socket holds |
+| `drop_subscriptions(where: Callable[[Subscription], bool]) -> int` | Removes every subscription of this process for which `where` is true and returns how many |
+| `subscriptions(topic: str) -> list[Subscription]` | The subscriptions of this process delivered under the store topic `topic` |
+| `topics_of(peer: Any) -> list[str]` | The client topics the socket holds |
 | `async wait_for_pushes() -> None` | Waits until the background tasks of the delivery module (pushes) running now and started meanwhile are done |
 | `reset_subscriptions() -> None` | Forgets every subscription of this process; for tests |
 
@@ -253,7 +305,7 @@ leaves the decision to the next authorizer in `settings.viewsets_event_authorize
 | `async allow_all(request, context, topic) -> bool` | `True` |
 | `async allow_authenticated(request, context, topic) -> bool \| None` | `True` when `await context.user` is truthy; `None` otherwise and for a context without `user` |
 | `DeclaredSources()` | `async __call__(request, context, topic) -> bool \| None`: the answer of the `authorizer` of the source that declared the topic's name; `None` for a viewset topic, an undeclared name, and a source without an authorizer |
-| `ViewsetTopics()` | `async __call__(request, context, topic) -> bool \| None`: `None` for a topic that does not start with `/` and for one no viewset on `request.app` has (`match_viewset`). Otherwise the checks run against `request` carrying the topic's path parameters as `path_params`: the route's `dependencies` other than `route_viewset`'s own (those of the application, of `include_router`, of the `APIRouter` and of the route), resolved as FastAPI resolves them, `False` when a parameter of one does not validate; then the found action's `@action_configuration` is resolved, the context rebound as `Context(context.raw(), action_configuration=..., action_name=...)`, and `depends(request, cls, context)` of every `Middleware` in `settings.viewsets_command_middleware` and of the instances the configuration injects runs. Returns `True` when none raises. An `HTTPException` propagates |
+| `ViewsetTopics()` | `async __call__(request, context, topic) -> bool \| None`: `None` for a topic that does not start with `/` and for one no viewset on `request.app` has (`match_viewset`). For a class with `@event_scope`, `await resolve_topic(request, topic)` and `True`; its exception propagates. Otherwise the checks run against `request` carrying the topic's path parameters as `path_params`: the route's `dependencies` other than `route_viewset`'s own (those of the application, of `include_router`, of the `APIRouter` and of the route), resolved as FastAPI resolves them, `False` when a parameter of one does not validate; then the found action's `@action_configuration` is resolved, the context rebound as `Context(context.raw(), action_configuration=..., action_name=...)`, and `depends(request, cls, context)` of every `Middleware` in `settings.viewsets_command_middleware` and of the instances the configuration injects runs. Returns `True` when none raises. An `HTTPException` propagates |
 | `match_viewset(app, topic: str) -> ViewsetMatch \| None` | In `fastapi_viewsets.events.authorizers`. The first route on `app` in routing order, `include_router` prefixes included, whose endpoint carries `__viewset_class__` and, as `__viewset_action__`, the class's `list_items`, or `retrieve` for a class without `list_items`, and whose path without that action's `__viewset_metadata__["paths"]` entry matches `topic` as Starlette matches a request path, path parameters included. Routes of an application under a Starlette `Mount` are not searched |
 | `ViewsetMatch` | In `fastapi_viewsets.events.authorizers`. A frozen dataclass: `viewset_class: type`, `action: str`, `route` (the application's route of `action`) and `path_params: dict[str, Any]`, the values of the routed base path's path parameters read from the topic and converted by their convertors |
 | `find_viewset(app, topic: str) -> tuple[type, str] \| None` | In `fastapi_viewsets.events.authorizers`. `(viewset_class, action)` of `match_viewset(app, topic)`, or `None` |
@@ -267,9 +319,9 @@ leaves the decision to the next authorizer in `settings.viewsets_event_authorize
 
 | Endpoint | Transports | Body | Answer | Errors |
 |----------|------------|------|--------|--------|
-| `subscribe` — `POST {base_path}/subscribe` | muxws | `TopicRequest` | 200 `SubscribeAnswer` | 422 `event_topic_invalid`, 403 `event_topic_refused` or the authorizer's `HTTPException`, 409 `event_subscriptions_exceeded`, `RuntimeError` (500) without `peer=` |
+| `subscribe` — `POST {base_path}/subscribe` | muxws | `TopicRequest` | 200 `SubscribeAnswer` | 422 `event_topic_invalid`, 403 `event_topic_refused` or the authorizer's `HTTPException`, 403 `event_scope_missing`, 409 `event_subscriptions_exceeded`, `RuntimeError` (500) without `peer=`; a refusal removes the socket's subscription to the topic |
 | `unsubscribe` — `POST {base_path}/unsubscribe` | muxws | `TopicRequest` | 204 | `RuntimeError` (500) without `peer=` |
-| `poll` — `POST {base_path}/poll` | REST, muxws | `PollRequest` | 200 `PollAnswer` | 422 `event_cursors_exceeded`; a topic's refusal is in its `TopicAnswer.error` |
+| `poll` — `POST {base_path}/poll` | REST, muxws | `PollRequest` | 200 `PollAnswer` | 422 `event_cursors_exceeded`; a topic's refusal is in its `TopicAnswer.error` and `status`; over muxws a status from 400 to 499 other than 429 removes the socket's subscription to the topic, and a 429 or a status of 500 or above keeps it |
 
 `subscribe` and `unsubscribe` read the socket from `request.scope["fastapi_viewsets.peer"]`
 (`fastapi_viewsets.routing.PEER_SCOPE_KEY`), set by `process_command(..., peer=peer)`. `poll` reads
@@ -280,10 +332,10 @@ The models, in `fastapi_viewsets.events.viewset`:
 | Model | Fields |
 |-------|--------|
 | `TopicRequest` | `topic: str` |
-| `SubscribeAnswer` | `rev: int`, the topic's current rev, `0` for a topic without events |
-| `PollRequest` | `cursors: dict[str, int \| None]`, each topic mapped to the rev the caller holds, `None` to start from the current rev |
+| `SubscribeAnswer` | `rev: int`, the store topic's current rev, `0` for a topic without events; `scope: str \| None = None`, the scope key of a scoped topic, left out of the serialized answer when `None` |
+| `PollRequest` | `cursors: dict[str, int \| None]`, each topic mapped to the rev the caller holds, `None` to start from the current rev; `scopes: dict[str, str] \| None = None`, the scope key the caller holds per topic: a cursor whose topic's entry (absent for none) differs from the resolved key answers `events: null`; `None` trusts every cursor |
 | `PolledEvent` | `rev: int`, `prev: int` (the rev of the event before it in the answer, the cursor for the first), `event: str` (the `event_name`), `version: int` (the `event_version`, at least `1`), `payload: Any = None` |
-| `TopicAnswer` | `rev: int \| None`, `events: list[PolledEvent] \| None` (the events after the cursor the delivery filters pass), `error: str \| None = None`; `rev` covers the events the filters left out; `error` is left out of the serialized answer when it is `None` |
+| `TopicAnswer` | `rev: int \| None`, `events: list[PolledEvent] \| None` (the events after the cursor the delivery filters pass), `error: str \| None = None`, `status: int \| None = None` (the HTTP status of the refusal, set with every `error`), `scope: str \| None = None` (the scope key of a scoped topic); `rev` covers the events the filters left out; `error`, `status` and `scope` are left out of the serialized answer when they are `None` |
 | `PollAnswer` | `topics: dict[str, TopicAnswer]`, one per cursor in the request's order; `poll_after_ms: int`, `settings.viewsets_event_poll_after_ms` |
 
 ## ChangeEvents
@@ -297,12 +349,12 @@ is `False`.
 
 | Method | Description |
 |--------|-------------|
-| `async __call__(request, viewset, context, call_next) -> ViewSetResult` | Stores `routed_base_path(request)` in the context under `TOPIC_CONTEXT_KEY` when it is not `None`, then returns `await call_next()` |
-| `async execute(execution, call_next) -> Any` | For the eight write actions, unless disabled or `replaced_for(execution)`: resolves and validates the topic and, for `created` and `updated`, the pk field, then runs `call_next()` and publishes one `RecordsChanged`. Returns the action's result. An exception of the publish, `store.append`'s included, propagates after the action has run. Any other action, a disabled one and a replaced one pass through |
+| `async __call__(request, viewset, context, call_next) -> ViewSetResult` | Stores `routed_base_path(request)` in the context under `TOPIC_CONTEXT_KEY` when it is not `None`. For every action of a class with `@event_scope`, except a write action that is disabled or has a `topic` option, stores under `SCOPE_CONTEXT_KEY` the deferred resolution of the scope key with `request` and `context`: it runs on the first read of the entry (`execute()`, `write_topic()`) for an action that executes in the web process, and before the dispatch for every `celery_viewset` action, whose task then carries `{"name", "key"}` or `None`. An exception of the resolver refuses the call before the action, and no task is sent. Then returns `await call_next()` |
+| `async execute(execution, call_next) -> Any` | For the eight write actions, unless disabled or `replaced_for(execution)`: resolves and validates the topic and, for `created` and `updated`, the pk field, then runs `call_next()` and publishes one `RecordsChanged`. For a class with `@event_scope` the topic is `topic_for(execution)` of a subclass that overrides it, else `@{name}:{key}` of the key under `SCOPE_CONTEXT_KEY` for an execution a request called, else of the key the resolver answers with the execution's request and context; a key of `None` runs the action, publishes nothing and logs a warning, and a `topic` option raises `TypeError`. Returns the action's result. An exception of the publish, `store.append`'s included, propagates after the action has run. Any other action, a disabled one and a replaced one pass through |
 | `replaced_for(execution) -> bool` | Whether the execution's action configuration has `ChangeEvents` instances as keys and this instance is not one of them |
 | `config_from(context) -> Any` | The value configured under this instance as the key, else under its class |
 | `options_for(context) -> dict[str, Any] \| None` | `{}` for `None` and `True`, `None` for `False`, the dict for a dict with no key other than `topic`. Raises `TypeError` for any other value or key |
-| `topic_for(execution) -> str` | The configured `topic` (a callable is called with `execution`); else, when `execution.parent` is `None`, `context["fastapi_viewsets.events.topic"]`; else `__viewset_metadata__["base_path"]`. Raises `TypeError` with none of the three |
+| `topic_for(execution) -> str` | The topic of a class without `@event_scope`, and the hook a subclass overrides for any class: the configured `topic` (a callable is called with `execution`); else, when `execution.parent` is `None`, `context["fastapi_viewsets.events.topic"]`; else `__viewset_metadata__["base_path"]`. Raises `TypeError` with none of the three |
 | `pk_field_for(execution) -> str` | `__viewset_metadata__["pk_field_name"]`, else the viewset's `pk_field_name`, else its `pk_field`. Raises `TypeError` naming the viewset with none of the three |
 | `changes_for(execution, op: str, result: Any) -> list[Change]` | For `deleted`, one `Change` per pk of the `pk` argument (keyword or positional); otherwise one per returned record, its pk read from the `pk_field_for` field. A `ViewSetResult` contributes its `body`. A record without the pk field raises `TypeError` |
 
@@ -331,6 +383,8 @@ value under its own key, else under its class, and the `ChangeEvents` of
 | `Change` | `BaseModel`: `pk: Any`. A frontend reads the changed record through the viewset's `retrieve`, which answers in the endpoint's format and in the reader's context |
 | `RecordsChanged` | `Event` with `event_name = "records_changed"` and `event_version = 1`: `op: Literal["created", "updated", "deleted"]`, `changes: list[Change]` |
 | `TOPIC_CONTEXT_KEY` | `"fastapi_viewsets.events.topic"` |
+| `SCOPE_CONTEXT_KEY` | `"fastapi_viewsets.events.scope"`; see [Scopes](#scopes) |
+| `async write_topic(viewset: Any, request: Request \| None, context: Context) -> str \| None` | The topic a write of the current call of `viewset` (a class or an instance) publishes to, for an endpoint that writes outside the eight actions. For a class with `@event_scope`, `@{name}:{key}` of the key under `SCOPE_CONTEXT_KEY` when the context carries one of this scope, else of the key the resolver answers with `request` and `context`; `None` for a key of `None`; an exception of the resolver propagates. In a `celery_viewset` worker the resolver is not called, and a context without an entry of this scope answers `None`. For a class without it, the topic under `TOPIC_CONTEXT_KEY`, else `__viewset_metadata__["base_path"]`, else `None` |
 | `routed_base_path(request: Request) -> str \| None` | The `include_router` prefixes followed by `base_path` of the viewset whose endpoint the request was routed to, with the values of the request's path parameters: the request's path relative to `root_path`, with as many trailing segments removed as `__viewset_metadata__["paths"][action]` has. `None` when the matched endpoint is not one `route_viewset` registered |
 
 ## Settings
@@ -345,6 +399,7 @@ value under its own key, else under its class, and the `ChangeEvents` of
 | `settings.viewsets_event_push_timeout` | `float` | `2.0` | Seconds the delivery filters and `peer.notify()` of one push to one socket may take together |
 | `settings.viewsets_event_max_subscriptions` | `int` | `256` | Topics one socket may hold, and cursors one poll may carry |
 | `settings.viewsets_event_poll_after_ms` | `int` | `0` | `poll_after_ms` of every poll answer |
+| `settings.viewsets_event_reauthorize_after` | `float \| None` | `300.0` | Seconds after which a push to a subscription of a scoped topic runs its gate again; `None` never |
 
 ## Errors
 
@@ -352,7 +407,8 @@ value under its own key, else under its class, and the `ChangeEvents` of
 |-------|--------|--------|----------|
 | `EventTopicInvalidError(topic)` | 422 | `event_topic_invalid` | `{topic}` |
 | `EventTopicRefusedError(topic)` | 403 | `event_topic_refused` | `{topic}` |
+| `EventScopeMissingError(topic)` | 403 | `event_scope_missing` | `{topic}` |
 | `EventSubscriptionsExceededError(limit)` | 409 | `event_subscriptions_exceeded` | `{limit}` |
 | `EventCursorsExceededError(count, limit)` | 422 | `event_cursors_exceeded` | `{count, limit}` |
 
-All four are `DfViewSetError`s in `fastapi_viewsets.exceptions`; see [Error Codes](../guide/error-codes).
+All five are `DfViewSetError`s in `fastapi_viewsets.exceptions`; see [Error Codes](../guide/error-codes).

@@ -171,6 +171,7 @@ describe('restViewSet', () => {
         'pkFieldName',
         'repeatOptions',
         'schemaValidationEnabled',
+        'topicOption',
       ].sort(),
     );
   });

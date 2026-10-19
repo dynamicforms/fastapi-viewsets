@@ -55,6 +55,7 @@ The handler is registered on the application, so it shapes a `DfViewSetError` ov
 | `UnsupportedListShapeError(shape, allowed)` | 422 | `unsupported_list_shape` | `{shape, allowed}` |
 | `EventTopicInvalidError(topic)` | 422 | `event_topic_invalid` | `{topic}` |
 | `EventTopicRefusedError(topic)` | 403 | `event_topic_refused` | `{topic}` |
+| `EventScopeMissingError(topic)` | 403 | `event_scope_missing` | `{topic}` |
 | `EventSubscriptionsExceededError(limit)` | 409 | `event_subscriptions_exceeded` | `{limit}` |
 | `EventCursorsExceededError(count, limit)` | 422 | `event_cursors_exceeded` | `{count, limit}` |
 | `CursorRequestError(error)` | 400 | one of the cursor codes below | varies |
@@ -271,6 +272,7 @@ The codes this package raises, with their English `detail`:
 | `unsupported_list_shape` | `unsupported list shape '{shape}'; this endpoint offers {allowed}` | `shape`, `allowed` |
 | `event_topic_invalid` | `Topic {topic} is neither a path starting with / nor a source name with an optional key` | `topic` |
 | `event_topic_refused` | `Topic {topic} is not admitted` | `topic` |
+| `event_scope_missing` | `Topic {topic} has no event scope for this caller` | `topic` |
 | `event_subscriptions_exceeded` | `This socket already holds {limit} topics` | `limit` |
 | `event_cursors_exceeded` | `A poll carries at most {limit} cursors, this one carries {count}` | `count`, `limit` |
 | `cursor_unreadable` | `cursor is not readable: {error}` | `error` |

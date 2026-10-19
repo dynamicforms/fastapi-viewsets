@@ -97,3 +97,68 @@ it('subscribes a topic and receives a push over a real muxws pair', async () => 
   ]);
   for (const { headers } of seen) expect(headers).not.toHaveProperty('Idempotency-Key');
 });
+
+it('two tenants on one server each receive the pushes of their own scope only', async () => {
+  const servers: Peer[] = [];
+  const subscribed: { peer: Peer; scope: string }[] = [];
+  function connectTenant(org: string) {
+    const [left, right] = memoryPair();
+    const client = new Peer(left, { codec: new JsonCodec(), isDialer: true });
+    const server = new Peer(right, { codec: new JsonCodec(), isDialer: false });
+    server.onStream(async (_payload: unknown, stream: Stream) => {
+      // the scope the BE resolves from the subscribing request: here, its X-Org header
+      const scope = String(stream.headers['X-Org']);
+      subscribed.push({ peer: server, scope });
+      await stream.reply({ rev: 10, scope }, { headers: { ':status': 200 } });
+      return undefined;
+    });
+    void client.serve().catch(() => undefined);
+    void server.serve().catch(() => undefined);
+    servers.push(server);
+    attachEvents(client);
+    return createEventClient({
+      basePath: '/events',
+      peer: client,
+      headers: () => ({ 'X-Org': org }),
+    });
+  }
+
+  const Changed = defineEvent<{ n: number }>('changed');
+  const seven = connectTenant('7');
+  const eight = connectTenant('8');
+  const received: Record<string, [number, string | undefined][]> = {
+    '7': [],
+    '8': [],
+  };
+  for (const [org, events] of [
+    ['7', seven],
+    ['8', eight],
+  ] as const) {
+    await events.subscribe('/api/v1/tags', Changed, {
+      onEvent: (payload, meta) => received[org].push([payload.n, meta.scope]),
+      onResync: () => {},
+    }).ready;
+  }
+  expect(subscribed.map(({ scope }) => scope)).toEqual(['7', '8']);
+
+  // a push of scope 7 on both sockets: the client of scope 8 ignores it
+  for (const server of servers) {
+    await server.notify(
+      { n: 1 },
+      {
+        headers: {
+          ':event': 'changed',
+          ':version': 1,
+          ':topic': '/api/v1/tags',
+          ':rev': 11,
+          ':prev': 10,
+          ':scope': '7',
+        },
+      },
+    );
+  }
+  await expect.poll(() => received['7']).toEqual([[1, '7']]);
+  expect(received['8']).toEqual([]);
+  seven.close();
+  eight.close();
+});

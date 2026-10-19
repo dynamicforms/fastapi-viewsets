@@ -165,6 +165,51 @@ with a cursor the log cannot answer, and resyncs.
 A push that arrives before the topic's first answer is held and applied once that answer gives the
 topic a rev.
 
+## Scoped topics
+
+The backend may store a viewset topic's events per tenant ([scoped topics](./events#scoped-topics)):
+it resolves a scope key from the calling request, its headers, path and session, and answers it with
+every `subscribe` and poll of the topic. The client:
+
+- holds the key of the topic's first answer, and applies only pushes whose `:scope` is that key;
+  a push held before the first answer under another key is dropped;
+- sends every poll as `{ cursors, scopes }`, `scopes` the key it holds for each scoped topic of the
+  poll (`{}` for none);
+- resyncs a topic answered under another key: `onResync`, and the held rev becomes the answer's. A
+  scope change seen by a poll subscribes the topic again on an open socket, so that the backend's
+  subscription follows the new key;
+- passes the key to `onEvent` in `EventMeta.scope`.
+
+The request the backend resolves the key from carries `headers` of the client's options, read for
+every call:
+
+```ts
+const events = createEventClient({
+  basePath: '/api/v1/events',
+  peer,
+  axios,
+  headers: () => ({ 'X-Org': session.orgSlug }),
+});
+```
+
+When the tenant changes, the application calls `events.refresh()`, or `refresh(topic)` for one
+topic: each answered topic is subscribed again over the open peer, or polled at once without one,
+and its pushes are held until the answer. An answer under another key resyncs the topic and applies
+the held pushes of the new key above the answer's rev; an answer under the same key applies the held
+pushes. A `subscribe` of a refresh that fails without a refusal drops the held pushes and leaves the
+topic to the ladder, which sends the `subscribe` again. A push of a scoped topic that arrives after
+`headers()` changed since the topic was answered refreshes that topic itself.
+
+```ts
+watch(() => session.orgSlug, () => {
+  events.refresh?.();
+  void reload();
+});
+```
+
+`refresh` is an optional member of `EventClient`, so an application's own implementation of the
+interface keeps compiling.
+
 ## Polling
 
 The client polls while a topic it follows has no subscription on an open peer's socket: always on
@@ -172,7 +217,7 @@ an `axios`-only client, after the peer is lost, and while a `subscribe` over the
 unanswered. Every followed topic goes into one `poll` call per rung:
 
 ```json
-{ "cursors": { "/api/music": 17, "imports:7": null } }
+{ "cursors": { "/api/music": 17, "imports:7": null, "/orgs/7/tags": 12 }, "scopes": { "/orgs/7/tags": "7" } }
 ```
 
 A topic added without an open peer is polled at once, so its `ready` does not wait for a rung.
@@ -195,9 +240,12 @@ options replace its constants and its jitter draw.
 
 A `subscribe` or `poll` that fails with a status from 400 to 499 refuses the topics it carried,
 except 429. 429, every status of 500 or above, and a failure without a status refuse nothing and
-are sent again: a poll on the next rung, a subscribe on the next reconnect, with the topic polled
-meanwhile. A topic of a poll answer whose `error` is `rate_limited` stays followed and is polled on
-the next rung. A gap poll that fails this way, or whose answer leaves the topic out, starts the
+are sent again: a poll on the next rung, a subscribe on each rung while the peer is open and on the
+next reconnect, with the topic polled meanwhile. The subscription stays, and its `onError` is called
+only for a refusal. A topic of a poll answer is classified by the answer's `status`, else by the status its
+`error` code stands for (`rate_limited` 429, `event_topic_invalid` 422, `session_expired` 401, any
+other 403): a topic answered `rate_limited`, or with a `status` of 500 or above, stays followed and is
+polled on the next rung. A gap poll that fails this way, or whose answer leaves the topic out, starts the
 ladder, also over an open peer, until a poll answers the topic.
 
 ## Losing and regaining the socket
@@ -218,11 +266,15 @@ subscription's `onError` and removes it.
 
 ## `watch()` on a ViewSet
 
-Every ViewSet has `watch(options)`. It subscribes the ViewSet's `basePath` to `records_changed`, the
+Every ViewSet has `watch(options)`. It subscribes the ViewSet's topic to `records_changed`, the
 event the backend's `ChangeEvents` middleware publishes after each create,
-update and destroy action, and returns the `EventSubscription`:
+update and destroy action, and returns the `EventSubscription`. The topic is `options.topic`, else
+the ViewSet's `topic` option, else its `basePath`. The topic is the backend path relative to the
+application's `root_path`, without a Starlette `Mount` prefix, so a ViewSet whose `basePath` carries
+such a prefix sets `topic`:
 
 ```ts
+const tracks = new TrackRestViewSet({ basePath: '/backend/api/music', topic: '/api/music', events });
 const watching = tracks.watch({
   fetch: true,
   onChange(change, meta) { /* change.op, change.changes; meta.version */ },
@@ -241,7 +293,10 @@ const tracks = new TrackRestViewSet({ basePath: '/api/music', events });
 The payload is `RecordsChanged<T, K>`: `op` is `created`, `updated` or `deleted`, and `changes`
 holds one `{ pk, record? }` per record the action touched. The backend sends the pk only. With
 `fetch: true` every `created` and `updated` change gets `record`, the answer of `retrieve(pk)` in the
-endpoint's format and the reader's context, before `onChange`. A change whose retrieve answers 404,
+endpoint's format and the reader's context, before `onChange`. The retrieve is issued inside
+`inBackground`, so call activity reports it with `background: true` and a busy indicator that counts
+foreground calls leaves it out; a `retrieve` override that issues its request after an `await` is
+not marked. A change whose retrieve answers 404,
 a row that is gone or the caller may no longer see, leaves the event and follows it in a second
 `onChange` with `op: 'deleted'`, so a displayed row is removed. `onChange` and `onResync` are
 called in the order their events arrived, also while `fetch` waits for a retrieve. `onChange`

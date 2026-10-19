@@ -11,6 +11,7 @@ import {
   type CallAttempt,
   type CallEvent,
   idempotencyKeyHeader,
+  inBackground,
   issueCall,
   newCallKey,
   onCallActivity,
@@ -260,13 +261,40 @@ describe('onCallActivity', () => {
     expect(events.at(-1)).toEqual({ type: 'settle', key: 'k1', ok: true });
   });
 
-  it('reports a rejected call as settled not ok, and passes background on', async () => {
-    const call = issueCall(Promise.reject(new Error('no')), 'k2', true);
+  it('reports a rejected call as settled not ok with its error, and passes background on', async () => {
+    const error = new Error('no');
+    const call = issueCall(Promise.reject(error), 'k2', true);
     await expect(call).rejects.toThrow('no');
     await Promise.resolve();
     expect(events).toEqual([
       { type: 'start', key: 'k2', background: true },
-      { type: 'settle', key: 'k2', ok: false },
+      { type: 'settle', key: 'k2', ok: false, error },
+    ]);
+    expect((events[1] as { error?: unknown }).error).toBe(error);
+  });
+
+  it('reports a call issued inside inBackground as background, nested and after it returns not', async () => {
+    const outer = inBackground(() => inBackground(() => issueCall(Promise.resolve(1), 'n1')));
+    const inner = inBackground(() => {
+      const first = issueCall(Promise.resolve(2), 'n2');
+      inBackground(() => undefined);
+      issueCall(Promise.resolve(3), 'n3');
+      return first;
+    });
+    issueCall(Promise.resolve(4), 'n4');
+    expect(() =>
+      inBackground(() => {
+        throw new Error('thrown');
+      }),
+    ).toThrow('thrown');
+    issueCall(Promise.resolve(5), 'n5');
+    await Promise.all([outer, inner]);
+    expect(events.filter((event) => event.type === 'start')).toEqual([
+      { type: 'start', key: 'n1', background: true },
+      { type: 'start', key: 'n2', background: true },
+      { type: 'start', key: 'n3', background: true },
+      { type: 'start', key: 'n4', background: false },
+      { type: 'start', key: 'n5', background: false },
     ]);
   });
 

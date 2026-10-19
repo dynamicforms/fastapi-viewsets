@@ -161,6 +161,24 @@ viewset/method without registering it globally at all. [`RateLimiter`](./rate-li
 this middleware, for real - one of a few
 [built-in middleware/processor implementations](./authentication) this library ships.
 
+## Event gate runs
+
+The events viewset resolves the store topic of a [scoped topic](./events#scoped-topics) in a gate
+run: the context processors, `depends()` and the chain of `__call__`s of the effective middlewares
+of the viewset's gate action (`list_items`, else `retrieve`), run for a `GET` of the topic by the
+subscribing caller, with the scope's resolver in place of the action. A middleware sees there:
+
+- `request.scope["fastapi_viewsets.events.gate"]` (`fastapi_viewsets.events.GATE_RUN_SCOPE_KEY`),
+  the gate action's name; absent from every other request;
+- the viewset class as `viewset` in `__call__`, as in `depends()`;
+- a context of its own, built for the gate run.
+
+The result's headers, cookies and body are discarded; an `HTTPException` refuses the topic, and a
+result with a status of 400 or above, or a chain that does not call `call_next()`, refuses it with
+`event_topic_refused`. A middleware that writes on every call (a "last selected" record, an audit
+entry) skips the write when the key is present: a gate run happens on every subscribe and poll.
+`Idempotency` passes a gate run through.
+
 ## `ViewSetResult`
 
 ```python

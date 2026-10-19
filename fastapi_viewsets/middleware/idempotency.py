@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -10,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
 from fastapi.encoders import jsonable_encoder
+from starlette.responses import Response
 
 from ..conf import settings
 from ..exceptions import (
@@ -19,6 +21,7 @@ from ..exceptions import (
     IdempotencyKeyInvalidError,
     IdempotencyKeyReusedError,
 )
+from ..routing import GATE_RUN_SCOPE_KEY
 from . import Middleware, ViewSetResult
 
 if TYPE_CHECKING:
@@ -142,9 +145,56 @@ async def request_fingerprint(request: "Request") -> str:
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
+@dataclass(frozen=True)
+class _StoredResponse:
+    """A buffered `Response` as recorded: its status, its raw headers as latin-1 strings without
+    `content-length`, and its body."""
+
+    status_code: int
+    raw_headers: list[tuple[str, str]]
+    body: bytes
+
+    @classmethod
+    def of(cls, response: Response) -> "_StoredResponse":
+        headers = [
+            (name.decode("latin-1"), value.decode("latin-1"))
+            for name, value in response.raw_headers
+            if name.lower() != b"content-length"
+        ]
+        return cls(response.status_code, headers, bytes(response.body))
+
+    def to_response(self) -> Response:
+        """A new `Response` with the recorded status, headers and body, and no background task."""
+        response = Response(content=self.body, status_code=self.status_code)
+        response.raw_headers = [(name.encode("latin-1"), value.encode("latin-1")) for name, value in self.raw_headers]
+        response.raw_headers.append((b"content-length", str(len(self.body)).encode("latin-1")))
+        return response
+
+    @property
+    def sets_cookie(self) -> bool:
+        return any(name.lower() == "set-cookie" for name, _value in self.raw_headers)
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "status_code": self.status_code,
+            "headers": [[name, value] for name, value in self.raw_headers],
+            "body": base64.b64encode(self.body).decode("ascii"),
+        }
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "_StoredResponse":
+        headers = [(name, value) for name, value in data["headers"]]
+        return cls(data["status_code"], headers, base64.b64decode(data["body"]))
+
+
+def _is_buffered(body: Any) -> bool:
+    return isinstance(body, Response) and isinstance(getattr(body, "body", None), bytes)
+
+
 @dataclass
 class _Outcome:
-    """What a call answered: a `ViewSetResult`, or an error as the fields of an `HTTPException`."""
+    """What a call answered: a `ViewSetResult`, or an error as the fields of an `HTTPException`. A
+    result whose body is a buffered `Response` holds it as a `_StoredResponse`."""
 
     result: ViewSetResult | None = None
     error: dict[str, Any] | None = None
@@ -153,18 +203,43 @@ class _Outcome:
     def of_error(cls, error: Exception) -> "_Outcome":
         return cls(error=_error_to_jsonable(error))
 
+    @classmethod
+    def of_result(cls, result: ViewSetResult) -> "_Outcome":
+        """The outcome of `result`; a buffered `Response` body is recorded as a `_StoredResponse`."""
+        if _is_buffered(result.body):
+            result = ViewSetResult(
+                body=_StoredResponse.of(result.body),
+                headers=result.headers,
+                cookies=result.cookies,
+                status_code=result.status_code,
+            )
+        return cls(result=result)
+
+    @property
+    def storable(self) -> bool:
+        """False for a result whose body is a `Response` without a buffered body (`StreamingResponse`,
+        `FileResponse`)."""
+        return self.result is None or not isinstance(self.result.body, Response)
+
     @property
     def sets_cookie(self) -> bool:
         if self.result is not None:
             headers = self.result.headers
-            return bool(self.result.cookies) or any(name.lower() == "set-cookie" for name in headers)
+            body = self.result.body
+            return (
+                bool(self.result.cookies)
+                or any(name.lower() == "set-cookie" for name in headers)
+                or (isinstance(body, _StoredResponse) and body.sets_cookie)
+            )
         return any(name.lower() == "set-cookie" for name in (self.error["headers"] or {}))
 
     def replay(self) -> ViewSetResult:
-        """A copy of the recorded result; a recorded error is raised as a new exception."""
+        """A copy of the recorded result, a recorded `Response` as a new `Response`; a recorded error
+        is raised as a new exception."""
         if self.result is not None:
+            body = self.result.body
             return ViewSetResult(
-                body=self.result.body,
+                body=body.to_response() if isinstance(body, _StoredResponse) else body,
                 headers=dict(self.result.headers),
                 cookies=dict(self.result.cookies),
                 status_code=self.result.status_code,
@@ -173,24 +248,27 @@ class _Outcome:
 
     def to_json(self) -> Any:
         """The outcome in JSON form. A result's body is encoded as FastAPI encodes a response body
-        (`jsonable_encoder`: models by alias), so the route's response model accepts it on a repeat."""
+        (`jsonable_encoder`: models by alias), so the route's response model accepts it on a repeat;
+        a recorded `Response` as its status, headers and base64 body under `response`."""
         if self.result is not None:
-            return {
-                "result": {
-                    "body": jsonable_encoder(self.result.body),
-                    "headers": jsonable_encoder(self.result.headers),
-                    "status_code": self.result.status_code,
-                }
+            body = self.result.body
+            encoded: dict[str, Any] = {
+                "headers": jsonable_encoder(self.result.headers),
+                "status_code": self.result.status_code,
             }
+            if isinstance(body, _StoredResponse):
+                encoded["response"] = body.to_json()
+            else:
+                encoded["body"] = jsonable_encoder(body)
+            return {"result": encoded}
         return {"error": self.error}
 
     @classmethod
     def from_json(cls, data: Any) -> "_Outcome":
         if "result" in data:
             result = data["result"]
-            return cls(
-                result=ViewSetResult(body=result["body"], headers=result["headers"], status_code=result["status_code"])
-            )
+            body = _StoredResponse.from_json(result["response"]) if "response" in result else result["body"]
+            return cls(result=ViewSetResult(body=body, headers=result["headers"], status_code=result["status_code"]))
         return cls(error=data["error"])
 
 
@@ -238,6 +316,11 @@ class Idempotency(Middleware):
       the running record for `settings.viewsets_idempotency_ttl` seconds. An outcome of `GET` or
       `HEAD` is stored only when a repeat attached while the call ran; an outcome with a cookie or a
       `set-cookie` header is never stored. A record that is not stored is deleted.
+    - A result whose body is a starlette `Response` with a buffered `body` is recorded as its status,
+      raw headers and body, and a repeat receives a new `Response` built from them, without a
+      background task; the response's own status is the answer's. A `Response` without a buffered
+      body (`StreamingResponse`, `FileResponse`) is not stored, and a `set-cookie` among its headers
+      is a cookie.
     - An error outcome is stored too and raised again on a repeat: an `HTTPException` as it was
       raised (a `DfViewSetError` with its `code` and `params`, and with its class when
       `fastapi_viewsets.exceptions` defines it), a `RequestValidationError` as a 422 with its
@@ -252,7 +335,8 @@ class Idempotency(Middleware):
     `<key_prefix><key>:attached` while the running record it read still exists, subscribes to the
     channel `<key_prefix><key>`, reads the record again and waits for the message published after
     the outcome is stored or the record deleted, or for the running record to expire. An outcome
-    that cannot be JSON-encoded is not stored. A repeat on the process running the call awaits it in
+    that cannot be JSON-encoded is not stored. An events gate run (`GATE_RUN_SCOPE_KEY` in the request
+    scope) passes through. A repeat on the process running the call awaits it in
     process either way.
     """
 
@@ -274,6 +358,8 @@ class Idempotency(Middleware):
         _context: "Context",
         call_next: Callable[[], Awaitable[ViewSetResult]],
     ) -> ViewSetResult:
+        if request is not None and request.scope.get(GATE_RUN_SCOPE_KEY):
+            return await call_next()
         key = read_idempotency_key(request) if request is not None else None
         if key is None:
             return await call_next()
@@ -307,7 +393,7 @@ class Idempotency(Middleware):
         except BaseException:
             await self._finish(storage_key, run, None, method)
             raise
-        await self._finish(storage_key, run, _Outcome(result=result), method)
+        await self._finish(storage_key, run, _Outcome.of_result(result), method)
         return result
 
     async def _call_renewing(
@@ -340,9 +426,10 @@ class Idempotency(Middleware):
 
     async def _finish(self, storage_key: str, run: _Run, outcome: _Outcome | None, method: str) -> None:
         """Stores the outcome or deletes the record, publishes on the key's channel and resolves the
-        in-process repeats, in that order. `outcome` None (the call was cancelled) or an outcome that
-        sets a cookie is not stored, and the in-process repeats claim the key again."""
-        if outcome is None or outcome.sets_cookie:
+        in-process repeats, in that order. `outcome` None (the call was cancelled), an outcome that
+        sets a cookie and an outcome that is not storable are not stored, and the in-process repeats
+        claim the key again."""
+        if outcome is None or outcome.sets_cookie or not outcome.storable:
             mode, outcome = "never", None
         else:
             mode = "attached" if method in _SAFE_METHODS else "always"

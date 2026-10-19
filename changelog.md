@@ -6,6 +6,63 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.2] - Unreleased
+
+### Added
+
+- Event scopes: `@event_scope(resolver, name=None)` on a viewset class stores and delivers its
+  events under the store topic `@{name}:{key}`, the key resolved by the server from the request: on
+  `subscribe` and `poll` in a gate run of the subscribing request (route dependencies, context
+  processors, `depends()` and `__call__` of the middleware chain of the gate action, then the
+  resolver), on a write by `ChangeEvents`, after the whole command chain (before the dispatch of
+  every `celery_viewset` action, custom endpoints included, whose task carries the key; the worker,
+  `write_topic()` included, does not call the resolver). One class and its subclasses on several routes (a header
+  route and a path-parameter route) share the store topic of a key; a subscriber of another key
+  receives nothing. New in `fastapi_viewsets.events`: `EventScope`, `ResolvedTopic`, `ScopeKey`,
+  `ScopeResolver`, `GATE_RUN_SCOPE_KEY`, `SCOPE_CONTEXT_KEY`, `event_scope`, `scope_of`,
+  `resolve_scope`, `resolve_topic`, `reset_event_scopes`, `scoped_topic`, `is_scoped_topic`,
+  `split_scoped_topic`, `drop_subscriptions`, `write_topic` (the topic of a custom endpoint that
+  publishes itself). Classes a function defines need `event_scope(name=...)` each.
+- `Subscription.store_topic`, `.scope`, `.authorized_at`, `.reauthorize`; `subscribe()` takes
+  `store_topic=`, `scope=` and `reauthorize=`. Delivery filters receive the client topic.
+- `settings.viewsets_event_reauthorize_after` (default `300.0` seconds): a push to a subscription of
+  a scoped topic runs its gate again once that long has passed. A refusal (an `HTTPException` of a
+  status from 400 to 499 other than 429) removes the subscription; a 429 or 5xx keeps it.
+- Wire: `SubscribeAnswer.scope`, `PollRequest.scopes`, `TopicAnswer.status` (on every error answer)
+  and `TopicAnswer.scope`, the push header `:scope`. Unscoped success answers are unchanged.
+- `EventScopeMissingError` (403, `event_scope_missing`): a scoped topic whose resolver answers
+  `None` for the caller.
+- `fastapi_viewsets.mux_ws.origin_allowed(connection, allowed_origins=None)`, the `Origin` check of
+  a WebSocket endpoint before `accept()`.
+- `fastapi_viewsets.routing.GATE_RUN_SCOPE_KEY`.
+- `Context.action_name`, the read-only name of the action a context represents.
+- FE: `WatchOptions.topic` and `ProxyBaseOptions.topic`, the client topic `watch()` subscribes;
+  `EventClientOptions.headers`, the headers of the event client's calls; `EventClient.refresh(topic?)`;
+  `EventMeta.scope`; the scope rules of the event client (held scope per topic, `scopes` in every
+  poll, resync on a scope change); `inBackground(fn)`; `error` on the `settle` `CallEvent`.
+
+### Fixed
+
+- `watch()` subscribed `basePath`, which differs from the BE topic when `basePath` carries a
+  Starlette `Mount` prefix or the application's `root_path`; `topic` sets it.
+- The retrieves of `watch({ fetch: true })` are background calls.
+- `Idempotency` stored a `Response` body as the dict `jsonable_encoder` made of its attributes and
+  replayed that dict. A buffered `Response` is stored as its status, headers and body and replayed
+  as a new `Response`; a `StreamingResponse` or `FileResponse` is not stored.
+- A muxws proxy whose `peer` is a function called it once for its lifetime. It calls it again after
+  the peer closed for good, and after the function threw or its promise rejected.
+- A refused `subscribe` of a topic the socket held left the old subscription in place; it removes
+  it for a status from 400 to 499 other than 429, and keeps it for a 429 or 5xx. A poll over muxws
+  that refuses a topic with a status from 400 to 499 other than 429 removes the socket's subscription
+  to it; a 429 or a status of 500 or above keeps it.
+- `route_viewset` on a subclass of a routed class reused the parent's endpoints, which then carried
+  the subclass as `__viewset_class__`; the subclass gets endpoints of its own.
+- The muxws endpoint examples check `Origin` before `accept()`.
+- FE: a `subscribe` that failed with 429, a status of 500 or above, or without a status was sent
+  again only on the next reconnect, while the peer stayed open the topic was only polled. It is sent
+  again on every rung of the ladder while the peer is open; the subscription stays, and a refusal of
+  the repeated `subscribe` is reported through `onError` and `ready`.
+
 ## [0.11.1] - Unreleased
 
 ### Fixed

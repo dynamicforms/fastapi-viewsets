@@ -2,9 +2,11 @@
 `celery_viewset` against a real Celery worker (prefork, and gevent where gevent is installed) and
 the Redis named by FASTAPI_VIEWSETS_TEST_REDIS_URL (skipped without it), called over HTTP: what a
 caller receives, and what `execute()`, `executor_started()` and `on_transition()` observe, when the
-executor interrupts an execution or never runs it.
+executor interrupts an execution or never runs it; and the events a standard and a custom write of
+a scoped class publish from the worker.
 """
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -40,12 +42,16 @@ WORKER_MODULE = textwrap.dedent(
     import time
 
     import redis
+    import redis.asyncio
 
     from celery import Celery
-    from fastapi import APIRouter
+    from fastapi import APIRouter, Request
 
     from fastapi_viewsets.conf import settings
+    from fastapi_viewsets.context import Context
     from fastapi_viewsets.decorators import celery_viewset_server
+    from fastapi_viewsets.events import Change, ChangeEvents, event_scope, publish, RecordsChanged, write_topic
+    from fastapi_viewsets.events.redis import RedisEventStore
     from fastapi_viewsets.middleware import Middleware
 
     URL = os.environ["E2E_REDIS_URL"]
@@ -82,7 +88,8 @@ WORKER_MODULE = textwrap.dedent(
             probe.rpush(f"{KEY}:transitions", json.dumps([transition.kind, transition.action, reason]))
 
 
-    settings.viewsets_command_middleware = [Probe()]
+    settings.viewsets_command_middleware = [Probe(), ChangeEvents()]
+    settings.viewsets_event_store = RedisEventStore(redis.asyncio.Redis.from_url(URL), key_prefix=f"{KEY}:events:")
 
 
     class Jobs:
@@ -127,6 +134,28 @@ WORKER_MODULE = textwrap.dedent(
 
 
     celery_viewset_server(app, KEY, redis_client=redis.Redis.from_url(URL))(Jobs)
+
+
+    def no_key_here(_request, _context):
+        raise RuntimeError("the web process carries the scope key")
+
+
+    @event_scope(no_key_here, name=f"things-{KEY}")
+    class Things:
+        __router = APIRouter()
+        pk_field_name = "id"
+
+        @__router.post("")
+        async def create(self, title: str) -> dict:
+            return {"id": 7, "title": title}
+
+        @__router.post("/{pk}/archive")
+        async def archive(self, request: Request, context: Context, pk: int) -> None:
+            topic = await write_topic(self, request, context)
+            await publish(topic, RecordsChanged(op="deleted", changes=[Change(pk=pk)]))
+
+
+    celery_viewset_server(app, f"{KEY}-things", redis_client=redis.Redis.from_url(URL))(Things)
     """
 )
 
@@ -407,3 +436,78 @@ def test_a_process_exit_in_the_solo_pool(client, probe, key, worker):
     assert _error(client.post("/jobs/system_exit")) == (503, "action_interrupted", "terminated")
     assert _eventually(lambda: ["interrupted", "system_exit", "terminated"] in _entries(probe, key, "transitions"))
     worker.wait(timeout=15)
+
+
+def test_writes_of_a_scoped_class_publish_from_the_worker_to_a_web_process_subscriber(
+    worker, redis_url, key, celery_app, probe, monkeypatch
+):
+    import redis.asyncio
+
+    from ...conf import settings
+    from ...context import Context
+    from ...events import ChangeEvents, event_scope
+    from ...events.conftest import FakePeer
+    from ...events.delivery import reset_subscriptions, subscribe
+    from ...events.redis import RedisEventStore
+
+    assert worker.poll() is None, "the worker exited"
+    task_prefix = f"{key}-things"
+
+    @event_scope(lambda request, _context: request.headers.get("x-org"), name=f"things-{key}")
+    class Things:
+        __router = APIRouter()
+        pk_field_name = "id"
+
+        @__router.post("")
+        async def create(self, title: str) -> dict: ...
+
+        @__router.post("/{pk}/archive")
+        async def archive(self, pk: int) -> None: ...
+
+    reader_client = redis.asyncio.Redis.from_url(redis_url)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        await start_result_reader(reader_client, get_result_queue_key(task_prefix))
+        yield
+        await stop_result_reader(get_result_queue_key(task_prefix))
+
+    router = APIRouter()
+    route_viewset(router, "/things", pk_field_name="id")(
+        celery_viewset_client(celery_app, task_prefix, redis_client=reader_client, result_timeout=30)(Things)
+    )
+    app = FastAPI(lifespan=lifespan)
+    app.include_router(router)
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [ChangeEvents()])
+
+    async def scenario(client: TestClient) -> tuple[FakePeer, FakePeer]:
+        web = RedisEventStore(redis.asyncio.Redis.from_url(redis_url), key_prefix=f"{key}:events:")
+        monkeypatch.setattr(settings, "viewsets_event_store", web)
+        await web.start()
+        try:
+            member, stranger = FakePeer(), FakePeer()
+            await subscribe(member, Context({}), "/things", store_topic=f"@things-{key}:7", scope="7")
+            await subscribe(stranger, Context({}), "/things", store_topic=f"@things-{key}:8", scope="8")
+            response = await asyncio.to_thread(client.post, "/things", params={"title": "x"}, headers={"x-org": "7"})
+            assert response.json() == {"id": 7, "title": "x"}
+            response = await asyncio.to_thread(client.post, "/things/3/archive", headers={"x-org": "7"})
+            assert response.status_code == 200
+            deadline = time.monotonic() + 10
+            while len(member.pushes) < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.05)
+            return member, stranger
+        finally:
+            await web.stop()
+            reset_subscriptions()
+
+    with TestClient(app) as client:
+        member, stranger = asyncio.run(scenario(client))
+    assert [payload for payload, _headers in member.pushes] == [
+        {"op": "created", "changes": [{"pk": 7}]},
+        {"op": "deleted", "changes": [{"pk": 3}]},
+    ]
+    assert [(headers[":topic"], headers[":scope"]) for _payload, headers in member.pushes] == [("/things", "7")] * 2
+    assert stranger.pushes == []
+    assert [entry for entry in _entries(probe, key, "execute") if entry[0] in ("create", "archive")] == []
+    for stored in probe.scan_iter(match=f"{key}:events:*"):
+        probe.delete(stored)

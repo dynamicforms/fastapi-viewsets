@@ -193,10 +193,10 @@ def test_a_source_name_of_another_form_raises_value_error(name):
 
 
 def test_a_source_keeps_its_authorizer():
-    async def club_member(_request, _context, _topic):
+    async def org_member(_request, _context, _topic):
         return True
 
-    assert source("club", authorizer=club_member).authorizer is club_member
+    assert source("org", authorizer=org_member).authorizer is org_member
     assert source("other").authorizer is None
 
 

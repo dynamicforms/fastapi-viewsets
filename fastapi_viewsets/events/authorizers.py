@@ -129,8 +129,8 @@ def match_viewset(app: Any, topic: str) -> ViewsetMatch | None:
     The first route of `app`, in routing order, whose endpoint carries `__viewset_class__` and, as
     `__viewset_action__`, the class's `list_items`, or `retrieve` for a class without `list_items`,
     and whose path without that action's path in `__viewset_metadata__["paths"]` matches `topic`
-    as Starlette matches a request path, path parameters included: `/clubs/{club_id}/tracks`
-    matches the topic `/clubs/7/tracks`. None when no route matches.
+    as Starlette matches a request path, path parameters included: `/orgs/{org_id}/tracks`
+    matches the topic `/orgs/7/tracks`. None when no route matches.
     """
     for route in _routes(app):
         endpoint = getattr(route, "endpoint", None)
@@ -213,8 +213,11 @@ class ViewsetTopics:
     `retrieve` when it has no `list_items`.
 
     A topic that does not start with `/`, and a topic no viewset on `request.app` has, get None (see
-    `match_viewset`). For the viewset found, the checks a request to that action passes run against
-    the calling request, which carries the path parameters read from the topic as `path_params`:
+    `match_viewset`).
+
+    For a class without `@event_scope`, the checks a request to that action passes before the
+    command chain run against the calling request, which carries the path parameters read from the
+    topic as `path_params`:
 
     1. the route's `dependencies` other than `route_viewset`'s own, those of the application, of
        `include_router`, of the `APIRouter` and of the route itself; a parameter of one that does not
@@ -224,17 +227,30 @@ class ViewsetTopics:
        action_configuration=..., action_name=...)`: `settings.viewsets_command_middleware` followed
        by the middleware instances the configuration adds.
 
+    A check in a middleware's `__call__` or in `perform_*` does not run for such a class. For a class
+    with `@event_scope`, the gate run of `resolve_topic` admits the topic: the route's dependencies,
+    the context processors, `depends()` and `__call__` of every effective middleware and the scope's
+    resolver, against a request of its own (see `fastapi_viewsets.events.scopes`). A viewset that is
+    not split by tenant gets the same checks with a constant resolver,
+    `@event_scope(lambda request, context: "all")`.
+
     An `HTTPException` propagates: `Session` raises 401, `Authorization` 403, `RateLimiter` 429 and
-    counts the call as one call of that action. When none raises, the topic is admitted.
+    counts the call as one call of that action, `EventScopeMissingError` 403 for a resolver that
+    answers None. When none raises, the topic is admitted.
     """
 
     async def __call__(self, request: Request, context: Context, topic: str) -> bool | None:
+        from .scopes import resolve_topic, scope_of
+
         if not is_viewset_topic(topic):
             return None
         found = match_viewset(request.app, topic)
         if found is None:
             return None
         cls, action = found.viewset_class, found.action
+        if scope_of(cls) is not None:
+            await resolve_topic(request, topic)
+            return True
         checked = _with_path_params(request, found.path_params)
         if not await _route_dependencies_admit(checked, found.route):
             return False

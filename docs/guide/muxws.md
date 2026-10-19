@@ -38,12 +38,15 @@ subprotocol to select. **Do not call `websocket.accept()`** — accepting first 
 from fastapi import FastAPI, WebSocket
 from muxws import accept, Stream
 
-from fastapi_viewsets.mux_ws import process_command
+from fastapi_viewsets.mux_ws import origin_allowed, process_command
 
 app = FastAPI()
 
 @app.websocket("/ws")
 async def muxws_endpoint(websocket: WebSocket) -> None:
+    if not origin_allowed(websocket):
+        await websocket.close(code=1008)  # before accept(): the handshake is answered with HTTP 403
+        return
     peer = await accept(websocket)
     peer.on_stream(lambda payload, stream: process_command(payload, stream, connection=websocket, peer=peer))
     await peer.serve()
@@ -276,6 +279,7 @@ schemas differ.
 | `resolve_register_muxws(endpoint, viewset_level)` | Whether an endpoint is on muxws: the endpoint's `@transports`, else `viewset_level`, else `settings.viewsets_register_muxws` |
 | `resolve_register_rest(endpoint, viewset_level=None)` | Whether an endpoint is on REST: the endpoint's `@transports`, else `viewset_level`, else `True` |
 | `METHOD_KEY`, `PATH_KEY`, `QUERY_KEY`, `STATUS_KEY` | `":method"`, `":path"`, `":query"`, `":status"` |
+| `origin_allowed(connection, allowed_origins=None)` | Whether the handshake's `Origin` may open the endpoint; see [Authentication](#authentication) |
 
 `fastapi_viewsets.routing` holds the routing both transports share:
 
@@ -286,6 +290,7 @@ schemas differ.
 | `request_transport(scope)` | The transport a request arrived over: `scope["fastapi_viewsets.transport"]`, or `"rest"` without it |
 | `TRANSPORT_SCOPE_KEY`, `REST`, `MUXWS` | `"fastapi_viewsets.transport"`, `"rest"`, `"muxws"` |
 | `PEER_SCOPE_KEY` | `"fastapi_viewsets.peer"`, the scope key of the `peer` argument of `process_command`; absent from a REST request |
+| `GATE_RUN_SCOPE_KEY` | `"fastapi_viewsets.events.gate"`, present on the request of an events [gate run](./events#the-gate-run); re-exported from `fastapi_viewsets.events` |
 | `openapi_endpoint(route_kwargs)` | A `/schema` endpoint answering with the OpenAPI document of the routes listed in `add_api_route` form |
 
 ## The wire format
@@ -353,6 +358,25 @@ new TrackViewSet({
 
 Authenticating the connection itself belongs *before* `accept()`, in your own websocket endpoint —
 muxws interprets no credential anywhere.
+
+A browser sends the site's cookies with a WebSocket handshake whatever page opened it, so a
+cookie-authenticated WebSocket has no CSRF protection; the endpoint checks `Origin` before
+`accept()`. `origin_allowed(connection, allowed_origins=None)` answers for a `WebSocket` or a
+`Request`:
+
+| Handshake | Answer |
+|-----------|--------|
+| no `Origin` header (a client that is not a browser) | `True` |
+| more than one `Origin` header, `Origin: null`, an origin that is not `scheme://host[:port]` with `http` or `https` | `False` |
+| `allowed_origins` given | `True` when the origin equals one of its entries; an entry that is not an origin raises `ValueError` |
+| no `allowed_origins` | `True` when the origin's host and port equal the request's host: the first item of `X-Forwarded-Host`, else `Host`; no host is `False` |
+
+Origins compare with the scheme and host lower-cased, the port explicit or the scheme's default
+(80, 443) and a trailing `/` removed. Without `allowed_origins` the scheme is not compared, so TLS
+terminated at a proxy passes, and a host without a port takes the default port of the origin's
+scheme. A proxy that rewrites `Host` without setting `X-Forwarded-Host` needs `allowed_origins`. The
+endpoint closes a refused handshake with `websocket.close(code=1008)` before `accept()`, which the
+server answers with HTTP 403.
 
 The connection also supplies each command's `request.client` and `request.server`: the
 WebSocket's own addresses, which [`RateLimiter`](./rate-limiter#identity-key) keys on by default.

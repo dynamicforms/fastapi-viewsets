@@ -163,9 +163,9 @@ def test_event_topic_invalid_error_carries_the_topic():
 
 
 def test_event_topic_refused_error_carries_the_topic():
-    error = EventTopicRefusedError("club:9")
-    assert (error.status_code, error.code, error.params) == (403, "event_topic_refused", {"topic": "club:9"})
-    assert error.detail == "Topic club:9 is not admitted"
+    error = EventTopicRefusedError("org:9")
+    assert (error.status_code, error.code, error.params) == (403, "event_topic_refused", {"topic": "org:9"})
+    assert error.detail == "Topic org:9 is not admitted"
 
 
 def test_event_subscriptions_exceeded_error_carries_the_limit():

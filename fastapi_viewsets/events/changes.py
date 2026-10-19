@@ -4,6 +4,8 @@ each of its create, update and destroy actions.
 
     settings.viewsets_command_middleware = [Idempotency(...), ChangeEvents(), Session(), ...]
 
+`write_topic` answers the topic of a call for an endpoint that publishes itself.
+
 | `execution.action` | `op` | `changes` |
 |---|---|---|
 | `create` | `created` | the pk of the returned record |
@@ -15,6 +17,7 @@ each of its create, update and destroy actions.
 """
 
 import inspect
+import logging
 
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Literal, TYPE_CHECKING
@@ -22,14 +25,18 @@ from typing import Any, Literal, TYPE_CHECKING
 from pydantic import BaseModel
 
 from ..action_configuration import resolve_action_configuration
-from ..context import Context
+from ..context import _Deferred, Context
+from ..decorators.lifecycle_runner import execution_translator
 from ..middleware import ActionExecution, Middleware, ViewSetResult
 from .event import Event
+from .scopes import EventScope, resolve_scope, SCOPE_CONTEXT_KEY, scope_of
 from .sources import publish
-from .topics import validate_topic
+from .topics import _validate_published_topic, scoped_topic, validate_topic
 
 if TYPE_CHECKING:
     from fastapi import Request
+
+logger = logging.getLogger(__name__)
 
 TOPIC_CONTEXT_KEY = "fastapi_viewsets.events.topic"
 """The context key under which `ChangeEvents.__call__` stores the routed base path of the call's
@@ -72,8 +79,8 @@ def routed_base_path(request: "Request") -> str | None:
     """
     The routed base path of the viewset whose endpoint `request` was routed to: the `include_router`
     prefixes followed by `base_path`, e.g. `/api/music` for a request to `/api/music/3`, with the
-    values of the request's path parameters in place, e.g. `/clubs/7/tracks` for a viewset at
-    `/clubs/{club_id}/tracks`.
+    values of the request's path parameters in place, e.g. `/orgs/7/tracks` for a viewset at
+    `/orgs/{org_id}/tracks`.
 
     It is the request's path, relative to the application's `root_path`, with as many trailing
     segments removed as the action's relative path (`__viewset_metadata__["paths"][action]`) has.
@@ -107,9 +114,26 @@ class ChangeEvents(Middleware):
     module's table). An action that raises publishes nothing; any other action publishes nothing.
 
     `__call__` runs in the web process and stores `routed_base_path(request)` in the context under
-    `TOPIC_CONTEXT_KEY`, on every action. `execute()` runs where the action executes and publishes
-    after `call_next()` returns. An exception of the publish, `store.append` failing included,
-    propagates from `execute()` after the action has run.
+    `TOPIC_CONTEXT_KEY`, on every action. For every action of a class with `@event_scope` (see
+    `fastapi_viewsets.events.scopes`) but a write action configured `False` or with a `topic`, it
+    also stores under `SCOPE_CONTEXT_KEY` the deferred resolution of the scope's key with the call's
+    request and context. The resolver runs after the whole command chain, wherever `ChangeEvents`
+    sits in it: in the web process, on the first `await` of the entry (`execute()` of a write action,
+    `write_topic()`) for an action that executes there, and before the dispatch for every
+    `celery_viewset` action, which then carries `{"name": ..., "key": ...}`, or None for a key of
+    None, to the worker. An exception of the resolver refuses the call before the action.
+    `execute()` runs where the action executes and publishes after `call_next()` returns. An
+    exception of the publish, `store.append` failing included, propagates from `execute()` after the
+    action has run.
+
+    The topic `execute()` publishes to:
+
+    1. for a class without `@event_scope`, `topic_for(execution)`;
+    2. for a class with `@event_scope`, `topic_for(execution)` of a subclass that overrides it;
+       else, for an execution a request called, `@{name}:{key}` of the key under
+       `SCOPE_CONTEXT_KEY` (resolved there in the web process); else `@{name}:{key}` of the key the
+       resolver answers in `execute()`, with the execution's request and context. A key of None
+       publishes nothing and logs a warning. A `topic` option on a class with `@event_scope` raises `TypeError`.
 
     `@action_configuration` on a class or a `perform_*` method:
 
@@ -132,7 +156,7 @@ class ChangeEvents(Middleware):
     async def __call__(
         self,
         request: "Request | None",
-        viewset: Any,  # noqa: ARG002
+        viewset: Any,
         context: Context,
         call_next: Callable[[], Awaitable[ViewSetResult]],
     ) -> ViewSetResult:
@@ -140,7 +164,19 @@ class ChangeEvents(Middleware):
             topic = routed_base_path(request)
             if topic is not None:
                 context.set(TOPIC_CONTEXT_KEY, topic)
+            cls = viewset if isinstance(viewset, type) else type(viewset)
+            scope = scope_of(cls)
+            if scope is not None and self._carries_scope(context):
+                context.set(SCOPE_CONTEXT_KEY, _Deferred(lambda: _scope_entry(scope, request, context)))
         return await call_next()
+
+    def _carries_scope(self, context: Context) -> bool:
+        """Whether `__call__` stores the scope of the call: for every action but a write action
+        configured `False` or with a `topic`."""
+        if context.action_name not in _OPS:
+            return True
+        options = self.options_for(context)
+        return options is not None and "topic" not in options
 
     def config_from(self, context: Context) -> Any:
         """The value configured under this instance as the key, else under its class."""
@@ -182,20 +218,46 @@ class ChangeEvents(Middleware):
         options = self.options_for(execution.context) if op is not None else None
         if options is None or self.replaced_for(execution):
             return await call_next()
-        topic = validate_topic(self.topic_for(execution))
+        topic = await self._resolve_topic(execution)
+        if topic is None:
+            scope = scope_of(execution.viewset_class)
+            logger.warning(
+                "events: %s.%s: the event scope %r answered no key; no %s is published",
+                execution.viewset_class.__qualname__,
+                execution.action,
+                scope.name if scope is not None else None,
+                RecordsChanged.event_name,
+            )
+            return await call_next()
         if op != "deleted":
             self.pk_field_for(execution)
         result = await call_next()
         await publish(topic, RecordsChanged(op=op, changes=self.changes_for(execution, op, result)))
         return result
 
+    async def _resolve_topic(self, execution: ActionExecution) -> str | None:
+        """The topic `execute()` publishes to (see the class's topic order); None for a scope key of
+        None."""
+        scope = scope_of(execution.viewset_class)
+        if scope is None:
+            return validate_topic(self.topic_for(execution))
+        if "topic" in (self.options_for(execution.context) or {}):
+            raise TypeError(
+                f"{execution.viewset_class.__qualname__}: event_scope and the {type(self).__name__} 'topic' "
+                f"option exclude each other"
+            )
+        if type(self).topic_for is not ChangeEvents.topic_for:
+            return _validate_published_topic(self.topic_for(execution))
+        return await _scoped_write_topic(scope, execution.request, execution.context, execution.parent is None)
+
     def topic_for(self, execution: ActionExecution) -> str:
         """
-        The configured `topic` (a callable is called with `execution`); else, for an execution a
-        request called (`execution.parent` None), the routed base path in the context under
-        `TOPIC_CONTEXT_KEY`; else `__viewset_metadata__["base_path"]`, for an execution dispatched
-        outside any call or in the execution of another action, whose context carries the topic of
-        that other action. Raises `TypeError` when there is none of the three.
+        The topic of an execution of a class without `@event_scope`, and the hook a subclass
+        overrides, for any class: the configured `topic` (a callable is called with `execution`);
+        else, for an execution a request called (`execution.parent` None), the routed base path in
+        the context under `TOPIC_CONTEXT_KEY`; else `__viewset_metadata__["base_path"]`, for an
+        execution dispatched outside any call or in the execution of another action, whose context
+        carries the topic of that other action. Raises `TypeError` when there is none of the three.
         """
         topic = (self.options_for(execution.context) or {}).get("topic")
         if callable(topic):
@@ -252,6 +314,70 @@ class ChangeEvents(Middleware):
         body = result.body if isinstance(result, ViewSetResult) else result
         field = self.pk_field_for(execution)
         return [Change(pk=_read_pk(execution, record, field)) for record in (body if bulk else [body])]
+
+
+async def _scope_entry(scope: EventScope, request: "Request | None", context: Context) -> dict[str, str] | None:
+    key = await resolve_scope(scope, request, context)
+    return None if key is None else {"name": scope.name, "key": key}
+
+
+_NOT_CARRIED = object()
+
+
+async def _carried_topic(scope: EventScope, context: Context) -> Any:
+    """The store topic of the entry under `SCOPE_CONTEXT_KEY` when the context holds one of `scope`
+    (None for an entry of a key of None), else `_NOT_CARRIED`."""
+    raw = context.raw()
+    if SCOPE_CONTEXT_KEY not in raw:
+        return _NOT_CARRIED
+    carried = raw[SCOPE_CONTEXT_KEY]
+    if isinstance(carried, _Deferred):
+        carried = await carried
+    if carried is None:
+        return None
+    if isinstance(carried, dict) and carried.get("name") == scope.name and isinstance(carried.get("key"), str):
+        return scoped_topic(scope.name, carried["key"])
+    return _NOT_CARRIED
+
+
+async def _scoped_write_topic(
+    scope: EventScope, request: "Request | None", context: Context, carries: bool
+) -> str | None:
+    """The store topic of a write of a class with `scope`: from the entry under `SCOPE_CONTEXT_KEY`
+    when `carries` and the context holds one of this scope, else from the key the resolver answers
+    with `request` and `context`; None for a key of None."""
+    if carries:
+        carried = await _carried_topic(scope, context)
+        if carried is not _NOT_CARRIED:
+            return carried
+    key = await resolve_scope(scope, request, context)
+    return None if key is None else scoped_topic(scope.name, key)
+
+
+async def write_topic(viewset: Any, request: "Request | None", context: Context) -> str | None:
+    """
+    The topic a write of the current call of `viewset` (a viewset class or instance) publishes to,
+    for an endpoint that writes outside the eight actions and publishes itself. For a class with
+    `@event_scope`, the store topic `@{name}:{key}` of the key under `SCOPE_CONTEXT_KEY` when the
+    context holds an entry of this scope (`ChangeEvents.__call__` stores one for every action of the
+    class), else of the key the scope's resolver answers with `request` and `context`; None for a key
+    of None; an exception of the resolver propagates. In a `celery_viewset` worker the resolver is
+    never called: the key is the one the web process resolved before the dispatch, and a context
+    without an entry of this scope answers None. For a class without it, the topic under
+    `TOPIC_CONTEXT_KEY`, else `__viewset_metadata__["base_path"]`, else None.
+    """
+    cls = viewset if isinstance(viewset, type) else type(viewset)
+    scope = scope_of(cls)
+    if scope is not None:
+        if execution_translator.get() is not None:
+            carried = await _carried_topic(scope, context)
+            return None if carried is _NOT_CARRIED else carried
+        return await _scoped_write_topic(scope, request, context, True)
+    routed = context.raw().get(TOPIC_CONTEXT_KEY)
+    if routed is not None:
+        return routed
+    metadata = getattr(cls, "__viewset_metadata__", None)
+    return metadata["base_path"] if metadata is not None else None
 
 
 def _argument(execution: ActionExecution, name: str) -> Any:
