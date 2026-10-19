@@ -198,8 +198,10 @@ topic: each answered topic is subscribed again over the open peer, or polled at 
 and its pushes are held until the answer. An answer under another key resyncs the topic and applies
 the held pushes of the new key above the answer's rev; an answer under the same key applies the held
 pushes. A `subscribe` of a refresh that fails without a refusal drops the held pushes and leaves the
-topic to the ladder, which sends the `subscribe` again. A push of a scoped topic that arrives after
-`headers()` changed since the topic was answered refreshes that topic itself.
+topic to the ladder, which sends the `subscribe` again. A topic whose first answer is pending when
+`refresh()` is called is refreshed once that answer arrives. The client refreshes a scoped topic
+itself when a push arrives after `headers()` changed since the topic was answered, and when its first
+answer arrives after `headers()` changed since that answer's call was sent.
 
 ```ts
 watch(() => session.orgSlug, () => {

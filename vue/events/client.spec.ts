@@ -1901,6 +1901,91 @@ describe('scoped topics', () => {
     expect(h.onResync).toHaveBeenCalledTimes(1);
   });
 
+  it('refresh() before the first answer subscribes the topic again once it arrives', async () => {
+    const t = makeTransport();
+    const c = track(client(t));
+    const h = handlers();
+    const sub = c.subscribe('/t', Changed, h);
+    const [first] = t.take();
+    c.refresh?.('/t');
+    expect(t.take()).toEqual([]);
+    first.answer({ rev: 10, scope: '7' });
+    await flush();
+    await expect(sub.ready).resolves.toBeUndefined();
+    const [again] = t.take();
+    expect(again).toMatchObject({ path: '/events/subscribe', body: { topic: '/t' } });
+    again.answer({ rev: 20, scope: '8' });
+    await flush();
+    expect(h.onResync).toHaveBeenCalledTimes(1);
+    expect(t.take()).toEqual([]);
+  });
+
+  it('a first answer sent before headers() changed refreshes a scoped topic with the new headers', async () => {
+    const t = makeTransport();
+    let headers: Record<string, string> = { 'X-Org': '7' };
+    const c = track(client(t, { headers: () => headers }));
+    const h = handlers();
+    c.subscribe('/t', Changed, h);
+    c.subscribe('/u', Changed, handlers());
+    const [first, unscoped] = t.take();
+    headers = { 'X-Org': '8' };
+    first.answer({ rev: 10, scope: '7' });
+    unscoped.answer({ rev: 3 });
+    await flush();
+    const [again] = t.take();
+    expect(again).toMatchObject({
+      path: '/events/subscribe',
+      body: { topic: '/t' },
+      headers: { 'X-Org': '8' },
+    });
+    again.answer({ rev: 40, scope: '8' });
+    await flush();
+    expect(h.onResync).toHaveBeenCalledTimes(1);
+    expect(t.take()).toEqual([]);
+  });
+
+  it('a held push and a headers() change before the first answer refresh the topic once', async () => {
+    const t = makeTransport();
+    let headers: Record<string, string> = { 'X-Org': '7' };
+    const c = track(client(t, { headers: () => headers }));
+    c.subscribe('/t', Changed, handlers());
+    const [first] = t.take();
+    t.pushScoped('/t', '7', 11, 10);
+    headers = { 'X-Org': '8' };
+    first.answer({ rev: 10, scope: '7' });
+    await flush();
+    const [again] = t.take();
+    again.answer({ rev: 30, scope: '8' });
+    await flush();
+    expect(t.take()).toEqual([]);
+  });
+
+  it('a first poll answer sent before headers() changed polls a scoped topic again at once', async () => {
+    const t = makeTransport();
+    let headers: Record<string, string> = { 'X-Org': '7' };
+    const c = track(
+      createEventClient({
+        basePath: '/events',
+        axios: t.axios,
+        draw: () => 0.5,
+        headers: () => headers,
+      }),
+    );
+    const h = handlers();
+    c.subscribe('/t', Changed, h);
+    await flush();
+    const [first] = t.take();
+    headers = { 'X-Org': '8' };
+    first.answer({ topics: { '/t': { rev: 5, events: [], scope: '7' } }, poll_after_ms: 0 });
+    await flush();
+    const [again] = t.take();
+    expect(again.headers).toMatchObject({ 'X-Org': '8' });
+    expect(again.body).toEqual({ cursors: { '/t': 5 }, scopes: { '/t': '7' } });
+    again.fail(new Error('network'));
+    await flush();
+    expect(t.take()).toEqual([]);
+  });
+
   it('sends the headers with every call over axios, and none without the option', async () => {
     const t = makeTransport();
     const c = track(

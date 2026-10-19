@@ -6,6 +6,15 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.4] - Unreleased
+
+### Fixed
+
+- Event client: `refresh()` of a topic whose first answer is pending refreshes the topic once that
+  answer arrives, and a scoped topic whose first answer was sent with other headers than `headers()`
+  returns on its arrival is refreshed. Without an open peer, a refresh polls at once also while a
+  poll is in flight.
+
 ## [0.11.3] - 2026-10-19
 
 ### Removed
