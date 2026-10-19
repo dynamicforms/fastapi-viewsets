@@ -320,16 +320,27 @@ cursor. A result that `is False` skips the push to the subscription's socket, or
 out of the poll answer; any other result passes; an exception counts as `True` and is logged at
 debug level. On a `poll` over REST, `subscription.peer` is `None`.
 
+### EventListener
+
+```python
+EventListener = Callable[[str, int, int, str, Any, int], None | Awaitable[None]]
+```
+
+`listener(topic, rev, prev, event_name, payload, version)`, sync or async; `topic` is the store
+topic. `deliver()` calls the listeners in list order with every event, awaiting each, in every
+process whose store is started, whether or not the process holds a subscription of the topic, before
+it starts the pushes. A listener that raises is logged at error level and the next one runs.
+
 ### Functions
 
 | Name | Description |
 |------|-------------|
-| `async deliver(topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None` | Starts one task per subscription delivered under the store topic `topic` in this process and returns without waiting. A task runs the subscription's reauthorization when `settings.viewsets_event_reauthorize_after` has passed (a refusal, an `HTTPException` of a status from 400 to 499 other than 429, or another store topic removes the subscription and skips the push, another exception skips the push), the delivery filters with the client topic, then `peer.notify(payload, headers={":event": name, ":version": version, ":topic": subscription.topic, ":rev": rev, ":prev": prev})`, with `":scope": subscription.scope` for a scoped topic, together bounded by `settings.viewsets_event_push_timeout` seconds; muxws's `notify()` queues the push and does not wait for the socket. A `ConnectionLost` (matched by class name) drops every subscription of its socket; any other failure is logged at debug level |
+| `async deliver(topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None` | Calls `settings.viewsets_event_listeners` in order, awaiting each (one that raises is logged and the next runs), then starts one task per subscription delivered under the store topic `topic` in this process and returns without waiting. A task runs the subscription's reauthorization when `settings.viewsets_event_reauthorize_after` has passed (a refusal, an `HTTPException` of a status from 400 to 499 other than 429, or another store topic removes the subscription and skips the push, another exception skips the push), the delivery filters with the client topic, then `peer.notify(payload, headers={":event": name, ":version": version, ":topic": subscription.topic, ":rev": rev, ":prev": prev})`, with `":scope": subscription.scope` for a scoped topic, together bounded by `settings.viewsets_event_push_timeout` seconds; muxws's `notify()` queues the push and does not wait for the socket. A `ConnectionLost` (matched by class name) drops every subscription of its socket; any other failure is logged at debug level |
 | `async passes_filters(subscription: Subscription, topic: str, rev: int, name: str, payload: Any, version: int) -> bool` | Runs `settings.viewsets_event_delivery_filters` in order and returns `False` once one of them returns a result that `is False`; a filter that raises counts as `True` and is logged at debug level. `deliver` and `poll` call it |
 | `async subscribe(peer: Any, context: Context, topic: str, *, store_topic: str \| None = None, scope: str \| None = None, reauthorize: Callable[[], Awaitable[str]] \| None = None) -> Subscription` | Subscribes the socket to the client topic `topic` and returns the subscription; `deliver()` pushes the events of `store_topic` (`None`: `topic`) to the socket from then on. A topic the socket holds is subscribed again with the new arguments, replacing the old subscription, and counts once. Raises `EventSubscriptionsExceededError` when the socket already holds `settings.viewsets_event_max_subscriptions` other topics. The first subscription of a socket installs one `peer.on_close` handler, which calls `drop_peer(peer)`. For a socket whose `is_open` is false it returns the subscription without entering it in the table |
 | `async unsubscribe(peer: Any, topic: str) -> None` | Removes the socket's subscription to the client topic `topic`, if it holds one |
 | `drop_peer(peer: Any) -> None` | Removes every subscription of the socket |
-| `drop_subscriptions(where: Callable[[Subscription], bool]) -> int` | Removes every subscription of this process for which `where` is true and returns how many |
+| `drop_subscriptions(where: Callable[[Subscription], bool]) -> int` | Removes every subscription of this process for which `where` is true and returns how many; called from a [listener](#eventlistener), it runs in every started process |
 | `subscriptions(topic: str) -> list[Subscription]` | The subscriptions of this process delivered under the store topic `topic` |
 | `topics_of(peer: Any) -> list[str]` | The client topics the socket holds |
 | `async wait_for_pushes() -> None` | Waits until the background tasks of the delivery module (pushes) running now and started meanwhile are done |
@@ -444,6 +455,7 @@ value under its own key, else under its class, and the `ChangeEvents` of
 | `settings.viewsets_event_store` | `EventStore \| None` | `None` | The store; `None` is one `MemoryEventStore` per process |
 | `settings.viewsets_event_authorizers` | `list[EventAuthorizer]` | `[]` | The authorizers, in order |
 | `settings.viewsets_event_delivery_filters` | `list[DeliveryFilter]` | `[]` | The delivery filters, in order; they run on every push and on every event a poll answers |
+| `settings.viewsets_event_listeners` | `list[EventListener]` | `[]` | The listeners, in order; called with every event in every process whose store is started, before its pushes |
 | `settings.viewsets_event_log_size` | `int` | `32` | Events kept per topic for `poll` |
 | `settings.viewsets_event_log_ttl` | `float` | `60.0` | Seconds a topic's log is kept after its last event |
 | `settings.viewsets_event_push_timeout` | `float` | `2.0` | Seconds the delivery filters and `peer.notify()` of one push to one socket may take together |

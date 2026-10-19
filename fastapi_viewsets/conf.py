@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
     from .context.auth import AuthBackend
     from .events.authorizers import EventAuthorizer
-    from .events.delivery import DeliveryFilter
+    from .events.delivery import DeliveryFilter, EventListener
     from .events.store import EventStore
     from .middleware import CommandMiddleware
 
@@ -86,6 +86,12 @@ class Settings:
         The functions that decide, per subscription and per event, whether a push is sent, and per
         poll and per event whether the poll answers the event. A filter that answers False skips that
         socket or leaves the event out of the poll answer; a filter that raises counts as True.
+        """
+        self.viewsets_event_listeners: list[EventListener] = []
+        """
+        The functions called with every event in every process whose store is started, before its
+        pushes, whether or not the process holds a subscription of its topic. A listener that raises is
+        logged and the next one runs.
         """
         self.viewsets_event_log_size: int = 32
         """

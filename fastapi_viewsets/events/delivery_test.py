@@ -514,3 +514,57 @@ async def test_no_reauthorization_before_it_is_due_or_with_the_setting_none():
     await deliver_and_wait("@s:7", rev=3, prev=2)
     assert len(peer.pushes) == 2
     assert calls == []
+
+
+# listeners
+
+
+@pytest.mark.asyncio
+async def test_the_listeners_receive_every_event_in_order_without_a_subscription():
+    received = []
+
+    def first(*event):
+        received.append(("first", *event))
+
+    async def second(*event):
+        await asyncio.sleep(0)
+        received.append(("second", *event))
+
+    settings.viewsets_event_listeners = [first, second]
+    await deliver_and_wait("club_membership:12", 5, 4, "membership_removed", {"club": "7"}, 2)
+    assert received == [
+        ("first", "club_membership:12", 5, 4, "membership_removed", {"club": "7"}, 2),
+        ("second", "club_membership:12", 5, 4, "membership_removed", {"club": "7"}, 2),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_listener_runs_before_the_pushes_of_its_event():
+    ana, bor = FakePeer(), FakePeer()
+    await subscribe(ana, Context({"user": "ana"}), "/t", store_topic="@s:7", scope="7")
+    await subscribe(bor, Context({"user": "bor"}), "/t", store_topic="@s:7", scope="7")
+
+    def revoke(*_event):
+        drop_subscriptions(lambda s: s.scope == "7" and s.context.raw()["user"] == "ana")
+
+    settings.viewsets_event_listeners = [revoke]
+    await deliver_and_wait("@s:7")
+    assert ana.pushes == []
+    assert len(bor.pushes) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_listener_that_raises_is_logged_and_the_event_is_still_delivered(caplog):
+    peer = FakePeer()
+    await subscribe(peer, Context({}), "/api/music")
+    after = []
+
+    def broken(*_event):
+        raise RuntimeError("broken")
+
+    settings.viewsets_event_listeners = [broken, lambda *event: after.append(event[0])]
+    with caplog.at_level(logging.ERROR, logger="fastapi_viewsets.events.delivery"):
+        await deliver_and_wait()
+    assert "a listener raised for topic /api/music rev 2" in caplog.text
+    assert after == ["/api/music"]
+    assert len(peer.pushes) == 1

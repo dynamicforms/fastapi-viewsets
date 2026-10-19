@@ -23,6 +23,7 @@ attributes once, before any viewset class is decorated with `route_viewset`.
 | `viewsets_event_store` | `EventStore \| None` | `None` | The event store; `None` is one `MemoryEventStore` per process. A deployment of more than one process sets a `RedisEventStore` in every process; see [Events](../guide/events#the-store) |
 | `viewsets_event_authorizers` | `list[EventAuthorizer]` | `[]` | Decide whether a caller may follow a topic, in list order; the first `True` admits, the first `False` refuses, no decision refuses |
 | `viewsets_event_delivery_filters` | `list[DeliveryFilter]` | `[]` | Decide per subscription and per event whether a push is sent, and per poll and per event whether the poll answers the event; `False` skips the socket or leaves the event out of the poll answer, an exception counts as `True` |
+| `viewsets_event_listeners` | `list[EventListener]` | `[]` | Called with every event, in list order, in every process whose store is started and before the event's pushes, whether or not the process holds a subscription of its topic; a listener that raises is logged and the next one runs |
 | `viewsets_event_log_size` | `int` | `32` | Events kept per topic for `poll` |
 | `viewsets_event_log_ttl` | `float` | `60.0` | Seconds a topic's log is kept after its last event; the topic's rev is kept without expiry |
 | `viewsets_event_push_timeout` | `float` | `2.0` | Seconds the delivery filters and `peer.notify()` of one push to one socket may take together; `notify()` queues the push and does not wait for the socket |

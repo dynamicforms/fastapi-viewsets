@@ -19,6 +19,7 @@ EVENT_SETTINGS = (
     "viewsets_event_store",
     "viewsets_event_authorizers",
     "viewsets_event_delivery_filters",
+    "viewsets_event_listeners",
     "viewsets_event_log_size",
     "viewsets_event_log_ttl",
     "viewsets_event_push_timeout",
@@ -33,6 +34,7 @@ def _reset_events():
     saved = {name: getattr(settings, name) for name in EVENT_SETTINGS}
     settings.viewsets_event_authorizers = []
     settings.viewsets_event_delivery_filters = []
+    settings.viewsets_event_listeners = []
     reset_subscriptions()
     reset_sources()
     reset_event_scopes()
