@@ -6,24 +6,7 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.11.6] - Unreleased
-
-### Added
-
-- Event client: `EventClientOptions.peer` may be a function that returns the peer or a promise of it
-  (`EventPeerSource`). The client calls it on its first subscription; when the peer closes for good
-  it polls over axios, calls the function on the ladder's next rung, registers for the new peer and
-  subscribes every followed topic on it. A function that throws or rejects is called again on each
-  later rung.
-- `MuxwsPeerLike.isClosed`: a muxws ViewSet's peer source is called again once its peer's
-  `isClosed` is true, and the event client does not adopt such a peer.
-
-### Changed
-
-- Requires `muxws` ≥ 0.4.3 (npm peer dependency): `Peer.isClosed`, and an `onClose` handler
-  registered on a closed peer is called at once.
-
-## [0.11.5] - Unreleased
+## [0.11.4] - Unreleased
 
 ### Added
 
@@ -37,8 +20,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `RedisEventStore(..., subscribe_timeout=5.0, read_timeout=1.0)`: the seconds `start()` waits for the
   `SUBSCRIBE` confirmation and the reader waits for a message (`DEFAULT_SUBSCRIBE_TIMEOUT`,
   `DEFAULT_READ_TIMEOUT`).
+- `settings.viewsets_event_listeners` (`EventListener`): functions called with every event, in
+  list order, in every process whose store is started, whether or not the process holds a
+  subscription of its topic, before the event's pushes. A listener that calls `drop_subscriptions`
+  removes subscriptions in every process.
+- Event client: `EventClientOptions.peer` may be a function that returns the peer or a promise of it
+  (`EventPeerSource`). The client calls it on its first subscription; when the peer closes for good
+  it polls over axios, calls the function on the ladder's next rung, registers for the new peer and
+  subscribes every followed topic on it. A function that throws or rejects is called again on each
+  later rung.
+- `MuxwsPeerLike.isClosed`: a muxws ViewSet's peer source is called again once its peer's
+  `isClosed` is true, and the event client does not adopt such a peer.
 
-## [0.11.4] - Unreleased
+### Changed
+
+- Requires `muxws` ≥ 0.4.3 (npm peer dependency): `Peer.isClosed`, and an `onClose` handler
+  registered on a closed peer is called at once.
 
 ### Fixed
 

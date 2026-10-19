@@ -433,8 +433,9 @@ An authorizer may also return its decision without an awaitable.
 
 A held subscription of an unscoped topic is not authorized again. An application whose callers lose
 access while connected closes their socket (`peer.close()`), or removes the subscriptions with
-`drop_subscriptions(where)`, and the frontend subscribes again under its current identity. A
-subscription of a scoped topic is [reauthorized](#reauthorization).
+`drop_subscriptions(where)` in every process, from a [listener](#listeners), and the frontend
+subscribes again under its current identity. A subscription of a scoped topic is
+[reauthorized](#reauthorization).
 
 ### `ViewsetTopics`
 
@@ -635,7 +636,8 @@ of a status from 400 to 499 other than 429, `event_scope_missing` included) or a
 removes the subscription and skips the push; any other exception, a 429 or a status of 500 or above
 included, skips the push and keeps the subscription for the next push to try again. Concurrent pushes share one
 gate run, and the push timeout bounds the wait for it. `None` turns it off. An application that
-revokes a membership removes the subscriptions at once:
+revokes a membership removes the subscriptions at once, in every process, by publishing an event
+whose [listener](#listeners) calls:
 
 ```python
 from fastapi_viewsets.events import drop_subscriptions
@@ -736,6 +738,35 @@ filter refuses reach neither the socket nor the poll answer. Its rev does: a lat
 as `:prev`, and a poll answer's `rev` covers it. A filter that answers from `context` decides on the
 context of the call it runs for, so a push and a poll decide alike when their contexts carry the
 same identity. The list is empty by default.
+
+### Listeners
+
+```python
+from typing import Any
+
+from fastapi_viewsets.events import drop_subscriptions
+
+
+def revoke_membership(topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None:
+    if name == "membership_removed":
+        drop_subscriptions(
+            lambda s: s.scope == payload["club"] and s.context.raw().get("user_id") == payload["user_id"]
+        )
+
+
+settings.viewsets_event_listeners = [revoke_membership]
+```
+
+`EventListener` is `listener(topic, rev, prev, event_name, payload, version) -> None`, sync or
+async; `topic` is the store topic. `deliver()` calls the listeners in list order with every event,
+awaiting each, in every process whose store is started, whether or not the process holds a
+subscription of the topic, and pushes the event after the last one. A listener that raises is logged
+and the next one runs. A listener runs on the reader's path of every event, so it returns quickly.
+
+`drop_subscriptions` removes the subscriptions of its own process. A listener on an event the
+application publishes is how every process removes them: with a `RedisEventStore` the event reaches
+the reader of every started process, and each process's listener removes its own subscriptions,
+before the event's own pushes. The list is empty by default.
 
 ---
 
@@ -936,6 +967,7 @@ another scoped class) answers `None`.
 | `viewsets_event_store` | `None` | The `EventStore`; `None` is one `MemoryEventStore` per process |
 | `viewsets_event_authorizers` | `[]` | The authorizers, in order; an empty list refuses every topic |
 | `viewsets_event_delivery_filters` | `[]` | The delivery filters, in order |
+| `viewsets_event_listeners` | `[]` | The listeners, in order; called with every event in every started process, before its pushes |
 | `viewsets_event_log_size` | `32` | Events kept per topic for `poll` |
 | `viewsets_event_log_ttl` | `60.0` | Seconds a topic's log is kept after its last event; the rev is kept without expiry |
 | `viewsets_event_push_timeout` | `2.0` | Seconds the delivery filters and `peer.notify()` of one push to one socket may take together |

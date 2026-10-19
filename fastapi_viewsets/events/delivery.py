@@ -62,6 +62,14 @@ None for a poll over REST. `topic` is the client topic; `subscription.store_topi
 `subscription.scope` name the scope of a scoped topic.
 """
 
+EventListener = Callable[[str, int, int, str, Any, int], "None | Awaitable[None]"]
+"""
+`listener(topic, rev, prev, event_name, payload, version)`, sync or async; `topic` is the store
+topic. `deliver()` calls the listeners with every event, in every process whose store is started,
+whether or not the process holds a subscription of the topic, before it pushes the event; a listener
+that removes subscriptions (`drop_subscriptions`) removes them before the push.
+"""
+
 # store topic -> (id(peer), client topic) -> Subscription
 _by_topic: dict[str, dict[tuple[int, str], Subscription]] = {}
 # id(peer) -> client topic -> Subscription
@@ -316,8 +324,10 @@ async def _push(
 
 async def deliver(topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None:
     """
-    Pushes one event of the store topic `topic` to every subscription delivered under it in this
-    process, each push in a task of its own, and returns without waiting for them. A push runs the
+    Calls `settings.viewsets_event_listeners` in list order with the event, awaiting each; a listener
+    that raises is logged and the next one runs. Then pushes the event of the store topic `topic` to
+    every subscription delivered under it in this process, each push in a task of its own, and
+    returns without waiting for them. A push runs the
     subscription's reauthorization when it is due (see `settings.viewsets_event_reauthorize_after`),
     the delivery filters with the client topic, and then `peer.notify(payload, headers={":event":
     name, ":version": version, ":topic": subscription.topic, ":rev": rev, ":prev": prev})`, with
@@ -325,6 +335,13 @@ async def deliver(topic: str, rev: int, prev: int, name: str, payload: Any, vers
     `settings.viewsets_event_push_timeout` seconds. A push that raises a `ConnectionLost` drops
     every subscription of its socket; any other failure is logged at debug level.
     """
+    for listener in settings.viewsets_event_listeners:
+        try:
+            result = listener(topic, rev, prev, name, payload, version)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.exception("events: a listener raised for topic %s rev %s", topic, rev)
     for subscription in subscriptions(topic):
         _spawn(_push(subscription, topic, rev, prev, name, payload, version))
 
