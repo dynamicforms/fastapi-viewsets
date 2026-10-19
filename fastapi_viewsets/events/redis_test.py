@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import subprocess
+import sys
 
 import pytest
 
@@ -248,10 +250,9 @@ async def test_start_returns_once_redis_has_confirmed_the_subscribe():
 
 
 @pytest.mark.asyncio
-async def test_start_raises_and_closes_the_connection_when_the_confirmation_does_not_arrive(monkeypatch):
-    monkeypatch.setattr(redis_module, "_SUBSCRIBE_TIMEOUT", 0.05)
+async def test_start_raises_and_closes_the_connection_when_the_confirmation_does_not_arrive():
     redis = FakeRedis()
-    store = RedisEventStore(redis)
+    store = RedisEventStore(redis, subscribe_timeout=0.05)
     redis.pubsub_held = True
     with pytest.raises(asyncio.TimeoutError):
         await store.start()
@@ -304,3 +305,122 @@ async def test_a_scoped_event_published_in_another_process_reaches_every_client_
         assert await web.revs(["@tags:7", "/api/v1/tags"]) == {"@tags:7": rev, "/api/v1/tags": 0}
     finally:
         await web.stop()
+
+
+class FakeRedisClass:
+    """Stands in for `redis.asyncio.Redis` in `PerLoopRedis`: `from_url` returns a `FakeRedis` that
+    records its url, options and whether it was closed."""
+
+    def __init__(self):
+        self.made: list[FakeRedis] = []
+
+    def from_url(self, url: str, **options):
+        client = FakeRedis()
+        client.url, client.options, client.closed = url, options, False
+
+        async def aclose():
+            client.closed = True
+
+        client.aclose = aclose
+        self.made.append(client)
+        return client
+
+
+def per_loop(**options) -> tuple[redis_module.PerLoopRedis, FakeRedisClass]:
+    clients = FakeRedisClass()
+    redis = redis_module.PerLoopRedis("redis://example.test/3", **options)
+    redis._redis_class = clients
+    return redis, clients
+
+
+def test_per_loop_redis_makes_one_client_per_loop_and_closes_it_with_the_loop():
+    redis, clients = per_loop()
+
+    async def use() -> FakeRedis:
+        first = redis.client()
+        await redis.get("k")
+        assert redis.client() is first
+        return first
+
+    one = asyncio.run(use())
+    two = asyncio.run(use())
+    assert one is not two
+    assert clients.made == [one, two]
+    assert one.closed
+    assert two.closed
+    assert redis._clients == {}
+
+
+def test_per_loop_redis_applies_the_default_options_under_the_given_ones():
+    redis, clients = per_loop(socket_timeout=1.0, decode_responses=True)
+
+    async def use() -> None:
+        redis.client()
+
+    asyncio.run(use())
+    assert clients.made[0].url == "redis://example.test/3"
+    assert clients.made[0].options == {
+        "socket_connect_timeout": 2.0,
+        "socket_timeout": 1.0,
+        "decode_responses": True,
+    }
+
+
+def test_per_loop_redis_forgets_the_client_of_a_loop_closed_without_cancelling_its_tasks():
+    redis, clients = per_loop()
+    loop = asyncio.new_event_loop()
+
+    async def use() -> None:
+        redis.client()
+
+    loop.run_until_complete(use())
+    loop.close()
+    asyncio.run(use())
+    assert list(redis._clients) == []
+    assert len(clients.made) == 2
+
+
+def test_per_loop_redis_outside_a_running_loop_raises():
+    redis, _ = per_loop()
+    with pytest.raises(RuntimeError):
+        redis.client()
+
+
+@pytest.mark.asyncio
+async def test_from_url_builds_a_store_on_a_per_loop_client():
+    store = RedisEventStore.from_url(
+        "redis://example.test/3", key_prefix="ev:", subscribe_timeout=0.5, read_timeout=0.2, socket_timeout=1.0
+    )
+    assert isinstance(store.redis_client, redis_module.PerLoopRedis)
+    assert store.redis_client.url == "redis://example.test/3"
+    assert store.redis_client.options["socket_timeout"] == 1.0
+    assert (store.key_prefix, store.subscribe_timeout, store.read_timeout) == ("ev:", 0.5, 0.2)
+    clients = FakeRedisClass()
+    store.redis_client._redis_class = clients
+    await store.start()
+    try:
+        rev, _ = await store.append("t", "ping", {}, 1)
+        assert await store.revs(["t"]) == {"t": rev}
+        assert len(clients.made) == 1
+    finally:
+        await store.stop()
+
+
+def test_per_loop_redis_on_a_loop_alive_at_exit_reports_nothing():
+    script = (
+        "import asyncio\n"
+        "from fastapi_viewsets.events.redis import PerLoopRedis\n"
+        "redis = PerLoopRedis('redis://127.0.0.1:1/0')\n"
+        "async def use():\n"
+        "    redis.client()\n"
+        "loop = asyncio.new_event_loop()\n"
+        "loop.run_until_complete(use())\n"
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False, timeout=30)  # noqa: S603
+    assert (result.returncode, result.stderr) == (0, "")
+
+
+def test_per_loop_redis_does_not_forward_private_names():
+    redis, _ = per_loop()
+    assert not hasattr(redis, "_missing")
+    assert not hasattr(redis, "__deepcopy__")

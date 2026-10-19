@@ -184,7 +184,25 @@ do nothing.
 from fastapi_viewsets.events.redis import RedisEventStore
 
 class RedisEventStore:
-    def __init__(self, redis_client: redis.asyncio.Redis, key_prefix: str = "events:"): ...
+    def __init__(
+        self,
+        redis_client: redis.asyncio.Redis | PerLoopRedis,
+        key_prefix: str = "events:",
+        *,
+        subscribe_timeout: float = DEFAULT_SUBSCRIBE_TIMEOUT,  # 5.0
+        read_timeout: float = DEFAULT_READ_TIMEOUT,  # 1.0
+    ): ...
+
+    @classmethod
+    def from_url(
+        cls,
+        url: str,
+        key_prefix: str = "events:",
+        *,
+        subscribe_timeout: float = DEFAULT_SUBSCRIBE_TIMEOUT,
+        read_timeout: float = DEFAULT_READ_TIMEOUT,
+        **options,
+    ) -> RedisEventStore: ...
 ```
 
 An event store shared by every process that reaches one Redis. `fastapi_viewsets.events.redis` is
@@ -192,8 +210,13 @@ the only module of the package that uses `redis`; `fastapi_viewsets.events` does
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `redis_client` | `redis.asyncio.Redis` | — | The client the application constructs |
+| `redis_client` | `redis.asyncio.Redis \| PerLoopRedis` | — | The client the application constructs, used on one event loop, or a `PerLoopRedis` |
 | `key_prefix` | `str` | `"events:"` | The prefix of the keys and the channel |
+| `subscribe_timeout` | `float` | `5.0` | Seconds `start()` waits for Redis to confirm the `SUBSCRIBE` |
+| `read_timeout` | `float` | `1.0` | Seconds the reader waits for a message before it checks again, and waits after a failed read |
+
+`RedisEventStore.from_url(url, key_prefix, *, subscribe_timeout, read_timeout, **options)` is
+`RedisEventStore(PerLoopRedis(url, **options), ...)`.
 
 | Member | Description |
 |--------|-------------|
@@ -201,7 +224,7 @@ the only module of the package that uses `redis`; `fastapi_viewsets.events` does
 | `log_key(topic) -> str` | `{prefix}log:{topic}`: the topic's log, a list of JSON entries `{"rev", "prev", "event": {"name", "payload", "version"}}`, newest first, at most `viewsets_event_log_size` long, expiring `viewsets_event_log_ttl` seconds after the topic's last event (`PEXPIRE`, at least 1 ms). A log size of `0` deletes the log |
 | `channel: str` | `{prefix}events`: the one channel `publish` publishes every event on, as the JSON object `{"topic", "rev", "prev", "name", "payload", "version"}` |
 | `reader_running: bool` | Whether the reader task runs |
-| `async start()` | `SUBSCRIBE` of `channel` on one pub/sub connection; once Redis has confirmed it, starts the reader, one task that calls `deliver()` for each message. Raises `asyncio.TimeoutError` when the confirmation does not arrive within 5 seconds, and the connection's error when it fails; the connection is then closed and the store not started. A store whose reader runs returns at once |
+| `async start()` | `SUBSCRIBE` of `channel` on one pub/sub connection; once Redis has confirmed it, starts the reader, one task that calls `deliver()` for each message. Raises `asyncio.TimeoutError` when the confirmation does not arrive within `subscribe_timeout` seconds, and the connection's error when it fails; the connection is then closed and the store not started. A store whose reader runs returns at once |
 | `async stop()` | Cancels the reader and closes its connection |
 | `async append(topic, name, payload, version)` | One Lua script: the rev with `GET` and `SET`, the log with `LPUSH`, `LTRIM` and `PEXPIRE`. Raises `OverflowError` at `MAX_REV`, changing nothing |
 | `async revs(topics)` | `MGET`; an absent key is `0` |
@@ -211,10 +234,37 @@ the only module of the package that uses `redis`; `fastapi_viewsets.events` does
 
 Every process whose store is started receives every event, and `deliver()` leaves out a topic
 without a subscription in the process; no event reaches a socket that does not hold its topic. The
-reader logs a failed read and retries after one second, and logs and skips a message that cannot be
+reader logs a failed read and retries after `read_timeout` seconds, and logs and skips a message that cannot be
 delivered. When redis-py reconnects the pub/sub connection it subscribes `channel` again; an event
 published while the connection is down does not reach the process, and the event client finds it
 by poll, on the topic's next push or its check poll.
+
+### PerLoopRedis
+
+```python
+from fastapi_viewsets.events.redis import PerLoopRedis
+
+class PerLoopRedis:
+    def __init__(self, url: str, **options): ...
+    def client(self) -> redis.asyncio.Redis: ...
+```
+
+Stands in for a `redis.asyncio.Redis`: every attribute whose name does not start with `_` is read
+off `client()`, the client of the running event loop, created with
+`Redis.from_url(url, **(DEFAULT_CLIENT_OPTIONS | options))` on its first use in that loop. `client()`
+raises `RuntimeError` outside a running loop.
+
+A loop's client is closed and forgotten when the loop's tasks are cancelled at its end, as
+`asyncio.run()` does; a client used on that loop by another task's cancellation cleanup may be
+closed already. The client of a loop closed without that, and of a loop alive at process exit, is
+not closed: the next `client()` call that creates a client forgets it, and its connections close
+when it is garbage-collected.
+
+| Constant | Value |
+|----------|-------|
+| `DEFAULT_CLIENT_OPTIONS` | `{"socket_connect_timeout": 2.0, "socket_timeout": 5.0}` |
+| `DEFAULT_SUBSCRIBE_TIMEOUT` | `5.0` |
+| `DEFAULT_READ_TIMEOUT` | `1.0` |
 
 ### Functions and constants
 

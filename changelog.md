@@ -6,6 +6,21 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.5] - Unreleased
+
+### Added
+
+- `RedisEventStore.from_url(url, key_prefix="events:", *, subscribe_timeout=5.0, read_timeout=1.0,
+  **options)`: a store on `PerLoopRedis(url, **options)`, one `redis.asyncio.Redis` client per event
+  loop, so that one store serves the server's loop, the loops of a Celery worker's executions and
+  the loops `async_to_sync()` opens. A loop's client is closed when the loop's tasks are cancelled
+  at its end.
+- `fastapi_viewsets.events.redis.PerLoopRedis(url, **options)`, with `DEFAULT_CLIENT_OPTIONS`
+  (`socket_connect_timeout=2.0`, `socket_timeout=5.0`) under the given options.
+- `RedisEventStore(..., subscribe_timeout=5.0, read_timeout=1.0)`: the seconds `start()` waits for the
+  `SUBSCRIBE` confirmation and the reader waits for a message (`DEFAULT_SUBSCRIBE_TIMEOUT`,
+  `DEFAULT_READ_TIMEOUT`).
+
 ## [0.11.4] - Unreleased
 
 ### Fixed
