@@ -38,8 +38,9 @@
  * the calling request: its headers (`EventClientOptions.headers`), its path, its session. The client
  * holds the key per topic, applies only pushes carrying that key in `:scope`, and sends it per topic
  * with every poll in `scopes`. An answer under another key resyncs the topic. `refresh()` subscribes
- * a topic again so that the BE resolves its key anew, and a push of a scoped topic arriving after
- * `headers()` changed since the topic was answered calls it for that topic.
+ * a topic again so that the BE resolves its key anew. The client calls it for a scoped topic when a
+ * push arrives after `headers()` changed since the topic was answered, and when the topic's first
+ * answer arrives after `headers()` changed since that answer's call was sent.
  */
 
 import { ViewSetRequestError } from '../errors';
@@ -195,7 +196,7 @@ export interface EventClient {
    * Subscribes `topic`, or every followed topic, again so that the BE resolves its scope anew: over an
    * open peer with a `subscribe` call, otherwise with a poll at once. Until the answer the topic's
    * pushes are held; an answer under another scope key resyncs the topic and applies the held pushes
-   * of the new key. A topic that has not been answered yet is left as it is.
+   * of the new key. A topic whose first answer is pending is refreshed once that answer arrives.
    */
   refresh?(topic?: string): void;
 }
@@ -395,6 +396,9 @@ class TopicState {
   /** No poll has carried the topic yet. */
   unpolled = true;
 
+  /** A refresh without an open peer waits for the next poll to carry the topic. */
+  refreshUnpolled = false;
+
   /** Pushes that arrived before the first answer gave the topic a rev. */
   pending: Arrival[] = [];
 
@@ -416,6 +420,9 @@ class TopicState {
 
   /** A `refresh()` of the topic waits for its answer; pushes are held in `pending` meanwhile. */
   refreshing = false;
+
+  /** `refresh()` was called before the topic's first answer; the topic is refreshed once it arrives. */
+  refreshOnAnswer = false;
 
   /** The headers key of the call whose answer the topic last applied; `null` before that answer. */
   sentHeaders: string | null = null;
@@ -530,13 +537,18 @@ class EventClientImpl implements EventClient {
    * peer, or of a poll at once over axios.
    */
   private refreshState(state: TopicState): void {
-    if (state.rev === null || this.topics.get(state.topic) !== state) return;
+    if (this.topics.get(state.topic) !== state) return;
+    if (state.rev === null) {
+      state.refreshOnAnswer = true;
+      return;
+    }
     state.refreshing = true;
     if (this.peerOpen()) {
       this.sendSubscribe(state);
       return;
     }
     state.behind = true;
+    state.refreshUnpolled = true;
     if (this.http && this.loop !== 'polling') this.schedule(0);
   }
 
@@ -554,7 +566,8 @@ class EventClientImpl implements EventClient {
 
   /**
    * Sets the first rev and scope of a topic, replays the pushes held for it under that scope and
-   * resolves its subscriptions.
+   * resolves its subscriptions. The topic is then refreshed when `refresh()` was called before the
+   * answer, or when it is scoped and `headers()` changed since the answer's call was sent.
    */
   private follow(state: TopicState, rev: number, scope: string | null): void {
     state.rev = rev;
@@ -568,6 +581,11 @@ class EventClientImpl implements EventClient {
       if (this.topics.get(state.topic) !== state) return;
       this.receive(state, arrival);
     }
+    // A replayed push may have started a refresh already.
+    const headersChanged = scope !== null && this.currentHeadersKey() !== state.sentHeaders;
+    const refresh = state.refreshOnAnswer || headersChanged;
+    state.refreshOnAnswer = false;
+    if (refresh && !state.refreshing) this.refreshState(state);
   }
 
   /**
@@ -976,11 +994,14 @@ class EventClientImpl implements EventClient {
   }
 
   /**
-   * A topic without a rev that no poll has carried is polled at once when there is no open peer to
-   * subscribe it on.
+   * A topic without a rev that no poll has carried, and a topic refreshed since the last poll, are
+   * polled at once when there is no open peer to subscribe them on.
    */
   private pollNow(): boolean {
-    return !this.peerOpen() && [...this.topics.values()].some((state) => state.rev === null && state.unpolled);
+    return (
+      !this.peerOpen() &&
+      [...this.topics.values()].some((state) => (state.rev === null && state.unpolled) || state.refreshUnpolled)
+    );
   }
 
   /** Starts, holds or hurries the ladder to match the state; stops the check timer without a topic. */
@@ -1022,7 +1043,10 @@ class EventClientImpl implements EventClient {
     }
     this.loop = 'polling';
     const sent = [...this.topics.values()].map((state) => ({ state, cursor: state.rev }));
-    for (const { state } of sent) state.unpolled = false;
+    for (const { state } of sent) {
+      state.unpolled = false;
+      state.refreshUnpolled = false;
+    }
 
     let revChanged = false;
     let pollAfterMs: number | null = null;

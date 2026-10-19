@@ -80,7 +80,7 @@ interface EventClient {
 | `basePath` | `EventClientOptions.basePath` without its trailing slash. |
 | `subscribe(topic, event, handlers)` | Subscribes `handlers` to the events named `event.name` on `topic`. The client holds one server subscription and one rev per topic, and counts the subscriptions on it: the first subscription of a topic sends `subscribe` over an open peer, or adds the topic to the next poll; a further one sends nothing, and its `ready` resolves at once when the topic already holds a rev. `P` is read off `event` only. Throws `Error('The event client is closed')` after `close()`. |
 | `close()` | Clears the client's timer, sends `unsubscribe` for every topic subscribed on an open peer, and for every topic whose `subscribe` is in flight once it is answered on the same socket, rejects every `ready` that has not settled with `Error('The event client is closed')`, ignores every later answer and push, and unregisters the client from its peer, which may then be given a new client. It calls no handler. A second call does nothing. |
-| `refresh(topic?)` | Optional member; the client of `createEventClient` has it. For `topic`, or every followed topic, that holds a rev: sends `subscribe` over the open peer, or polls at once over axios without one, so that the BE resolves the topic's scope anew; the topic's pushes are held until the answer. See [Scoped topics](#scoped-topics). A topic without a rev is left as it is; after `close()` it does nothing. |
+| `refresh(topic?)` | Optional member; the client of `createEventClient` has it. For `topic`, or every followed topic, that holds a rev: sends `subscribe` over the open peer, or polls at once over axios without one, so that the BE resolves the topic's scope anew; the topic's pushes are held until the answer. See [Scoped topics](#scoped-topics). A topic without a rev is refreshed once its first answer arrives; after `close()` it does nothing. |
 
 ## defineEvent
 
@@ -259,7 +259,9 @@ A [scoped viewset topic](../guide/events#scoped-topics) answers `scope`, the key
 from the calling request, with every `subscribe` and poll answer, and carries it in each push as
 `:scope`. The client holds it per topic, applies only pushes of the held scope, sends it in the
 `scopes` of every poll, and resyncs a topic answered under another scope (see the table above).
-`refresh(topic?)` asks the BE to resolve the scope anew. A topic without `scope` in its answers is
+`refresh(topic?)` asks the BE to resolve the scope anew. The first answer of a scoped topic, sent
+with headers that differ from `headers()` read on its arrival, refreshes the topic. A topic without
+`scope` in its answers is
 unscoped and keeps the rules above unchanged.
 
 ## The peer
