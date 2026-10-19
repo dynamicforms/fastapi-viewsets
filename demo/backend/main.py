@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 from asgiref.sync import sync_to_async
 from fastapi import APIRouter, FastAPI, WebSocket
@@ -20,7 +21,7 @@ from demo.backend.viewsets import (
 from fastapi_viewsets.decorators.route_viewset import route_viewset
 from fastapi_viewsets.endpoint_docs import apply_viewset_tags
 from fastapi_viewsets.events import check_events, register_events, start_events, stop_events
-from fastapi_viewsets.mux_ws import origin_allowed, process_command
+from fastapi_viewsets.mux_ws import process_command
 
 
 @asynccontextmanager
@@ -106,6 +107,12 @@ app.include_router(router)
 apply_viewset_tags(app)
 
 
+def _local_origin(origin: str | None) -> bool:
+    """The demo's Origin check: a page served from this machine, on any port, or a client that is not
+    a browser and sends no Origin."""
+    return origin is None or urlsplit(origin).hostname in ("127.0.0.1", "localhost")
+
+
 @app.websocket("/ws")
 async def muxws_endpoint(websocket: WebSocket) -> None:
     """
@@ -115,11 +122,8 @@ async def muxws_endpoint(websocket: WebSocket) -> None:
     only it knows which muxws.v1.<codec> subprotocol to select.
     """
     # A cookie-authenticated WebSocket has no CSRF protection: a handshake from a page of another
-    # origin is closed before accept(), which the server answers with HTTP 403.
-    if not origin_allowed(websocket):
-        await websocket.close(code=1008)
-        return
-    peer = await accept(websocket)
+    # origin is answered with HTTP 403.
+    peer = await accept(websocket, allowed_origins=_local_origin)
 
     async def on_stream(payload, stream: Stream) -> None:
         # peer= names the socket a `subscribe` holds its subscription on, and the pushes go to it.

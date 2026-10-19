@@ -6,6 +6,19 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.3] - 2026-10-19
+
+### Removed
+
+- `fastapi_viewsets.mux_ws.origin_allowed`. The `Origin` check of a WebSocket endpoint is muxws's
+  `accept(websocket, allowed_origins=...)` (muxws ≥ 0.4.2), which takes a list of exact origins or a
+  callable and answers a refused handshake with HTTP 403. It has no mode that compares the origin
+  with the request's host; an endpoint lists its origins.
+
+### Changed
+
+- Requires `muxws` ≥ 0.4.2 (Python extra `muxws`, npm peer dependency).
+
 ## [0.11.2] - Unreleased
 
 ### Added
