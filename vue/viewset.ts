@@ -66,7 +66,8 @@ type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTO
  * An empty `declares` list, `[]`, builds a ViewSet with no standard actions, for a BE viewset that
  * serves custom endpoints only; its methods are the class body's own. A list annotated
  * `ViewSetMixinClass[]` erases which mixins are in it and would produce a ViewSet with no actions
- * and no complaint; TS2507 prints the type it was given, so the type is the sentence.
+ * and no complaint; for such a list this type resolves to a string literal stating the fix, and
+ * extending it is TS2507, whose message prints that string.
  *
  * `pkFieldName: PK` is added on top of `ViewSetInternals` explicitly: the constructed instance's
  * real runtime type is `ProxyBaseOptions`'s `ViewSetProxyBase`, which already carries the public

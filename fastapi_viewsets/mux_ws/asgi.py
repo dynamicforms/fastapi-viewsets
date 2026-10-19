@@ -5,9 +5,7 @@ The muxws transport deliberately does not re-implement parameter binding, valida
 resolution or response-model serialisation - it hands the request to the application, the same one
 an HTTP server hands a request to, so the two transports cannot drift apart on anything the
 application declares. The scope marks the request as a muxws one (`fastapi_viewsets.routing`).
-
-What that costs is one synthetic ASGI round trip per call, which is still nothing next to an
-actual HTTP request: no connection setup, no header parsing, no socket at all.
+Each call is one in-process ASGI round trip.
 """
 
 import json
@@ -129,9 +127,8 @@ def payload_to_body(payload: Any) -> bytes:
     """
     Re-encodes an already-decoded muxws payload as the JSON bytes FastAPI expects to parse.
 
-    This decode-then-re-encode round trip is the one real inefficiency of dispatching through
-    ASGI, and it is deliberate: skipping it would mean binding and validating parameters
-    ourselves, which is exactly the duplication this transport exists to avoid. See GAPS.md.
+    FastAPI parses the request body from bytes, so a decoded payload is encoded again as JSON;
+    `bytes` pass through unchanged and an absent or `None` payload is an empty body.
     """
     from muxws.frames import ABSENT
 

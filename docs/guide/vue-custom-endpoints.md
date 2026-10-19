@@ -47,10 +47,10 @@ Four things about the base-class expression, each of which the compiler enforces
   is read off `Item['id']`. It is not repeated in the constructor options.
 - The mixin list decides the public surface. Calling an action it does not name is a compile error,
   not a 404 at run time.
-- Constructor options are `{ basePath, validateSchema?, repeat?, axiosInstance?, attemptTimeoutMs? }`
-  for `restViewSet` and `{ basePath, validateSchema?, repeat?, peer, headers?, timeoutMs? }` for
-  `muxwsViewSet`. `pkFieldName` and
-  `declares` are bound by the factory; passing either is TS2353.
+- Constructor options are
+  `{ basePath, validateSchema?, repeat?, events?, topic?, axiosInstance?, attemptTimeoutMs? }` for
+  `restViewSet` and `{ basePath, validateSchema?, repeat?, events?, topic?, peer, headers?, timeoutMs? }`
+  for `muxwsViewSet`. `pkFieldName` and `declares` are bound by the factory; passing either is TS2353.
 
 The method's name is also what the [schema check](./route-rest#schema-validation) looks for. The
 schema names the BE method that serves each custom endpoint (`x-viewset-action`), and the check
@@ -117,7 +117,7 @@ muxws.
 |----------|-------|
 | `method` | `'GET'` \| `'POST'` \| `'PUT'` \| `'PATCH'` \| `'DELETE'` |
 | `path` | relative to `basePath`: `''` for the collection, `'/search'`, `` `/${pk}/history` `` |
-| `options` | `{ query?, body?, headers?, key?, repeat? }`, all optional |
+| `options` | `{ query?, body?, headers?, key?, repeat?, background? }`, all optional |
 
 `request()` returns a `ViewSetCall<R>`: the promise of the body, with the call's `Idempotency-Key`
 as `key`. The call is repeated with that key when an attempt ends without an answer; `key` sets the

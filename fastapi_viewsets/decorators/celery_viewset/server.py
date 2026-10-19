@@ -63,11 +63,9 @@ def _unwrap_optional(hint):
     return hint
 
 
-# Alias, not a re-implementation: the actual conversion (Pydantic models, dicts, lists/tuples,
-# SerializableObject values - e.g. a ViewSetResult a worker-side action returned directly, see
-# fastapi_viewsets.middleware) lives in fastapi_viewsets.context.to_jsonable, shared with
-# ViewSetResult's own (de)serialization. Kept under this name since call sites/tests here already
-# import it as `_to_jsonable`.
+# `fastapi_viewsets.context.to_jsonable`: converts Pydantic models, dicts, lists/tuples and
+# SerializableObject values (e.g. a ViewSetResult a worker-side action returned directly); also used
+# by ViewSetResult's own (de)serialization.
 _to_jsonable = to_jsonable
 
 

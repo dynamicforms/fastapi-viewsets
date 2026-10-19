@@ -14,8 +14,8 @@ recover what went wrong - both wrong. A `code` names the failure independently o
 any language without ever reading `detail`.
 
 `code` and `params` are additive, top-level siblings - `detail_code` and `detail_params` - never
-nested inside `detail` itself: `detail` keeps its plain-string type for every consumer that already
-reads it as text, and the two new fields appear only once the application opts in:
+nested inside `detail` itself: `detail` is a plain string, and `detail_code` and `detail_params`
+appear only once the application registers the handler:
 
 ```python
 from fastapi_viewsets.exceptions import DfViewSetError, df_viewset_exception_handler
@@ -266,7 +266,7 @@ The codes this package raises, with their English `detail`:
 | `result_reader_stopped` | `The result reader for {queue_key} stopped before the result arrived` | `queue_key` |
 | `action_dispatch_failed` | `{task} could not be handed to its executor` | `task`, `reason` |
 | `action_interrupted` | `{task} exceeded its time limit` (`time_limit`), `{task} was terminated` (`terminated`), `{task} lost the process executing it` (`lost`) | `task`, `reason` |
-| `action_failed` | `{task} failed` | `task`, `reason` |
+| `action_failed` | `{task} failed`; `The action failed` without a task | `task`, `reason` |
 | `idempotency_key_invalid` | `Idempotency-Key must be a non-empty Structured Field string` | — |
 | `idempotency_key_reused` | `Idempotency key {key} was used for a different request` | `key` |
 | `unsupported_list_shape` | `unsupported list shape '{shape}'; this endpoint offers {allowed}` | `shape`, `allowed` |

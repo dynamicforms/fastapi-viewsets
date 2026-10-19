@@ -324,7 +324,7 @@ type EventStreamHandler = (payload: any, stream: EventStreamLike) => void | Prom
 
 /** The axios method the client uses; an `AxiosInstance` is one. */
 interface EventAxiosLike {
-  post<R = unknown>(url: string, data?: unknown): Promise<{ data: R }>;
+  post<R = unknown>(url: string, data?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: R }>;
 }
 ```
 
@@ -357,7 +357,8 @@ function applyChanges<T, K extends KeyType = KeyType>(
 ```
 
 `RECORDS_CHANGED` is `defineEvent('records_changed')`, the event
-[`watch()`](./vue-mixins#watch) subscribes a ViewSet's `basePath` to. The backend's
+[`watch()`](./vue-mixins#watch) subscribes a ViewSet's topic to (`options.topic`, else the
+ViewSet's `topic` option, else its `basePath`). The backend's
 `RecordsChanged` is version `1`, and `RecordsChanged<T, K>` is the payload of that version.
 `watch()` calls `onChange` for version `1` only and `onResync` for an event of any other version.
 

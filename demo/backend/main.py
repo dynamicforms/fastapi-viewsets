@@ -26,10 +26,8 @@ from fastapi_viewsets.mux_ws import process_command
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAPI
-    # In a thread, because Django refuses a synchronous query from inside a running event loop -
-    # and the lifespan is always inside one. Doing it at import time only appeared to work: it
-    # depended on the app being imported before the loop started, which is true for
-    # `uvicorn.run(app)` and false for `uvicorn.run("demo.backend.main:app")`.
+    # In a thread: Django refuses a synchronous query inside a running event loop, and the lifespan
+    # runs inside one.
     await sync_to_async(ensure_database, thread_sensitive=False)(records)
     await start_events()
     check_events()

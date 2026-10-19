@@ -4,10 +4,8 @@ import { expect, test, type Page } from '@playwright/test';
  * "Does the demo actually work" - end to end, through a real browser, a real dev-server proxy, a
  * real WebSocket and two real backends.
  *
- * Every failure this is meant to catch has already happened once: a server that imported cleanly
- * and never started, a grid wired to an event the installed version did not emit, a WebSocket that
- * reported only that it never opened. None of them were visible to a unit test, because none of
- * them were about a unit.
+ * Covers the servers starting, the grid's `@load` wiring and the WebSocket path through the
+ * dev-server proxy, none of which a unit test exercises.
  */
 
 const PAGE_SIZE = 50;
@@ -44,8 +42,7 @@ async function renderedIds(page: Page, count = 20): Promise<number[]> {
   const cells = await page.locator('.df-grid.body-grid .df-anchored .df-grid.cell.id').allInnerTexts();
   return cells
     .map((text) => text.trim())
-    // Empty first: Number('') is 0, so the filter row's blank id cell was arriving as record 0 and
-    // sitting at the head of every comparison.
+    // Empty first: Number('') is 0, so a blank id cell would count as record 0.
     .filter((text) => text !== '')
     .map(Number)
     .filter((value) => !Number.isNaN(value))
@@ -131,9 +128,9 @@ test('sorting happens on the server and restarts the paging', async ({ page }) =
   const ascending = await renderedIds(page);
   const loaded = await loadedCount(page);
 
-  // `year`, not `id`: the default order already is by id ascending, so sorting by it changes
-  // nothing and the assertion below could never have been satisfied. `.card` picks the visible header: the hidden
-  // copy the grid measures column widths with carries `df-grid header` too.
+  // `year`, not `id`: the default order is by id ascending, so sorting by id changes nothing.
+  // `.card` picks the visible header: the hidden copy the grid measures column widths with carries
+  // `df-grid header` too.
   await page.locator('.df-grid.card.header .df-grid.cell.year').click();
   await expect.poll(async () => renderedIds(page), { timeout: 30_000 }).not.toEqual(ascending);
   await expect(page.getByTestId('error')).toHaveCount(0);

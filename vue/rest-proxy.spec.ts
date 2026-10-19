@@ -568,9 +568,8 @@ describe('schema validation — validateAgainstSchema()', () => {
   });
 
   it('a ViewSet declaring one mixin says nothing about actions it never claimed', async () => {
-    // The reported bug: a BE viewset built from a single mixin (or none) made the FE warn about
-    // every standard action, because the check asked which methods exist on the proxy — and they
-    // all do, unconditionally — instead of asking what this ViewSet declared.
+    // The check compares the BE against the actions the ViewSet declared, not against the methods
+    // the proxy has: every standard method exists on the proxy whichever mixins are declared.
     await createAndValidate({ paths: { '/items': { get: {} }, '/items/schema': { get: {} } } }, [CursorListMixin]);
     expect(warnSpy).not.toHaveBeenCalled();
   });
@@ -631,8 +630,8 @@ describe('schema validation — validateAgainstSchema()', () => {
   });
 
   it('checks custom endpoints against methods the ViewSet actually wrote', async () => {
-    // Here `typeof this[name]` IS honest: the base implements no custom actions, so whatever
-    // answers is something this ViewSet's own author wrote.
+    // The base implements no custom actions, so a method named after an endpoint's
+    // x-viewset-action is one the ViewSet defines.
     await createAndValidate(
       { paths: { ...FULL_SCHEMA.paths, '/items/export': { get: { 'x-viewset-action': 'export' } } } },
       [BulkViewSetMixin, LookupMixin],

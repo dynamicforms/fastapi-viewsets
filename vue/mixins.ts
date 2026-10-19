@@ -25,8 +25,6 @@
  */
 
 /*
- * The two rules below object to precisely what this file is for.
- *
  * no-unsafe-declaration-merging guards against a class and an interface merging by accident, where
  * the interface promises members the constructor never assigns. Here it is the design: the members
  * are implemented by ViewSetProxyBase, and a mixin that assigned them would be a second copy of the
@@ -88,8 +86,7 @@ export interface ListParams {
  * One page, mirroring the BE PaginatedList.
  *
  * `count` is null when the backend could not know it without draining a lazy source. `hasMore` and
- * `hasPrevious` are stated rather than inferred — a client that guesses from a null gets the guess
- * wrong exactly at the boundary where it matters.
+ * `hasPrevious` are sent by the backend; a null `count` does not determine them.
  */
 export interface PaginatedList<T> {
   results: T[];

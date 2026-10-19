@@ -55,8 +55,7 @@ class MusicTrackRow(models.Model):
         app_label = "backend"
         indexes = [models.Index(fields=["year", "id"])]
         """
-        Composite, in that order, because that is what a cursor over (year, id) needs to seek
-        rather than scan - see the cursor section in TODO.md.
+        Composite, in that order: a cursor over (year, id) seeks on it instead of scanning.
         """
 
 
@@ -64,8 +63,8 @@ def ensure_database(records: list[dict]) -> None:
     """
     Creates the table if it is missing and fills it once.
 
-    Synchronous on purpose: this runs at startup, before the event loop is serving anything, and
-    wrapping it would only obscure that.
+    Synchronous: Django refuses a synchronous query inside a running event loop, so the lifespan
+    calls it in a worker thread (`sync_to_async`).
     """
     from django.db import connection
 

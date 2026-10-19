@@ -132,6 +132,7 @@ the handler does not know reaches it like any other.
 | `rev` | The event's rev |
 | `prev` | The rev the client held for the topic before it applied the event |
 | `version` | The event's version: the push's `:version` header, or the poll answer entry's `version` |
+| `scope` | The scope key of a scoped viewset topic, as the BE resolved it for this client; absent otherwise |
 
 A push without a usable `:version`, an integer of at least 1 or a string of one, is ignored, as a
 push without a usable rev is. A poll answer entry without one is malformed, and the topic resyncs.

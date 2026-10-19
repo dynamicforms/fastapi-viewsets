@@ -88,10 +88,8 @@ MusicTrackFilter = make_filter_model(
     },
 )
 """
-Declared rather than hand-written: this replaces the boolean expression that used to live in
-`filter_list` below, and the SQLite viewset gets the same filters translated into SQL for free.
-`genres`/`moods` use `overlaps`, which no backend can translate portably, so a request touching
-them falls back to in-memory filtering - correctly, just not as quickly.
+Declared filters: the SQLite viewset receives the same filters translated into SQL. `genres`/`moods`
+use `overlaps`, which no backend translates, so a request with them is filtered in memory.
 """
 
 records = generate_music_library(LIBRARY_SIZE)

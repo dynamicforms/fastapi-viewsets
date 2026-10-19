@@ -147,7 +147,7 @@ describe('restViewSet', () => {
   it('narrows by calling the factory again, not by subclassing', async () => {
     // A factory-built class pins `declares` to the exact tuple it was given, so restating it in a
     // subclass is TS2417 - see the @ts-expect-error in 'the type surface' below. The smaller
-    // ViewSet is its own class, which also keeps its type honest about what it can do.
+    // ViewSet is its own class, whose type has only the actions it declares.
     class ItemDbApi extends restViewSet<Item>()('id', [CursorListMixin]) {}
     mockSchema({ paths: { '/items': { get: {} }, '/items/schema': { get: {} } } });
     new ItemDbApi({ basePath: '/items', axiosInstance: http as unknown as typeof axios });
@@ -157,9 +157,9 @@ describe('restViewSet', () => {
   });
 
   it('assigns nothing after super(), so the base constructor is not clobbered', () => {
-    // Regression guard: the factory injects pkFieldName into the argument expression rather than
-    // assigning it afterwards. Under useDefineForClassFields an assignment would emit a [[Define]]
-    // running after super() and would overwrite what the base had set.
+    // The factory injects pkFieldName into the argument expression. Under useDefineForClassFields
+    // an assignment after super() would emit a [[Define]] that overwrites what the base constructor
+    // set.
     const api = build();
     expect(Object.keys(api).sort()).toEqual(
       [

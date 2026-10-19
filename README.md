@@ -18,8 +18,7 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
 - **Bulk operations** — first-class support for bulk create, update, partial update and destroy.
 - **muxws transport** — reach the same viewsets over a single WebSocket instead of one HTTP request
   per call. A command goes through your application as an HTTP request does - its middleware,
-  exception handlers, router dependencies and state - so both transports behave identically. In the
-  demo, a burst of 100 requests takes 156 ms over REST and 37 ms over muxws.
+  exception handlers, router dependencies and state - so both transports behave identically.
 - **Events** — publish an event to a topic and every frontend following it learns of it, as a muxws
   push or on its next poll. `ChangeEvents` publishes every create, update and destroy of a viewset to
   its routed base path; custom events are declared with `source()`. Every event is recorded before it
@@ -85,7 +84,7 @@ app.include_router(router)
 
 See the [full documentation](https://docs.velis.si/dynamicforms/fastapi-viewsets/) for guides on
 the mixin system, `route_viewset`, `CollectionViewSet`, `DjangoORMViewSet`, `celery_viewset`, the
-list pipeline and pagination, the muxws transport, and the Vue client.
+list pipeline and pagination, the muxws transport, events, and the Vue client.
 
 ## Demo
 

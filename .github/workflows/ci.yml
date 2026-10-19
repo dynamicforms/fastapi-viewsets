@@ -83,8 +83,8 @@ jobs:
             coverage/clover.xml
           # docs/ is the VitePress site, scripts/ the lint runner and demo.py/demo/ the sample app -
           # none is library code, and none is covered by pytest or vitest, whose coverage is scoped to
-          # fastapi_viewsets/ and vue/ respectively (pyproject.toml's own [tool.coverage.run] omits
-          # the same paths). vue/index.ts is a re-export barrel excluded from vitest's own coverage
+          # fastapi_viewsets/ and vue/ respectively (pyproject.toml's [tool.coverage.run] omits
+          # demo.py and demo/). vue/index.ts is a re-export barrel excluded from vitest's own coverage
           # config for the same reason.
           extra-ignore-patterns: |
             docs/**

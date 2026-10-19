@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
+# Seconds a `celery_viewset_client` call waits for its result when `result_timeout` is not given.
 DEFAULT_RESULT_TIMEOUT = 3600.0
 
 # queue_keys registered by celery_viewset_client so far - populated at decoration (import) time,

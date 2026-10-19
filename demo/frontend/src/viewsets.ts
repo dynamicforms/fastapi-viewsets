@@ -41,7 +41,7 @@ const BASE_PATHS: Record<Backend, string> = { memory: '/music', db: '/music-db' 
 
 /**
  * The ViewSet's own methods, written once against `request()` so that the same body works on both
- * transports. Only the base class differs between the two proxies below — everything a ViewSet
+ * transports. Only the base class differs between the four proxies below — everything a ViewSet
  * actually declares is shared here.
  */
 interface MusicTrackMethods {

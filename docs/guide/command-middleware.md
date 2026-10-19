@@ -99,20 +99,18 @@ class RequireAdmin(Middleware):
         return await call_next()   # depends() already decided everything - nothing left to do here
 ```
 
-This gets: rejection *before* FastAPI parses the body (a `403`/`401`/`429` can now precede a `422`
-for a malformed body on the same request - the conventional, correct ordering for real APIs),
-native OpenAPI/Swagger discoverability (see `settings.viewsets_security_scheme` below),
-`app.dependency_overrides` testability (impossible with the pure onion-chain mechanism, since it's
-never part of FastAPI's own dependency graph), and - since `depends()` is entirely optional -
-plain-function middleware and `Middleware` subclasses that don't define it run only in the onion
-chain.
+This gets: rejection *before* FastAPI parses the body (a `403`/`401`/`429` from `depends()`
+precedes a `422` for a malformed body on the same request), native OpenAPI/Swagger
+discoverability (see `settings.viewsets_security_scheme` below), and replacement through
+`app.dependency_overrides` in tests, since `depends()` is a FastAPI dependency. `depends()` is
+optional: plain-function middleware and `Middleware` subclasses that don't define it run only in
+the onion chain.
 
 `context` is real and usable inside `depends()` (built as early as possible - see
 [Context Processors](./context-processors) - and shared/cached for the rest of the request, so
 context processors never run twice), but `viewset` is not: `cls` (the viewset *class*, not an
 instance) is passed instead, since for `per-request`/`instance-key` lifecycles no instance exists
-yet this early (uniform across all three lifecycle modes, rather than sometimes a real instance and
-sometimes not).
+yet this early.
 
 **Put only reject-capable logic in `depends()`.** Work that always happens regardless of any
 decision (e.g. enriching `context` with no reject path) has no early-timing benefit and should stay
@@ -136,9 +134,9 @@ from fastapi_viewsets.conf import settings
 settings.viewsets_security_scheme = APIKeyHeader(name="X-Session-Token", auto_error=False)
 ```
 
-Must be set **before** any viewset class is decorated with `route_viewset` (the same existing
-constraint `any_modifies_response_shape(settings.viewsets_command_middleware)` already has in this
-codebase - see below) - typically at app startup, before importing viewset modules.
+Must be set **before** any viewset class is decorated with `route_viewset`, as must
+`viewsets_command_middleware` (whose `modifies_response_shape` entries are read at decoration) -
+typically at app startup, before importing viewset modules.
 
 ## Per-viewset/per-action configuration
 
@@ -157,9 +155,9 @@ class RateLimiter(Middleware):
 This is how one globally-registered middleware instance can behave differently per viewset or
 per action - see [Action Configuration](./action-configuration) for the full merge rules
 (global default → class → method) and for injecting a brand-new middleware just for one
-viewset/method without registering it globally at all. [`RateLimiter`](./rate-limiter) is exactly
-this middleware, for real - one of a few
-[built-in middleware/processor implementations](./authentication) this library ships.
+viewset/method without registering it globally at all. [`RateLimiter`](./rate-limiter) reads its
+limit this way; see [Authentication](./authentication) for the other built-in middleware and
+processors.
 
 ## Event gate runs
 
@@ -198,8 +196,7 @@ and `cookies` via `response.set_cookie(...)` once the chain finishes - regardles
 action ran in-process or was `celery_viewset`-dispatched to a worker.
 
 `status_code`, when set, lets a middleware short-circuit the *onion chain* with a non-200 result
-without ever calling `call_next()` - no special mechanism is needed for this, since a middleware
-simply returning without calling `call_next()` already means nothing further down the chain runs.
+without calling `call_next()`.
 `route_viewset` applies it onto the real `Response`'s status code; left `None` (the default), the
 response's status code is unaffected. For a middleware whose *entire* job is reject-or-allow with
 no "after" phase (e.g. `Session`'s `401`), prefer raising `HTTPException` from `depends()` instead

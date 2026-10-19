@@ -47,10 +47,11 @@ uses) does it in
 not in the viewset's constructor: a `"singleton"` instance is created when the decorator runs, in
 the process that imports the viewset.
 
-> **Note:** There is currently no distributed locking around `load_state` / `save_state`. In
-> deployments with multiple worker processes, concurrent requests can interleave their load/save
-> cycles and overwrite each other's changes. Add external locking (e.g. a Redis lock) in your
-> `load_state` / `save_state` implementation if you need consistency.
+> **Note:** `load_state` / `save_state` run without a distributed lock. With more than one worker
+> process, concurrent requests interleave their load/save cycles and overwrite each other's
+> changes. An implementation that needs consistency holds a lock from `load_state` to `save_state`
+> (e.g. `ConfigurableAIOREDLock` from
+> [configurable-redlock](https://docs.velis.si/configurable-redlock.html)).
 
 ```python
 from fastapi_viewsets.context import Context
