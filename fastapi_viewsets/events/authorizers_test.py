@@ -74,7 +74,7 @@ async def test_no_authorizer_refuses_every_topic():
     with pytest.raises(EventTopicRefusedError) as raised:
         await authorize_topic(FakeRequest(), Context({}), "imports")
     assert raised.value.status_code == 403
-    assert raised.value.code == "event_topic_refused"
+    assert raised.value.code == "fastapi-viewsets.event_topic_refused"
     assert raised.value.params == {"topic": "imports"}
 
 
@@ -233,7 +233,7 @@ async def test_viewset_topics_runs_session_depends():
     with pytest.raises(HTTPException) as raised:
         await authorizer(FakeRequest(app), Context({"user": None}), "/music")
     assert raised.value.status_code == 401
-    assert raised.value.code == "session_expired"
+    assert raised.value.code == "fastapi-viewsets.session_expired"
 
 
 @pytest.mark.asyncio
@@ -254,7 +254,7 @@ async def test_viewset_topics_resolves_the_action_configuration_of_the_viewset()
     with pytest.raises(HTTPException) as raised:
         await authorizer(FakeRequest(app), Context({"user": None}), "/music")
     assert raised.value.status_code == 403
-    assert raised.value.code == "not_authorized"
+    assert raised.value.code == "fastapi-viewsets.not_authorized"
     assert seen == [(cls, "list_items"), (cls, "list_items")]
 
 

@@ -63,8 +63,8 @@ action again. A recorded `set-cookie` header is a cookie: the outcome is not sto
 
 | Class | Status | `code` | `params` |
 |-------|--------|--------|----------|
-| `IdempotencyKeyInvalidError()` | 400 | `idempotency_key_invalid` | — |
-| `IdempotencyKeyReusedError(key)` | 422 | `idempotency_key_reused` | `{key}` |
+| `IdempotencyKeyInvalidError()` | 400 | `fastapi-viewsets.idempotency_key_invalid` | — |
+| `IdempotencyKeyReusedError(key)` | 422 | `fastapi-viewsets.idempotency_key_reused` | `{key}` |
 
 Both are `DfViewSetError`s; see [Error Codes](../guide/error-codes).
 

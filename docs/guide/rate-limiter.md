@@ -35,7 +35,7 @@ class ExpensiveViewSet(...): ...
 ```
 
 Exceeding the limit returns `429` with `detail` "Rate limit exceeded" and `detail_code`
-`rate_limited` (see [Error Codes](./error-codes)) - raised from `depends()`
+`fastapi-viewsets.rate_limited` (see [Error Codes](./error-codes)) - raised from `depends()`
 (bridged onto FastAPI's own native `Depends()` by `route_viewset`, see
 [Command Middleware](./command-middleware#early-rejection-middleware-depends)), so a request over
 the limit is rejected before FastAPI parses the body, without calling `perform_*`.

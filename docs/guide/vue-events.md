@@ -83,10 +83,10 @@ subscription.unsubscribe();
 The handlers are typed by the definition: an `onEvent` whose payload parameter type differs from
 the `defineEvent` type argument, a wider one included, does not compile.
 
-`ready` resolves once the topic is followed: the `subscribe` over the peer is answered, or the first
-poll answered the topic. It rejects when the topic is refused first, with the subscription
-removed; the error is a `ViewSetRequestError` whose `response.data.detail_code` names the reason,
-such as `event_topic_refused`, `event_topic_invalid`, `not_authorized` or `session_expired`, or the
+`ready` resolves once the topic is followed: the `subscribe` over the peer is answered, or the first poll answered the
+topic. It rejects when the topic is refused first, with the subscription removed; the error is a `ViewSetRequestError`
+whose `response.data.detail_code` names the reason, such as `fastapi-viewsets.event_topic_refused`,
+`fastapi-viewsets.event_topic_invalid`, `fastapi-viewsets.not_authorized` or `fastapi-viewsets.session_expired`, or the
 `AxiosError` of a poll axios sent. After `close()` it rejects with `Error('The event client is closed')`.
 
 The client holds one server subscription and one rev per topic, however many subscriptions it
@@ -241,15 +241,15 @@ schedulers: `PollLadder`, `nextDelay` and `DEFAULT_POLL_SETTINGS` (see
 [Polling ladder](../api/vue-events#polling-ladder)); `pollSettings` and `draw` in the client's
 options replace its constants and its jitter draw.
 
-A `subscribe` or `poll` that fails with a status from 400 to 499 refuses the topics it carried,
-except 429. 429, every status of 500 or above, and a failure without a status refuse nothing and
-are sent again: a poll on the next rung, a subscribe on each rung while the peer is open and on the
-next reconnect, with the topic polled meanwhile. The subscription stays, and its `onError` is called
-only for a refusal. A topic of a poll answer is classified by the answer's `status`, else by the status its
-`error` code stands for (`rate_limited` 429, `event_topic_invalid` 422, `session_expired` 401, any
-other 403): a topic answered `rate_limited`, or with a `status` of 500 or above, stays followed and is
-polled on the next rung. A gap poll that fails this way, or whose answer leaves the topic out, starts the
-ladder, also over an open peer, until a poll answers the topic.
+A `subscribe` or `poll` that fails with a status from 400 to 499 refuses the topics it carried, except 429. 429, every
+status of 500 or above, and a failure without a status refuse nothing and are sent again: a poll on the next rung, a
+subscribe on each rung while the peer is open and on the next reconnect, with the topic polled meanwhile. The
+subscription stays, and its `onError` is called only for a refusal. A topic of a poll answer is classified by the
+answer's `status`, else by the status its `error` code stands for (`fastapi-viewsets.rate_limited` 429,
+`fastapi-viewsets.event_topic_invalid` 422, `fastapi-viewsets.session_expired` 401, any other 403): a topic answered
+`fastapi-viewsets.rate_limited`, or with a `status` of 500 or above, stays followed and is polled on the next rung. A
+gap poll that fails this way, or whose answer leaves the topic out, starts the ladder, also over an open peer, until a
+poll answers the topic.
 
 ## Losing and regaining the socket
 

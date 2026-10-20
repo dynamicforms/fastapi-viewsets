@@ -122,7 +122,7 @@ async def test_a_socket_holds_at_most_max_subscriptions_topics():
         await subscribe(peer, Context({}), "/c")
     assert (exc_info.value.status_code, exc_info.value.code, exc_info.value.params) == (
         409,
-        "event_subscriptions_exceeded",
+        "fastapi-viewsets.event_subscriptions_exceeded",
         {"limit": 2},
     )
     await subscribe(peer, Context({}), "/b")

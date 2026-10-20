@@ -50,9 +50,9 @@ CollectionViewSet(container, pk_field="id")
 | `MutableSet` (e.g. `set`) | ✅ | ✅ |
 | `MutableMapping` (e.g. `dict`) | ✅ | ✅ |
 
-A write to a non-mutable container raises `ReadOnlyCollectionError` (405, `read_only`). A partial update replaces a
-set's item with a copy (`model_copy`, `_replace` or `dataclasses.replace`) and raises `TypeError` for an item that is
-none of a pydantic model, a named tuple or a dataclass.
+A write to a non-mutable container raises `ReadOnlyCollectionError` (405, `fastapi-viewsets.read_only`). A partial
+update replaces a set's item with a copy (`model_copy`, `_replace` or `dataclasses.replace`) and raises `TypeError` for
+an item that is none of a pydantic model, a named tuple or a dataclass.
 
 ### Auto-increment PK
 

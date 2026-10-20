@@ -56,8 +56,8 @@ rejected from `depends()`, before the request body is parsed.
 | key | none | the record is written as running, the action runs, the outcome is stored or the record deleted |
 | key, same fingerprint | running | attaches; the outcome of the running call when it completes |
 | key, same fingerprint | outcome | the stored outcome |
-| key, different fingerprint | any | `422`, `detail_code` `idempotency_key_reused` |
-| key that is not a Structured Field string | — | `400`, `detail_code` `idempotency_key_invalid` |
+| key, different fingerprint | any | `422`, `detail_code` `fastapi-viewsets.idempotency_key_reused` |
+| key that is not a Structured Field string | — | `400`, `detail_code` `fastapi-viewsets.idempotency_key_invalid` |
 
 - **Fingerprint.** The method, path, query string and the SHA-256 of the body of the call. A body
   FastAPI read as a form is hashed as its sorted fields, a file field as its file name and size.
@@ -181,7 +181,7 @@ A key that is empty or holds a character outside printable ASCII rejects the cal
 
 Any other outcome settles the call. A `502`, `503` or `504` with a JSON body holding `detail` is the
 body FastAPI gives an `HTTPException`, so the status is the application's answer (e.g.
-`result_timeout` of a `celery_viewset` call); `Idempotency` stores it, and it settles the call as it
+`fastapi-viewsets.result_timeout` of a `celery_viewset` call); `Idempotency` stores it, and it settles the call as it
 does over muxws, where a status is never repeated.
 
 A repeated attempt is abandoned first: its axios request is aborted through its `AbortSignal`, its

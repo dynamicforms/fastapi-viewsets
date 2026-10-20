@@ -1,9 +1,12 @@
+import { ERROR_NAMESPACE_PYDANTIC } from './error-namespace';
+
 /**
  * The body of a failed request that names one failure. `detail` is plain English text.
  * `detail_code` and `detail_params` appear when the server has registered
  * `df_viewset_exception_handler` (see the Python side's `fastapi_viewsets.exceptions`) and the
  * error is a `DfViewSetError`; a view's own `raise HTTPException(status_code, detail="...")` carries
- * `detail` alone.
+ * `detail` alone. `detail_code` is a full code, `<namespace>.<code>`: `fastapi-viewsets.<code>` for
+ * the errors the package raises, the application's own code as given for its own errors.
  */
 export interface ApiErrorBody {
   detail: string;
@@ -44,8 +47,8 @@ export interface ErrorDescription {
 }
 
 /**
- * The error a failed request's body describes: `detail_code` as `code` (an empty string where the
- * body has none), `detail_params` as `params` and `detail` unchanged.
+ * The error a failed request's body describes: `detail_code` as `code`, unchanged (an empty string
+ * where the body has none), `detail_params` as `params` and `detail` unchanged.
  */
 export function toErrorDescription(body: ApiErrorBody): ErrorDescription {
   return {
@@ -59,14 +62,20 @@ export function toErrorDescription(body: ApiErrorBody): ErrorDescription {
 /**
  * The errors of a 422 body, keyed by the name of the failing field: `loc` without its first
  * element, joined with `.` (`['body', 'address', 'city']` is `address.city`). A failure of the body
- * as a whole is keyed `''`. Each error has pydantic's `type` as `code`, `ctx` as `params` and `msg`
+ * as a whole is keyed `''`. Each error has pydantic's `type` in the namespace
+ * `ERROR_NAMESPACE_PYDANTIC` as `code` (`pydantic.string_too_short`), `ctx` as `params` and `msg`
  * as `detail`.
  */
 export function toFieldErrors(body: FieldErrorsBody): Record<string, ErrorDescription[]> {
   const errors: Record<string, ErrorDescription[]> = {};
   for (const entry of body.detail) {
     const field = entry.loc.slice(1).join('.');
-    (errors[field] ??= []).push({ code: entry.type, params: entry.ctx ?? {}, detail: entry.msg, origin: 'server' });
+    (errors[field] ??= []).push({
+      code: `${ERROR_NAMESPACE_PYDANTIC}.${entry.type}`,
+      params: entry.ctx ?? {},
+      detail: entry.msg,
+      origin: 'server',
+    });
   }
   return errors;
 }

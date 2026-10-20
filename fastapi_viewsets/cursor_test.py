@@ -6,6 +6,8 @@ skips a row when the collection changes underneath it - and the ones a single-ke
 wrong, which is everything to do with multi-key ordering and ties.
 """
 
+import base64
+import json
 import types
 
 import pytest
@@ -93,19 +95,36 @@ def test_null_stays_null_rather_than_becoming_a_sentinel():
 
 def test_a_cursor_from_a_different_query_is_refused():
     raw = CursorState({"year": 1, "id": 1}, query="sorted-by-year").encode()
-    with pytest.raises(CursorError, match="different ordering or filter"):
+    with pytest.raises(CursorError, match="different ordering or filter") as raised:
         decode_cursor(raw, KEYS, "sorted-by-title", {})
+    assert raised.value.code == "fastapi-viewsets.cursor_stale"
 
 
 def test_a_cursor_missing_an_ordering_key_is_refused():
     raw = CursorState({"id": 1}, query="q").encode()
-    with pytest.raises(CursorError, match="no value for ordering key"):
+    with pytest.raises(CursorError, match="no value for ordering key") as raised:
         decode_cursor(raw, KEYS, "q", {})
+    assert (raised.value.code, raised.value.params) == ("fastapi-viewsets.cursor_missing_keys", {"missing": ["year"]})
 
 
 def test_a_corrupt_cursor_is_refused():
-    with pytest.raises(CursorError, match="not readable"):
+    with pytest.raises(CursorError, match="not readable") as raised:
         decode_cursor("!!!not-base64!!!", KEYS, "q", {})
+    assert raised.value.code == "fastapi-viewsets.cursor_unreadable"
+
+
+def test_a_cursor_without_a_position_is_refused():
+    raw = base64.urlsafe_b64encode(json.dumps({"q": "q"}).encode()).decode().rstrip("=")
+    with pytest.raises(CursorError) as raised:
+        decode_cursor(raw, KEYS, "q", {})
+    assert raised.value.code == "fastapi-viewsets.cursor_missing_position"
+
+
+def test_a_cursor_value_that_does_not_fit_the_field_is_refused():
+    raw = CursorState({"year": "not-a-year", "id": 1}, query="q").encode()
+    with pytest.raises(CursorError) as raised:
+        decode_cursor(raw, KEYS, "q", {"year": int, "id": int})
+    assert raised.value.code == "fastapi-viewsets.cursor_value_mismatch"
 
 
 def test_the_fingerprint_follows_the_ordering():

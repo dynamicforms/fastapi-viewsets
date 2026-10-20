@@ -260,7 +260,7 @@ def test_celery_viewset_client_unregisters_future_on_send_task_error():
         with pytest.raises(ActionDispatchError) as raised:
             await instance.list_items()
         assert raised.value.status_code == 503
-        assert raised.value.code == "action_dispatch_failed"
+        assert raised.value.code == "fastapi-viewsets.action_dispatch_failed"
         assert raised.value.params == {"task": "items.list_items", "reason": "send"}
         assert str(raised.value.__cause__) == "Celery broker unavailable"
         # Future should be unregistered after error

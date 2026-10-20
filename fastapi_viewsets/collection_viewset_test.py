@@ -148,7 +148,7 @@ async def test_collection_viewset_immutable():
     with pytest.raises(ReadOnlyCollectionError) as exc_info:
         await viewset.perform_create(CTX, {"id": 2})
     assert exc_info.value.status_code == 405
-    assert exc_info.value.code == "read_only"
+    assert exc_info.value.code == "fastapi-viewsets.read_only"
 
 
 @pytest.mark.asyncio
@@ -338,7 +338,7 @@ def test_a_write_to_an_immutable_container_is_405():
     client = _client((Track(id=1, title="One"),), Track)
     response = client.post("/tracks", json={"title": "Two"})
     assert response.status_code == 405
-    assert response.json()["detail_code"] == "read_only"
+    assert response.json()["detail_code"] == "fastapi-viewsets.read_only"
 
 
 def test_the_pk_field_name_is_the_pk_field_ahead_of_the_list_mixin_default():

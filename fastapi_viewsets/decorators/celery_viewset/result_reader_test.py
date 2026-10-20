@@ -370,7 +370,7 @@ async def test_an_encoded_error_is_raised_as_its_class_with_code_params_and_head
     future = await _read_one(payload)
     raised = future.exception()
     assert type(raised) is ActionInterruptedError
-    assert (raised.status_code, raised.code) == (503, "action_interrupted")
+    assert (raised.status_code, raised.code) == (503, "fastapi-viewsets.action_interrupted")
     assert raised.params == {"task": "items.list_items", "reason": "terminated"}
     assert raised.headers == {"Retry-After": "5"}
 

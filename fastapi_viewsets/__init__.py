@@ -1,1 +1,5 @@
-__version__ = "0.11.4"
+__version__ = "0.12.0"
+
+from .error_namespace import ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC
+
+__all__ = ["ERROR_NAMESPACE", "ERROR_NAMESPACE_PYDANTIC", "__version__"]

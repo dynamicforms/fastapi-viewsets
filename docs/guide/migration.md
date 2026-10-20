@@ -5,6 +5,52 @@ releases at once, work from the bottom of the page upwards.
 
 <!-- New releases go directly below this comment, above the previous one, as `## Upgrading to vX.Y.Z (from vA.B.x)`. -->
 
+## Upgrading to v0.12.0 (from v0.11.x)
+
+- [ ] Replace every comparison with one of the package's error codes by its full code. A code is
+      `<namespace>.<code>`; the package's codes are in the namespace `fastapi-viewsets`, exported as
+      `ERROR_NAMESPACE` from `fastapi_viewsets` and from `@dynamicforms/fastapi-viewsets`. This covers
+      `DfViewSetError.code`, `CursorError.code`, `detail_code` of a response, `error` of a poll's
+      `TopicAnswer` and `code` of `toErrorDescription()`:
+
+  | 0.11 | 0.12 |
+  |------|------|
+  | `not_found` | `fastapi-viewsets.not_found` |
+  | `read_only` | `fastapi-viewsets.read_only` |
+  | `session_expired` | `fastapi-viewsets.session_expired` |
+  | `not_authorized` | `fastapi-viewsets.not_authorized` |
+  | `rate_limited` | `fastapi-viewsets.rate_limited` |
+  | `result_timeout` | `fastapi-viewsets.result_timeout` |
+  | `result_reader_stopped` | `fastapi-viewsets.result_reader_stopped` |
+  | `action_dispatch_failed` | `fastapi-viewsets.action_dispatch_failed` |
+  | `action_interrupted` | `fastapi-viewsets.action_interrupted` |
+  | `action_failed` | `fastapi-viewsets.action_failed` |
+  | `idempotency_key_invalid` | `fastapi-viewsets.idempotency_key_invalid` |
+  | `idempotency_key_reused` | `fastapi-viewsets.idempotency_key_reused` |
+  | `unsupported_list_shape` | `fastapi-viewsets.unsupported_list_shape` |
+  | `event_topic_invalid` | `fastapi-viewsets.event_topic_invalid` |
+  | `event_topic_refused` | `fastapi-viewsets.event_topic_refused` |
+  | `event_scope_missing` | `fastapi-viewsets.event_scope_missing` |
+  | `event_subscriptions_exceeded` | `fastapi-viewsets.event_subscriptions_exceeded` |
+  | `event_cursors_exceeded` | `fastapi-viewsets.event_cursors_exceeded` |
+  | `cursor_unreadable` | `fastapi-viewsets.cursor_unreadable` |
+  | `cursor_missing_position` | `fastapi-viewsets.cursor_missing_position` |
+  | `cursor_stale` | `fastapi-viewsets.cursor_stale` |
+  | `cursor_missing_keys` | `fastapi-viewsets.cursor_missing_keys` |
+  | `cursor_value_mismatch` | `fastapi-viewsets.cursor_value_mismatch` |
+
+- [ ] `toFieldErrors()` gives pydantic's `type` as `pydantic.<type>` (`ERROR_NAMESPACE_PYDANTIC`):
+      `string_too_short` is `pydantic.string_too_short`.
+- [ ] Move the translations of these codes under a key prefix per namespace, and map the namespaces to
+      the prefixes through `ERROR_NAMESPACE` and `ERROR_NAMESPACE_PYDANTIC`; see
+      [Translating the codes](./error-codes#translating-the-codes).
+- [ ] Prefix the codes of the application's own `DfViewSetError` subclasses with a namespace of its
+      own. The package passes them on as given.
+- [ ] A worker and a FastAPI process of 0.11 and 0.12 read each other's `celery_viewset` result
+      payloads, and 0.12 replays a 0.11 idempotency record: the payloads and records carry the
+      package's codes without the namespace in both versions. A 0.11 process passes on the codes
+      without the namespace.
+
 ## Upgrading to v0.11.0 (from v0.10.x)
 
 - [ ] Pass `redis_client` (a synchronous `redis.Redis`) to `celery_viewset` and

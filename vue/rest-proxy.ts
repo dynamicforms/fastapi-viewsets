@@ -223,7 +223,7 @@ const GATEWAY_STATUSES = new Set([502, 503, 504]);
  * own timeout (`ECONNABORTED`, `ETIMEDOUT`), `'lost'` otherwise. A cancellation the application
  * requested is an answer. A gateway status is `'lost'` unless its body is a JSON object with `detail`,
  * the body FastAPI gives an `HTTPException`: that status is the application's answer (e.g. the BE's
- * `result_timeout`), which `Idempotency` stores and a repeat would only receive again.
+ * `fastapi-viewsets.result_timeout`), which `Idempotency` stores and a repeat would only receive again.
  */
 function restAttemptFailure(error: unknown): AttemptFailure {
   if (!axios.isAxiosError(error) || axios.isCancel(error)) return null;

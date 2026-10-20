@@ -54,7 +54,7 @@ async def test_depends_rejects_with_429_once_the_limit_is_exceeded():
 
     assert exc_info.value.status_code == 429
     assert exc_info.value.detail == "Rate limit exceeded"
-    assert exc_info.value.code == "rate_limited"
+    assert exc_info.value.code == "fastapi-viewsets.rate_limited"
 
 
 @pytest.mark.asyncio
