@@ -6,7 +6,11 @@ export default defineConfig({
   title: 'DynamicForms Viewsets',
   // the directory's own README, for contributors
   srcExclude: ['readme.md'],
-  description: 'Full-stack ViewSet library for FastAPI (Python) and Vue/TypeScript',
+  description: 'Django REST Framework-style viewsets for FastAPI: CRUD and bulk endpoints, in-memory or Django ORM backends, typed TypeScript client, Celery, WebSockets.',
+  transformHead({ pageData, siteConfig }) {
+    const path = pageData.relativePath.replace(/(^|\/)index\.md$/, '$1').replace(/\.md$/, '.html');
+    return [['link', { rel: 'canonical', href: `https://docs.velis.si${siteConfig.site.base}${path}` }]];
+  },
   markdown: {
     config: crosslinksConfig({
       projects: {

@@ -1,3 +1,7 @@
+---
+description: 'Install dynamicforms-fastapi-viewsets and its TypeScript client, define a Pydantic model and a viewset, register it on a FastAPI router, call it from Vue.'
+---
+
 # Getting Started
 
 ## Installation
