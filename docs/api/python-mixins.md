@@ -227,5 +227,5 @@ Inherits: `BulkCreateMixin`, `ListMixin`, `RetrieveMixin`, `BulkUpdateMixin`, `B
 from fastapi_viewsets.exceptions import NotFoundError
 
 raise NotFoundError(pk)
-# HTTP 404: {"detail": "Item with pk <pk> not found"}
+# HTTP 404: {"detail": "Item with pk <pk> not found", "detail_code": "fastapi-viewsets.not_found", "detail_params": {"pk": <pk>}, "field_errors": {}}
 ```

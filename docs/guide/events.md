@@ -368,7 +368,12 @@ nor authorizes the topic.
     },
     "imports:7": {"rev": 3, "events": []},
     "/orgs/7/tags": {"rev": 12, "events": [], "scope": "7"},
-    "org:9": {"rev": null, "events": null, "error": "fastapi-viewsets.event_topic_refused", "status": 403}
+    "org:9": {
+      "rev": null,
+      "events": null,
+      "error": {"detail": "Topic org:9 is not admitted", "detail_code": "fastapi-viewsets.event_topic_refused", "detail_params": {"topic": "org:9"}, "field_errors": {}},
+      "status": 403
+    }
   },
   "poll_after_ms": 0
 }
@@ -383,8 +388,8 @@ A poll carrying more than `settings.viewsets_event_max_subscriptions` cursors is
 
 | Topic and cursor | `rev` | `events` | `error`, `status` |
 |------------------|-------|----------|-------------------|
-| a topic of neither form | `null` | `null` | `fastapi-viewsets.event_topic_invalid`, `422` |
-| refused by the authorizers or the gate run | `null` | `null` | `fastapi-viewsets.event_topic_refused`, `fastapi-viewsets.event_scope_missing`, or the `code` of the `DfViewSetError` raised (`fastapi-viewsets.session_expired`, `fastapi-viewsets.not_authorized`, `fastapi-viewsets.rate_limited`, ...); `fastapi-viewsets.event_topic_refused` for an `HTTPException` without a `code`; `status` is the refusal's HTTP status |
+| a topic of neither form | `null` | `null` | the [error body](./error-codes#the-error-body) of `fastapi-viewsets.event_topic_invalid`, `422` |
+| refused by the authorizers or the gate run | `null` | `null` | the error body of the refusal: `fastapi-viewsets.event_topic_refused`, `fastapi-viewsets.event_scope_missing`, or the `code` of the `DfViewSetError` raised (`fastapi-viewsets.session_expired`, `fastapi-viewsets.not_authorized`, `fastapi-viewsets.rate_limited`, ...); `fastapi-viewsets.http_error` for an `HTTPException` without a `code`; `status` is the refusal's HTTP status |
 | a cursor, `scopes` present, and the topic's entry in `scopes` (absent for none) differs from the scope key the server resolves | the current rev | `null` | absent |
 | cursor `null` | the current rev | `[]` | absent |
 | cursor equal to the current rev | the current rev | `[]` | absent |

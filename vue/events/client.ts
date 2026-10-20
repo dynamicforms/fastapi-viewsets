@@ -43,8 +43,7 @@
  * answer arrives after `headers()` changed since that answer's call was sent.
  */
 
-import { namespaced } from '../error-namespace';
-import { ViewSetRequestError } from '../errors';
+import { isApiErrorBody, ViewSetRequestError } from '../errors';
 import type { MuxwsPeerLike } from '../muxws-proxy';
 import { readHeaders, readStatus } from '../muxws-reply';
 
@@ -230,8 +229,9 @@ interface WireEvent {
 interface WireTopicAnswer {
   rev: number | null;
   events: WireEvent[] | null;
-  error?: string;
-  /** The HTTP status of the refusal `error` names. */
+  /** The `ApiErrorBody` of the topic's refusal. */
+  error?: unknown;
+  /** The HTTP status of the refusal. */
   status?: number;
   /** The scope key of a scoped topic. */
   scope?: string;
@@ -252,19 +252,6 @@ interface CallAnswer<R> {
   data: R;
   headersKey: string;
 }
-
-/**
- * The status a topic error of a poll answer stands for when the answer carries no `status`: the
- * status of the BE error whose `code` the answer carries. A code not listed here stands for 403.
- */
-const TOPIC_ERROR_STATUS: Readonly<Record<string, number>> = {
-  [namespaced('event_topic_invalid')]: 422,
-  [namespaced('event_topic_refused')]: 403,
-  [namespaced('event_scope_missing')]: 403,
-  [namespaced('not_authorized')]: 403,
-  [namespaced('session_expired')]: 401,
-  [namespaced('rate_limited')]: 429,
-};
 
 /** `RESET_REFUSED` is muxws' `ResetCode.REFUSED`; muxws is not imported here. */
 const RESET_REFUSED = 4;
@@ -692,8 +679,9 @@ class EventClientImpl implements EventClient {
    * One topic of a poll answer. `cursor` is the rev the poll carried; the held rev may have moved
    * since, by pushes applied while the poll was in flight.
    *
-   * - `error` with a transient status (`isTransientStatus`) leaves the topic as it is; any other
-   *   `error` refuses the topic.
+   * - `error` refuses the topic with a `ViewSetRequestError` of `status` whose `response.data` is
+   *   `error`, the BE's `ApiErrorBody`; a transient `status` (`isTransientStatus`), and an `error`
+   *   that is not an `ApiErrorBody` or comes without a `status`, leave the topic as it is.
    * - The first answer of a topic sets its rev.
    * - `events: null` is a resync, unless pushes have moved the held rev since the poll was sent and
    *   the answer's rev is at most the held one: those pushes applied the events the log no longer has.
@@ -710,7 +698,8 @@ class EventClientImpl implements EventClient {
    *   `scopeChange`).
    *
    * Returns `'moved'` when the held rev moved, `'answered'` when the answer answered the topic
-   * without moving it, and `'unanswered'` for a transient error and for an answer without a rev.
+   * without moving it, and `'unanswered'` for an error that does not refuse the topic and for an
+   * answer without a rev.
    */
   private applyTopicAnswer(
     state: TopicState,
@@ -718,14 +707,10 @@ class EventClientImpl implements EventClient {
     answer: WireTopicAnswer,
     headersKey: string,
   ): 'moved' | 'answered' | 'unanswered' {
-    if (typeof answer.error === 'string' && answer.error) {
-      const error = topicError(
-        state.topic,
-        answer.error,
-        typeof answer.status === 'number' ? answer.status : undefined,
-      );
-      if (isTransientStatus(error.response.status)) return 'unanswered';
-      this.refuse(state, error);
+    if (answer.error !== undefined && answer.error !== null) {
+      if (!isApiErrorBody(answer.error) || typeof answer.status !== 'number') return 'unanswered';
+      if (isTransientStatus(answer.status)) return 'unanswered';
+      this.refuse(state, new ViewSetRequestError(answer.status, answer.error));
       return 'answered';
     }
     const rev = revOf(answer.rev);
@@ -1301,18 +1286,6 @@ function toArrival(event: WireEvent, scope: string | null): Arrival | null {
   const version = versionOf(event?.version);
   if (rev === null || prev === null || version === null || typeof event.event !== 'string') return null;
   return { rev, prev, event: event.event, version, payload: event.payload, scope };
-}
-
-/**
- * A topic error of a poll answer, as the `ViewSetRequestError` it is reported with: `status`, else the
- * status `TOPIC_ERROR_STATUS` lists for `code`, else 403.
- */
-function topicError(topic: string, code: string, status?: number): ViewSetRequestError {
-  return new ViewSetRequestError(status ?? TOPIC_ERROR_STATUS[code] ?? 403, {
-    detail: `The poll of topic '${topic}' answered ${code}`,
-    detail_code: code,
-    detail_params: { topic },
-  });
 }
 
 /** `headers` as a key that compares equal for the same names (case-insensitively) and values. */

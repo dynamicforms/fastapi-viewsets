@@ -41,7 +41,15 @@ STATUS_KEY = ":status"
 
 
 class EnvelopeError(ValueError):
-    """The open frame's headers are not a well-formed viewset command."""
+    """
+    The open frame's headers are not a well-formed viewset command. `reason` names the failure:
+    `address_missing`, `address_type`, `path_relative` or `query_type` (see
+    `fastapi_viewsets.exceptions.CommandInvalidError`).
+    """
+
+    def __init__(self, message: str, reason: str):
+        super().__init__(message)
+        self.reason = reason
 
 
 def is_command(headers: dict[str, Any] | None) -> bool:
@@ -63,14 +71,16 @@ def parse_request(headers: dict[str, Any] | None) -> tuple[str, str, bytes, dict
     rather than being encoded as one comma-joined value.
     """
     if not is_command(headers):
-        raise EnvelopeError(f"stream headers carry no {METHOD_KEY}/{PATH_KEY} - not a viewset command")
+        raise EnvelopeError(
+            f"stream headers carry no {METHOD_KEY}/{PATH_KEY} - not a viewset command", "address_missing"
+        )
 
     method = headers[METHOD_KEY]
     path = headers[PATH_KEY]
     if not isinstance(method, str) or not isinstance(path, str):
-        raise EnvelopeError(f"{METHOD_KEY} and {PATH_KEY} must both be strings")
+        raise EnvelopeError(f"{METHOD_KEY} and {PATH_KEY} must both be strings", "address_type")
     if not path.startswith("/"):
-        raise EnvelopeError(f"{PATH_KEY} must be absolute, got {path!r}")
+        raise EnvelopeError(f"{PATH_KEY} must be absolute, got {path!r}", "path_relative")
 
     query = headers.get(QUERY_KEY) or ""
     if isinstance(query, str):
@@ -86,7 +96,7 @@ def parse_request(headers: dict[str, Any] | None) -> tuple[str, str, bytes, dict
                 pairs.append((key, str(value)))
         query_string = urlencode(pairs).encode()
     else:
-        raise EnvelopeError(f"{QUERY_KEY} must be a string or a mapping, got {type(query).__name__}")
+        raise EnvelopeError(f"{QUERY_KEY} must be a string or a mapping, got {type(query).__name__}", "query_type")
 
     http_headers = {str(key).lower(): str(value) for key, value in headers.items() if not str(key).startswith(":")}
     return method.upper(), path, query_string, http_headers

@@ -6,7 +6,8 @@ Every viewset endpoint is one route on the application's router, whichever trans
 so a request goes through the application's middleware, exception handlers and router dependencies
 whether an HTTP server or the muxws transport delivered it. A route that is not published on the
 request's transport does not match, and the router carries on to the next route as if it were not
-there.
+there. A route answers every error its request raises with the body of
+`fastapi_viewsets.error_responses`.
 """
 
 from collections.abc import Callable
@@ -15,10 +16,12 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
+from starlette.exceptions import HTTPException
 from starlette.routing import Match
-from starlette.types import Scope
+from starlette.types import Message, Receive, Scope, Send
 
 from .endpoint_docs import viewset_tags
+from .error_responses import answers_unhandled_itself, error_response, uniform_exception_handlers
 
 TRANSPORT_SCOPE_KEY = "fastapi_viewsets.transport"
 """The ASGI scope key a transport writes its name under. A request without it is a REST request."""
@@ -41,7 +44,20 @@ def request_transport(scope: Scope) -> str:
 
 
 class TransportRoute(APIRoute):
-    """An `APIRoute` that matches only requests arriving over one of `transports`."""
+    """
+    An `APIRoute` that matches only requests arriving over one of `transports`, and answers every
+    error its endpoint, its dependencies or its request validation raise with an `ApiErrorBody`
+    (`fastapi_viewsets.error_responses.error_body`), without a handler registered by the application:
+
+    - the handlers of `HTTPException` and `RequestValidationError` replace FastAPI's default
+      handlers;
+    - an exception without a handler is answered with 500 `fastapi-viewsets.unhandled_error` and
+      re-raised, so the server logs it as it logs an exception after Starlette's own 500. A handler
+      the application registered for `Exception` or 500 answers it instead.
+
+    A handler the application registered for a class or a status answers as the application wrote
+    it. The exceptions run through the request's dependencies with `yield` before they are answered.
+    """
 
     transports: frozenset[str] = frozenset({REST, MUXWS})
 
@@ -49,6 +65,25 @@ class TransportRoute(APIRoute):
         if scope["type"] == "http" and request_transport(scope) not in self.transports:
             return Match.NONE, {}
         return super().matches(scope)
+
+    async def handle(self, scope: Scope, receive: Receive, send: Send) -> None:
+        uniform_exception_handlers(scope)
+        started = False
+
+        async def sending(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await super().handle(scope, receive, sending)
+        except Exception as error:
+            # an HTTPException that reaches here is Starlette's 405 of the route, not the endpoint's
+            if started or isinstance(error, HTTPException) or answers_unhandled_itself(scope.get("app")):
+                raise
+            await error_response(error)(scope, receive, send)
+            raise
 
 
 @cache

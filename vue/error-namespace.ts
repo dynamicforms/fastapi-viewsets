@@ -5,7 +5,7 @@
 export const ERROR_NAMESPACE = 'fastapi-viewsets';
 
 /**
- * The namespace of pydantic's error types. `toFieldErrors()` forwards pydantic's `type` as
+ * The namespace of pydantic's error types. The BE's field errors carry pydantic's `type` as
  * `${ERROR_NAMESPACE_PYDANTIC}.<type>`, such as `pydantic.string_too_short`.
  */
 export const ERROR_NAMESPACE_PYDANTIC = 'pydantic';

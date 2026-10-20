@@ -211,7 +211,12 @@ def test_end_to_end_rate_limiting_via_route_viewset():
     assert client.get("/items").status_code == 200
     third = client.get("/items")
     assert third.status_code == 429
-    assert third.json() == {"detail": "Rate limit exceeded"}
+    assert third.json() == {
+        "detail": "Rate limit exceeded",
+        "detail_code": "fastapi-viewsets.rate_limited",
+        "detail_params": {},
+        "field_errors": {},
+    }
 
 
 def test_end_to_end_action_configuration_overrides_limit_per_viewset():

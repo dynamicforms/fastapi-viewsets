@@ -201,7 +201,7 @@ def test_arguments_that_do_not_validate_are_action_failed():
     tasks, redis_client = _worker(Jobs)
     with pytest.raises(ActionFailedError):
         tasks["jobs.run"](data={"name": 1, "extra": {}}, **CALL)
-    assert _pushed(redis_client)["error"]["code"] == "action_failed"
+    assert _pushed(redis_client)["error"]["code"] == "fastapi-viewsets.action_failed"
 
 
 def test_a_base_exception_is_pushed_and_raised_as_action_failed():
@@ -279,7 +279,11 @@ def test_an_http_exception_is_the_answer_and_a_package_error_keeps_its_class():
     tasks, redis_client = _worker(_state_recording_viewset(body, []))
     assert tasks["jobs.run"](**CALL) is None
     error = _pushed(redis_client)["error"]
-    assert (error["class"], error["code"], error["params"]) == ("NotFoundError", "not_found", {"pk": 7})
+    assert (error["class"], error["code"], error["params"]) == (
+        "NotFoundError",
+        "fastapi-viewsets.not_found",
+        {"pk": 7},
+    )
 
 
 def test_a_result_that_cannot_be_serialized_is_action_failed():

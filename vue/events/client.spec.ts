@@ -8,7 +8,8 @@
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ViewSetRequestError } from '../errors';
+import { ERROR_NAMESPACE } from '../error-namespace';
+import { type ApiErrorBody, ViewSetRequestError } from '../errors';
 
 import {
   attachEvents,
@@ -166,6 +167,11 @@ function payloads(h: { onEvent: ReturnType<typeof vi.fn> }): unknown[] {
 }
 
 const flush = () => vi.advanceTimersByTimeAsync(0);
+
+/** The `ApiErrorBody` of the package's error `code` (without the namespace), as a poll answer carries it. */
+function topicError(detail: string, code: string, params: Record<string, unknown> = {}): ApiErrorBody {
+  return { detail, detail_code: `${ERROR_NAMESPACE}.${code}`, detail_params: params, field_errors: {} };
+}
 
 /** `draw: () => 0.5` makes the jitter multiplier exactly 1, so every delay is the ladder's own. */
 function client(transport: Transport, options: Partial<EventClientOptions> = {}): EventClient {
@@ -573,15 +579,13 @@ describe('push, gap, poll and resync', () => {
     const t = makeTransport();
     const { h, sub } = await followed(t);
     t.push('a', 20, 19, 'changed', {});
-    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'fastapi-viewsets.event_topic_refused' } } });
+    const refused = topicError('Topic a is not admitted', 'event_topic_refused', { topic: 'a' });
+    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: refused, status: 403 } } });
     await flush();
     expect(h.onError).toHaveBeenCalledTimes(1);
     const error = h.onError.mock.calls[0][0] as ViewSetRequestError;
     expect(error).toBeInstanceOf(ViewSetRequestError);
-    expect(error.response).toMatchObject({
-      status: 403,
-      data: { detail_code: 'fastapi-viewsets.event_topic_refused' },
-    });
+    expect(error.response).toMatchObject({ status: 403, data: refused });
     await expect(sub.ready).resolves.toBeUndefined();
     // The socket subscription of a refused topic is ended.
     expect(t.take()).toMatchObject([{ path: '/events/unsubscribe', body: { topic: 'a' } }]);
@@ -874,7 +878,11 @@ describe('polling', () => {
     const h = handlers();
     const sub = c.subscribe('a', Changed, h);
     await flush();
-    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'fastapi-viewsets.session_expired' } } });
+    t.take()[0].answer({
+      topics: {
+        a: { rev: null, events: null, error: topicError('Session expired or invalid', 'session_expired'), status: 401 },
+      },
+    });
     await expect(sub.ready).rejects.toMatchObject({
       response: { status: 401, data: { detail_code: 'fastapi-viewsets.session_expired' } },
     });
@@ -1410,22 +1418,32 @@ describe('failures and malformed arrivals', () => {
     const t = makeTransport();
     const { h } = await followed(t);
     t.push('a', 13, 12, 'changed', {});
-    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'fastapi-viewsets.not_authorized' } } });
+    t.take()[0].answer({
+      topics: {
+        a: {
+          rev: null,
+          events: null,
+          error: topicError('Not authorized to perform this action', 'not_authorized'),
+          status: 403,
+        },
+      },
+    });
     await flush();
     expect(h.onError.mock.calls[0][0]).toMatchObject({
       response: { status: 403, data: { detail_code: 'fastapi-viewsets.not_authorized' } },
     });
   });
 
-  it('reports an unknown topic error code with status 403', async () => {
+  it.each([
+    ['an error that is not an error body', { error: 'fastapi-viewsets.not_authorized', status: 403 }],
+    ['an error without a status', { error: topicError('Not authorized to perform this action', 'not_authorized') }],
+  ])('leaves a topic answered with %s unanswered', async (_name, answer) => {
     const t = makeTransport();
     const { h } = await followed(t);
     t.push('a', 13, 12, 'changed', {});
-    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'unauthorized' } } });
+    t.take()[0].answer({ topics: { a: { rev: null, events: null, ...answer } } });
     await flush();
-    expect(h.onError.mock.calls[0][0]).toMatchObject({
-      response: { status: 403, data: { detail_code: 'unauthorized' } },
-    });
+    expect(h.onError).not.toHaveBeenCalled();
   });
 
   it('reports event_topic_invalid with status 422', async () => {
@@ -1434,7 +1452,18 @@ describe('failures and malformed arrivals', () => {
     const sub = c.subscribe('Bad Topic', Changed, handlers());
     await flush();
     t.take()[0].answer({
-      topics: { 'Bad Topic': { rev: null, events: null, error: 'fastapi-viewsets.event_topic_invalid' } },
+      topics: {
+        'Bad Topic': {
+          rev: null,
+          events: null,
+          error: topicError(
+            'Topic Bad Topic is neither a path starting with / nor a source name with an optional key',
+            'event_topic_invalid',
+            { topic: 'Bad Topic' },
+          ),
+          status: 422,
+        },
+      },
     });
     await expect(sub.ready).rejects.toMatchObject({ response: { status: 422 } });
   });
@@ -2035,17 +2064,22 @@ describe('scoped topics', () => {
     await flush();
     t.take()[0].answer({
       topics: {
-        '/m': { rev: null, events: null, error: 'fastapi-viewsets.event_scope_missing' },
+        '/m': {
+          rev: null,
+          events: null,
+          error: topicError('Topic /m has no event scope for this caller', 'event_scope_missing', { topic: '/m' }),
+          status: 403,
+        },
         '/u': {
           rev: null,
           events: null,
-          error: 'fastapi-viewsets.event_topic_refused',
+          error: topicError('the membership service is unavailable', 'http_error', { status: 503 }),
           status: 503,
         },
         '/a': {
           rev: null,
           events: null,
-          error: 'fastapi-viewsets.event_topic_refused',
+          error: topicError('Session expired or invalid', 'session_expired'),
           status: 401,
         },
       },

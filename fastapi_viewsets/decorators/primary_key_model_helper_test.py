@@ -235,11 +235,17 @@ def test_a_create_validates_the_body_by_the_model():
 
     response = client.post("/products", json={"title": "", "price": -10})
     assert response.status_code == 422
-    assert {error["type"] for error in response.json()["detail"]} == {"string_too_short", "greater_than_equal"}
+    fields = response.json()["field_errors"]
+    assert {error["code"] for errors in fields.values() for error in errors} == {
+        "pydantic.string_too_short",
+        "pydantic.greater_than_equal",
+    }
 
     response = client.post("/products", json={"id": 7, "title": "abc", "price": 1})
     assert response.status_code == 422
-    assert [error["type"] for error in response.json()["detail"]] == ["pk_assigned_by_server"]
+    assert [error["code"] for errors in response.json()["field_errors"].values() for error in errors] == [
+        "fastapi-viewsets.pk_assigned_by_server"
+    ]
 
     assert created == []
 

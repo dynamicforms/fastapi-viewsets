@@ -20,6 +20,7 @@ from demo.backend.viewsets import (
 )
 from fastapi_viewsets.decorators.route_viewset import route_viewset
 from fastapi_viewsets.endpoint_docs import apply_viewset_tags
+from fastapi_viewsets.error_responses import install_error_handlers
 from fastapi_viewsets.events import check_events, register_events, start_events, stop_events
 from fastapi_viewsets.mux_ws import process_command
 
@@ -56,6 +57,8 @@ async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAP
 # Both doc pages are served by hand: FastAPI's built-ins have no hook for the extra <head> the
 # "Try it in Swagger UI" link needs (see demo/backend/openapi_docs.py).
 app = FastAPI(title="Demo ViewSet App", lifespan=lifespan, docs_url=None, redoc_url=None)
+# the errors of the routes outside the viewsets, and of a path no route matches, in the viewsets' body
+install_error_handlers(app)
 
 
 def custom_openapi():

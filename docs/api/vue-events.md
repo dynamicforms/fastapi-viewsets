@@ -170,17 +170,10 @@ A refusal is reported with:
 |---------|-------|
 | `subscribe` or `poll` answered over the peer with a [refusing status](#calls) | `ViewSetRequestError(status, body, headers)` |
 | `poll` answered over axios with a refusing status | the `AxiosError` axios throws |
-| a topic of a poll answer carries `error` | `ViewSetRequestError` with `response.data` `{ detail, detail_code: error, detail_params: { topic } }` and the answer's `status`, or for an answer without one the status below |
+| a topic of a poll answer carries `error` | `ViewSetRequestError` with the answer's `status` as `response.status` and `error`, the server's `ApiErrorBody`, as `response.data` |
 
-| Topic `error` | `response.status` without `status` |
-|---------------|-------------------|
-| `fastapi-viewsets.event_topic_invalid` | 422 |
-| `fastapi-viewsets.event_topic_refused` | 403 |
-| `fastapi-viewsets.event_scope_missing` | 403 |
-| `fastapi-viewsets.not_authorized` | 403 |
-| `fastapi-viewsets.session_expired` | 401 |
-| `fastapi-viewsets.rate_limited` | 429 |
-| any other code | 403 |
+A topic answer whose `error` is not an `ApiErrorBody`, or that has no `status`, is not a refusal and is treated as an
+answer without a rev.
 
 A status of 429 or of 500 and above is not a refusal: the topic stays, is polled on the next
 rung, and a failed `subscribe` of it is sent again (see [Calls](#calls)). `onError` is not called

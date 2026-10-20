@@ -24,6 +24,7 @@ from fastapi_viewsets.endpoint_docs import (
 from fastapi_viewsets.middleware import any_modifies_response_shape, Middleware, unwrap_viewset_result_type
 from fastapi_viewsets.mixins import FilterParam
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
+from fastapi_viewsets.response_classes import with_error_responses
 from fastapi_viewsets.routing import MUXWS, openapi_endpoint, REST, transport_route_class
 
 from .build_schema import _pydantic_generic_args, build_schema, route_to_add_api_route_kwargs
@@ -418,7 +419,9 @@ def route_viewset(
             documented.add(action_name)
             paths.setdefault(action_name, route.path[len(base) :] if route.path.startswith(base) else route.path)
             dependencies = list(route.dependencies or []) + [Depends(_make_middleware_depends(cls, action_name))]
-            route_kwargs = route_to_add_api_route_kwargs(route, dependencies=dependencies)
+            route_kwargs = route_to_add_api_route_kwargs(
+                route, dependencies=dependencies, responses=with_error_responses(route.responses)
+            )
             # Per-viewset wording for an endpoint the mixin provided - the mixin's own docstring is
             # the same sentence on every viewset in the application. See endpoint_docs.py.
             route_kwargs.update(docs_for(cls, action_name))

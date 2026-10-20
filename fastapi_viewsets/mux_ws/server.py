@@ -14,6 +14,8 @@ from typing import Any, TYPE_CHECKING
 
 from fastapi import FastAPI
 
+from ..error_responses import error_body
+from ..exceptions import CommandInvalidError, DfViewSetError, UnhandledError
 from .asgi import call_asgi, payload_to_body
 from .protocol import build_response_meta, EnvelopeError, is_command, merge_headers, parse_request
 
@@ -107,6 +109,13 @@ async def process_command(
     it or the socket is lost, and muxws cancels this handler), the request runs to completion and its
     answer is discarded, as an HTTP server lets a request run after its client disconnected. An
     exception it raises then is logged.
+
+    The answer's status is the response's, in the `:status` leading header, and its payload the
+    response's decoded body: for an error of a viewset route an `ApiErrorBody`
+    (`fastapi_viewsets.error_responses`), as over HTTP. A command whose headers cannot be parsed is
+    answered with 400 `fastapi-viewsets.command_invalid` (`CommandInvalidError`); an exception the
+    application raises before it starts a response with 500 `fastapi-viewsets.unhandled_error`, and
+    the exception is logged.
     """
     headers = getattr(stream, "headers", None) or {}
     if not is_command(headers):
@@ -121,7 +130,7 @@ async def process_command(
     except EnvelopeError as error:
         # addressed to a viewset, but not in a form any route could be matched against: answered
         # as HTTP answers a request it cannot parse
-        await stream.reply({"detail": str(error)}, headers=build_response_meta(400, {}))
+        await _reply_error(stream, CommandInvalidError(error.reason))
         return True
     effective = merge_headers(
         merge_headers(connection_headers(connection), base_headers or {}),
@@ -157,7 +166,7 @@ async def process_command(
         # handler crashed" into "the transport failed", which is a different and less useful thing
         # to report - so a 500 is delivered normally and the traceback goes to the log.
         logger.exception("muxws command %s %s failed", method, path)
-        await stream.reply(None, headers=build_response_meta(500, {}))
+        await _reply_error(stream, UnhandledError())
         return True
 
     # Leading headers rather than trailers: the status is announced before the body, so a caller
@@ -167,6 +176,11 @@ async def process_command(
         headers=build_response_meta(response.status, _response_headers(response.headers)),
     )
     return True
+
+
+async def _reply_error(stream: "Stream", error: DfViewSetError) -> None:
+    """Answers `stream` with `error`'s status and `ApiErrorBody`, as a route answers it."""
+    await stream.reply(error_body(error), headers=build_response_meta(error.status_code, {}))
 
 
 _HOP_BY_HOP = frozenset({"content-length", "transfer-encoding", "connection", "keep-alive"})

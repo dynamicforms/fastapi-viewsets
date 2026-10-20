@@ -26,7 +26,6 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from ...action_configuration import action_configuration, TimeLimits
-from ...exceptions import df_viewset_exception_handler, DfViewSetError
 from .. import route_viewset
 from . import celery_viewset_client, get_result_queue_key, start_result_reader, stop_result_reader
 
@@ -307,7 +306,6 @@ def client(worker, redis_url, key, celery_app):
         celery_viewset_client(celery_app, key, redis_client=reader_client, result_timeout=30)(Jobs)
     )
     app = FastAPI(lifespan=lifespan)
-    app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
     app.include_router(router)
     with TestClient(app) as test_client:
         yield test_client

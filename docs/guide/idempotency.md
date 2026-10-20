@@ -85,8 +85,10 @@ rejected from `depends()`, before the request body is parsed.
 - **Error outcomes are stored too.** An `HTTPException` is raised again on a repeat with its status
   code, `detail` and headers, a `DfViewSetError` with its `code` and `params`, and with its class when
   `fastapi_viewsets.exceptions` defines it (an `ActionInterruptedError` is replayed as one). A
-  `RequestValidationError` raised by the action is replayed as a `422` with its errors as `detail`.
-  Any other exception is replayed as a `500` with `detail` `"Internal Server Error"`.
+  `RequestValidationError` raised by the action is replayed as the `RequestValidationError` of the
+  same errors. Any other exception is replayed as an `UnhandledError`. A repeat is answered with the
+  [error body](./error-codes#the-error-body) of the replayed error, the body of the first call; a
+  record 0.11 wrote is answered the same way.
 - **A call that did not run is not an outcome.** For an `ActionDispatchError` (a `celery_viewset`
   task that could not be sent, or that the worker revoked, rejected or did not know) the record is
   deleted, and a repeat runs the call again.
@@ -258,8 +260,8 @@ call to it, `GET` included, is preflighted.
 - In-memory storage (the default) serves one process; a repeat that reaches another process runs the
   action again.
 - A repeat of a call that raised an exception other than `HTTPException` or `RequestValidationError`
-  answers `{"detail": "Internal Server Error"}` through FastAPI's `HTTPException` handling, not through
-  the application's handler for `Exception`.
+  raises `UnhandledError`, an `HTTPException`: an application's handler for `Exception` answered the
+  first call, and the handling of `HTTPException` answers the repeat.
 - A `celery_viewset` call answered `504 fastapi-viewsets.result_timeout` or
   `503 fastapi-viewsets.result_reader_stopped` stores that outcome, although the worker may complete
   the action later; a repeat answers the stored error.

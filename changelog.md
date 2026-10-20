@@ -13,12 +13,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ERROR_NAMESPACE` (`"fastapi-viewsets"`) and `ERROR_NAMESPACE_PYDANTIC` (`"pydantic"`), exported
   from `fastapi_viewsets` and from `@dynamicforms/fastapi-viewsets`: the namespaces of the error
   codes the package's errors carry.
+- One error body, `ApiErrorBody` (`fastapi_viewsets.error_responses`): `detail`, `detail_code`,
+  `detail_params` and `field_errors`. The routes of a viewset answer every error with it over REST and
+  muxws without a handler registered by the application; a handler the application registered for an
+  exception class, a status, `HTTPException`, or `Exception` / 500 takes precedence.
+- `install_error_handlers(app)`: answers the errors of the application's other routes, and Starlette's
+  404 and 405, with `ApiErrorBody`.
+- `error_body(error)`, `error_response(error)`, `error_status(error)` and `field_errors(errors)` in
+  `fastapi_viewsets.error_responses`, and the models `ApiErrorBody` and `ApiFieldError`.
+- Codes `fastapi-viewsets.validation_failed` (422, failures in `field_errors`), `fastapi-viewsets.http_error`
+  (an `HTTPException` without a code, `params.status`), `fastapi-viewsets.unhandled_error` (500, raised as
+  `UnhandledError`) and `fastapi-viewsets.command_invalid` (400, `CommandInvalidError`, a muxws command
+  whose headers no route can be matched against).
+- Every operation of a viewset documents 422, 500 and `default` with the schema `ApiErrorBody`, with
+  examples (`fastapi_viewsets.response_classes.VIEWSET_ERROR_RESPONSES`).
+- TS: `errorBodyOf(error)`, the `ApiErrorBody` of what a call threw, `fastapi-viewsets.no_response` or
+  `fastapi-viewsets.unexpected_response` for a call the BE did not answer; `isApiErrorBody(data)`;
+  `ApiFieldError`.
 
 ### Changed
 
 - Every error code the package declares is `<namespace>.<code>` in the namespace
   `fastapi-viewsets`: `DfViewSetError.code` of the built-in errors, `CursorError.code`,
-  `detail_code` of a response, `error` of a poll's `TopicAnswer` and `code` of
+  `detail_code` of a response and of a poll's `TopicAnswer.error`, and `code` of
   `toErrorDescription()`:
 
   | 0.11.4 | 0.12.0 |
@@ -47,14 +64,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `cursor_missing_keys` | `fastapi-viewsets.cursor_missing_keys` |
   | `cursor_value_mismatch` | `fastapi-viewsets.cursor_value_mismatch` |
 
-- `toFieldErrors()` gives pydantic's `type` as `pydantic.<type>`: `string_too_short` is
+- Field errors carry pydantic's own `type` as `pydantic.<type>`: `string_too_short` is
   `pydantic.string_too_short`.
-- The event client's status of a poll answer's `error` without `status` is looked up by the full
-  code.
 - The code of an application's own `DfViewSetError` is used as given.
 - The JSON fields of an error in a `celery_viewset` result payload and in an idempotency record carry
-  a code of the namespace `fastapi-viewsets` without it, whatever the error's class, as in 0.11; a
-  code the package declares gains the namespace when the error is rebuilt.
+  the full code, and the reader reads it as given; a record 0.11 wrote replays with its bare code.
+- A request that fails validation is answered with `fastapi-viewsets.validation_failed` and its
+  failures in `field_errors`, keyed by field name, each `{code: "pydantic.<type>", params, detail}`
+  without pydantic's `input`, in place of FastAPI's list of errors.
+- An exception without a handler is answered with a 500 `ApiErrorBody` that names no part of it, in
+  place of plain-text `Internal Server Error`; it is re-raised after the response.
+- muxws: a command whose headers cannot be parsed is answered with `fastapi-viewsets.command_invalid`;
+  an exception before the response with `fastapi-viewsets.unhandled_error`, in place of a `null`
+  payload.
+- `TopicAnswer.error` of a poll is the refusal's `ApiErrorBody`; an authorizer's `HTTPException`
+  without a code refuses with `fastapi-viewsets.http_error`.
+- A `celery_viewset` worker pushes a `RequestValidationError` as it is, with `class`
+  `"RequestValidationError"`, and the FastAPI process raises it as a `RequestValidationError`; an
+  idempotency record of an exception without a handler holds the fields of `UnhandledError`.
+- A field error of a type pydantic does not declare (`pydantic_core.core_schema.ErrorType`) is
+  `pydantic.custom_error` with `params` `{type, ctx}`; the primary key in a create's body is
+  `fastapi-viewsets.pk_assigned_by_server`.
+- `NOT_FOUND_RESPONSE` documents the 404 with `ApiErrorBody`.
+- TS: `ApiErrorBody` is the body above, every field required. `toErrorDescription()` and
+  `toFieldErrors()` take an `ApiErrorBody`; `toFieldErrors()` reads `field_errors`. The event client
+  reports a topic error with the server's body and the answer's `status`, and leaves an answer whose
+  `error` is not an `ApiErrorBody` or that has no `status` unanswered. A gateway status is the
+  application's answer only with an `ApiErrorBody`.
+
+### Removed
+
+- `df_viewset_exception_handler`; `install_error_handlers(app)` replaces it.
+- `NotFoundResponse` (`fastapi_viewsets.response_classes`).
+- TS: `FieldErrorEntry` and `FieldErrorsBody`.
 
 ## [0.11.4] - 2026-10-19
 

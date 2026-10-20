@@ -703,3 +703,4 @@ def test_celery_viewset_server_pushes_request_validation_error_as_422():
     payload = json.loads(redis_mock.rpush.call_args[0][1])
     assert payload["http_status_code"] == 422
     assert payload["http_detail"][0]["loc"] == ["query", "year__in", 1]
+    assert payload["error"]["class"] == "RequestValidationError"

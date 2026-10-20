@@ -263,9 +263,9 @@ def test_a_filter_value_that_will_not_convert_is_a_422_on_the_query_parameter():
 
     response = client.get("/tracks", params={"year__in": "2001,abc"})
     assert response.status_code == 422
-    [error] = response.json()["detail"]
-    assert error["loc"] == ["query", "year__in", 1]
-    assert error["type"] == "int_parsing"
+    assert response.json()["detail_code"] == "fastapi-viewsets.validation_failed"
+    [error] = response.json()["field_errors"]["year__in.1"]
+    assert error["code"] == "pydantic.int_parsing"
 
 
 @pytest.mark.parametrize(("parameter", "value"), [("limit", -1), ("limit", 0), ("offset", -1)])
@@ -277,4 +277,4 @@ def test_a_page_window_out_of_range_is_a_422(parameter, value):
     client = client_for(PagedViewSet)
     response = client.get("/tracks", params={parameter: value})
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["query", parameter]
+    assert list(response.json()["field_errors"]) == [parameter]

@@ -123,3 +123,21 @@ They compose; using all three is normal.
 A list endpoint that offers several response shapes documents each of them automatically, with the
 example named after the `X-List-Shape` value that produces it — see
 [the list pipeline](./list-pipeline.md#declaring-a-shape). Nothing to write.
+
+## Error responses
+
+Every operation of a viewset documents its error responses with the named schema `ApiErrorBody`, the
+[error body](./error-codes#the-error-body), and `ApiFieldError`, one entry of its `field_errors`; every field of both
+has a description. Nothing to write:
+
+| status | when | examples |
+|---|---|---|
+| `404` | the operations that address an item by `pk` (`retrieve`, `update`, `partial_update`, `destroy`): `fastapi-viewsets.not_found` | `not_found` |
+| `422` | the request failed validation, `fastapi-viewsets.validation_failed` with `field_errors`; or a check of a valid request answers 422 (`fastapi-viewsets.idempotency_key_reused`, ...) | `validation_failed`, `idempotency_key_reused` |
+| `500` | an exception without a handler, `fastapi-viewsets.unhandled_error`; a deferred action that failed, `fastapi-viewsets.action_failed` | `unhandled_error` |
+| `default` | any other error: the package's codes by status, and `fastapi-viewsets.http_error` for an `HTTPException` without a code | `http_error`, `rate_limited` |
+
+The entries replace FastAPI's own `422` with `HTTPValidationError`, which no longer appears in the document. An
+entry the endpoint declares itself (`@router.get(..., responses={409: {...}})`) is kept, and replaces the package's
+entry of the same status. The entries are `fastapi_viewsets.response_classes.VIEWSET_ERROR_RESPONSES` and
+`NOT_FOUND_RESPONSE`.

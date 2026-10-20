@@ -1,8 +1,8 @@
 # Error Codes
 
-Every `HTTPException` this package raises on its own behalf carries a stable `code` and the
-`params` its English `detail` was built from, alongside `detail` itself. This page covers why that
-exists, how to opt into it on the backend, and how the frontend reads it.
+Every error response of the package has one body: a stable `code`, the `params` its English `detail` was built
+from, `detail` itself and, for a request that failed validation, the failures per field. This page covers why that
+exists, which errors carry which code, and how the frontend reads it.
 
 ## Design
 
@@ -13,26 +13,87 @@ recover what went wrong - both wrong. A `code` names the failure independently o
 `params` are the values that wording was interpolated with, so a client can rebuild the message in
 any language without ever reading `detail`.
 
-`code` and `params` are additive, top-level siblings - `detail_code` and `detail_params` - never
-nested inside `detail` itself: `detail` is a plain string, and `detail_code` and `detail_params`
-appear only once the application registers the handler:
-
-```python
-from fastapi_viewsets.exceptions import DfViewSetError, df_viewset_exception_handler
-
-app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
-```
-
-An application that never registers this receives `{"detail": "..."}`, from FastAPI's own default
-`HTTPException` handling. A view's own `raise HTTPException(status_code,
-detail="...")` is unaffected either way - only exceptions descending from `DfViewSetError` carry a
-`code`.
-
 The server never picks a locale for an error: `detail` is always English, and the client shows the
 error in its own language by its `code`.
 
-The handler is registered on the application, so it shapes a `DfViewSetError` over REST and over
-[muxws](./muxws) alike.
+### The error body
+
+Every error of a viewset's route is answered with `ApiErrorBody` (`fastapi_viewsets.error_responses`), over REST and
+over [muxws](./muxws) alike:
+
+```json
+{
+  "detail": "Item with pk 42 not found",
+  "detail_code": "fastapi-viewsets.not_found",
+  "detail_params": { "pk": 42 },
+  "field_errors": {}
+}
+```
+
+| Field | Value |
+|-------|-------|
+| `detail` | English text, interpolated from `detail_params` |
+| `detail_code` | the full code, `<namespace>.<code>` |
+| `detail_params` | the values `detail` was built from; `{}` without any |
+| `field_errors` | the failures of a request that failed validation, by field name (see [Field errors](#field-errors)); `{}` for every other error |
+
+The body is built from the exception the request raised:
+
+| Exception | Status | `detail_code` | `detail_params` |
+|-----------|--------|---------------|-----------------|
+| a `DfViewSetError` (the package's errors, an application's subclass) | its own | its `code` | its `params` |
+| `RequestValidationError` (FastAPI's validation of the request, or raised by the endpoint) | 422 | `fastapi-viewsets.validation_failed` | `{}` |
+| any other `HTTPException`, FastAPI's or Starlette's | its own | `fastapi-viewsets.http_error` | `{status}` |
+| any other exception | 500 | `fastapi-viewsets.unhandled_error` | `{}` |
+
+An `HTTPException` keeps its `headers`. Its `detail` is the body's `detail` when it is a string; any other `detail`
+is `detail_params.detail`, and the body's `detail` is the status phrase (`Bad Request`). The body of an unhandled
+exception names no part of it: `detail` is `Internal Server Error`, and the exception is re-raised after the
+response, so the server logs it as it logs any exception of a request. A status that allows no body (204, 304) is
+answered without one.
+
+`ApiErrorBody`, and `ApiFieldError` for one field error, are the named schemas of every error response in the
+viewsets' OpenAPI document (see [Documenting endpoints](./endpoint-docs#error-responses)).
+
+### The routes of a viewset
+
+The routes `route_viewset` adds answer every error of their endpoint, its dependencies and its request validation
+with the body, without any registration by the application:
+
+- the package's handler of `HTTPException` and of `RequestValidationError` replaces FastAPI's default handlers for
+  the request;
+- an exception without a handler is answered with 500 `fastapi-viewsets.unhandled_error` and re-raised.
+
+A handler the application registered itself takes precedence, as Starlette's lookup gives it: a handler for a class
+of exception (`app.add_exception_handler(MyDomainError, ...)`), for a status, for `HTTPException`, and for
+`Exception` or 500 answer as the application wrote them. A dependency with `yield` sees the exception before the
+response is built.
+
+### The other routes: `install_error_handlers`
+
+A route of the application outside the viewsets, and a request no route matches, are answered by FastAPI's own
+handlers: `{"detail": "..."}`, a 422 with pydantic's list of errors, plain-text `Internal Server Error`.
+`install_error_handlers(app)` registers handlers that answer them with the body too:
+
+```python
+from fastapi_viewsets.error_responses import install_error_handlers
+
+app = FastAPI()
+install_error_handlers(app)
+```
+
+It registers one handler for `DfViewSetError`, `HTTPException`, `RequestValidationError` and `Exception`. Starlette's
+routing errors are not the errors of a viewset: they are answered with the body only once the handlers are
+installed, as `fastapi-viewsets.http_error` with `detail` Starlette's text and the status in `detail_params`:
+
+| Request | Status | Body |
+|---------|--------|------|
+| a path no route matches | 404 | `{"detail": "Not Found", "detail_code": "fastapi-viewsets.http_error", "detail_params": {"status": 404}, "field_errors": {}}` |
+| a method the route of the path does not serve | 405 | `{"detail": "Method Not Allowed", "detail_code": "fastapi-viewsets.http_error", "detail_params": {"status": 405}, "field_errors": {}}`, with `Allow` |
+
+A viewset's `NotFoundError` (`fastapi-viewsets.not_found`, an item with no such `pk`) is an error of the viewset's
+route and carries its own code either way. A handler the application registers after `install_error_handlers`
+replaces the installed one for its class.
 
 ### Namespaces
 
@@ -48,7 +109,7 @@ same values in Python and TypeScript:
 | Constant | Value | Codes |
 |----------|-------|-------|
 | `ERROR_NAMESPACE` | `fastapi-viewsets` | the codes this package declares, e.g. `fastapi-viewsets.not_found` |
-| `ERROR_NAMESPACE_PYDANTIC` | `pydantic` | pydantic's error types, which [`toFieldErrors()`](#field-errors) forwards, e.g. `pydantic.string_too_short` |
+| `ERROR_NAMESPACE_PYDANTIC` | `pydantic` | pydantic's error types, which the [field errors](#field-errors) forward, e.g. `pydantic.string_too_short` |
 
 ```python
 from fastapi_viewsets import ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC
@@ -90,6 +151,21 @@ see [Frontend](#translating-the-codes).
 | `EventSubscriptionsExceededError(limit)` | 409 | `fastapi-viewsets.event_subscriptions_exceeded` | `{limit}` |
 | `EventCursorsExceededError(count, limit)` | 422 | `fastapi-viewsets.event_cursors_exceeded` | `{count, limit}` |
 | `CursorRequestError(error)` | 400 | one of the cursor codes below | varies |
+| `UnhandledError()` | 500 | `fastapi-viewsets.unhandled_error` | — |
+| `CommandInvalidError(reason)` | 400 | `fastapi-viewsets.command_invalid` | `{reason}` |
+
+`UnhandledError` is the error an exception without a handler is answered with, and the error a stored outcome of one
+is rebuilt as (see [Custom errors](#custom-errors)). `CommandInvalidError` answers a muxws stream addressed to a
+viewset whose headers no route can be matched against; `reason` is `address_missing` (no `:method` or `:path`),
+`address_type` (`:method` or `:path` is not a string), `path_relative` (`:path` does not start with `/`) or
+`query_type` (`:query` is neither a string nor a mapping).
+
+The codes the package answers errors with that no exception class of its own carries:
+
+| `code` | Status | `params` | When |
+|--------|--------|----------|------|
+| `fastapi-viewsets.validation_failed` | 422 | — | a `RequestValidationError`; the failures are in `field_errors` |
+| `fastapi-viewsets.http_error` | the exception's | `{status}`, and `{detail}` for a `detail` that is not a string | an `HTTPException` that is not a `DfViewSetError` |
 
 The cursor codes, raised as `fastapi_viewsets.cursor.CursorError` (a `ValueError` carrying `code`
 and `params`) when cursor pagination rejects a request, and surfaced through `CursorRequestError`:
@@ -106,8 +182,7 @@ and `params`) when cursor pagination rejects a request, and surfaced through `Cu
 from fastapi_viewsets.exceptions import NotFoundError
 
 raise NotFoundError(pk)
-# unregistered: {"detail": "Item with pk 42 not found"}
-# registered:   {"detail": "Item with pk 42 not found", "detail_code": "fastapi-viewsets.not_found", "detail_params": {"pk": 42}}
+# 404 {"detail": "Item with pk 42 not found", "detail_code": "fastapi-viewsets.not_found", "detail_params": {"pk": 42}, "field_errors": {}}
 ```
 
 ### Executor outcomes
@@ -146,30 +221,30 @@ class InsufficientBalanceError(DfViewSetError):
         super().__init__(402, message, "app.insufficient_balance", {"required": required, "available": available})
 ```
 
-Registering `df_viewset_exception_handler` for `DfViewSetError` covers every subclass, this
-package's own errors and an application's own alike.
+A route of a viewset answers every subclass with its `code` and `params`, the package's own errors and an
+application's own alike; `install_error_handlers` does the same for the application's other routes.
 
 An application's own subclass raised by a `celery_viewset` action reaches the FastAPI process as a
 `DfViewSetError` with the same status, `detail`, `code`, `params` and headers; only the classes
 `fastapi_viewsets.exceptions` defines are rebuilt as their own class.
 
 The error travels from the worker as JSON fields, in the result payload of the call, and an
-[idempotency](./idempotency) record stores it the same way. In those fields a `code` in the namespace
-`fastapi-viewsets` is written without it, as `not_found`, whatever the error's class; every other code is written as
-given. The reading process adds `ERROR_NAMESPACE` to a code without a namespace that the package declares (one of the
-codes on this page), whatever the class, and reads every other code as given. The fields of the package's own errors,
-and of an application's subclass of one, therefore carry the same code in every version, and the reader rebuilds the
-full code. The rule leaves these cases:
+[idempotency](./idempotency) record stores it the same way; a pickled `DfViewSetError` keeps its fields too. The
+fields hold the full code, `fastapi-viewsets.not_found` or the application's own, and the reader reads it as given.
+They hold the error, not the response body; the body is built when the response is, by the rules of
+[The error body](#the-error-body), so a replayed error and a result read from a worker are answered as the error was
+when it was raised:
 
-- A code that a later version of the package declares, read by an earlier version, is rebuilt without the namespace.
-- An application code without a namespace that equals one of the package's codes, such as `not_found`, is rebuilt as
-  the package's, `fastapi-viewsets.not_found`.
-- An application code in the namespace `fastapi-viewsets` that the package does not declare is rebuilt without the
-  namespace.
+| Error | Stored fields | Rebuilt as |
+|-------|---------------|------------|
+| a `DfViewSetError` | `status_code`, `detail`, `headers`, `class`, `code`, `params` | the class `class` names where `fastapi_viewsets.exceptions` defines it, else `DfViewSetError` |
+| another `HTTPException` | `status_code`, `detail`, `headers` | `HTTPException` |
+| `RequestValidationError` | `status_code` 422, pydantic's errors as `detail`, `headers` null, `class` `"RequestValidationError"` | `RequestValidationError` |
+| any other exception (an idempotency record; a `celery_viewset` worker answers it as `ActionFailedError`) | the fields of `UnhandledError` | `UnhandledError` |
 
 ## Frontend
 
-`@dynamicforms/fastapi-viewsets` converts an error body into an `ErrorDescription`: `code`,
+`@dynamicforms/fastapi-viewsets` reads errors as `ApiErrorBody`, and converts one into an `ErrorDescription`: `code`,
 `params`, the English `detail` and `origin: 'server'`. The interface has the shape of
 `ErrorDescription` in `@dynamicforms/vue-forms`, so the application renders and translates a
 server's errors with the same function as its validators' errors. The package holds no
@@ -178,42 +253,78 @@ translations. How an application converts an error into text in its own language
 the codes of this page are added to the application's translations under the prefixes of their namespaces (see
 [Translating the codes](#translating-the-codes)).
 
-### One error
+### The body of a failed call
 
-`toErrorDescription(body)` converts the body of a failed request:
+A failed call throws an `AxiosError` over REST and a `ViewSetRequestError` over muxws; both carry the response as
+`error.response`, with the body in `error.response.data`. `errorBodyOf(error)` returns that body when it is an
+`ApiErrorBody` (`isApiErrorBody(data)`). A call the BE did not answer has no body, and `errorBodyOf` builds one; this
+is the only place the client describes an error itself:
+
+| The call | `detail_code` | `detail_params` |
+|----------|---------------|-----------------|
+| got no response: a network failure, a timeout, a cancelled request, a muxws stream reset or a lost connection, any error without `response` | `fastapi-viewsets.no_response` | — |
+| got a response whose body is not an `ApiErrorBody`: a proxy's HTML 502, a route of the application without `install_error_handlers` | `fastapi-viewsets.unexpected_response` | `{status}`, null where the response has none |
 
 ```ts
-import { toErrorDescription } from '@dynamicforms/fastapi-viewsets';
+import { errorBodyOf, toErrorDescription } from '@dynamicforms/fastapi-viewsets';
 
-const error = toErrorDescription(body); // body: { detail, detail_code?, detail_params? }
-// { code: 'fastapi-viewsets.not_found', params: { pk: 42 }, detail: 'Item with pk 42 not found', origin: 'server' }
+try {
+  await itemsApi.retrieve(42);
+} catch (error) {
+  const description = toErrorDescription(errorBodyOf(error));
+  // { code: 'fastapi-viewsets.not_found', params: { pk: 42 }, detail: 'Item with pk 42 not found', origin: 'server' }
+}
 ```
+
+### One error
+
+`toErrorDescription(body)` converts an `ApiErrorBody`:
 
 | Field | Value |
 |-------|-------|
-| `code` | `detail_code`, unchanged; an empty string where the body has none (the handler is not registered, or the error is a view's own `HTTPException`) |
-| `params` | `detail_params` as the server sent them; `{}` where the body has none |
+| `code` | `detail_code`, unchanged |
+| `params` | `detail_params`, as the server sent them |
 | `detail` | `detail`, unchanged |
 | `origin` | `'server'` |
 
 ### Field errors
 
-A request whose body or parameters fail validation is answered by FastAPI with status 422 and a
-list of failures, one per failing value; over muxws the body is the same:
+A request whose body or parameters fail validation is answered with status 422,
+`fastapi-viewsets.validation_failed`, and its failures in `field_errors`, over REST and muxws alike:
 
 ```json
 {
-  "detail": [
-    { "type": "string_too_short", "loc": ["body", "name"], "msg": "String should have at least 3 characters", "input": "a", "ctx": { "min_length": 3 } },
-    { "type": "int_parsing", "loc": ["body", "address", "zip"], "msg": "Input should be a valid integer", "input": "x" }
-  ]
+  "detail": "The request failed validation",
+  "detail_code": "fastapi-viewsets.validation_failed",
+  "detail_params": {},
+  "field_errors": {
+    "name": [{ "code": "pydantic.string_too_short", "params": { "min_length": 3 }, "detail": "String should have at least 3 characters" }],
+    "address.zip": [{ "code": "pydantic.int_parsing", "params": {}, "detail": "Input should be a valid integer" }]
+  }
 }
 ```
 
-`toFieldErrors(body)` converts it into errors keyed by field name. The name is `loc` without its
-first element (`body`, `query`, `path`, `header` or `cookie`), joined with `.`; a failure of the
-body as a whole is keyed `''`. Each error has pydantic's `type` in the namespace `ERROR_NAMESPACE_PYDANTIC` as
-`code` (`pydantic.string_too_short`), `ctx` as `params` and `msg` as `detail`:
+The server builds `field_errors` from pydantic's errors. The name of a field is pydantic's `loc` without its first
+element (`body`, `query`, `path`, `header` or `cookie`), joined with `.`; a failure of the body as a whole is keyed
+`''`. Each entry (`ApiFieldError`) has pydantic's own `type` in the namespace `ERROR_NAMESPACE_PYDANTIC` as `code`
+(`pydantic.string_too_short`), pydantic's `ctx` as `params` (an exception in it, such as the `error` of a
+`value_error`, as its message) and pydantic's `msg` as `detail`. pydantic's `input` is left out.
+
+A type pydantic does not declare, the type of an application's `PydanticCustomError`, is reported as
+`pydantic.custom_error`, with `params` `{type, ctx}`: the custom type and the error's `ctx`, nested so that no key of
+`ctx` collides with `type`. pydantic's own types are the values of `pydantic_core.core_schema.ErrorType`
+(`PYDANTIC_ERROR_TYPES` in `fastapi_viewsets.error_responses`). The package's own custom type, a primary key in the
+body of a create, is `fastapi-viewsets.pk_assigned_by_server`:
+
+```json
+{
+  "slug": [{ "code": "pydantic.custom_error", "params": { "type": "app.slug_taken", "ctx": { "slug": "blue" } }, "detail": "Slug blue is taken" }],
+  "id": [{ "code": "fastapi-viewsets.pk_assigned_by_server", "params": {}, "detail": "The primary key is assigned by the server" }]
+}
+```
+
+`toFieldErrors(body)` converts `field_errors` into `ErrorDescription`s keyed by the same names; it is `{}` for a body
+without field errors:
 
 ```ts
 import { toFieldErrors } from '@dynamicforms/fastapi-viewsets';
@@ -232,9 +343,8 @@ refuses it, writes the server's errors to the form before it throws:
 
 ```ts
 import {
-  type ApiErrorBody,
   type ErrorDescription,
-  type FieldErrorsBody,
+  errorBodyOf,
   toErrorDescription,
   toFieldErrors,
 } from '@dynamicforms/fastapi-viewsets';
@@ -265,16 +375,11 @@ const save = new Action({
       async (value, target) => {
         try {
           return await itemsApi.update(value.id, value);
-        } catch (error: any) {
-          const status = error.response?.status;
-          const body = error.response?.data;
-          if (status === 422) {
-            for (const [name, errors] of Object.entries(toFieldErrors(body as FieldErrorsBody))) {
-              addErrors(elementAt(target, name) ?? target, errors);
-            }
-          } else if (typeof body?.detail === 'string') {
-            addErrors(target, [toErrorDescription(body as ApiErrorBody)]);
-          }
+        } catch (error) {
+          const body = errorBodyOf(error);
+          const fields = Object.entries(toFieldErrors(body));
+          for (const [name, errors] of fields) addErrors(elementAt(target, name) ?? target, errors);
+          if (fields.length === 0) addErrors(target, [toErrorDescription(body)]);
           throw error;
         }
       },
@@ -297,8 +402,8 @@ holds a value other than the one it held when the error was written.
 
 The codes are pydantic's error types in the namespace `pydantic` (`pydantic.missing`,
 `pydantic.string_too_short`, `pydantic.int_parsing`, ...), and `params` holds the values pydantic built `msg` from.
-`toFieldErrors()` prefixes `type` as it arrives. The type of a `PydanticCustomError` is the application's own string;
-one that contains a `.` or is not snake_case gives a code outside the grammar above.
+`pydantic.custom_error` carries the application's own type in `params.type`, so a translation of it looks that type
+up.
 
 ### Codes
 
@@ -329,6 +434,18 @@ The codes this package raises, with their English `detail`:
 | `fastapi-viewsets.cursor_stale` | `this cursor was issued for a different ordering or filter - start from the first page` | — |
 | `fastapi-viewsets.cursor_missing_keys` | `cursor has no value for ordering key(s): {missing}` | `missing` |
 | `fastapi-viewsets.cursor_value_mismatch` | `cursor value for '{name}' does not fit the field: {error}` | `name`, `error` |
+| `fastapi-viewsets.validation_failed` | `The request failed validation` | — |
+| `fastapi-viewsets.pk_assigned_by_server` (a field error) | `The primary key is assigned by the server` | — |
+| `fastapi-viewsets.http_error` | the `HTTPException`'s `detail`; its status phrase for a `detail` that is not a string | `status`, `detail` |
+| `fastapi-viewsets.unhandled_error` | `Internal Server Error` | — |
+| `fastapi-viewsets.command_invalid` | `The stream headers carry no :method or :path` (`address_missing`), `:method and :path must both be strings` (`address_type`), `:path must be an absolute path` (`path_relative`), `:query must be a string or a mapping` (`query_type`) | `reason` |
+
+The codes the client builds in `errorBodyOf()`:
+
+| `code` | `detail` | Params |
+|--------|----------|--------|
+| `fastapi-viewsets.no_response` | `The server did not answer` | — |
+| `fastapi-viewsets.unexpected_response` | `The server answered with status {status} and a body that is not an error body`; `unknown` for a `status` of null | `status` |
 
 `allowed` and `missing` are arrays. An application's own `DfViewSetError` subclasses add their codes
 to the translations under the prefix of their namespace.
@@ -368,5 +485,6 @@ function errorText(error: ErrorDescription): string {
 }
 ```
 
-An error without a code (`code` is `''`) has no key and renders as its `detail`. vue-forms' codes are mapped the same
-way through vue-forms' own `ERROR_NAMESPACE`.
+A `fastapi-viewsets.http_error` carries the `detail` of an `HTTPException` the application or a library raised
+without a code; a translation keyed by `http_error` renders it by `params.status`. vue-forms' codes are mapped the
+same way through vue-forms' own `ERROR_NAMESPACE`.

@@ -23,7 +23,7 @@ from starlette.exceptions import HTTPException
 from ..conf import settings
 from ..context import Context
 from ..decorators.route_viewset import route_viewset
-from ..error_namespace import _namespaced
+from ..error_responses import ApiErrorBody, error_body
 from ..exceptions import EventCursorsExceededError, EventTopicInvalidError
 from ..mux_ws.transports import transports
 from ..routing import PEER_SCOPE_KEY
@@ -92,13 +92,14 @@ class TopicAnswer(BaseModel):
     """
     The answer of `poll` for one topic. `events` is None when the log cannot answer the cursor; the
     caller then re-reads the state it displays. A topic that was refused, or that has neither form,
-    has `rev` and `events` None, `error` set to the code of the refusal and `status` to its HTTP
-    status. `error`, `status` and `scope` are left out of the serialized answer when they are None.
+    has `rev` and `events` None, `error` set to the `ApiErrorBody` of the refusal, as a call refused
+    with it is answered, and `status` to its HTTP status. `error`, `status` and `scope` are left out
+    of the serialized answer when they are None.
     """
 
     rev: int | None
     events: list[PolledEvent] | None
-    error: str | None = None
+    error: ApiErrorBody | None = None
     status: int | None = None
     """The HTTP status of the refusal; set on every answer with `error`."""
     scope: str | None = None
@@ -145,11 +146,6 @@ def _reauthorizer(request: Request, topic: str) -> Callable[[], Awaitable[str]]:
         return (await resolve_topic(copy, topic)).store_topic
 
     return reauthorize
-
-
-def _error_code(error: HTTPException) -> str:
-    code = getattr(error, "code", None)
-    return code if isinstance(code, str) and code else _namespaced("event_topic_refused")
 
 
 class EventsViewSet:
@@ -210,11 +206,12 @@ class EventsViewSet:
         """
         Answers every cursor of the request. Per topic the authorizers run, then the store topic is
         resolved (see `fastapi_viewsets.events.scopes`); a refused topic answers `error` with the
-        refusal's code (`fastapi-viewsets.event_topic_refused`, `fastapi-viewsets.event_scope_missing`,
-        or the `code` of the `HTTPException` an authorizer raised, FastAPI's or Starlette's,
-        `fastapi-viewsets.event_topic_refused` for one without a `code`) and `status` with its HTTP
-        status, and `fastapi-viewsets.event_topic_invalid` with 422 for a topic of neither form, and
-        the other topics are unaffected. A poll over muxws that refuses a topic with a status from 400
+        `ApiErrorBody` of the refusal (`fastapi-viewsets.event_topic_refused`,
+        `fastapi-viewsets.event_scope_missing`, or the body of the `HTTPException` an authorizer raised,
+        FastAPI's or Starlette's: its own code for a `DfViewSetError`, `fastapi-viewsets.http_error`
+        for any other) and `status` with its HTTP status, and the body of
+        `fastapi-viewsets.event_topic_invalid` with 422 for a topic of neither form, and the other
+        topics are unaffected. A poll over muxws that refuses a topic with a status from 400
         to 499 other than 429 removes the socket's subscription to it;
         a 429 or a status of 500 or above keeps it. A None cursor answers the topic's current rev
         and no events, a cursor equal to it `[]`, and any other cursor the events since it, or
@@ -240,15 +237,16 @@ class EventsViewSet:
         admitted: list[ResolvedTopic] = []
         for topic in cursors:
             if not is_valid_topic(topic):
+                invalid = EventTopicInvalidError(topic)
                 answers[topic] = TopicAnswer(
-                    rev=None, events=None, error=_namespaced("event_topic_invalid"), status=422
+                    rev=None, events=None, error=error_body(invalid), status=invalid.status_code
                 )
                 continue
             try:
                 await authorize_topic(request, context, topic)
                 resolved = await resolve_topic(request, topic)
             except HTTPException as error:
-                answers[topic] = TopicAnswer(rev=None, events=None, error=_error_code(error), status=error.status_code)
+                answers[topic] = TopicAnswer(rev=None, events=None, error=error_body(error), status=error.status_code)
                 if peer is not None and delivery._is_refusal(error):
                     await delivery.unsubscribe(peer, topic)
                 continue

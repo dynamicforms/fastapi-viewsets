@@ -13,7 +13,6 @@ from ..action_configuration import action_configuration
 from ..collection_viewset import CollectionViewSet
 from ..conf import settings
 from ..decorators import route_viewset
-from ..exceptions import df_viewset_exception_handler, DfViewSetError
 from ..middleware.auth import Session
 from ..middleware.auth.authorization import Authorization
 from ..middleware.idempotency import Idempotency
@@ -23,7 +22,7 @@ from ..mux_ws.registry import reset_registry
 from ..mux_ws.server import process_command
 from .authorizers import allow_all, allow_authenticated, DeclaredSources, ViewsetTopics
 from .changes import ChangeEvents
-from .conftest import FakePeer
+from .conftest import envelope, FakePeer
 from .delivery import subscriptions, topics_of, wait_for_pushes
 from .event import Event
 from .sources import publish, source
@@ -97,7 +96,6 @@ class Application:
         self.music = MusicViewSet
         self.events = register_events(events_router)
         self.app = FastAPI()
-        self.app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
         self.app.include_router(music_router, prefix="/api")
         self.app.include_router(events_router)
 
@@ -383,12 +381,21 @@ async def test_poll_answers_every_cursor(application, transport):
             },
             "imports:7": {"rev": imported, "events": []},
             "imports:8": {"rev": 0, "events": []},
-            "orgs:9": {"rev": None, "events": None, "error": "fastapi-viewsets.event_topic_refused", "status": 403},
+            "orgs:9": {
+                "rev": None,
+                "events": None,
+                "error": envelope("Topic orgs:9 is not admitted", "event_topic_refused", topic="orgs:9"),
+                "status": 403,
+            },
             "imports": {"rev": 0, "events": None},
             "Not A Topic": {
                 "rev": None,
                 "events": None,
-                "error": "fastapi-viewsets.event_topic_invalid",
+                "error": envelope(
+                    "Topic Not A Topic is neither a path starting with / nor a source name with an optional key",
+                    "event_topic_invalid",
+                    topic="Not A Topic",
+                ),
                 "status": 422,
             },
         },
@@ -525,14 +532,19 @@ async def test_poll_refuses_each_topic_with_its_own_code(application):
 
     anonymous = (await application.rest("/events/poll", body)).json()["topics"]
     assert anonymous == {
-        "/api/music": {"rev": None, "events": None, "error": "fastapi-viewsets.session_expired", "status": 401},
+        "/api/music": {
+            "rev": None,
+            "events": None,
+            "error": envelope("Session expired or invalid", "session_expired"),
+            "status": 401,
+        },
         "/open": {"rev": 0, "events": []},
     }
     member = (await application.rest("/events/poll", body, **{"x-user": "jure"})).json()["topics"]
     assert member["/api/music"] == {
         "rev": None,
         "events": None,
-        "error": "fastapi-viewsets.not_authorized",
+        "error": envelope("Not authorized to perform this action", "not_authorized"),
         "status": 403,
     }
     admin = (await application.rest("/events/poll", body, **{"x-user": "admin"})).json()["topics"]
@@ -549,7 +561,12 @@ async def test_poll_counts_one_call_of_the_viewset_action_per_topic(application)
 
     assert (await application.rest("/events/poll", body)).json()["topics"]["/api/music"]["rev"] == 0
     second = (await application.rest("/events/poll", body)).json()["topics"]["/api/music"]
-    assert second == {"rev": None, "events": None, "error": "fastapi-viewsets.rate_limited", "status": 429}
+    assert second == {
+        "rev": None,
+        "events": None,
+        "error": envelope("Rate limit exceeded", "rate_limited"),
+        "status": 429,
+    }
 
 
 @pytest.mark.asyncio
@@ -656,7 +673,12 @@ async def test_poll_answers_a_starlette_http_exception_of_an_authorizer_in_its_t
     assert response.status_code == 200
     assert response.json()["topics"] == {
         "imports": {"rev": 0, "events": []},
-        "orgs:9": {"rev": None, "events": None, "error": "fastapi-viewsets.event_topic_refused", "status": 403},
+        "orgs:9": {
+            "rev": None,
+            "events": None,
+            "error": envelope("Forbidden", "http_error", status=403),
+            "status": 403,
+        },
     }
 
 
@@ -699,7 +721,7 @@ async def test_viewset_topics_runs_the_dependencies_of_include_router(include_kw
     assert stream.status == (403 if guarded else 200)
     member = (await application.rest("/events/poll", body)).json()["topics"]["/admin/secrets"]
     assert member == (
-        {"rev": None, "events": None, "error": "fastapi-viewsets.event_topic_refused", "status": 403}
+        {"rev": None, "events": None, "error": envelope("admins only", "http_error", status=403), "status": 403}
         if guarded
         else {"rev": 0, "events": []}
     )
@@ -721,7 +743,9 @@ async def test_viewset_topics_refuses_a_topic_whose_dependency_parameters_do_not
         "/orgs/seven/secrets": {
             "rev": None,
             "events": None,
-            "error": "fastapi-viewsets.event_topic_refused",
+            "error": envelope(
+                "Topic /orgs/seven/secrets is not admitted", "event_topic_refused", topic="/orgs/seven/secrets"
+            ),
             "status": 403,
         },
     }
@@ -764,6 +788,6 @@ async def test_a_viewset_under_a_parametrised_prefix_is_followed_on_the_path_wit
 
     body = {"cursors": {"/orgs/7/tracks": 0}}
     outsider = (await application.rest("/events/poll", body, **{"x-user": "bor"})).json()["topics"]
-    assert outsider["/orgs/7/tracks"]["error"] == "fastapi-viewsets.not_authorized"
+    assert outsider["/orgs/7/tracks"]["error"]["detail_code"] == "fastapi-viewsets.not_authorized"
     member = (await application.rest("/events/poll", body, **{"x-user": "ana"})).json()["topics"]
     assert [event["payload"]["op"] for event in member["/orgs/7/tracks"]["events"]] == ["deleted"]

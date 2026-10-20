@@ -323,8 +323,9 @@ class Idempotency(Middleware):
       is a cookie.
     - An error outcome is stored too and raised again on a repeat: an `HTTPException` as it was
       raised (a `DfViewSetError` with its `code` and `params`, and with its class when
-      `fastapi_viewsets.exceptions` defines it), a `RequestValidationError` as a 422 with its
-      errors as `detail`, any other exception as a 500 with `detail` `"Internal Server Error"`.
+      `fastapi_viewsets.exceptions` defines it), a `RequestValidationError` as the
+      `RequestValidationError` of the same errors, any other exception as an `UnhandledError`. The
+      repeat is answered with the body of `fastapi_viewsets.error_responses`, as the first call was.
       An `ActionDispatchError` is not an outcome: the action did not run (it was not sent, or the
       executor revoked, rejected or did not know it), the record is deleted, and a repeat runs the
       call again.

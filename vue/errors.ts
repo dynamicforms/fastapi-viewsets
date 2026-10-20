@@ -1,36 +1,29 @@
-import { ERROR_NAMESPACE_PYDANTIC } from './error-namespace';
+import { namespaced } from './error-namespace';
 
 /**
- * The body of a failed request that names one failure. `detail` is plain English text.
- * `detail_code` and `detail_params` appear when the server has registered
- * `df_viewset_exception_handler` (see the Python side's `fastapi_viewsets.exceptions`) and the
- * error is a `DfViewSetError`; a view's own `raise HTTPException(status_code, detail="...")` carries
- * `detail` alone. `detail_code` is a full code, `<namespace>.<code>`: `fastapi-viewsets.<code>` for
- * the errors the package raises, the application's own code as given for its own errors.
+ * One failure of one value of a request that failed validation: pydantic's error type in the
+ * namespace `ERROR_NAMESPACE_PYDANTIC` as `code` (`pydantic.string_too_short`), the values pydantic
+ * built its message from as `params`, and pydantic's English message as `detail`. A type pydantic
+ * does not declare is `pydantic.custom_error` with `params` `{ type, ctx }`.
+ */
+export interface ApiFieldError {
+  code: string;
+  params: Record<string, unknown>;
+  detail: string;
+}
+
+/**
+ * The body of every error response of the BE. `detail` is English text, `detail_code` the full code
+ * (`<namespace>.<code>`: `fastapi-viewsets.<code>` for the errors the package raises, the
+ * application's own code as given for its own errors), `detail_params` the values `detail` was
+ * interpolated with. `field_errors` holds the failures of a request that failed validation
+ * (`fastapi-viewsets.validation_failed`) by field name, and is `{}` for every other error.
  */
 export interface ApiErrorBody {
   detail: string;
-  detail_code?: string;
-  detail_params?: Record<string, unknown>;
-}
-
-/**
- * One failure of a request body's validation, as FastAPI reports it with status 422. `loc` is the
- * path to the failing value, starting with where it was read from (`body`, `query`, `path`,
- * `header`, `cookie`); `type` is pydantic's code for the failure and `ctx` the values its `msg` was
- * built from.
- */
-export interface FieldErrorEntry {
-  type: string;
-  loc: (string | number)[];
-  msg: string;
-  input?: unknown;
-  ctx?: Record<string, unknown>;
-}
-
-/** The body of a 422 response to a request whose parameters or body failed validation. */
-export interface FieldErrorsBody {
-  detail: FieldErrorEntry[];
+  detail_code: string;
+  detail_params: Record<string, unknown>;
+  field_errors: Record<string, ApiFieldError[]>;
 }
 
 /**
@@ -46,36 +39,81 @@ export interface ErrorDescription {
   readonly origin: 'server';
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
- * The error a failed request's body describes: `detail_code` as `code`, unchanged (an empty string
- * where the body has none), `detail_params` as `params` and `detail` unchanged.
+ * Whether `data` is an `ApiErrorBody`: `detail` and `detail_code` strings, `detail_params` and
+ * `field_errors` objects.
+ */
+export function isApiErrorBody(data: unknown): data is ApiErrorBody {
+  return (
+    isRecord(data) &&
+    typeof data.detail === 'string' &&
+    typeof data.detail_code === 'string' &&
+    isRecord(data.detail_params) &&
+    isRecord(data.field_errors)
+  );
+}
+
+/**
+ * The `ApiErrorBody` of what a call threw: the body of its response (`error.response.data`, as both
+ * `AxiosError` and `ViewSetRequestError` carry it) when that is an `ApiErrorBody`. A call the BE did
+ * not answer has none, and the client builds it here:
+ *
+ * - `fastapi-viewsets.no_response`: the error carries no `response` (a network failure, a timeout, a
+ *   cancelled request, a muxws stream that was reset or lost its connection, any other exception);
+ * - `fastapi-viewsets.unexpected_response`, `detail_params` `{ status }`: the response's body is not an
+ *   `ApiErrorBody` (a proxy's HTML 502, a route of the application without `install_error_handlers`).
+ */
+export function errorBodyOf(error: unknown): ApiErrorBody {
+  const response = (error as { response?: unknown } | null | undefined)?.response;
+  if (!isRecord(response)) {
+    return {
+      detail: 'The server did not answer',
+      detail_code: namespaced('no_response'),
+      detail_params: {},
+      field_errors: {},
+    };
+  }
+  if (isApiErrorBody(response.data)) return response.data;
+  const status = typeof response.status === 'number' ? response.status : null;
+  return {
+    detail: `The server answered with status ${status ?? 'unknown'} and a body that is not an error body`,
+    detail_code: namespaced('unexpected_response'),
+    detail_params: { status },
+    field_errors: {},
+  };
+}
+
+/**
+ * The error an `ApiErrorBody` describes: `detail_code` as `code`, `detail_params` as `params` and
+ * `detail` unchanged.
  */
 export function toErrorDescription(body: ApiErrorBody): ErrorDescription {
   return {
-    code: body.detail_code ?? '',
-    params: body.detail_params ?? {},
+    code: body.detail_code,
+    params: body.detail_params,
     detail: body.detail,
     origin: 'server',
   };
 }
 
 /**
- * The errors of a 422 body, keyed by the name of the failing field: `loc` without its first
- * element, joined with `.` (`['body', 'address', 'city']` is `address.city`). A failure of the body
- * as a whole is keyed `''`. Each error has pydantic's `type` in the namespace
- * `ERROR_NAMESPACE_PYDANTIC` as `code` (`pydantic.string_too_short`), `ctx` as `params` and `msg`
- * as `detail`.
+ * The `field_errors` of an `ApiErrorBody` as errors keyed by field name: `loc` of pydantic's error
+ * without its first element, joined with `.` (`address.city`); a failure of the body as a whole is
+ * keyed `''`. `{}` for a body without field errors.
  */
-export function toFieldErrors(body: FieldErrorsBody): Record<string, ErrorDescription[]> {
+export function toFieldErrors(body: ApiErrorBody): Record<string, ErrorDescription[]> {
   const errors: Record<string, ErrorDescription[]> = {};
-  for (const entry of body.detail) {
-    const field = entry.loc.slice(1).join('.');
-    (errors[field] ??= []).push({
-      code: `${ERROR_NAMESPACE_PYDANTIC}.${entry.type}`,
-      params: entry.ctx ?? {},
-      detail: entry.msg,
+  for (const [field, entries] of Object.entries(body.field_errors)) {
+    errors[field] = entries.map((entry) => ({
+      code: entry.code,
+      params: entry.params,
+      detail: entry.detail,
       origin: 'server',
-    });
+    }));
   }
   return errors;
 }

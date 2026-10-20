@@ -66,9 +66,9 @@ export { route_rest, RestProxyImpl } from './rest-proxy';
 export type { MuxwsPeerLike, MuxwsPeerSource, MuxwsProxy, MuxwsProxyOptions, MuxwsStreamLike } from './muxws-proxy';
 export { route_muxws, MuxwsProxyImpl } from './muxws-proxy';
 
-export type { ApiErrorBody, ErrorDescription, FieldErrorEntry, FieldErrorsBody } from './errors';
+export type { ApiErrorBody, ApiFieldError, ErrorDescription } from './errors';
 export { ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC } from './error-namespace';
-export { toErrorDescription, toFieldErrors } from './errors';
+export { errorBodyOf, isApiErrorBody, toErrorDescription, toFieldErrors } from './errors';
 
 export type {
   EventAxiosLike,

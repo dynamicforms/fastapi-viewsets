@@ -20,7 +20,6 @@ from ..decorators import route_viewset
 from ..decorators.celery_viewset import celery_viewset_client, celery_viewset_server
 from ..decorators.lifecycle_runner import lifecycle_runner
 from ..decorators.lifecycle_runner_test import _Executor
-from ..exceptions import df_viewset_exception_handler, DfViewSetError
 from ..middleware import ActionExecution, ExecutionRef, Middleware, ViewSetResult
 from ..mixins import BulkViewSetMixin, CreateMixin, DestroyMixin, ViewSetMixin
 from ..mux_ws.registry import reset_registry
@@ -64,7 +63,6 @@ def changes(*pks) -> list[dict]:
 
 def app_for(router: APIRouter, prefix: str = "") -> FastAPI:
     app = FastAPI()
-    app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
     app.include_router(router, prefix=prefix)
     return app
 
@@ -694,7 +692,12 @@ def test_a_resolver_that_raises_before_the_dispatch_refuses_the_call_and_sends_n
         "/api/things", json={"title": "Seven"}, headers={"x-org": "7"}
     )
     assert response.status_code == 403
-    assert response.json() == {"detail": "read only"}
+    assert response.json() == {
+        "detail": "read only",
+        "detail_code": "fastapi-viewsets.http_error",
+        "detail_params": {"status": 403},
+        "field_errors": {},
+    }
     assert executor.sent == []
 
 

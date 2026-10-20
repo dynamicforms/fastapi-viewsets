@@ -13,7 +13,6 @@ from ..collection_viewset import CollectionViewSet
 from ..conf import settings
 from ..context import Context
 from ..decorators import route_viewset
-from ..exceptions import df_viewset_exception_handler, DfViewSetError
 from ..middleware import Middleware, ViewSetResult
 from ..middleware.idempotency import Idempotency
 from ..middleware.rate_limiter import RateLimiter
@@ -23,7 +22,7 @@ from ..mux_ws.server import process_command
 from . import scopes as scopes_module
 from .authorizers import allow_all, allow_authenticated, DeclaredSources, ViewsetTopics
 from .changes import Change, ChangeEvents, RecordsChanged, write_topic
-from .conftest import FakePeer
+from .conftest import envelope, FakePeer
 from .delivery import subscriptions, topics_of, wait_for_pushes
 from .scopes import (
     event_scope,
@@ -192,7 +191,6 @@ class Scoped:
         self.tags, self.org_tags = TagsViewSet, OrgTagsViewSet
         self.events = action_configuration({SelectedOrg: False})(register_events(events))
         self.app = FastAPI()
-        self.app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
         self.app.include_router(api, prefix="/api/v1")
         self.app.include_router(orgs)
         self.app.include_router(events)
@@ -295,7 +293,16 @@ async def test_a_client_cannot_name_a_store_topic():
     assert stream.payload["detail_code"] == "fastapi-viewsets.event_topic_invalid"
     topics = await app.poll({"cursors": {"@tags:7": None}}, **user("ana"))
     assert topics == {
-        "@tags:7": {"rev": None, "events": None, "error": "fastapi-viewsets.event_topic_invalid", "status": 422}
+        "@tags:7": {
+            "rev": None,
+            "events": None,
+            "error": envelope(
+                "Topic @tags:7 is neither a path starting with / nor a source name with an optional key",
+                "event_topic_invalid",
+                topic="@tags:7",
+            ),
+            "status": 422,
+        }
     }
 
 
@@ -400,21 +407,23 @@ async def test_a_refusal_in_call_a_short_circuit_and_a_missing_key_refuse_the_to
     assert blocked["/orgs/7/tags"] == {
         "rev": None,
         "events": None,
-        "error": "fastapi-viewsets.event_topic_refused",
+        "error": envelope("Topic /orgs/7/tags is not admitted", "event_topic_refused", topic="/orgs/7/tags"),
         "status": 403,
     }
     stranger = await app.poll({"cursors": {"/orgs/7/tags": None}}, **user("bor"))
     assert stranger["/orgs/7/tags"] == {
         "rev": None,
         "events": None,
-        "error": "fastapi-viewsets.event_topic_refused",
+        "error": envelope("not a member of the organisation", "http_error", status=403),
         "status": 403,
     }
     nobody = await app.poll({"cursors": {"/api/v1/tags": None}}, **user("ana"))
     assert nobody["/api/v1/tags"] == {
         "rev": None,
         "events": None,
-        "error": "fastapi-viewsets.event_scope_missing",
+        "error": envelope(
+            "Topic /api/v1/tags has no event scope for this caller", "event_scope_missing", topic="/api/v1/tags"
+        ),
         "status": 403,
     }
 
@@ -429,7 +438,7 @@ async def test_poll_answers_the_status_of_a_resolver_s_refusal():
     assert topics["/orgs/7/tags"] == {
         "rev": None,
         "events": None,
-        "error": "fastapi-viewsets.event_topic_refused",
+        "error": envelope("the membership service is unavailable", "http_error", status=503),
         "status": 503,
     }
 
@@ -513,7 +522,7 @@ async def test_one_gate_run_answers_every_topic_of_a_request_with_the_same_route
     assert second["/orgs/7/tags"] == {
         "rev": None,
         "events": None,
-        "error": "fastapi-viewsets.rate_limited",
+        "error": envelope("Rate limit exceeded", "rate_limited"),
         "status": 429,
     }
 
