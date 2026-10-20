@@ -154,11 +154,18 @@ An application's own subclass raised by a `celery_viewset` action reaches the Fa
 `fastapi_viewsets.exceptions` defines are rebuilt as their own class.
 
 The error travels from the worker as JSON fields, in the result payload of the call, and an
-[idempotency](./idempotency) record stores it the same way. In those fields the `code` of an error of a class
-`fastapi_viewsets.exceptions` defines (other than `DfViewSetError` itself) is written without the namespace, as
-`not_found`, and the reading process adds `ERROR_NAMESPACE` back when it rebuilds the error. The code of any other
-error is written as given. A worker and a FastAPI process of different versions of this package read each other's
-payloads, and a stored record keeps its meaning across an upgrade.
+[idempotency](./idempotency) record stores it the same way. In those fields a `code` in the namespace
+`fastapi-viewsets` is written without it, as `not_found`, whatever the error's class; every other code is written as
+given. The reading process adds `ERROR_NAMESPACE` to a code without a namespace that the package declares (one of the
+codes on this page), whatever the class, and reads every other code as given. The fields of the package's own errors,
+and of an application's subclass of one, therefore carry the same code in every version, and the reader rebuilds the
+full code. The rule leaves these cases:
+
+- A code that a later version of the package declares, read by an earlier version, is rebuilt without the namespace.
+- An application code without a namespace that equals one of the package's codes, such as `not_found`, is rebuilt as
+  the package's, `fastapi-viewsets.not_found`.
+- An application code in the namespace `fastapi-viewsets` that the package does not declare is rebuilt without the
+  namespace.
 
 ## Frontend
 

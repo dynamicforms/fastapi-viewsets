@@ -53,8 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code.
 - The code of an application's own `DfViewSetError` is used as given.
 - The JSON fields of an error in a `celery_viewset` result payload and in an idempotency record carry
-  the code of an error of a class `fastapi_viewsets.exceptions` defines without the namespace, as in
-  0.11; the namespace is added when the error is rebuilt.
+  a code of the namespace `fastapi-viewsets` without it, whatever the error's class, as in 0.11; a
+  code the package declares gains the namespace when the error is rebuilt.
 
 ## [0.11.4] - 2026-10-19
 

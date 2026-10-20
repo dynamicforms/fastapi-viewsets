@@ -23,7 +23,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .cursor import CursorError
-from .error_namespace import _namespaced, _own_code
+from .error_namespace import _code_from_wire, _code_to_wire, _namespaced
 
 
 class DfViewSetError(HTTPException):
@@ -239,11 +239,6 @@ class EventCursorsExceededError(DfViewSetError):
         super().__init__(422, message, _namespaced("event_cursors_exceeded"), {"count": count, "limit": limit})
 
 
-def _is_own_class(cls: type) -> bool:
-    """Whether `cls` is a subclass of `DfViewSetError` this module defines, other than `DfViewSetError` itself."""
-    return cls is not DfViewSetError and getattr(sys.modules[__name__], cls.__name__, None) is cls
-
-
 def _error_to_jsonable(error: BaseException) -> dict[str, Any]:
     """
     `error` as the JSON fields of an `HTTPException`: `status_code`, `detail` and `headers`, plus
@@ -251,9 +246,9 @@ def _error_to_jsonable(error: BaseException) -> dict[str, Any]:
     errors as `detail`; any other error a 500 with `detail` `"Internal Server Error"`.
 
     The fields are read back by another process (a `celery_viewset` result) or later (an idempotency
-    record), possibly by another version of this package. `code` of an error of a class this module
-    defines is written without the namespace (`not_found`), so a reader that reads codes without one
-    reads it; `_error_from_jsonable` adds the namespace back. Every other code is written as given.
+    record), possibly by another version of this package. A `code` in the namespace `ERROR_NAMESPACE`
+    is written without it (`not_found`), whatever the error's class; every other code is written as
+    given. `_error_from_jsonable` adds the namespace back to the codes this package declares.
     """
     if isinstance(error, RequestValidationError):
         return {"status_code": 422, "detail": jsonable_encoder(error.errors()), "headers": None}
@@ -265,8 +260,7 @@ def _error_to_jsonable(error: BaseException) -> dict[str, Any]:
         }
         if isinstance(error, DfViewSetError):
             encoded["class"] = type(error).__name__
-            own = _own_code(error.code) if _is_own_class(type(error)) and isinstance(error.code, str) else None
-            encoded["code"] = error.code if own is None else own
+            encoded["code"] = _code_to_wire(error.code)
             encoded["params"] = jsonable_encoder(error.params)
         return encoded
     return {"status_code": 500, "detail": "Internal Server Error", "headers": None}
@@ -277,17 +271,17 @@ def _error_from_jsonable(data: dict[str, Any]) -> HTTPException:
     The exception `_error_to_jsonable` encoded. Fields with a `code` are a `DfViewSetError`: of the
     class `class` names when this module defines a `DfViewSetError` subclass of that name, else of
     `DfViewSetError` itself, with the same fields either way. Fields without one are an
-    `HTTPException`. The `code` of a class this module defines other than `DfViewSetError` gains
-    the namespace `ERROR_NAMESPACE` where it has none.
+    `HTTPException`. A `code` without a namespace that this package declares (`not_found`) gains
+    `ERROR_NAMESPACE`, whatever the class; every other code is read as given. A code a later version
+    of this package declares is therefore read without the namespace, and an application's code
+    without a namespace that equals one of this package's codes is read as this package's.
     """
     if "code" not in data:
         return HTTPException(status_code=data["status_code"], detail=data["detail"], headers=data.get("headers"))
     cls = getattr(sys.modules[__name__], data.get("class") or "", None)
     if not (isinstance(cls, type) and issubclass(cls, DfViewSetError)):
         cls = DfViewSetError
-    code = data["code"]
-    if _is_own_class(cls) and isinstance(code, str) and "." not in code:
-        code = _namespaced(code)
+    code = _code_from_wire(data["code"])
     return _rebuild_error(cls, data["status_code"], data["detail"], code, data.get("params"), data.get("headers"))
 
 

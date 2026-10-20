@@ -1,6 +1,8 @@
 import pickle
 import re
 
+from pathlib import Path
+
 import pytest
 
 from fastapi import APIRouter, FastAPI
@@ -8,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from fastapi_viewsets import ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC
 from fastapi_viewsets.cursor import CursorError
-from fastapi_viewsets.error_namespace import _namespaced
+from fastapi_viewsets.error_namespace import _DECLARED_CODES, _namespaced
 from fastapi_viewsets.exceptions import (
     _error_from_jsonable,
     _error_to_jsonable,
@@ -264,7 +266,7 @@ def test_the_encoded_fields_rebuild_the_error():
     }
 
 
-def test_the_encoded_fields_carry_the_code_of_a_class_of_this_module_without_the_namespace():
+def test_the_encoded_fields_carry_a_code_of_the_package_namespace_without_it():
     assert _error_to_jsonable(NotFoundError(3))["code"] == "not_found"
     assert _error_to_jsonable(CursorRequestError(CursorError("x", code=_namespaced("cursor_stale"))))["code"] == (
         "cursor_stale"
@@ -288,7 +290,7 @@ class _ApplicationNotFoundError(NotFoundError):
     pass
 
 
-@pytest.mark.parametrize("code", ["app.conflict", "conflict", "fastapi-viewsets.conflict"])
+@pytest.mark.parametrize("code", ["app.conflict", "conflict", "app.not_found"])
 def test_the_code_of_an_application_error_is_encoded_and_rebuilt_as_given(code):
     encoded = _error_to_jsonable(_ApplicationError(code))
     assert encoded["code"] == code
@@ -298,10 +300,45 @@ def test_the_code_of_an_application_error_is_encoded_and_rebuilt_as_given(code):
     assert base.code == code
 
 
-def test_an_application_subclass_of_an_error_of_this_module_keeps_the_full_code():
+def test_an_application_subclass_of_an_error_of_this_module_travels_without_the_namespace():
+    # a 0.11 reader reads the code it wrote itself
     encoded = _error_to_jsonable(_ApplicationNotFoundError(3))
-    assert (encoded["class"], encoded["code"]) == ("_ApplicationNotFoundError", "fastapi-viewsets.not_found")
-    assert _error_from_jsonable(encoded).code == "fastapi-viewsets.not_found"
+    assert (encoded["class"], encoded["code"]) == ("_ApplicationNotFoundError", "not_found")
+    rebuilt = _error_from_jsonable(encoded)
+    assert (type(rebuilt), rebuilt.code) == (DfViewSetError, "fastapi-viewsets.not_found")
+
+
+def test_a_record_without_the_namespace_of_a_class_the_reader_does_not_define_gains_it():
+    # a 0.11 record of an application subclass, and a class a later version defines, with a code this
+    # version declares
+    for class_name in ("MyNotFound", "NotFoundInALaterVersionError"):
+        data = {"status_code": 404, "detail": "x", "headers": None, "class": class_name, "code": "not_found"}
+        rebuilt = _error_from_jsonable(data)
+        assert (type(rebuilt), rebuilt.code) == (DfViewSetError, "fastapi-viewsets.not_found")
+
+
+def test_a_code_this_version_does_not_declare_is_read_as_given():
+    data = {"status_code": 409, "detail": "x", "headers": None, "class": "LaterError", "code": "later_code"}
+    assert _error_from_jsonable(data).code == "later_code"
+    # a code in the package namespace that this version does not declare loses the namespace on the way
+    encoded = _error_to_jsonable(_ApplicationError("fastapi-viewsets.later_code"))
+    assert (encoded["code"], _error_from_jsonable(encoded).code) == ("later_code", "later_code")
+
+
+def test_an_application_code_without_a_namespace_that_equals_a_package_code_is_read_as_the_packages():
+    rebuilt = _error_from_jsonable(_error_to_jsonable(_ApplicationError("not_found")))
+    assert rebuilt.code == "fastapi-viewsets.not_found"
+
+
+def test_the_declared_codes_are_the_codes_the_source_builds():
+    root = Path(__file__).parent
+    built = {
+        match
+        for path in root.rglob("*.py")
+        if not path.name.endswith("_test.py")
+        for match in re.findall(r'_namespaced\("([a-z0-9_]+)"\)', path.read_text())
+    }
+    assert built == _DECLARED_CODES
 
 
 def test_the_package_exports_the_namespaces_of_its_error_codes():

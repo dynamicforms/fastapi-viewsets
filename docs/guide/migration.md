@@ -48,8 +48,11 @@ releases at once, work from the bottom of the page upwards.
       own. The package passes them on as given.
 - [ ] A worker and a FastAPI process of 0.11 and 0.12 read each other's `celery_viewset` result
       payloads, and 0.12 replays a 0.11 idempotency record: the payloads and records carry the
-      package's codes without the namespace in both versions. A 0.11 process passes on the codes
-      without the namespace.
+      package's codes without the namespace in both versions, also for an application's subclass of
+      one of the package's errors. 0.12 rebuilds them with the namespace; a 0.11 process passes them
+      on without it. An application code without a namespace that equals one of the package's codes
+      is rebuilt by 0.12 as the package's (see
+      [Custom errors](./error-codes#custom-errors)).
 
 ## Upgrading to v0.11.0 (from v0.10.x)
 

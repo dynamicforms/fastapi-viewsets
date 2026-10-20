@@ -260,5 +260,6 @@ call to it, `GET` included, is preflighted.
 - A repeat of a call that raised an exception other than `HTTPException` or `RequestValidationError`
   answers `{"detail": "Internal Server Error"}` through FastAPI's `HTTPException` handling, not through
   the application's handler for `Exception`.
-- A `celery_viewset` call answered `504 result_timeout` or `503 result_reader_stopped` stores that
-  outcome, although the worker may complete the action later; a repeat answers the stored error.
+- A `celery_viewset` call answered `504 fastapi-viewsets.result_timeout` or
+  `503 fastapi-viewsets.result_reader_stopped` stores that outcome, although the worker may complete
+  the action later; a repeat answers the stored error.
