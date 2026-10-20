@@ -174,12 +174,12 @@ A refusal is reported with:
 
 | Topic `error` | `response.status` without `status` |
 |---------------|-------------------|
-| `event_topic_invalid` | 422 |
-| `event_topic_refused` | 403 |
-| `event_scope_missing` | 403 |
-| `not_authorized` | 403 |
-| `session_expired` | 401 |
-| `rate_limited` | 429 |
+| `fastapi-viewsets.event_topic_invalid` | 422 |
+| `fastapi-viewsets.event_topic_refused` | 403 |
+| `fastapi-viewsets.event_scope_missing` | 403 |
+| `fastapi-viewsets.not_authorized` | 403 |
+| `fastapi-viewsets.session_expired` | 401 |
+| `fastapi-viewsets.rate_limited` | 429 |
 | any other code | 403 |
 
 A status of 429 or of 500 and above is not a refusal: the topic stays, is polled on the next

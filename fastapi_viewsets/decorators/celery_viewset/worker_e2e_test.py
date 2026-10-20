@@ -345,24 +345,36 @@ def _task_ids(celery_app, key, which: str, name: str) -> list[str]:
 
 
 def test_a_soft_time_limit_while_suspended(client, probe, key):
-    assert _error(client.post("/jobs/suspended", params={"seconds": 5})) == (504, "action_interrupted", "time_limit")
+    assert _error(client.post("/jobs/suspended", params={"seconds": 5})) == (
+        504,
+        "fastapi-viewsets.action_interrupted",
+        "time_limit",
+    )
     assert ["suspended", "ActionInterruptedError", "time_limit"] in _entries(probe, key, "execute")
 
 
 def test_a_soft_time_limit_in_synchronous_code(client, probe, key):
-    assert _error(client.post("/jobs/busy", params={"seconds": 5})) == (504, "action_interrupted", "time_limit")
+    assert _error(client.post("/jobs/busy", params={"seconds": 5})) == (
+        504,
+        "fastapi-viewsets.action_interrupted",
+        "time_limit",
+    )
     assert ["busy", "ActionInterruptedError", "time_limit"] in _entries(probe, key, "execute")
 
 
 def test_a_hard_time_limit(client, probe, key):
-    assert _error(client.post("/jobs/hard", params={"seconds": 5})) == (504, "action_interrupted", "time_limit")
+    assert _error(client.post("/jobs/hard", params={"seconds": 5})) == (
+        504,
+        "fastapi-viewsets.action_interrupted",
+        "time_limit",
+    )
     assert _eventually(lambda: ["interrupted", "hard", "time_limit"] in _entries(probe, key, "transitions"))
     # the process ends on SIGTERM, which unwinds as SystemExit where it gets the chance
     assert all(entry[1] == "SystemExit" for entry in _entries(probe, key, "execute") if entry[0] == "hard")
 
 
 def test_a_lost_worker_process(client, probe, key):
-    assert _error(client.post("/jobs/exit")) == (503, "action_interrupted", "lost")
+    assert _error(client.post("/jobs/exit")) == (503, "fastapi-viewsets.action_interrupted", "lost")
     assert _eventually(lambda: ["interrupted", "exit", "lost"] in _entries(probe, key, "transitions"))
 
 
@@ -371,7 +383,7 @@ def test_a_terminated_execution(client, probe, key, celery_app):
     task_ids = _eventually(lambda: _task_ids(celery_app, key, "active", f"{key}.long"))
     celery_app.control.revoke(task_ids[0], terminate=True)
     thread.join(timeout=20)
-    assert _error(outcome["response"]) == (503, "action_interrupted", "terminated")
+    assert _error(outcome["response"]) == (503, "fastapi-viewsets.action_interrupted", "terminated")
     assert _eventually(lambda: ["interrupted", "long", "terminated"] in _entries(probe, key, "transitions"))
     # the suspended execution unwinds as the SystemExit of SIGTERM, and only the supervisor reports it
     assert ["long", "SystemExit", None] in _entries(probe, key, "execute")
@@ -390,12 +402,12 @@ def test_a_call_revoked_before_it_started(client, probe, key, celery_app):
     thread.join(timeout=20)
     blocker.join(timeout=20)
     assert blocked["response"].status_code == 200
-    assert _error(outcome["response"]) == (503, "action_dispatch_failed", "revoked")
+    assert _error(outcome["response"]) == (503, "fastapi-viewsets.action_dispatch_failed", "revoked")
     assert _eventually(lambda: ["not_run", "quick", "revoked"] in _entries(probe, key, "transitions"))
 
 
 def test_an_unknown_task(client, probe, key):
-    assert _error(client.post("/jobs/missing")) == (503, "action_dispatch_failed", "unknown_task")
+    assert _error(client.post("/jobs/missing")) == (503, "fastapi-viewsets.action_dispatch_failed", "unknown_task")
     assert _eventually(lambda: ["not_run", "missing", "unknown_task"] in _entries(probe, key, "transitions"))
 
 
@@ -414,7 +426,11 @@ def test_executor_started_runs_once_in_each_process(client, probe, key, worker):
 @in_gevent_pool
 @pytest.mark.parametrize("action", ["hard", "hard_suspended"])
 def test_a_hard_time_limit_in_the_gevent_pool(client, probe, key, action):
-    assert _error(client.post(f"/jobs/{action}", params={"seconds": 5})) == (504, "action_interrupted", "time_limit")
+    assert _error(client.post(f"/jobs/{action}", params={"seconds": 5})) == (
+        504,
+        "fastapi-viewsets.action_interrupted",
+        "time_limit",
+    )
     assert [action, "ActionInterruptedError", "time_limit"] in _entries(probe, key, "execute")
     assert _eventually(lambda: ["interrupted", action, "time_limit"] in _entries(probe, key, "transitions"))
     assert client.post("/jobs/quick").json() == "quick"
@@ -433,7 +449,7 @@ def test_executor_started_runs_once_on_each_loop_of_the_gevent_pool(client, prob
 
 @pytest.mark.parametrize("pool", ["solo"], indirect=True, scope="module")
 def test_a_process_exit_in_the_solo_pool(client, probe, key, worker):
-    assert _error(client.post("/jobs/system_exit")) == (503, "action_interrupted", "terminated")
+    assert _error(client.post("/jobs/system_exit")) == (503, "fastapi-viewsets.action_interrupted", "terminated")
     assert _eventually(lambda: ["interrupted", "system_exit", "terminated"] in _entries(probe, key, "transitions"))
     worker.wait(timeout=15)
 

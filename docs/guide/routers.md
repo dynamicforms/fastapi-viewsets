@@ -146,7 +146,7 @@ def celery_viewset(
 | `task_prefix` | `str` | — | Prefix for all registered Celery task names, e.g. `"items"` |
 | `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle on the worker side (same semantics as `route_viewset` — see [ViewSet Lifecycle](./lifecycle)) |
 | `redis_client` | `redis.Redis \| None` | `None` | Redis client used to pass results back to FastAPI. Required in both modes; without it the decorator raises `ValueError`. |
-| `result_timeout` | `float \| None` | `3600.0` (`DEFAULT_RESULT_TIMEOUT`) | Client mode: seconds a call waits for its result before it raises `ResultTimeoutError` (504, `result_timeout`). `None` waits without a limit. Ignored in worker mode. |
+| `result_timeout` | `float \| None` | `3600.0` (`DEFAULT_RESULT_TIMEOUT`) | Client mode: seconds a call waits for its result before it raises `ResultTimeoutError` (504, `fastapi-viewsets.result_timeout`). `None` waits without a limit. Ignored in worker mode. |
 
 ### Usage
 
@@ -231,14 +231,14 @@ and that process's reader pops it. Any number of FastAPI processes, on any numbe
 one Redis. Every push renews the list's expiry to one hour, so the list of a process that has exited
 is removed from Redis.
 
-A call raises `ResultTimeoutError` (504, `result_timeout`) when its result does not arrive within
+A call raises `ResultTimeoutError` (504, `fastapi-viewsets.result_timeout`) when its result does not arrive within
 `result_timeout` seconds, one hour by default. Every outcome the worker observes reaches the caller
 as soon as it happens (see [Outcomes of a call](#outcomes-of-a-call)); `result_timeout` covers what
 the worker cannot observe: a supervisor process that is itself killed, or a task message that
 cannot be decoded.
 
 A call pending when `stop_result_reader` stops the reader of its `queue_key`, or when that reader task
-is cancelled, raises `ResultReaderStoppedError` (503, `result_reader_stopped`, param `queue_key`). A
+is cancelled, raises `ResultReaderStoppedError` (503, `fastapi-viewsets.result_reader_stopped`, param `queue_key`). A
 cancelled call removes its pending entry; its result, if the worker still sends one, is logged as
 having no pending call and dropped. `send_task` runs in a worker thread, so a slow broker does not
 block the event loop.
@@ -325,7 +325,7 @@ carries that execution's context and request, unless it passes a `context` of it
 execution as its `parent`. A call made outside any call carries an empty context and no request.
 
 A call whose arguments cannot be serialized raises `ActionDispatchError` (503,
-`action_dispatch_failed`, reason `serialization`), and a call whose task cannot be sent raises it with
+`fastapi-viewsets.action_dispatch_failed`, reason `serialization`), and a call whose task cannot be sent raises it with
 reason `send`; the error that prevented the dispatch is its `__cause__`. The scope key of a call
 of a [scoped class](./events#scoped-classes) is resolved before the arguments are serialized; an
 exception of its resolver propagates unchanged and no task is sent.

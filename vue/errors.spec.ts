@@ -1,19 +1,27 @@
+import { ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC } from './error-namespace';
 import { toErrorDescription, toFieldErrors } from './errors';
+
+import * as entry from './index';
 
 describe('toErrorDescription', () => {
   it('should take the code, params and detail of a coded body, with origin server', () => {
     const error = toErrorDescription({
       detail: 'Item with pk 5 not found',
-      detail_code: 'not_found',
+      detail_code: 'fastapi-viewsets.not_found',
       detail_params: { pk: 5 },
     });
 
     expect(error).toEqual({
-      code: 'not_found',
+      code: 'fastapi-viewsets.not_found',
       params: { pk: 5 },
       detail: 'Item with pk 5 not found',
       origin: 'server',
     });
+  });
+
+  it('should pass an application code on as the server sent it', () => {
+    expect(toErrorDescription({ detail: 'Conflict', detail_code: 'app.conflict' }).code).toBe('app.conflict');
+    expect(toErrorDescription({ detail: 'Conflict', detail_code: 'conflict' }).code).toBe('conflict');
   });
 
   it('should give a body without a code an empty code and no params', () => {
@@ -28,7 +36,7 @@ describe('toErrorDescription', () => {
   it('should keep params as the server sent them', () => {
     const error = toErrorDescription({
       detail: "unsupported list shape 'paged'; this endpoint offers cursor, flat",
-      detail_code: 'unsupported_list_shape',
+      detail_code: 'fastapi-viewsets.unsupported_list_shape',
       detail_params: { shape: 'paged', allowed: ['cursor', 'flat'] },
     });
 
@@ -59,16 +67,16 @@ describe('toFieldErrors', () => {
     expect(errors).toEqual({
       name: [
         {
-          code: 'string_too_short',
+          code: 'pydantic.string_too_short',
           params: { min_length: 3 },
           detail: 'String should have at least 3 characters',
           origin: 'server',
         },
       ],
-      age: [{ code: 'int_parsing', params: {}, detail: 'Input should be a valid integer', origin: 'server' }],
+      age: [{ code: 'pydantic.int_parsing', params: {}, detail: 'Input should be a valid integer', origin: 'server' }],
       'address.city': [
         {
-          code: 'string_too_short',
+          code: 'pydantic.string_too_short',
           params: { min_length: 3 },
           detail: 'String should have at least 3 characters',
           origin: 'server',
@@ -87,6 +95,17 @@ describe('toFieldErrors', () => {
     });
 
     expect(Object.keys(errors)).toEqual(['', 'items.0']);
-    expect(errors['items.0'].map((e) => e.code)).toEqual(['a', 'b']);
+    expect(errors['items.0'].map((e) => e.code)).toEqual(['pydantic.a', 'pydantic.b']);
+  });
+});
+
+describe('error namespaces', () => {
+  it('should be exported from the package root with the values of the Python package', () => {
+    expect(entry.ERROR_NAMESPACE).toBe('fastapi-viewsets');
+    expect(entry.ERROR_NAMESPACE_PYDANTIC).toBe('pydantic');
+    expect([ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC]).toEqual([
+      entry.ERROR_NAMESPACE,
+      entry.ERROR_NAMESPACE_PYDANTIC,
+    ]);
   });
 });

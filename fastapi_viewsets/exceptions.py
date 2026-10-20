@@ -7,6 +7,10 @@ wrong independently of `detail`'s wording, and `params` are the raw values `deta
 interpolated with; both reach the response body only once the application registers
 `df_viewset_exception_handler` for `DfViewSetError` (see that function). A view's own
 `raise HTTPException(status_code, detail="...")` is unaffected either way.
+
+`code` is a full code, `<namespace>.<code>`: the errors this module defines carry codes in the
+namespace `ERROR_NAMESPACE` (`fastapi-viewsets.not_found`). The code of an application's own
+`DfViewSetError` is used as given; the application prefixes it with a namespace of its own.
 """
 
 import sys
@@ -19,10 +23,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .cursor import CursorError
+from .error_namespace import _code_from_wire, _code_to_wire, _namespaced
 
 
 class DfViewSetError(HTTPException):
-    """Base for every `HTTPException` this package raises on its own behalf."""
+    """
+    Base for every `HTTPException` this package raises on its own behalf. `code` is stored as given;
+    the subclasses this module defines pass a code in the namespace `ERROR_NAMESPACE`.
+    """
 
     def __init__(self, status_code: int, message: str, code: str, params: dict[str, Any] | None = None):
         super().__init__(status_code=status_code, detail=message)
@@ -51,7 +59,7 @@ def _rebuild_error(
 
 class NotFoundError(DfViewSetError):
     def __init__(self, pk: Any):
-        super().__init__(404, f"Item with pk {pk} not found", "not_found", {"pk": pk})
+        super().__init__(404, f"Item with pk {pk} not found", _namespaced("not_found"), {"pk": pk})
 
 
 class ReadOnlyCollectionError(DfViewSetError):
@@ -59,22 +67,22 @@ class ReadOnlyCollectionError(DfViewSetError):
     read-only mapping)."""
 
     def __init__(self):
-        super().__init__(405, "This collection is read-only", "read_only")
+        super().__init__(405, "This collection is read-only", _namespaced("read_only"))
 
 
 class SessionExpiredError(DfViewSetError):
     def __init__(self):
-        super().__init__(401, "Session expired or invalid", "session_expired")
+        super().__init__(401, "Session expired or invalid", _namespaced("session_expired"))
 
 
 class NotAuthorizedError(DfViewSetError):
     def __init__(self):
-        super().__init__(403, "Not authorized to perform this action", "not_authorized")
+        super().__init__(403, "Not authorized to perform this action", _namespaced("not_authorized"))
 
 
 class RateLimitedError(DfViewSetError):
     def __init__(self):
-        super().__init__(429, "Rate limit exceeded", "rate_limited")
+        super().__init__(429, "Rate limit exceeded", _namespaced("rate_limited"))
 
 
 class ActionOutcomeUnknownError(DfViewSetError):
@@ -89,7 +97,7 @@ class ResultTimeoutError(ActionOutcomeUnknownError):
 
     def __init__(self, task: str, timeout: float):
         message = f"No result for {task} within {timeout} s"
-        super().__init__(504, message, "result_timeout", {"task": task, "timeout": timeout})
+        super().__init__(504, message, _namespaced("result_timeout"), {"task": task, "timeout": timeout})
 
 
 class ResultReaderStoppedError(ActionOutcomeUnknownError):
@@ -97,7 +105,7 @@ class ResultReaderStoppedError(ActionOutcomeUnknownError):
 
     def __init__(self, queue_key: str):
         message = f"The result reader for {queue_key} stopped before the result arrived"
-        super().__init__(503, message, "result_reader_stopped", {"queue_key": queue_key})
+        super().__init__(503, message, _namespaced("result_reader_stopped"), {"queue_key": queue_key})
 
 
 class ActionDispatchError(DfViewSetError):
@@ -117,7 +125,7 @@ class ActionDispatchError(DfViewSetError):
 
     def __init__(self, task: str, reason: str | None = None):
         message = f"{task} could not be handed to its executor"
-        super().__init__(503, message, "action_dispatch_failed", {"task": task, "reason": reason})
+        super().__init__(503, message, _namespaced("action_dispatch_failed"), {"task": task, "reason": reason})
 
 
 class ActionInterruptedError(DfViewSetError):
@@ -142,7 +150,7 @@ class ActionInterruptedError(DfViewSetError):
     def __init__(self, task: str, reason: str):
         message = self._MESSAGES.get(reason, "{task} was interrupted").format(task=task)
         status_code = 504 if reason == "time_limit" else 503
-        super().__init__(status_code, message, "action_interrupted", {"task": task, "reason": reason})
+        super().__init__(status_code, message, _namespaced("action_interrupted"), {"task": task, "reason": reason})
 
 
 class ActionFailedError(DfViewSetError):
@@ -159,14 +167,16 @@ class ActionFailedError(DfViewSetError):
 
     def __init__(self, task: str | None, reason: str = "error"):
         message = f"{task} failed" if task else "The action failed"
-        super().__init__(500, message, "action_failed", {"task": task, "reason": reason})
+        super().__init__(500, message, _namespaced("action_failed"), {"task": task, "reason": reason})
 
 
 class IdempotencyKeyInvalidError(DfViewSetError):
     """An `Idempotency-Key` header that is not a single, non-empty Structured Field string."""
 
     def __init__(self):
-        super().__init__(400, "Idempotency-Key must be a non-empty Structured Field string", "idempotency_key_invalid")
+        super().__init__(
+            400, "Idempotency-Key must be a non-empty Structured Field string", _namespaced("idempotency_key_invalid")
+        )
 
 
 class IdempotencyKeyReusedError(DfViewSetError):
@@ -174,13 +184,13 @@ class IdempotencyKeyReusedError(DfViewSetError):
 
     def __init__(self, key: str):
         message = f"Idempotency key {key} was used for a different request"
-        super().__init__(422, message, "idempotency_key_reused", {"key": key})
+        super().__init__(422, message, _namespaced("idempotency_key_reused"), {"key": key})
 
 
 class UnsupportedListShapeError(DfViewSetError):
     def __init__(self, shape: str, allowed: list[str]):
         message = f"unsupported list shape {shape!r}; this endpoint offers {', '.join(allowed)}"
-        super().__init__(422, message, "unsupported_list_shape", {"shape": shape, "allowed": allowed})
+        super().__init__(422, message, _namespaced("unsupported_list_shape"), {"shape": shape, "allowed": allowed})
 
 
 class CursorRequestError(DfViewSetError):
@@ -195,14 +205,14 @@ class EventTopicInvalidError(DfViewSetError):
 
     def __init__(self, topic: str):
         message = f"Topic {topic} is neither a path starting with / nor a source name with an optional key"
-        super().__init__(422, message, "event_topic_invalid", {"topic": topic})
+        super().__init__(422, message, _namespaced("event_topic_invalid"), {"topic": topic})
 
 
 class EventTopicRefusedError(DfViewSetError):
     """A topic no event authorizer admitted to the caller."""
 
     def __init__(self, topic: str):
-        super().__init__(403, f"Topic {topic} is not admitted", "event_topic_refused", {"topic": topic})
+        super().__init__(403, f"Topic {topic} is not admitted", _namespaced("event_topic_refused"), {"topic": topic})
 
 
 class EventScopeMissingError(DfViewSetError):
@@ -210,7 +220,7 @@ class EventScopeMissingError(DfViewSetError):
 
     def __init__(self, topic: str):
         message = f"Topic {topic} has no event scope for this caller"
-        super().__init__(403, message, "event_scope_missing", {"topic": topic})
+        super().__init__(403, message, _namespaced("event_scope_missing"), {"topic": topic})
 
 
 class EventSubscriptionsExceededError(DfViewSetError):
@@ -218,7 +228,7 @@ class EventSubscriptionsExceededError(DfViewSetError):
 
     def __init__(self, limit: int):
         message = f"This socket already holds {limit} topics"
-        super().__init__(409, message, "event_subscriptions_exceeded", {"limit": limit})
+        super().__init__(409, message, _namespaced("event_subscriptions_exceeded"), {"limit": limit})
 
 
 class EventCursorsExceededError(DfViewSetError):
@@ -226,7 +236,7 @@ class EventCursorsExceededError(DfViewSetError):
 
     def __init__(self, count: int, limit: int):
         message = f"A poll carries at most {limit} cursors, this one carries {count}"
-        super().__init__(422, message, "event_cursors_exceeded", {"count": count, "limit": limit})
+        super().__init__(422, message, _namespaced("event_cursors_exceeded"), {"count": count, "limit": limit})
 
 
 def _error_to_jsonable(error: BaseException) -> dict[str, Any]:
@@ -234,6 +244,11 @@ def _error_to_jsonable(error: BaseException) -> dict[str, Any]:
     `error` as the JSON fields of an `HTTPException`: `status_code`, `detail` and `headers`, plus
     `class`, `code` and `params` for a `DfViewSetError`. A `RequestValidationError` is a 422 with its
     errors as `detail`; any other error a 500 with `detail` `"Internal Server Error"`.
+
+    The fields are read back by another process (a `celery_viewset` result) or later (an idempotency
+    record), possibly by another version of this package. A `code` in the namespace `ERROR_NAMESPACE`
+    is written without it (`not_found`), whatever the error's class; every other code is written as
+    given. `_error_from_jsonable` adds the namespace back to the codes this package declares.
     """
     if isinstance(error, RequestValidationError):
         return {"status_code": 422, "detail": jsonable_encoder(error.errors()), "headers": None}
@@ -245,7 +260,7 @@ def _error_to_jsonable(error: BaseException) -> dict[str, Any]:
         }
         if isinstance(error, DfViewSetError):
             encoded["class"] = type(error).__name__
-            encoded["code"] = error.code
+            encoded["code"] = _code_to_wire(error.code)
             encoded["params"] = jsonable_encoder(error.params)
         return encoded
     return {"status_code": 500, "detail": "Internal Server Error", "headers": None}
@@ -256,21 +271,25 @@ def _error_from_jsonable(data: dict[str, Any]) -> HTTPException:
     The exception `_error_to_jsonable` encoded. Fields with a `code` are a `DfViewSetError`: of the
     class `class` names when this module defines a `DfViewSetError` subclass of that name, else of
     `DfViewSetError` itself, with the same fields either way. Fields without one are an
-    `HTTPException`.
+    `HTTPException`. A `code` without a namespace that this package declares (`not_found`) gains
+    `ERROR_NAMESPACE`, whatever the class; every other code is read as given. A code a later version
+    of this package declares is therefore read without the namespace, and an application's code
+    without a namespace that equals one of this package's codes is read as this package's.
     """
     if "code" not in data:
         return HTTPException(status_code=data["status_code"], detail=data["detail"], headers=data.get("headers"))
     cls = getattr(sys.modules[__name__], data.get("class") or "", None)
     if not (isinstance(cls, type) and issubclass(cls, DfViewSetError)):
         cls = DfViewSetError
-    return _rebuild_error(
-        cls, data["status_code"], data["detail"], data["code"], data.get("params"), data.get("headers")
-    )
+    code = _code_from_wire(data["code"])
+    return _rebuild_error(cls, data["status_code"], data["detail"], code, data.get("params"), data.get("headers"))
 
 
 async def df_viewset_exception_handler(_request: Request, exc: DfViewSetError) -> JSONResponse:
     """
-    Adds `detail_code` and `detail_params` alongside `detail` in the response body.
+    Adds `detail_code` and `detail_params` alongside `detail` in the response body. `detail_code` is
+    the error's full `code`: `fastapi-viewsets.<code>` for the errors this package raises, the
+    application's own code as given for its own subclasses.
 
     Opt in once, for `DfViewSetError` - every exception this package raises on its own descends
     from it:

@@ -488,7 +488,7 @@ async def test_the_apps_exception_handler_shapes_a_viewset_error():
     await process_command(ABSENT, stream, app=app)
     assert stream.status == rest.status_code == 404
     assert stream.payload == rest.json()
-    assert stream.payload["detail_code"] == "not_found"
+    assert stream.payload["detail_code"] == "fastapi-viewsets.not_found"
 
 
 @pytest.mark.asyncio

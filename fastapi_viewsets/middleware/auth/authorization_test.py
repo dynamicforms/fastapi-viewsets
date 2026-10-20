@@ -69,7 +69,7 @@ async def test_callable_config_returning_false_rejects_with_403():
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "Not authorized to perform this action"
-    assert exc_info.value.code == "not_authorized"
+    assert exc_info.value.code == "fastapi-viewsets.not_authorized"
 
 
 @pytest.mark.asyncio

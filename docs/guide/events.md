@@ -80,7 +80,7 @@ of each scope key. A Starlette `Mount` path in front of the application is not p
 
 The store keeps a third form, `@{name}:{key}`, the store topic of a [scoped](#scoped-topics) viewset
 topic. The server derives it from the subscribing request; a client that sends it receives
-`event_topic_invalid`.
+`fastapi-viewsets.event_topic_invalid`.
 
 ### Custom topics: `source()`
 
@@ -326,16 +326,16 @@ refuse a foreign `Origin` (see [muxws](./muxws#authentication)).
 `subscribe`:
 
 1. reads the socket; without one, `RuntimeError`;
-2. a topic of neither form is 422 `event_topic_invalid`;
-3. runs the [authorizers](#authorization); a refusal is 403 `event_topic_refused`, or the status of
+2. a topic of neither form is 422 `fastapi-viewsets.event_topic_invalid`;
+3. runs the [authorizers](#authorization); a refusal is 403 `fastapi-viewsets.event_topic_refused`, or the status of
    the `HTTPException` an authorizer raised;
 4. resolves the store topic: the topic itself, or for a [scoped](#scoped-topics) topic
-   `@{name}:{key}` from the gate run; a resolver that answers `None` is 403 `event_scope_missing`;
+   `@{name}:{key}` from the gate run; a resolver that answers `None` is 403 `fastapi-viewsets.event_scope_missing`;
    a refusal of step 3 or 4 with a status from 400 to 499 other than 429 removes the socket's
    subscription to the topic, if it holds one; a 429 or 5xx leaves it as it is;
 5. subscribes the socket to the store topic; a socket that already holds
    `settings.viewsets_event_max_subscriptions` other topics (default `256`) is 409
-   `event_subscriptions_exceeded`;
+   `fastapi-viewsets.event_subscriptions_exceeded`;
 6. answers the store topic's current rev, read after the subscription is in the table, so every
    event published after the rev the answer carries is pushed to the socket while the store's reader
    receives events, and the scope key for a scoped topic.
@@ -368,7 +368,7 @@ nor authorizes the topic.
     },
     "imports:7": {"rev": 3, "events": []},
     "/orgs/7/tags": {"rev": 12, "events": [], "scope": "7"},
-    "org:9": {"rev": null, "events": null, "error": "event_topic_refused", "status": 403}
+    "org:9": {"rev": null, "events": null, "error": "fastapi-viewsets.event_topic_refused", "status": 403}
   },
   "poll_after_ms": 0
 }
@@ -379,12 +379,12 @@ The request carries `cursors`, each topic mapped to the rev the caller holds or 
 request without `scopes` trusts every cursor.
 
 A poll carrying more than `settings.viewsets_event_max_subscriptions` cursors is 422
-`event_cursors_exceeded`. Otherwise every cursor is answered, in the request's order:
+`fastapi-viewsets.event_cursors_exceeded`. Otherwise every cursor is answered, in the request's order:
 
 | Topic and cursor | `rev` | `events` | `error`, `status` |
 |------------------|-------|----------|-------------------|
-| a topic of neither form | `null` | `null` | `event_topic_invalid`, `422` |
-| refused by the authorizers or the gate run | `null` | `null` | `event_topic_refused`, `event_scope_missing`, or the `code` of the `DfViewSetError` raised (`session_expired`, `not_authorized`, `rate_limited`, ...); `event_topic_refused` for an `HTTPException` without a `code`; `status` is the refusal's HTTP status |
+| a topic of neither form | `null` | `null` | `fastapi-viewsets.event_topic_invalid`, `422` |
+| refused by the authorizers or the gate run | `null` | `null` | `fastapi-viewsets.event_topic_refused`, `fastapi-viewsets.event_scope_missing`, or the `code` of the `DfViewSetError` raised (`fastapi-viewsets.session_expired`, `fastapi-viewsets.not_authorized`, `fastapi-viewsets.rate_limited`, ...); `fastapi-viewsets.event_topic_refused` for an `HTTPException` without a `code`; `status` is the refusal's HTTP status |
 | a cursor, `scopes` present, and the topic's entry in `scopes` (absent for none) differs from the scope key the server resolves | the current rev | `null` | absent |
 | cursor `null` | the current rev | `[]` | absent |
 | cursor equal to the current rev | the current rev | `[]` | absent |
@@ -570,7 +570,7 @@ validated it.
 |--------|-----|
 | `int` (not `bool`) | `str(key)` |
 | `str` without whitespace and control characters | itself |
-| `None` | none: subscribe 403 `event_scope_missing`, poll `error: event_scope_missing, status: 403`, a write publishes nothing and logs a warning |
+| `None` | none: subscribe 403 `fastapi-viewsets.event_scope_missing`, poll `error: fastapi-viewsets.event_scope_missing, status: 403`, a write publishes nothing and logs a warning |
 | any other value, an empty `str` | `TypeError` / `ValueError` |
 
 An application that normalises the header, the path parameter and the domain into one context value
@@ -588,12 +588,12 @@ caller runs before the action executes, against a request of its own:
    (`"fastapi_viewsets.events.gate"`) in its scope with the gate action's name. `scope["route"]` is
    the route Starlette sets for a real request to the topic.
 2. The route's dependencies run (as for [`ViewsetTopics`](#viewsettopics)); one that does not
-   validate refuses the topic with `event_topic_refused`.
+   validate refuses the topic with `fastapi-viewsets.event_topic_refused`.
 3. The context processors run with the viewset class as `viewset`.
 4. `depends()` of every effective middleware runs, then the chain of their `__call__`s with the class
    as `viewset`. In place of the action the scope's resolver runs.
 5. A chain that does not reach the resolver, or answers a status of 400 or above, refuses the topic
-   with `event_topic_refused`. A resolver that answers `None` refuses it with `event_scope_missing`.
+   with `fastapi-viewsets.event_topic_refused`. A resolver that answers `None` refuses it with `fastapi-viewsets.event_scope_missing`.
    An `HTTPException` propagates with its status; any other exception is a 500 of the subscribe, or
    of the whole poll.
 
@@ -632,7 +632,7 @@ A push to a subscription of a scoped topic first runs the topic's gate again wit
 subscription was made with, once `settings.viewsets_event_reauthorize_after` seconds (default
 `300.0`) have passed since the subscribe or the last reauthorization. A gate run that answers the
 subscription's store topic sends the push and renews the subscription; a refusal (an `HTTPException`
-of a status from 400 to 499 other than 429, `event_scope_missing` included) or another store topic
+of a status from 400 to 499 other than 429, `fastapi-viewsets.event_scope_missing` included) or another store topic
 removes the subscription and skips the push; any other exception, a 429 or a status of 500 or above
 included, skips the push and keeps the subscription for the next push to try again. Concurrent pushes share one
 gate run, and the push timeout bounds the wait for it. `None` turns it off. An application that
@@ -649,11 +649,11 @@ drop_subscriptions(lambda s: s.scope == str(org_id) and s.context.raw().get("use
 
 | Case | Behaviour |
 |------|-----------|
-| Resolver answers `None` | subscribe 403 `event_scope_missing`; poll `error: event_scope_missing`, `status: 403`; a write runs and publishes nothing, with a warning |
+| Resolver answers `None` | subscribe 403 `fastapi-viewsets.event_scope_missing`; poll `error: fastapi-viewsets.event_scope_missing`, `status: 403`; a write runs and publishes nothing, with a warning |
 | Resolver raises on a write | the write is refused before the action; the resolver runs after the whole command chain. A `celery_viewset` call of any action is refused the same way, before the dispatch |
 | Membership revoked | the next subscribe or poll refuses the topic and removes the server subscription; pushes are gated again after `viewsets_event_reauthorize_after`; `drop_subscriptions(where)` removes them at once |
 | Scope change of a client (header, domain) | the client calls `refresh()`; it refreshes a topic itself on a push after its `headers()` changed; a poll's `scopes` that differ resync the topic and subscribe it again |
-| Client sends `@...` | 422, or poll `event_topic_invalid` |
+| Client sends `@...` | 422, or poll `fastapi-viewsets.event_topic_invalid` |
 | Frontend before 0.11.2 against a scoped topic | subscribe works and `:scope` is ignored; a poll without `scopes` trusts the cursor. Scoped topics need the frontend of 0.11.2 or later |
 | Action configuration differs between the gate action and a write | the keys can differ, and the event goes to a store topic no subscriber holds; the resolver's inputs are set for both the gate action and the write actions |
 | Endpoint that writes outside the eight actions | publishes to `await write_topic(self, request, context)` (see [Custom endpoints](#custom-endpoints)) |
@@ -981,15 +981,16 @@ Every one is read on use. See [settings](../api/settings).
 
 | Code | Status | Class | Raised when |
 |------|--------|-------|-------------|
-| `event_topic_invalid` | 422 | `EventTopicInvalidError(topic)` | `subscribe` with a topic of neither form |
-| `event_topic_refused` | 403 | `EventTopicRefusedError(topic)` | No authorizer admitted the topic; or in a gate run a route dependency did not validate, the command chain did not reach the resolver, or it answered a status of 400 or above |
-| `event_scope_missing` | 403 | `EventScopeMissingError(topic)` | The scope resolver of a scoped topic answered `None` for the caller |
-| `event_subscriptions_exceeded` | 409 | `EventSubscriptionsExceededError(limit)` | The socket already holds `viewsets_event_max_subscriptions` topics |
-| `event_cursors_exceeded` | 422 | `EventCursorsExceededError(count, limit)` | A poll carries more cursors than `viewsets_event_max_subscriptions` |
+| `fastapi-viewsets.event_topic_invalid` | 422 | `EventTopicInvalidError(topic)` | `subscribe` with a topic of neither form |
+| `fastapi-viewsets.event_topic_refused` | 403 | `EventTopicRefusedError(topic)` | No authorizer admitted the topic; or in a gate run a route dependency did not validate, the command chain did not reach the resolver, or it answered a status of 400 or above |
+| `fastapi-viewsets.event_scope_missing` | 403 | `EventScopeMissingError(topic)` | The scope resolver of a scoped topic answered `None` for the caller |
+| `fastapi-viewsets.event_subscriptions_exceeded` | 409 | `EventSubscriptionsExceededError(limit)` | The socket already holds `viewsets_event_max_subscriptions` topics |
+| `fastapi-viewsets.event_cursors_exceeded` | 422 | `EventCursorsExceededError(count, limit)` | A poll carries more cursors than `viewsets_event_max_subscriptions` |
 
-All five are `DfViewSetError`s in `fastapi_viewsets.exceptions`; see [Error Codes](./error-codes).
-On `poll`, `event_topic_invalid`, `event_topic_refused` and `event_scope_missing` are a topic's
-`error`, with the status in its `status`, not the status of the answer.
+All five are `DfViewSetError`s in `fastapi_viewsets.exceptions`; see [Error Codes](./error-codes). On `poll`,
+`fastapi-viewsets.event_topic_invalid`, `fastapi-viewsets.event_topic_refused` and
+`fastapi-viewsets.event_scope_missing` are a topic's `error`, with the status in its `status`, not the status of the
+answer.
 
 ## Frontend
 

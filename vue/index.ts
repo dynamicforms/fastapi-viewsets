@@ -67,6 +67,7 @@ export type { MuxwsPeerLike, MuxwsPeerSource, MuxwsProxy, MuxwsProxyOptions, Mux
 export { route_muxws, MuxwsProxyImpl } from './muxws-proxy';
 
 export type { ApiErrorBody, ErrorDescription, FieldErrorEntry, FieldErrorsBody } from './errors';
+export { ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC } from './error-namespace';
 export { toErrorDescription, toFieldErrors } from './errors';
 
 export type {

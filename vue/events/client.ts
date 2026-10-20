@@ -43,6 +43,7 @@
  * answer arrives after `headers()` changed since that answer's call was sent.
  */
 
+import { namespaced } from '../error-namespace';
 import { ViewSetRequestError } from '../errors';
 import type { MuxwsPeerLike } from '../muxws-proxy';
 import { readHeaders, readStatus } from '../muxws-reply';
@@ -257,12 +258,12 @@ interface CallAnswer<R> {
  * status of the BE error whose `code` the answer carries. A code not listed here stands for 403.
  */
 const TOPIC_ERROR_STATUS: Readonly<Record<string, number>> = {
-  event_topic_invalid: 422,
-  event_topic_refused: 403,
-  event_scope_missing: 403,
-  not_authorized: 403,
-  session_expired: 401,
-  rate_limited: 429,
+  [namespaced('event_topic_invalid')]: 422,
+  [namespaced('event_topic_refused')]: 403,
+  [namespaced('event_scope_missing')]: 403,
+  [namespaced('not_authorized')]: 403,
+  [namespaced('session_expired')]: 401,
+  [namespaced('rate_limited')]: 429,
 };
 
 /** `RESET_REFUSED` is muxws' `ResetCode.REFUSED`; muxws is not imported here. */

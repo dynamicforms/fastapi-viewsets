@@ -173,7 +173,7 @@ subscribing caller, with the scope's resolver in place of the action. A middlewa
 
 The result's headers, cookies and body are discarded; an `HTTPException` refuses the topic, and a
 result with a status of 400 or above, or a chain that does not call `call_next()`, refuses it with
-`event_topic_refused`. A middleware that writes on every call (a "last selected" record, an audit
+`fastapi-viewsets.event_topic_refused`. A middleware that writes on every call (a "last selected" record, an audit
 entry) skips the write when the key is present: a gate run happens on every subscribe and poll.
 `Idempotency` passes a gate run through.
 
@@ -361,9 +361,9 @@ raises exactly one of:
 
 | Error | The action |
 |-------|------------|
-| `ActionDispatchError` (503, `action_dispatch_failed`) | did not run: it was not sent, or the worker revoked, rejected or did not know it |
-| `ActionInterruptedError` (504 / 503, `action_interrupted`) | started and the worker ended it |
-| `ActionFailedError` (500, `action_failed`) | failed with an error that is not an `HTTPException`, or the worker failed around it |
+| `ActionDispatchError` (503, `fastapi-viewsets.action_dispatch_failed`) | did not run: it was not sent, or the worker revoked, rejected or did not know it |
+| `ActionInterruptedError` (504 / 503, `fastapi-viewsets.action_interrupted`) | started and the worker ended it |
+| `ActionFailedError` (500, `fastapi-viewsets.action_failed`) | failed with an error that is not an `HTTPException`, or the worker failed around it |
 | the `HTTPException` the action raised | answered with it |
 | `ResultTimeoutError`, `ResultReaderStoppedError` (`ActionOutcomeUnknownError`) | may have run, may still run, or never will: the caller stopped waiting |
 

@@ -283,7 +283,7 @@ async def test_a_scope_the_caller_may_not_read_is_refused():
 
     stream = await app.subscribe("/api/v1/tags", peer, **user("ana"))
     assert stream.status == 403
-    assert stream.payload["detail_code"] == "event_scope_missing"
+    assert stream.payload["detail_code"] == "fastapi-viewsets.event_scope_missing"
     assert stream.payload["detail_params"] == {"topic": "/api/v1/tags"}
 
 
@@ -292,9 +292,11 @@ async def test_a_client_cannot_name_a_store_topic():
     app = Scoped()
     stream = await app.subscribe("@tags:7", FakePeer(), **user("ana"))
     assert stream.status == 422
-    assert stream.payload["detail_code"] == "event_topic_invalid"
+    assert stream.payload["detail_code"] == "fastapi-viewsets.event_topic_invalid"
     topics = await app.poll({"cursors": {"@tags:7": None}}, **user("ana"))
-    assert topics == {"@tags:7": {"rev": None, "events": None, "error": "event_topic_invalid", "status": 422}}
+    assert topics == {
+        "@tags:7": {"rev": None, "events": None, "error": "fastapi-viewsets.event_topic_invalid", "status": 422}
+    }
 
 
 @pytest.mark.asyncio
@@ -395,11 +397,26 @@ async def test_a_refusal_in_call_a_short_circuit_and_a_missing_key_refuse_the_to
 
     app = Scoped(middleware=[ShortCircuit(), SelectedOrg()])
     blocked = await app.poll({"cursors": {"/orgs/7/tags": None}}, **user("ana"), **{"x-blocked": "1"})
-    assert blocked["/orgs/7/tags"] == {"rev": None, "events": None, "error": "event_topic_refused", "status": 403}
+    assert blocked["/orgs/7/tags"] == {
+        "rev": None,
+        "events": None,
+        "error": "fastapi-viewsets.event_topic_refused",
+        "status": 403,
+    }
     stranger = await app.poll({"cursors": {"/orgs/7/tags": None}}, **user("bor"))
-    assert stranger["/orgs/7/tags"] == {"rev": None, "events": None, "error": "event_topic_refused", "status": 403}
+    assert stranger["/orgs/7/tags"] == {
+        "rev": None,
+        "events": None,
+        "error": "fastapi-viewsets.event_topic_refused",
+        "status": 403,
+    }
     nobody = await app.poll({"cursors": {"/api/v1/tags": None}}, **user("ana"))
-    assert nobody["/api/v1/tags"] == {"rev": None, "events": None, "error": "event_scope_missing", "status": 403}
+    assert nobody["/api/v1/tags"] == {
+        "rev": None,
+        "events": None,
+        "error": "fastapi-viewsets.event_scope_missing",
+        "status": 403,
+    }
 
 
 @pytest.mark.asyncio
@@ -409,7 +426,12 @@ async def test_poll_answers_the_status_of_a_resolver_s_refusal():
 
     app = Scoped(resolver=unavailable)
     topics = await app.poll({"cursors": {"/orgs/7/tags": None}}, **user("ana"))
-    assert topics["/orgs/7/tags"] == {"rev": None, "events": None, "error": "event_topic_refused", "status": 503}
+    assert topics["/orgs/7/tags"] == {
+        "rev": None,
+        "events": None,
+        "error": "fastapi-viewsets.event_topic_refused",
+        "status": 503,
+    }
 
 
 @pytest.mark.asyncio
@@ -488,7 +510,12 @@ async def test_one_gate_run_answers_every_topic_of_a_request_with_the_same_route
     assert len(app.selected.gate_scopes) == 1
 
     second = await app.poll({"cursors": {"/orgs/7/tags": None}}, **user("ana"))
-    assert second["/orgs/7/tags"] == {"rev": None, "events": None, "error": "rate_limited", "status": 429}
+    assert second["/orgs/7/tags"] == {
+        "rev": None,
+        "events": None,
+        "error": "fastapi-viewsets.rate_limited",
+        "status": 429,
+    }
 
 
 @pytest.mark.asyncio
@@ -650,7 +677,7 @@ async def test_a_route_dependency_that_does_not_validate_refuses_the_topic_in_th
     app.app.include_router(router)
     stream = await app.subscribe("/notes", FakePeer(), **user("ana"))
     assert stream.status == 403
-    assert stream.payload["detail_code"] == "event_topic_refused"
+    assert stream.payload["detail_code"] == "fastapi-viewsets.event_topic_refused"
     admitted = await app.subscribe("/notes", FakePeer(), **user("ana"), **{"x-tenant": "3"})
     assert admitted.payload == {"rev": 0, "scope": "everyone"}
 

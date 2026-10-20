@@ -297,7 +297,7 @@ The three methods read the same `GET {basePath}`. Each sends `X-List-Shape` with
 `cursor` - and throws `ListShapeMismatchError` when the reply is in another one. A BE viewset that declares one shape
 does not read the header and answers in that shape, so a ViewSet declares the mixins of the shapes the BE viewset offers
 through `list_shape` and `list_shapes`. A shape the BE viewset's `list_shapes` leave out is a 422
-`unsupported_list_shape`.
+`fastapi-viewsets.unsupported_list_shape`.
 
 ### RetrieveMixin `<K extends KeyType, T>`
 

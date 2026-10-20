@@ -313,7 +313,7 @@ describe('subscribing over an open peer', () => {
     const c = track(client(t));
     const h = handlers();
     const sub = c.subscribe('a', Changed, h);
-    t.take()[0].answer({ detail: 'refused', detail_code: 'event_topic_refused' }, 403);
+    t.take()[0].answer({ detail: 'refused', detail_code: 'fastapi-viewsets.event_topic_refused' }, 403);
     await expect(sub.ready).rejects.toBeInstanceOf(ViewSetRequestError);
     await expect(sub.ready).rejects.toMatchObject({ response: { status: 403 } });
     expect(h.onError).toHaveBeenCalledWith(expect.any(ViewSetRequestError));
@@ -573,12 +573,15 @@ describe('push, gap, poll and resync', () => {
     const t = makeTransport();
     const { h, sub } = await followed(t);
     t.push('a', 20, 19, 'changed', {});
-    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'event_topic_refused' } } });
+    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'fastapi-viewsets.event_topic_refused' } } });
     await flush();
     expect(h.onError).toHaveBeenCalledTimes(1);
     const error = h.onError.mock.calls[0][0] as ViewSetRequestError;
     expect(error).toBeInstanceOf(ViewSetRequestError);
-    expect(error.response).toMatchObject({ status: 403, data: { detail_code: 'event_topic_refused' } });
+    expect(error.response).toMatchObject({
+      status: 403,
+      data: { detail_code: 'fastapi-viewsets.event_topic_refused' },
+    });
     await expect(sub.ready).resolves.toBeUndefined();
     // The socket subscription of a refused topic is ended.
     expect(t.take()).toMatchObject([{ path: '/events/unsubscribe', body: { topic: 'a' } }]);
@@ -851,7 +854,7 @@ describe('polling', () => {
     t.take()[0].answer({ topics: { a: { rev: 3, events: [] } } });
     await flush();
     await vi.advanceTimersByTimeAsync(400);
-    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'rate_limited' } } });
+    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'fastapi-viewsets.rate_limited' } } });
     await flush();
     expect(h.onError).not.toHaveBeenCalled();
     // No rev moved: the ladder climbs to 600 ms.
@@ -871,9 +874,9 @@ describe('polling', () => {
     const h = handlers();
     const sub = c.subscribe('a', Changed, h);
     await flush();
-    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'session_expired' } } });
+    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'fastapi-viewsets.session_expired' } } });
     await expect(sub.ready).rejects.toMatchObject({
-      response: { status: 401, data: { detail_code: 'session_expired' } },
+      response: { status: 401, data: { detail_code: 'fastapi-viewsets.session_expired' } },
     });
     expect(h.onError).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(10_000);
@@ -1265,7 +1268,7 @@ describe('failures and malformed arrivals', () => {
     const t = makeTransport();
     const { h } = await followed(t);
     t.push('a', 13, 12, 'changed', {});
-    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'rate_limited' } } });
+    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'fastapi-viewsets.rate_limited' } } });
     await flush();
     await catchUp(t, h);
   });
@@ -1288,7 +1291,7 @@ describe('failures and malformed arrivals', () => {
     await flush();
     const [gap] = t.take();
     expect(gap.body).toEqual({ cursors: { a: 10 }, scopes: {} });
-    gap.answer({ detail: 'rate limited', detail_code: 'rate_limited' }, 429);
+    gap.answer({ detail: 'rate limited', detail_code: 'fastapi-viewsets.rate_limited' }, 429);
     await flush();
     await catchUp(t, h);
   });
@@ -1370,7 +1373,7 @@ describe('failures and malformed arrivals', () => {
     await flush();
     await vi.advanceTimersByTimeAsync(400);
     const [poll, subscribe] = t.take();
-    subscribe.answer({ detail: 'refused', detail_code: 'event_topic_refused' }, 401);
+    subscribe.answer({ detail: 'refused', detail_code: 'fastapi-viewsets.event_topic_refused' }, 401);
     await expect(sub.ready).rejects.toMatchObject({ response: { status: 401 } });
     expect(h.onError).toHaveBeenCalledWith(expect.any(ViewSetRequestError));
     poll.answer({ topics: { a: { rev: 2, events: [] } } });
@@ -1407,10 +1410,10 @@ describe('failures and malformed arrivals', () => {
     const t = makeTransport();
     const { h } = await followed(t);
     t.push('a', 13, 12, 'changed', {});
-    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'not_authorized' } } });
+    t.take()[0].answer({ topics: { a: { rev: null, events: null, error: 'fastapi-viewsets.not_authorized' } } });
     await flush();
     expect(h.onError.mock.calls[0][0]).toMatchObject({
-      response: { status: 403, data: { detail_code: 'not_authorized' } },
+      response: { status: 403, data: { detail_code: 'fastapi-viewsets.not_authorized' } },
     });
   });
 
@@ -1430,7 +1433,9 @@ describe('failures and malformed arrivals', () => {
     const c = track(createEventClient({ basePath: '/events', axios: t.axios }));
     const sub = c.subscribe('Bad Topic', Changed, handlers());
     await flush();
-    t.take()[0].answer({ topics: { 'Bad Topic': { rev: null, events: null, error: 'event_topic_invalid' } } });
+    t.take()[0].answer({
+      topics: { 'Bad Topic': { rev: null, events: null, error: 'fastapi-viewsets.event_topic_invalid' } },
+    });
     await expect(sub.ready).rejects.toMatchObject({ response: { status: 422 } });
   });
 });
@@ -2030,17 +2035,17 @@ describe('scoped topics', () => {
     await flush();
     t.take()[0].answer({
       topics: {
-        '/m': { rev: null, events: null, error: 'event_scope_missing' },
+        '/m': { rev: null, events: null, error: 'fastapi-viewsets.event_scope_missing' },
         '/u': {
           rev: null,
           events: null,
-          error: 'event_topic_refused',
+          error: 'fastapi-viewsets.event_topic_refused',
           status: 503,
         },
         '/a': {
           rev: null,
           events: null,
-          error: 'event_topic_refused',
+          error: 'fastapi-viewsets.event_topic_refused',
           status: 401,
         },
       },

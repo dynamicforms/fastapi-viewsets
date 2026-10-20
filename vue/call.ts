@@ -95,7 +95,7 @@ export function newCallKey(): string {
  * `key` as a Structured Field string (RFC 8941): quoted, with `"` and `\` escaped.
  *
  * Throws a TypeError for an empty key or one with a character outside printable ASCII, which an
- * sf-string cannot carry and the BE rejects with `400 idempotency_key_invalid`.
+ * sf-string cannot carry and the BE rejects with `400 fastapi-viewsets.idempotency_key_invalid`.
  */
 export function idempotencyKeyHeader(key: string): string {
   if (!/^[\x20-\x7e]+$/.test(key)) {

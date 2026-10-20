@@ -6,6 +6,56 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-10-20
+
+### Added
+
+- `ERROR_NAMESPACE` (`"fastapi-viewsets"`) and `ERROR_NAMESPACE_PYDANTIC` (`"pydantic"`), exported
+  from `fastapi_viewsets` and from `@dynamicforms/fastapi-viewsets`: the namespaces of the error
+  codes the package's errors carry.
+
+### Changed
+
+- Every error code the package declares is `<namespace>.<code>` in the namespace
+  `fastapi-viewsets`: `DfViewSetError.code` of the built-in errors, `CursorError.code`,
+  `detail_code` of a response, `error` of a poll's `TopicAnswer` and `code` of
+  `toErrorDescription()`:
+
+  | 0.11.4 | 0.12.0 |
+  |--------|--------|
+  | `not_found` | `fastapi-viewsets.not_found` |
+  | `read_only` | `fastapi-viewsets.read_only` |
+  | `session_expired` | `fastapi-viewsets.session_expired` |
+  | `not_authorized` | `fastapi-viewsets.not_authorized` |
+  | `rate_limited` | `fastapi-viewsets.rate_limited` |
+  | `result_timeout` | `fastapi-viewsets.result_timeout` |
+  | `result_reader_stopped` | `fastapi-viewsets.result_reader_stopped` |
+  | `action_dispatch_failed` | `fastapi-viewsets.action_dispatch_failed` |
+  | `action_interrupted` | `fastapi-viewsets.action_interrupted` |
+  | `action_failed` | `fastapi-viewsets.action_failed` |
+  | `idempotency_key_invalid` | `fastapi-viewsets.idempotency_key_invalid` |
+  | `idempotency_key_reused` | `fastapi-viewsets.idempotency_key_reused` |
+  | `unsupported_list_shape` | `fastapi-viewsets.unsupported_list_shape` |
+  | `event_topic_invalid` | `fastapi-viewsets.event_topic_invalid` |
+  | `event_topic_refused` | `fastapi-viewsets.event_topic_refused` |
+  | `event_scope_missing` | `fastapi-viewsets.event_scope_missing` |
+  | `event_subscriptions_exceeded` | `fastapi-viewsets.event_subscriptions_exceeded` |
+  | `event_cursors_exceeded` | `fastapi-viewsets.event_cursors_exceeded` |
+  | `cursor_unreadable` | `fastapi-viewsets.cursor_unreadable` |
+  | `cursor_missing_position` | `fastapi-viewsets.cursor_missing_position` |
+  | `cursor_stale` | `fastapi-viewsets.cursor_stale` |
+  | `cursor_missing_keys` | `fastapi-viewsets.cursor_missing_keys` |
+  | `cursor_value_mismatch` | `fastapi-viewsets.cursor_value_mismatch` |
+
+- `toFieldErrors()` gives pydantic's `type` as `pydantic.<type>`: `string_too_short` is
+  `pydantic.string_too_short`.
+- The event client's status of a poll answer's `error` without `status` is looked up by the full
+  code.
+- The code of an application's own `DfViewSetError` is used as given.
+- The JSON fields of an error in a `celery_viewset` result payload and in an idempotency record carry
+  a code of the namespace `fastapi-viewsets` without it, whatever the error's class, as in 0.11; a
+  code the package declares gains the namespace when the error is rebuilt.
+
 ## [0.11.4] - 2026-10-19
 
 ### Added

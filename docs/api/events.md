@@ -380,9 +380,9 @@ leaves the decision to the next authorizer in `settings.viewsets_event_authorize
 
 | Endpoint | Transports | Body | Answer | Errors |
 |----------|------------|------|--------|--------|
-| `subscribe` — `POST {base_path}/subscribe` | muxws | `TopicRequest` | 200 `SubscribeAnswer` | 422 `event_topic_invalid`, 403 `event_topic_refused` or the authorizer's `HTTPException`, 403 `event_scope_missing`, 409 `event_subscriptions_exceeded`, `RuntimeError` (500) without `peer=`; a refusal removes the socket's subscription to the topic |
+| `subscribe` — `POST {base_path}/subscribe` | muxws | `TopicRequest` | 200 `SubscribeAnswer` | 422 `fastapi-viewsets.event_topic_invalid`, 403 `fastapi-viewsets.event_topic_refused` or the authorizer's `HTTPException`, 403 `fastapi-viewsets.event_scope_missing`, 409 `fastapi-viewsets.event_subscriptions_exceeded`, `RuntimeError` (500) without `peer=`; a refusal removes the socket's subscription to the topic |
 | `unsubscribe` — `POST {base_path}/unsubscribe` | muxws | `TopicRequest` | 204 | `RuntimeError` (500) without `peer=` |
-| `poll` — `POST {base_path}/poll` | REST, muxws | `PollRequest` | 200 `PollAnswer` | 422 `event_cursors_exceeded`; a topic's refusal is in its `TopicAnswer.error` and `status`; over muxws a status from 400 to 499 other than 429 removes the socket's subscription to the topic, and a 429 or a status of 500 or above keeps it |
+| `poll` — `POST {base_path}/poll` | REST, muxws | `PollRequest` | 200 `PollAnswer` | 422 `fastapi-viewsets.event_cursors_exceeded`; a topic's refusal is in its `TopicAnswer.error` and `status`; over muxws a status from 400 to 499 other than 429 removes the socket's subscription to the topic, and a 429 or a status of 500 or above keeps it |
 
 `subscribe` and `unsubscribe` read the socket from `request.scope["fastapi_viewsets.peer"]`
 (`fastapi_viewsets.routing.PEER_SCOPE_KEY`), set by `process_command(..., peer=peer)`. `poll` reads
@@ -467,10 +467,10 @@ value under its own key, else under its class, and the `ChangeEvents` of
 
 | Class | Status | `code` | `params` |
 |-------|--------|--------|----------|
-| `EventTopicInvalidError(topic)` | 422 | `event_topic_invalid` | `{topic}` |
-| `EventTopicRefusedError(topic)` | 403 | `event_topic_refused` | `{topic}` |
-| `EventScopeMissingError(topic)` | 403 | `event_scope_missing` | `{topic}` |
-| `EventSubscriptionsExceededError(limit)` | 409 | `event_subscriptions_exceeded` | `{limit}` |
-| `EventCursorsExceededError(count, limit)` | 422 | `event_cursors_exceeded` | `{count, limit}` |
+| `EventTopicInvalidError(topic)` | 422 | `fastapi-viewsets.event_topic_invalid` | `{topic}` |
+| `EventTopicRefusedError(topic)` | 403 | `fastapi-viewsets.event_topic_refused` | `{topic}` |
+| `EventScopeMissingError(topic)` | 403 | `fastapi-viewsets.event_scope_missing` | `{topic}` |
+| `EventSubscriptionsExceededError(limit)` | 409 | `fastapi-viewsets.event_subscriptions_exceeded` | `{limit}` |
+| `EventCursorsExceededError(count, limit)` | 422 | `fastapi-viewsets.event_cursors_exceeded` | `{count, limit}` |
 
 All five are `DfViewSetError`s in `fastapi_viewsets.exceptions`; see [Error Codes](../guide/error-codes).

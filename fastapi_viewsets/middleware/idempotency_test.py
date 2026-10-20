@@ -99,7 +99,7 @@ def test_anything_else_is_invalid(value):
     with pytest.raises(IdempotencyKeyInvalidError) as exc_info:
         parse_idempotency_key(value)
     assert exc_info.value.status_code == 400
-    assert exc_info.value.code == "idempotency_key_invalid"
+    assert exc_info.value.code == "fastapi-viewsets.idempotency_key_invalid"
 
 
 @pytest.mark.asyncio
@@ -149,7 +149,7 @@ async def test_a_key_reused_with_a_different_fingerprint_answers_422():
     with pytest.raises(IdempotencyKeyReusedError) as exc_info:
         await call(middleware, chain, body=b'{"a": 1}')
     assert exc_info.value.status_code == 422
-    assert exc_info.value.code == "idempotency_key_reused"
+    assert exc_info.value.code == "fastapi-viewsets.idempotency_key_reused"
     assert exc_info.value.params == {"key": KEY.strip('"')}
 
 
@@ -169,7 +169,11 @@ async def test_an_error_outcome_is_stored_and_raised_again():
     with pytest.raises(DfViewSetError) as exc_info:
         await call(middleware, chain)
     assert chain.calls == 1
-    assert (exc_info.value.status_code, exc_info.value.code, exc_info.value.params) == (404, "not_found", {"pk": 7})
+    assert (exc_info.value.status_code, exc_info.value.code, exc_info.value.params) == (
+        404,
+        "fastapi-viewsets.not_found",
+        {"pk": 7},
+    )
 
 
 @pytest.mark.asyncio
@@ -329,8 +333,8 @@ def test_the_errors_carry_their_codes():
     invalid = client.post("/items", json={"id": 1, "name": "a"}, headers={"Idempotency-Key": "plain"})
     client.post("/items", json={"id": 1, "name": "a"}, headers={"Idempotency-Key": KEY})
     reused = client.post("/items", json={"id": 2, "name": "b"}, headers={"Idempotency-Key": KEY})
-    assert (invalid.status_code, invalid.json()["detail_code"]) == (400, "idempotency_key_invalid")
-    assert (reused.status_code, reused.json()["detail_code"]) == (422, "idempotency_key_reused")
+    assert (invalid.status_code, invalid.json()["detail_code"]) == (400, "fastapi-viewsets.idempotency_key_invalid")
+    assert (reused.status_code, reused.json()["detail_code"]) == (422, "fastapi-viewsets.idempotency_key_reused")
     assert len(created) == 1
 
 
@@ -536,7 +540,11 @@ async def test_redis_an_error_outcome_crosses_processes():
         await call(Idempotency(redis_client=redis), chain)
     with pytest.raises(DfViewSetError) as exc_info:
         await call(Idempotency(redis_client=redis), chain)
-    assert (exc_info.value.status_code, exc_info.value.code, exc_info.value.params) == (404, "not_found", {"pk": 3})
+    assert (exc_info.value.status_code, exc_info.value.code, exc_info.value.params) == (
+        404,
+        "fastapi-viewsets.not_found",
+        {"pk": 3},
+    )
 
 
 class Aliased(BaseModel):

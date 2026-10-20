@@ -158,7 +158,7 @@ async def test_subscribe_refuses_a_topic_of_neither_form(application):
     settings.viewsets_event_authorizers = [allow_all]
     stream = await application.command("/events/subscribe", {"topic": "Not A Topic"}, FakePeer())
     assert stream.status == 422
-    assert stream.payload["detail_code"] == "event_topic_invalid"
+    assert stream.payload["detail_code"] == "fastapi-viewsets.event_topic_invalid"
 
 
 @pytest.mark.asyncio
@@ -166,7 +166,7 @@ async def test_subscribe_refuses_a_topic_no_authorizer_admits(application):
     peer = FakePeer()
     stream = await application.command("/events/subscribe", {"topic": "/api/music"}, peer)
     assert stream.status == 403
-    assert stream.payload["detail_code"] == "event_topic_refused"
+    assert stream.payload["detail_code"] == "fastapi-viewsets.event_topic_refused"
     assert stream.payload["detail_params"] == {"topic": "/api/music"}
     assert topics_of(peer) == []
 
@@ -215,7 +215,7 @@ async def test_a_socket_holds_at_most_the_subscription_limit(application):
 
     stream = await application.command("/events/subscribe", {"topic": "c"}, peer)
     assert stream.status == 409
-    assert stream.payload["detail_code"] == "event_subscriptions_exceeded"
+    assert stream.payload["detail_code"] == "fastapi-viewsets.event_subscriptions_exceeded"
     assert stream.payload["detail_params"] == {"limit": 2}
     assert sorted(topics_of(peer)) == ["a", "b"]
 
@@ -279,7 +279,7 @@ async def test_subscribe_through_viewset_topics_follows_session(application):
 
     stream = await application.command("/events/subscribe", {"topic": "/api/music"}, peer)
     assert stream.status == 401
-    assert stream.payload["detail_code"] == "session_expired"
+    assert stream.payload["detail_code"] == "fastapi-viewsets.session_expired"
     assert topics_of(peer) == []
 
     stream = await application.command("/events/subscribe", {"topic": "/api/music"}, peer, **{"x-user": "jure"})
@@ -299,7 +299,7 @@ async def test_subscribe_through_viewset_topics_follows_authorization(applicatio
 
     stream = await application.command("/events/subscribe", {"topic": "/api/music"}, peer, **{"x-user": "jure"})
     assert stream.status == 403
-    assert stream.payload["detail_code"] == "not_authorized"
+    assert stream.payload["detail_code"] == "fastapi-viewsets.not_authorized"
 
     stream = await application.command("/events/subscribe", {"topic": "/api/music"}, peer, **{"x-user": "admin"})
     assert stream.status == 200
@@ -313,7 +313,7 @@ async def test_viewset_topics_uses_the_prefixed_path(application):
 
     stream = await application.command("/events/subscribe", {"topic": "/music"}, peer)
     assert stream.status == 403
-    assert stream.payload["detail_code"] == "event_topic_refused"
+    assert stream.payload["detail_code"] == "fastapi-viewsets.event_topic_refused"
 
 
 @pytest.mark.asyncio
@@ -383,9 +383,14 @@ async def test_poll_answers_every_cursor(application, transport):
             },
             "imports:7": {"rev": imported, "events": []},
             "imports:8": {"rev": 0, "events": []},
-            "orgs:9": {"rev": None, "events": None, "error": "event_topic_refused", "status": 403},
+            "orgs:9": {"rev": None, "events": None, "error": "fastapi-viewsets.event_topic_refused", "status": 403},
             "imports": {"rev": 0, "events": None},
-            "Not A Topic": {"rev": None, "events": None, "error": "event_topic_invalid", "status": 422},
+            "Not A Topic": {
+                "rev": None,
+                "events": None,
+                "error": "fastapi-viewsets.event_topic_invalid",
+                "status": 422,
+            },
         },
         "poll_after_ms": 250,
     }
@@ -520,11 +525,16 @@ async def test_poll_refuses_each_topic_with_its_own_code(application):
 
     anonymous = (await application.rest("/events/poll", body)).json()["topics"]
     assert anonymous == {
-        "/api/music": {"rev": None, "events": None, "error": "session_expired", "status": 401},
+        "/api/music": {"rev": None, "events": None, "error": "fastapi-viewsets.session_expired", "status": 401},
         "/open": {"rev": 0, "events": []},
     }
     member = (await application.rest("/events/poll", body, **{"x-user": "jure"})).json()["topics"]
-    assert member["/api/music"] == {"rev": None, "events": None, "error": "not_authorized", "status": 403}
+    assert member["/api/music"] == {
+        "rev": None,
+        "events": None,
+        "error": "fastapi-viewsets.not_authorized",
+        "status": 403,
+    }
     admin = (await application.rest("/events/poll", body, **{"x-user": "admin"})).json()["topics"]
     assert admin["/api/music"] == {"rev": 0, "events": []}
 
@@ -539,7 +549,7 @@ async def test_poll_counts_one_call_of_the_viewset_action_per_topic(application)
 
     assert (await application.rest("/events/poll", body)).json()["topics"]["/api/music"]["rev"] == 0
     second = (await application.rest("/events/poll", body)).json()["topics"]["/api/music"]
-    assert second == {"rev": None, "events": None, "error": "rate_limited", "status": 429}
+    assert second == {"rev": None, "events": None, "error": "fastapi-viewsets.rate_limited", "status": 429}
 
 
 @pytest.mark.asyncio
@@ -549,7 +559,7 @@ async def test_poll_carries_at_most_the_subscription_limit_of_cursors(applicatio
 
     response = await application.rest("/events/poll", {"cursors": {"a": None, "b": None, "c": None}})
     assert response.status_code == 422
-    assert response.json()["detail_code"] == "event_cursors_exceeded"
+    assert response.json()["detail_code"] == "fastapi-viewsets.event_cursors_exceeded"
     assert response.json()["detail_params"] == {"count": 3, "limit": 2}
 
     response = await application.rest("/events/poll", {"cursors": {"a": None, "b": None}})
@@ -646,7 +656,7 @@ async def test_poll_answers_a_starlette_http_exception_of_an_authorizer_in_its_t
     assert response.status_code == 200
     assert response.json()["topics"] == {
         "imports": {"rev": 0, "events": []},
-        "orgs:9": {"rev": None, "events": None, "error": "event_topic_refused", "status": 403},
+        "orgs:9": {"rev": None, "events": None, "error": "fastapi-viewsets.event_topic_refused", "status": 403},
     }
 
 
@@ -689,7 +699,7 @@ async def test_viewset_topics_runs_the_dependencies_of_include_router(include_kw
     assert stream.status == (403 if guarded else 200)
     member = (await application.rest("/events/poll", body)).json()["topics"]["/admin/secrets"]
     assert member == (
-        {"rev": None, "events": None, "error": "event_topic_refused", "status": 403}
+        {"rev": None, "events": None, "error": "fastapi-viewsets.event_topic_refused", "status": 403}
         if guarded
         else {"rev": 0, "events": []}
     )
@@ -708,7 +718,12 @@ async def test_viewset_topics_refuses_a_topic_whose_dependency_parameters_do_not
     topics = (await application.rest("/events/poll", body)).json()["topics"]
     assert topics == {
         "/orgs/7/secrets": {"rev": 0, "events": []},
-        "/orgs/seven/secrets": {"rev": None, "events": None, "error": "event_topic_refused", "status": 403},
+        "/orgs/seven/secrets": {
+            "rev": None,
+            "events": None,
+            "error": "fastapi-viewsets.event_topic_refused",
+            "status": 403,
+        },
     }
 
 
@@ -740,7 +755,7 @@ async def test_a_viewset_under_a_parametrised_prefix_is_followed_on_the_path_wit
         "/events/subscribe", {"topic": "/orgs/7/tracks"}, FakePeer(), **{"x-user": "bor"}
     )
     assert refused.status == 403
-    assert refused.payload["detail_code"] == "not_authorized"
+    assert refused.payload["detail_code"] == "fastapi-viewsets.not_authorized"
 
     deleted = await application.rest("/orgs/7/tracks/1", None, method="DELETE", **{"x-user": "ana"})
     assert deleted.status_code == 200
@@ -749,6 +764,6 @@ async def test_a_viewset_under_a_parametrised_prefix_is_followed_on_the_path_wit
 
     body = {"cursors": {"/orgs/7/tracks": 0}}
     outsider = (await application.rest("/events/poll", body, **{"x-user": "bor"})).json()["topics"]
-    assert outsider["/orgs/7/tracks"]["error"] == "not_authorized"
+    assert outsider["/orgs/7/tracks"]["error"] == "fastapi-viewsets.not_authorized"
     member = (await application.rest("/events/poll", body, **{"x-user": "ana"})).json()["topics"]
     assert [event["payload"]["op"] for event in member["/orgs/7/tracks"]["events"]] == ["deleted"]

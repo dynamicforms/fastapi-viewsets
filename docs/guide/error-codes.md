@@ -34,30 +34,61 @@ error in its own language by its `code`.
 The handler is registered on the application, so it shapes a `DfViewSetError` over REST and over
 [muxws](./muxws) alike.
 
+### Namespaces
+
+A code is a full code, `<namespace>.<code>`:
+
+- `code` is snake_case and contains no `.`: `[a-z0-9]+(_[a-z0-9]+)*`;
+- `namespace` is one or more segments joined by `.`, each `[a-z0-9]+(-[a-z0-9]+)*`;
+- a full code splits at its last `.`: everything before it is the namespace, everything after it the code.
+
+The namespace names the package that declared the code. The package exports its namespaces from its root, with the
+same values in Python and TypeScript:
+
+| Constant | Value | Codes |
+|----------|-------|-------|
+| `ERROR_NAMESPACE` | `fastapi-viewsets` | the codes this package declares, e.g. `fastapi-viewsets.not_found` |
+| `ERROR_NAMESPACE_PYDANTIC` | `pydantic` | pydantic's error types, which [`toFieldErrors()`](#field-errors) forwards, e.g. `pydantic.string_too_short` |
+
+```python
+from fastapi_viewsets import ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC
+```
+
+```ts
+import { ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC } from '@dynamicforms/fastapi-viewsets';
+```
+
+The code of an application's own `DfViewSetError` is used as given: the package does not prefix, check or rewrite it.
+The application prefixes its own codes with a namespace of its own, such as `app.insufficient_balance`, so that they
+do not collide with the codes of a library.
+
+The package ships no translation keys. The application maps each namespace to a translation key prefix of its own;
+see [Frontend](#translating-the-codes).
+
 ## Backend
 
 ### Built-in errors
 
 | Class | Status | `code` | `params` |
 |-------|--------|--------|----------|
-| `NotFoundError(pk)` | 404 | `not_found` | `{pk}` |
-| `ReadOnlyCollectionError()` | 405 | `read_only` | — |
-| `SessionExpiredError()` | 401 | `session_expired` | — |
-| `NotAuthorizedError()` | 403 | `not_authorized` | — |
-| `RateLimitedError()` | 429 | `rate_limited` | — |
-| `IdempotencyKeyInvalidError()` | 400 | `idempotency_key_invalid` | — |
-| `IdempotencyKeyReusedError(key)` | 422 | `idempotency_key_reused` | `{key}` |
-| `ResultTimeoutError(task, timeout)` | 504 | `result_timeout` | `{task, timeout}` |
-| `ResultReaderStoppedError(queue_key)` | 503 | `result_reader_stopped` | `{queue_key}` |
-| `ActionDispatchError(task, reason=None)` | 503 | `action_dispatch_failed` | `{task, reason}` |
-| `ActionInterruptedError(task, reason)` | 504 for `time_limit`, else 503 | `action_interrupted` | `{task, reason}` |
-| `ActionFailedError(task, reason="error")` | 500 | `action_failed` | `{task, reason}` |
-| `UnsupportedListShapeError(shape, allowed)` | 422 | `unsupported_list_shape` | `{shape, allowed}` |
-| `EventTopicInvalidError(topic)` | 422 | `event_topic_invalid` | `{topic}` |
-| `EventTopicRefusedError(topic)` | 403 | `event_topic_refused` | `{topic}` |
-| `EventScopeMissingError(topic)` | 403 | `event_scope_missing` | `{topic}` |
-| `EventSubscriptionsExceededError(limit)` | 409 | `event_subscriptions_exceeded` | `{limit}` |
-| `EventCursorsExceededError(count, limit)` | 422 | `event_cursors_exceeded` | `{count, limit}` |
+| `NotFoundError(pk)` | 404 | `fastapi-viewsets.not_found` | `{pk}` |
+| `ReadOnlyCollectionError()` | 405 | `fastapi-viewsets.read_only` | — |
+| `SessionExpiredError()` | 401 | `fastapi-viewsets.session_expired` | — |
+| `NotAuthorizedError()` | 403 | `fastapi-viewsets.not_authorized` | — |
+| `RateLimitedError()` | 429 | `fastapi-viewsets.rate_limited` | — |
+| `IdempotencyKeyInvalidError()` | 400 | `fastapi-viewsets.idempotency_key_invalid` | — |
+| `IdempotencyKeyReusedError(key)` | 422 | `fastapi-viewsets.idempotency_key_reused` | `{key}` |
+| `ResultTimeoutError(task, timeout)` | 504 | `fastapi-viewsets.result_timeout` | `{task, timeout}` |
+| `ResultReaderStoppedError(queue_key)` | 503 | `fastapi-viewsets.result_reader_stopped` | `{queue_key}` |
+| `ActionDispatchError(task, reason=None)` | 503 | `fastapi-viewsets.action_dispatch_failed` | `{task, reason}` |
+| `ActionInterruptedError(task, reason)` | 504 for `time_limit`, else 503 | `fastapi-viewsets.action_interrupted` | `{task, reason}` |
+| `ActionFailedError(task, reason="error")` | 500 | `fastapi-viewsets.action_failed` | `{task, reason}` |
+| `UnsupportedListShapeError(shape, allowed)` | 422 | `fastapi-viewsets.unsupported_list_shape` | `{shape, allowed}` |
+| `EventTopicInvalidError(topic)` | 422 | `fastapi-viewsets.event_topic_invalid` | `{topic}` |
+| `EventTopicRefusedError(topic)` | 403 | `fastapi-viewsets.event_topic_refused` | `{topic}` |
+| `EventScopeMissingError(topic)` | 403 | `fastapi-viewsets.event_scope_missing` | `{topic}` |
+| `EventSubscriptionsExceededError(limit)` | 409 | `fastapi-viewsets.event_subscriptions_exceeded` | `{limit}` |
+| `EventCursorsExceededError(count, limit)` | 422 | `fastapi-viewsets.event_cursors_exceeded` | `{count, limit}` |
 | `CursorRequestError(error)` | 400 | one of the cursor codes below | varies |
 
 The cursor codes, raised as `fastapi_viewsets.cursor.CursorError` (a `ValueError` carrying `code`
@@ -65,18 +96,18 @@ and `params`) when cursor pagination rejects a request, and surfaced through `Cu
 
 | `code` | `params` | When |
 |--------|----------|------|
-| `cursor_unreadable` | `{error}` | the cursor string does not decode |
-| `cursor_missing_position` | — | it decodes but carries no position |
-| `cursor_stale` | — | it was issued for a different ordering or filter |
-| `cursor_missing_keys` | `{missing}` | it has no value for one or more ordering keys |
-| `cursor_value_mismatch` | `{name, error}` | a value in it does not fit the field's type |
+| `fastapi-viewsets.cursor_unreadable` | `{error}` | the cursor string does not decode |
+| `fastapi-viewsets.cursor_missing_position` | — | it decodes but carries no position |
+| `fastapi-viewsets.cursor_stale` | — | it was issued for a different ordering or filter |
+| `fastapi-viewsets.cursor_missing_keys` | `{missing}` | it has no value for one or more ordering keys |
+| `fastapi-viewsets.cursor_value_mismatch` | `{name, error}` | a value in it does not fit the field's type |
 
 ```python
 from fastapi_viewsets.exceptions import NotFoundError
 
 raise NotFoundError(pk)
 # unregistered: {"detail": "Item with pk 42 not found"}
-# registered:   {"detail": "Item with pk 42 not found", "detail_code": "not_found", "detail_params": {"pk": 42}}
+# registered:   {"detail": "Item with pk 42 not found", "detail_code": "fastapi-viewsets.not_found", "detail_params": {"pk": 42}}
 ```
 
 ### Executor outcomes
@@ -86,15 +117,15 @@ The errors that end a call to a `celery_viewset` action without its result, by `
 
 | `code` | `reason` | The action |
 |--------|----------|------------|
-| `action_dispatch_failed` | `send` | was not sent: the broker is unreachable, or the message cannot be encoded |
+| `fastapi-viewsets.action_dispatch_failed` | `send` | was not sent: the broker is unreachable, or the message cannot be encoded |
 | | `serialization` | was not sent: its arguments, context or request cannot be serialized |
 | | `unknown_task` | did not run: the worker has no task of that name |
 | | `rejected` | did not run: the worker rejected the message |
 | | `revoked`, `expired` | did not run: it was revoked, or expired, before it started |
-| `action_interrupted` | `time_limit` | exceeded its soft or hard time limit (504) |
+| `fastapi-viewsets.action_interrupted` | `time_limit` | exceeded its soft or hard time limit (504) |
 | | `terminated` | was terminated (503) |
 | | `lost` | lost the worker process executing it (503) |
-| `action_failed` | `error` | raised an error that is not an `HTTPException`; `detail` names the task only, the error is logged in the worker |
+| `fastapi-viewsets.action_failed` | `error` | raised an error that is not an `HTTPException`; `detail` names the task only, the error is logged in the worker |
 | | `result` | returned a result that cannot be serialized, or that the caller cannot deserialize |
 | | `executor` | did not complete because the worker failed around it, or `Middleware.executor_started()` raised |
 
@@ -103,7 +134,8 @@ caller stopped waiting, and the action may have run, may still run, or never wil
 
 ### Custom errors
 
-Subclass `DfViewSetError` for an application's own errors that should carry the same shape:
+Subclass `DfViewSetError` for an application's own errors that should carry the same shape. The code is the
+application's, in a namespace of its own:
 
 ```python
 from fastapi_viewsets.exceptions import DfViewSetError
@@ -111,7 +143,7 @@ from fastapi_viewsets.exceptions import DfViewSetError
 class InsufficientBalanceError(DfViewSetError):
     def __init__(self, required: float, available: float):
         message = f"balance {available} is short of the required {required}"
-        super().__init__(402, message, "insufficient_balance", {"required": required, "available": available})
+        super().__init__(402, message, "app.insufficient_balance", {"required": required, "available": available})
 ```
 
 Registering `df_viewset_exception_handler` for `DfViewSetError` covers every subclass, this
@@ -121,6 +153,20 @@ An application's own subclass raised by a `celery_viewset` action reaches the Fa
 `DfViewSetError` with the same status, `detail`, `code`, `params` and headers; only the classes
 `fastapi_viewsets.exceptions` defines are rebuilt as their own class.
 
+The error travels from the worker as JSON fields, in the result payload of the call, and an
+[idempotency](./idempotency) record stores it the same way. In those fields a `code` in the namespace
+`fastapi-viewsets` is written without it, as `not_found`, whatever the error's class; every other code is written as
+given. The reading process adds `ERROR_NAMESPACE` to a code without a namespace that the package declares (one of the
+codes on this page), whatever the class, and reads every other code as given. The fields of the package's own errors,
+and of an application's subclass of one, therefore carry the same code in every version, and the reader rebuilds the
+full code. The rule leaves these cases:
+
+- A code that a later version of the package declares, read by an earlier version, is rebuilt without the namespace.
+- An application code without a namespace that equals one of the package's codes, such as `not_found`, is rebuilt as
+  the package's, `fastapi-viewsets.not_found`.
+- An application code in the namespace `fastapi-viewsets` that the package does not declare is rebuilt without the
+  namespace.
+
 ## Frontend
 
 `@dynamicforms/fastapi-viewsets` converts an error body into an `ErrorDescription`: `code`,
@@ -129,7 +175,8 @@ An application's own subclass raised by a `celery_viewset` action reaches the Fa
 server's errors with the same function as its validators' errors. The package holds no
 translations. How an application converts an error into text in its own language is described in
 [vue-forms: Error messages and translation](:vue-forms:/api/validators.html#error-messages-and-translation);
-the codes of this page are added to the application's translations next to the validators' codes.
+the codes of this page are added to the application's translations under the prefixes of their namespaces (see
+[Translating the codes](#translating-the-codes)).
 
 ### One error
 
@@ -139,12 +186,12 @@ the codes of this page are added to the application's translations next to the v
 import { toErrorDescription } from '@dynamicforms/fastapi-viewsets';
 
 const error = toErrorDescription(body); // body: { detail, detail_code?, detail_params? }
-// { code: 'not_found', params: { pk: 42 }, detail: 'Item with pk 42 not found', origin: 'server' }
+// { code: 'fastapi-viewsets.not_found', params: { pk: 42 }, detail: 'Item with pk 42 not found', origin: 'server' }
 ```
 
 | Field | Value |
 |-------|-------|
-| `code` | `detail_code`; an empty string where the body has none (the handler is not registered, or the error is a view's own `HTTPException`) |
+| `code` | `detail_code`, unchanged; an empty string where the body has none (the handler is not registered, or the error is a view's own `HTTPException`) |
 | `params` | `detail_params` as the server sent them; `{}` where the body has none |
 | `detail` | `detail`, unchanged |
 | `origin` | `'server'` |
@@ -165,16 +212,16 @@ list of failures, one per failing value; over muxws the body is the same:
 
 `toFieldErrors(body)` converts it into errors keyed by field name. The name is `loc` without its
 first element (`body`, `query`, `path`, `header` or `cookie`), joined with `.`; a failure of the
-body as a whole is keyed `''`. Each error has pydantic's `type` as `code`, `ctx` as `params` and
-`msg` as `detail`:
+body as a whole is keyed `''`. Each error has pydantic's `type` in the namespace `ERROR_NAMESPACE_PYDANTIC` as
+`code` (`pydantic.string_too_short`), `ctx` as `params` and `msg` as `detail`:
 
 ```ts
 import { toFieldErrors } from '@dynamicforms/fastapi-viewsets';
 
 toFieldErrors(body);
 // {
-//   name: [{ code: 'string_too_short', params: { min_length: 3 }, detail: 'String should have at least 3 characters', origin: 'server' }],
-//   'address.zip': [{ code: 'int_parsing', params: {}, detail: 'Input should be a valid integer', origin: 'server' }],
+//   name: [{ code: 'pydantic.string_too_short', params: { min_length: 3 }, detail: 'String should have at least 3 characters', origin: 'server' }],
+//   'address.zip': [{ code: 'pydantic.int_parsing', params: {}, detail: 'Input should be a valid integer', origin: 'server' }],
 // }
 ```
 
@@ -248,8 +295,10 @@ vue-forms' [`ErrorPolicy`](:vue-forms:/api/validators.html#errorpolicy). By defa
 an element drops it when the element, or a member below it, is marked touched while the element
 holds a value other than the one it held when the error was written.
 
-The codes are pydantic's error types (`missing`, `string_too_short`, `int_parsing`, ...), and
-`params` holds the values pydantic built `msg` from.
+The codes are pydantic's error types in the namespace `pydantic` (`pydantic.missing`,
+`pydantic.string_too_short`, `pydantic.int_parsing`, ...), and `params` holds the values pydantic built `msg` from.
+`toFieldErrors()` prefixes `type` as it arrives. The type of a `PydanticCustomError` is the application's own string;
+one that contains a `.` or is not snake_case gives a code outside the grammar above.
 
 ### Codes
 
@@ -257,29 +306,67 @@ The codes this package raises, with their English `detail`:
 
 | `code` | `detail` | Params |
 |--------|----------|--------|
-| `not_found` | `Item with pk {pk} not found` | `pk` |
-| `read_only` | `This collection is read-only` | — |
-| `session_expired` | `Session expired or invalid` | — |
-| `not_authorized` | `Not authorized to perform this action` | — |
-| `rate_limited` | `Rate limit exceeded` | — |
-| `result_timeout` | `No result for {task} within {timeout} s` | `task`, `timeout` |
-| `result_reader_stopped` | `The result reader for {queue_key} stopped before the result arrived` | `queue_key` |
-| `action_dispatch_failed` | `{task} could not be handed to its executor` | `task`, `reason` |
-| `action_interrupted` | `{task} exceeded its time limit` (`time_limit`), `{task} was terminated` (`terminated`), `{task} lost the process executing it` (`lost`) | `task`, `reason` |
-| `action_failed` | `{task} failed`; `The action failed` without a task | `task`, `reason` |
-| `idempotency_key_invalid` | `Idempotency-Key must be a non-empty Structured Field string` | — |
-| `idempotency_key_reused` | `Idempotency key {key} was used for a different request` | `key` |
-| `unsupported_list_shape` | `unsupported list shape '{shape}'; this endpoint offers {allowed}` | `shape`, `allowed` |
-| `event_topic_invalid` | `Topic {topic} is neither a path starting with / nor a source name with an optional key` | `topic` |
-| `event_topic_refused` | `Topic {topic} is not admitted` | `topic` |
-| `event_scope_missing` | `Topic {topic} has no event scope for this caller` | `topic` |
-| `event_subscriptions_exceeded` | `This socket already holds {limit} topics` | `limit` |
-| `event_cursors_exceeded` | `A poll carries at most {limit} cursors, this one carries {count}` | `count`, `limit` |
-| `cursor_unreadable` | `cursor is not readable: {error}` | `error` |
-| `cursor_missing_position` | `cursor is not readable: no position in it` | — |
-| `cursor_stale` | `this cursor was issued for a different ordering or filter - start from the first page` | — |
-| `cursor_missing_keys` | `cursor has no value for ordering key(s): {missing}` | `missing` |
-| `cursor_value_mismatch` | `cursor value for '{name}' does not fit the field: {error}` | `name`, `error` |
+| `fastapi-viewsets.not_found` | `Item with pk {pk} not found` | `pk` |
+| `fastapi-viewsets.read_only` | `This collection is read-only` | — |
+| `fastapi-viewsets.session_expired` | `Session expired or invalid` | — |
+| `fastapi-viewsets.not_authorized` | `Not authorized to perform this action` | — |
+| `fastapi-viewsets.rate_limited` | `Rate limit exceeded` | — |
+| `fastapi-viewsets.result_timeout` | `No result for {task} within {timeout} s` | `task`, `timeout` |
+| `fastapi-viewsets.result_reader_stopped` | `The result reader for {queue_key} stopped before the result arrived` | `queue_key` |
+| `fastapi-viewsets.action_dispatch_failed` | `{task} could not be handed to its executor` | `task`, `reason` |
+| `fastapi-viewsets.action_interrupted` | `{task} exceeded its time limit` (`time_limit`), `{task} was terminated` (`terminated`), `{task} lost the process executing it` (`lost`) | `task`, `reason` |
+| `fastapi-viewsets.action_failed` | `{task} failed`; `The action failed` without a task | `task`, `reason` |
+| `fastapi-viewsets.idempotency_key_invalid` | `Idempotency-Key must be a non-empty Structured Field string` | — |
+| `fastapi-viewsets.idempotency_key_reused` | `Idempotency key {key} was used for a different request` | `key` |
+| `fastapi-viewsets.unsupported_list_shape` | `unsupported list shape '{shape}'; this endpoint offers {allowed}` | `shape`, `allowed` |
+| `fastapi-viewsets.event_topic_invalid` | `Topic {topic} is neither a path starting with / nor a source name with an optional key` | `topic` |
+| `fastapi-viewsets.event_topic_refused` | `Topic {topic} is not admitted` | `topic` |
+| `fastapi-viewsets.event_scope_missing` | `Topic {topic} has no event scope for this caller` | `topic` |
+| `fastapi-viewsets.event_subscriptions_exceeded` | `This socket already holds {limit} topics` | `limit` |
+| `fastapi-viewsets.event_cursors_exceeded` | `A poll carries at most {limit} cursors, this one carries {count}` | `count`, `limit` |
+| `fastapi-viewsets.cursor_unreadable` | `cursor is not readable: {error}` | `error` |
+| `fastapi-viewsets.cursor_missing_position` | `cursor is not readable: no position in it` | — |
+| `fastapi-viewsets.cursor_stale` | `this cursor was issued for a different ordering or filter - start from the first page` | — |
+| `fastapi-viewsets.cursor_missing_keys` | `cursor has no value for ordering key(s): {missing}` | `missing` |
+| `fastapi-viewsets.cursor_value_mismatch` | `cursor value for '{name}' does not fit the field: {error}` | `name`, `error` |
 
 `allowed` and `missing` are arrays. An application's own `DfViewSetError` subclasses add their codes
-to the same translations.
+to the translations under the prefix of their namespace.
+
+### Translating the codes
+
+The application maps each namespace to a translation key prefix of its own and the code after the namespace to a key
+under that prefix, taking a library's namespace from its constant. Here `fastapi-viewsets.not_found` renders through
+the key `libs.fastapi-viewsets.not_found`, `pydantic.string_too_short` through `libs.pydantic.string_too_short` and
+the application's `app.insufficient_balance` through `errors.insufficient_balance`, with
+[vue-i18n](https://vue-i18n.intlify.dev/)'s `t` and `te`:
+
+```ts
+import { ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC, type ErrorDescription } from '@dynamicforms/fastapi-viewsets';
+
+const keyPrefixes: Record<string, string> = {
+  [ERROR_NAMESPACE]: 'libs.fastapi-viewsets',
+  [ERROR_NAMESPACE_PYDANTIC]: 'libs.pydantic',
+  app: 'errors',
+};
+
+function errorText(error: ErrorDescription): string {
+  const dot = error.code.lastIndexOf('.');
+  const prefix = keyPrefixes[error.code.slice(0, dot)];
+  const key = prefix === undefined ? undefined : `${prefix}.${error.code.slice(dot + 1)}`;
+  return key !== undefined && te(key) ? t(key, error.params) : error.detail;
+}
+```
+
+```json
+{
+  "libs": {
+    "fastapi-viewsets": { "not_found": "Element {pk} ne obstaja" },
+    "pydantic": { "string_too_short": "Vnesite vsaj {min_length} znake" }
+  },
+  "errors": { "insufficient_balance": "Stanje {available} ne zadošča za {required}" }
+}
+```
+
+An error without a code (`code` is `''`) has no key and renders as its `detail`. vue-forms' codes are mapped the same
+way through vue-forms' own `ERROR_NAMESPACE`.

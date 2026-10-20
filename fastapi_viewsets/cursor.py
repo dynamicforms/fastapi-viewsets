@@ -34,6 +34,7 @@ from typing import Any, ClassVar, Generic, TYPE_CHECKING
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypeVar
 
+from .error_namespace import _namespaced
 from .filters import Filter
 
 if TYPE_CHECKING:
@@ -43,7 +44,10 @@ TItem = TypeVar("TItem")
 
 
 class CursorError(ValueError):
-    """The cursor is unreadable, or does not belong to the query it was sent with."""
+    """
+    The cursor is unreadable, or does not belong to the query it was sent with. `code` is one of the
+    cursor codes, `fastapi-viewsets.cursor_<reason>`.
+    """
 
     def __init__(self, message: str, code: str, params: dict[str, Any] | None = None):
         super().__init__(message)
@@ -135,16 +139,16 @@ def decode_cursor(raw: str, keys: CursorKeys, expected_query: str, annotations: 
         payload = json.loads(base64.urlsafe_b64decode(padded))
     except (ValueError, binascii.Error) as error:
         raise CursorError(
-            f"cursor is not readable: {error}", code="cursor_unreadable", params={"error": str(error)}
+            f"cursor is not readable: {error}", code=_namespaced("cursor_unreadable"), params={"error": str(error)}
         ) from None
 
     if not isinstance(payload, dict) or not isinstance(payload.get("p"), dict):
-        raise CursorError("cursor is not readable: no position in it", code="cursor_missing_position")
+        raise CursorError("cursor is not readable: no position in it", code=_namespaced("cursor_missing_position"))
 
     if payload.get("q") != expected_query:
         raise CursorError(
             "this cursor was issued for a different ordering or filter - start from the first page",
-            code="cursor_stale",
+            code=_namespaced("cursor_stale"),
         )
 
     position = payload["p"]
@@ -152,7 +156,7 @@ def decode_cursor(raw: str, keys: CursorKeys, expected_query: str, annotations: 
     if missing:
         raise CursorError(
             f"cursor has no value for ordering key(s): {', '.join(missing)}",
-            code="cursor_missing_keys",
+            code=_namespaced("cursor_missing_keys"),
             params={"missing": missing},
         )
 
@@ -168,7 +172,7 @@ def decode_cursor(raw: str, keys: CursorKeys, expected_query: str, annotations: 
         except Exception as error:
             raise CursorError(
                 f"cursor value for {name!r} does not fit the field: {error}",
-                code="cursor_value_mismatch",
+                code=_namespaced("cursor_value_mismatch"),
                 params={"name": name, "error": str(error)},
             ) from None
 

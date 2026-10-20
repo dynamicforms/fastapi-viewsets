@@ -23,6 +23,7 @@ from starlette.exceptions import HTTPException
 from ..conf import settings
 from ..context import Context
 from ..decorators.route_viewset import route_viewset
+from ..error_namespace import _namespaced
 from ..exceptions import EventCursorsExceededError, EventTopicInvalidError
 from ..mux_ws.transports import transports
 from ..routing import PEER_SCOPE_KEY
@@ -148,7 +149,7 @@ def _reauthorizer(request: Request, topic: str) -> Callable[[], Awaitable[str]]:
 
 def _error_code(error: HTTPException) -> str:
     code = getattr(error, "code", None)
-    return code if isinstance(code, str) and code else "event_topic_refused"
+    return code if isinstance(code, str) and code else _namespaced("event_topic_refused")
 
 
 class EventsViewSet:
@@ -166,11 +167,12 @@ class EventsViewSet:
         Subscribes the socket the command arrived on to `topic` and answers the current rev of its
         store topic, with the scope key for a scoped viewset topic (see
         `fastapi_viewsets.events.scopes`). Every event published to the store topic after it is
-        pushed to the socket until the socket closes or unsubscribes. 422 `event_topic_invalid` for
-        a topic of neither form, 403 `event_topic_refused`, or the status of the authorizer's
-        `HTTPException`, for a topic the authorizers do not admit, 403 `event_scope_missing` for a
-        scoped topic whose resolver answers None, 409 `event_subscriptions_exceeded` for a socket
-        that already holds `settings.viewsets_event_max_subscriptions` topics. A subscribe refused
+        pushed to the socket until the socket closes or unsubscribes. 422
+        `fastapi-viewsets.event_topic_invalid` for a topic of neither form, 403
+        `fastapi-viewsets.event_topic_refused`, or the status of the authorizer's `HTTPException`, for
+        a topic the authorizers do not admit, 403 `fastapi-viewsets.event_scope_missing` for a scoped
+        topic whose resolver answers None, 409 `fastapi-viewsets.event_subscriptions_exceeded` for a
+        socket that already holds `settings.viewsets_event_max_subscriptions` topics. A subscribe refused
         with a status from 400 to 499 other than 429 removes the socket's subscription to the topic,
         if it holds one; any other error, a 429 or 5xx included, leaves it as it is. A command served by
         `process_command` without `peer=` raises `RuntimeError`.
@@ -208,18 +210,19 @@ class EventsViewSet:
         """
         Answers every cursor of the request. Per topic the authorizers run, then the store topic is
         resolved (see `fastapi_viewsets.events.scopes`); a refused topic answers `error` with the
-        refusal's code (`event_topic_refused`, `event_scope_missing`, or the `code` of the
-        `HTTPException` an authorizer raised, FastAPI's or Starlette's, `event_topic_refused` for one
-        without a `code`) and `status` with its HTTP status, and `event_topic_invalid` with 422 for a
-        topic of neither form, and the other topics are unaffected. A poll over muxws that refuses a
-        topic with a status from 400 to 499 other than 429 removes the socket's subscription to it;
+        refusal's code (`fastapi-viewsets.event_topic_refused`, `fastapi-viewsets.event_scope_missing`,
+        or the `code` of the `HTTPException` an authorizer raised, FastAPI's or Starlette's,
+        `fastapi-viewsets.event_topic_refused` for one without a `code`) and `status` with its HTTP
+        status, and `fastapi-viewsets.event_topic_invalid` with 422 for a topic of neither form, and
+        the other topics are unaffected. A poll over muxws that refuses a topic with a status from 400
+        to 499 other than 429 removes the socket's subscription to it;
         a 429 or a status of 500 or above keeps it. A None cursor answers the topic's current rev
         and no events, a cursor equal to it `[]`, and any other cursor the events since it, or
         `events: null` when the log holds no event whose `prev` is the cursor. When the request
         carries `scopes`, a cursor of a topic whose entry in `scopes` (absent for none) differs from
         the scope key the server resolves answers the current rev and `events: null`. Every answer of
-        a scoped topic carries its `scope`. 422 `event_cursors_exceeded` for more cursors than
-        `settings.viewsets_event_max_subscriptions`.
+        a scoped topic carries its `scope`. 422 `fastapi-viewsets.event_cursors_exceeded` for more
+        cursors than `settings.viewsets_event_max_subscriptions`.
 
         The delivery filters run on every event since the cursor, with a `Subscription` of the
         topic whose `peer` is the socket the poll arrived on, None over REST, and whose `context` is
@@ -237,7 +240,9 @@ class EventsViewSet:
         admitted: list[ResolvedTopic] = []
         for topic in cursors:
             if not is_valid_topic(topic):
-                answers[topic] = TopicAnswer(rev=None, events=None, error="event_topic_invalid", status=422)
+                answers[topic] = TopicAnswer(
+                    rev=None, events=None, error=_namespaced("event_topic_invalid"), status=422
+                )
                 continue
             try:
                 await authorize_topic(request, context, topic)
