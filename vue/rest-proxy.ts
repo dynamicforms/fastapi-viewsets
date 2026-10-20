@@ -27,6 +27,7 @@ import {
   type ViewSetCalls,
   withKeyHeader,
 } from './call';
+import { isApiErrorBody } from './errors';
 import type { KeyOf, RecordOf, ViewSetWatch } from './events/changes';
 import type { KeyType } from './mixins';
 import {
@@ -221,9 +222,9 @@ const GATEWAY_STATUSES = new Set([502, 503, 504]);
 /**
  * An axios error without `response` is an attempt that got no answer: `'timeout'` for the attempt's
  * own timeout (`ECONNABORTED`, `ETIMEDOUT`), `'lost'` otherwise. A cancellation the application
- * requested is an answer. A gateway status is `'lost'` unless its body is a JSON object with `detail`,
- * the body FastAPI gives an `HTTPException`: that status is the application's answer (e.g. the BE's
- * `fastapi-viewsets.result_timeout`), which `Idempotency` stores and a repeat would only receive again.
+ * requested is an answer. A gateway status is `'lost'` unless its body is an `ApiErrorBody`: that status
+ * is the application's answer (e.g. the BE's `fastapi-viewsets.result_timeout`), which `Idempotency`
+ * stores and a repeat would only receive again.
  */
 function restAttemptFailure(error: unknown): AttemptFailure {
   if (!axios.isAxiosError(error) || axios.isCancel(error)) return null;
@@ -231,8 +232,7 @@ function restAttemptFailure(error: unknown): AttemptFailure {
     return error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT' ? 'timeout' : 'lost';
   }
   if (!GATEWAY_STATUSES.has(error.response.status)) return null;
-  const data: unknown = error.response.data;
-  return typeof data === 'object' && data !== null && 'detail' in data ? null : 'lost';
+  return isApiErrorBody(error.response.data) ? null : 'lost';
 }
 
 // ---------------------------------------------------------------------------

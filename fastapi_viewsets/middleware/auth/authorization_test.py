@@ -133,7 +133,12 @@ def test_callable_config_rejects_a_real_route_with_403():
 
     response = client.get("/admin-items")
     assert response.status_code == 403
-    assert response.json() == {"detail": "Not authorized to perform this action"}
+    assert response.json() == {
+        "detail": "Not authorized to perform this action",
+        "detail_code": "fastapi-viewsets.not_authorized",
+        "detail_params": {},
+        "field_errors": {},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +177,12 @@ def test_perform_method_reads_authorization_and_rejects_itself():
 
     other_response = client.get("/items/1", headers={"x-user": "someone-else"})
     assert other_response.status_code == 403
-    assert other_response.json() == {"detail": "Not your item"}
+    assert other_response.json() == {
+        "detail": "Not your item",
+        "detail_code": "fastapi-viewsets.http_error",
+        "detail_params": {"status": 403},
+        "field_errors": {},
+    }
 
 
 # ---------------------------------------------------------------------------

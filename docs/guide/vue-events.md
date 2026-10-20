@@ -85,7 +85,7 @@ the `defineEvent` type argument, a wider one included, does not compile.
 
 `ready` resolves once the topic is followed: the `subscribe` over the peer is answered, or the first poll answered the
 topic. It rejects when the topic is refused first, with the subscription removed; the error is a `ViewSetRequestError`
-whose `response.data.detail_code` names the reason, such as `fastapi-viewsets.event_topic_refused`,
+whose `response.data` is the server's `ApiErrorBody` and whose `response.data.detail_code` names the reason, such as `fastapi-viewsets.event_topic_refused`,
 `fastapi-viewsets.event_topic_invalid`, `fastapi-viewsets.not_authorized` or `fastapi-viewsets.session_expired`, or the
 `AxiosError` of a poll axios sent. After `close()` it rejects with `Error('The event client is closed')`.
 
@@ -245,9 +245,9 @@ A `subscribe` or `poll` that fails with a status from 400 to 499 refuses the top
 status of 500 or above, and a failure without a status refuse nothing and are sent again: a poll on the next rung, a
 subscribe on each rung while the peer is open and on the next reconnect, with the topic polled meanwhile. The
 subscription stays, and its `onError` is called only for a refusal. A topic of a poll answer is classified by the
-answer's `status`, else by the status its `error` code stands for (`fastapi-viewsets.rate_limited` 429,
-`fastapi-viewsets.event_topic_invalid` 422, `fastapi-viewsets.session_expired` 401, any other 403): a topic answered
-`fastapi-viewsets.rate_limited`, or with a `status` of 500 or above, stays followed and is polled on the next rung. A
+answer's `status`; its `error` is the server's `ApiErrorBody`, the `response.data` of the `ViewSetRequestError` the
+topic is refused with. A topic answered with a `status` of 429 or of 500 or above, and an answer whose `error` is not
+an `ApiErrorBody` or that has no `status`, stays followed and is polled on the next rung. A
 gap poll that fails this way, or whose answer leaves the topic out, starts the ladder, also over an open peer, until a
 poll answers the topic.
 

@@ -233,7 +233,6 @@ def _client(container, model):
     from fastapi.testclient import TestClient
 
     from fastapi_viewsets.decorators import route_viewset
-    from fastapi_viewsets.exceptions import df_viewset_exception_handler, DfViewSetError
     from fastapi_viewsets.mixins import BulkViewSetMixin
 
     router = APIRouter()
@@ -244,7 +243,6 @@ def _client(container, model):
             super().__init__(container=container, pk_field="id")
 
     app = FastAPI()
-    app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
     app.include_router(router)
     return TestClient(app)
 
@@ -268,7 +266,8 @@ def test_patch_validates_the_fields_it_states():
     client = _client([Track(id=1, title="One")], Track)
     response = client.patch("/tracks/1", json={"title": ""})
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "title"]
+    assert response.json()["detail_code"] == "fastapi-viewsets.validation_failed"
+    assert list(response.json()["field_errors"]) == ["title"]
 
 
 def test_bulk_patch_writes_only_the_fields_each_record_states():
@@ -315,7 +314,8 @@ def test_patch_applies_the_models_field_validators():
     client = _client([Venue(id=1, name="Hall")], Venue)
     response = client.patch("/tracks/1", json={"name": "reserved"})
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "name"]
+    assert response.json()["detail_code"] == "fastapi-viewsets.validation_failed"
+    assert list(response.json()["field_errors"]) == ["name"]
 
 
 def test_put_still_replaces_the_whole_record():

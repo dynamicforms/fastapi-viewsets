@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from fastapi import APIRouter, FastAPI
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
 
 from fastapi_viewsets import ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC
 from fastapi_viewsets.cursor import CursorError
@@ -19,7 +19,6 @@ from fastapi_viewsets.exceptions import (
     ActionInterruptedError,
     ActionOutcomeUnknownError,
     CursorRequestError,
-    df_viewset_exception_handler,
     DfViewSetError,
     EventCursorsExceededError,
     EventScopeMissingError,
@@ -35,6 +34,7 @@ from fastapi_viewsets.exceptions import (
     ResultReaderStoppedError,
     ResultTimeoutError,
     SessionExpiredError,
+    UnhandledError,
     UnsupportedListShapeError,
 )
 
@@ -120,50 +120,6 @@ def test_cursor_request_error_carries_the_wrapped_cursor_errors_code_and_params(
     assert error.detail == "cursor has no value for ordering key(s): id"
     assert error.code == "fastapi-viewsets.cursor_missing_keys"
     assert error.params == {"missing": ["id"]}
-
-
-def _app_with_handler_registered() -> FastAPI:
-    router = APIRouter()
-
-    @router.get("/boom")
-    async def boom():
-        raise NotFoundError(5)
-
-    app = FastAPI()
-    app.include_router(router)
-    app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
-    return app
-
-
-def _app_without_handler_registered() -> FastAPI:
-    router = APIRouter()
-
-    @router.get("/boom")
-    async def boom():
-        raise NotFoundError(5)
-
-    app = FastAPI()
-    app.include_router(router)
-    return app
-
-
-def test_without_the_handler_the_response_is_exactly_a_plain_detail_string():
-    """An application that does nothing further sees exactly what it always has."""
-    client = TestClient(_app_without_handler_registered())
-    response = client.get("/boom")
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Item with pk 5 not found"}
-
-
-def test_with_the_handler_registered_detail_code_and_params_are_additive():
-    client = TestClient(_app_with_handler_registered())
-    response = client.get("/boom")
-    assert response.status_code == 404
-    assert response.json() == {
-        "detail": "Item with pk 5 not found",
-        "detail_code": "fastapi-viewsets.not_found",
-        "detail_params": {"pk": 5},
-    }
 
 
 def test_event_topic_invalid_error_carries_the_topic():
@@ -263,22 +219,58 @@ def test_the_encoded_fields_rebuild_the_error():
         "status_code": 500,
         "detail": "Internal Server Error",
         "headers": None,
+        "class": "UnhandledError",
+        "code": "fastapi-viewsets.unhandled_error",
+        "params": {},
     }
+    rebuilt = _error_from_jsonable(_error_to_jsonable(RuntimeError("x")))
+    assert (type(rebuilt), rebuilt.code) == (UnhandledError, "fastapi-viewsets.unhandled_error")
 
 
-def test_the_encoded_fields_carry_a_code_of_the_package_namespace_without_it():
-    assert _error_to_jsonable(NotFoundError(3))["code"] == "not_found"
-    assert _error_to_jsonable(CursorRequestError(CursorError("x", code=_namespaced("cursor_stale"))))["code"] == (
-        "cursor_stale"
+_ERRORS = [
+    {"type": "string_too_short", "loc": ["body", "name"], "msg": "short", "input": "a", "ctx": {"min_length": 3}}
+]
+
+
+def test_a_request_validation_error_is_encoded_with_its_class_and_rebuilt_as_one():
+    encoded = _error_to_jsonable(RequestValidationError(_ERRORS))
+    assert encoded == {"status_code": 422, "detail": _ERRORS, "headers": None, "class": "RequestValidationError"}
+    rebuilt = _error_from_jsonable(encoded)
+    assert type(rebuilt) is RequestValidationError
+    assert list(rebuilt.errors()) == _ERRORS
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"status_code": 422, "detail": _ERRORS, "headers": None},
+        {"status_code": 500, "detail": "Internal Server Error", "headers": None},
+        {"status_code": 403, "detail": "Not your item", "headers": {"X-A": "1"}},
+    ],
+)
+def test_fields_without_a_code_or_a_class_rebuild_an_http_exception(data):
+    rebuilt = _error_from_jsonable(data)
+    assert type(rebuilt) is HTTPException
+    assert (rebuilt.status_code, rebuilt.detail, rebuilt.headers) == (
+        data["status_code"],
+        data["detail"],
+        data["headers"],
     )
 
 
-def test_encoded_fields_without_the_namespace_rebuild_an_error_of_this_module_with_it():
-    data = {"status_code": 404, "detail": "Item with pk 3 not found", "headers": None}
-    rebuilt = _error_from_jsonable({**data, "class": "NotFoundError", "code": "not_found", "params": {"pk": 3}})
-    assert (type(rebuilt), rebuilt.code) == (NotFoundError, "fastapi-viewsets.not_found")
+def test_the_encoded_fields_carry_the_full_code():
+    assert _error_to_jsonable(NotFoundError(3))["code"] == "fastapi-viewsets.not_found"
+    assert _error_to_jsonable(CursorRequestError(CursorError("x", code=_namespaced("cursor_stale"))))["code"] == (
+        "fastapi-viewsets.cursor_stale"
+    )
+
+
+def test_encoded_fields_rebuild_an_error_of_this_module_with_its_code_as_given():
+    data = {"status_code": 404, "detail": "Item with pk 3 not found", "headers": None, "params": {"pk": 3}}
     rebuilt = _error_from_jsonable({**data, "class": "NotFoundError", "code": "fastapi-viewsets.not_found"})
-    assert rebuilt.code == "fastapi-viewsets.not_found"
+    assert (type(rebuilt), rebuilt.code, rebuilt.params) == (NotFoundError, "fastapi-viewsets.not_found", {"pk": 3})
+    # a bare code, as 0.11 wrote it, is read as given
+    assert _error_from_jsonable({**data, "class": "NotFoundError", "code": "not_found"}).code == "not_found"
 
 
 class _ApplicationError(DfViewSetError):
@@ -290,7 +282,7 @@ class _ApplicationNotFoundError(NotFoundError):
     pass
 
 
-@pytest.mark.parametrize("code", ["app.conflict", "conflict", "app.not_found"])
+@pytest.mark.parametrize("code", ["app.conflict", "conflict", "not_found", "fastapi-viewsets.later_code"])
 def test_the_code_of_an_application_error_is_encoded_and_rebuilt_as_given(code):
     encoded = _error_to_jsonable(_ApplicationError(code))
     assert encoded["code"] == code
@@ -300,34 +292,11 @@ def test_the_code_of_an_application_error_is_encoded_and_rebuilt_as_given(code):
     assert base.code == code
 
 
-def test_an_application_subclass_of_an_error_of_this_module_travels_without_the_namespace():
-    # a 0.11 reader reads the code it wrote itself
+def test_an_application_subclass_of_an_error_of_this_module_is_rebuilt_as_a_df_viewset_error():
     encoded = _error_to_jsonable(_ApplicationNotFoundError(3))
-    assert (encoded["class"], encoded["code"]) == ("_ApplicationNotFoundError", "not_found")
+    assert (encoded["class"], encoded["code"]) == ("_ApplicationNotFoundError", "fastapi-viewsets.not_found")
     rebuilt = _error_from_jsonable(encoded)
     assert (type(rebuilt), rebuilt.code) == (DfViewSetError, "fastapi-viewsets.not_found")
-
-
-def test_a_record_without_the_namespace_of_a_class_the_reader_does_not_define_gains_it():
-    # a 0.11 record of an application subclass, and a class a later version defines, with a code this
-    # version declares
-    for class_name in ("MyNotFound", "NotFoundInALaterVersionError"):
-        data = {"status_code": 404, "detail": "x", "headers": None, "class": class_name, "code": "not_found"}
-        rebuilt = _error_from_jsonable(data)
-        assert (type(rebuilt), rebuilt.code) == (DfViewSetError, "fastapi-viewsets.not_found")
-
-
-def test_a_code_this_version_does_not_declare_is_read_as_given():
-    data = {"status_code": 409, "detail": "x", "headers": None, "class": "LaterError", "code": "later_code"}
-    assert _error_from_jsonable(data).code == "later_code"
-    # a code in the package namespace that this version does not declare loses the namespace on the way
-    encoded = _error_to_jsonable(_ApplicationError("fastapi-viewsets.later_code"))
-    assert (encoded["code"], _error_from_jsonable(encoded).code) == ("later_code", "later_code")
-
-
-def test_an_application_code_without_a_namespace_that_equals_a_package_code_is_read_as_the_packages():
-    rebuilt = _error_from_jsonable(_error_to_jsonable(_ApplicationError("not_found")))
-    assert rebuilt.code == "fastapi-viewsets.not_found"
 
 
 def test_the_declared_codes_are_the_codes_the_source_builds():

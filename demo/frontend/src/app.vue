@@ -115,7 +115,7 @@ import {
 } from '@dynamicforms/vue-grid';
 import { ref, watch } from 'vue';
 
-import { toErrorDescription, type ApiErrorBody } from '../../../vue/errors';
+import { errorBodyOf, toErrorDescription } from '../../../vue/errors';
 import { applyChanges, type Change, type RecordsChanged } from '../../../vue/events';
 import type { EventSubscription } from '../../../vue/events';
 
@@ -194,17 +194,10 @@ const columnsResponsive: ResponsiveColumnDefinitions = [
   { cssClass: 'single-column', rows: columns.length, columns },
 ];
 
-/**
- * The text of a failed call: the server's own `detail` and `code` where the response body names
- * one failure (both transports throw the same shape), the error's message otherwise.
- */
-function failureText(what: string, e: any): string {
-  const body = e?.response?.data;
-  if (body && typeof body === 'object' && typeof body.detail === 'string') {
-    const error = toErrorDescription(body as ApiErrorBody);
-    return `${what}: ${error.detail}${error.code ? ` (${error.code})` : ''}`;
-  }
-  return `${what}: ${e?.response?.status ?? ''} ${e?.message ?? e}`;
+/** The text of a failed call: the `detail` and the code of its error body (see `errorBodyOf`). */
+function failureText(what: string, e: unknown): string {
+  const error = toErrorDescription(errorBodyOf(e));
+  return `${what}: ${error.detail} (${error.code})`;
 }
 
 /** Sort and filters as the backend's query parameters. Same on every page of a walk. */

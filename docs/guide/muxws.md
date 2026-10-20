@@ -282,7 +282,7 @@ schemas differ.
 
 | Name | Description |
 |------|-------------|
-| `TransportRoute` | An `APIRoute` that matches only requests arriving over one of its `transports` (a `frozenset` of `"rest"`, `"muxws"`) |
+| `TransportRoute` | An `APIRoute` that matches only requests arriving over one of its `transports` (a `frozenset` of `"rest"`, `"muxws"`), and answers every error of its request with the [error body](./error-codes#the-routes-of-a-viewset) |
 | `transport_route_class(base, transports)` | The route class `route_viewset` registers an endpoint with: the router's `route_class` restricted to `transports` |
 | `request_transport(scope)` | The transport a request arrived over: `scope["fastapi_viewsets.transport"]`, or `"rest"` without it |
 | `TRANSPORT_SCOPE_KEY`, `REST`, `MUXWS` | `"fastapi_viewsets.transport"`, `"rest"`, `"muxws"` |
@@ -329,10 +329,13 @@ body, for a streaming reply as much as a unary one.
 
 ### Errors
 
-A 404 or a 422 comes back as a normal reply carrying that status. Stream resets are reserved for
+A 404 or a 422 comes back as a normal reply carrying that status, with the same
+[error body](./error-codes#the-error-body) as over REST. Stream resets are reserved for
 transport and protocol failures. A command whose `:method`, `:path` or `:query` is malformed — a
 path that is not absolute, a method that is not a string, a `:query` that is neither a string nor a
-mapping — is answered with status 400 and `{"detail": "..."}`.
+mapping — is answered with status 400 and `fastapi-viewsets.command_invalid`, `params.reason` naming the
+failure. An exception the application raises before it starts a response is answered with 500
+`fastapi-viewsets.unhandled_error`, and logged.
 
 On the client that status becomes a `ViewSetRequestError`, whose shape is the one axios raises —
 `error.response.status`, `error.response.data` — so error handling written against axios works over

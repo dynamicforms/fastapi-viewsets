@@ -1,3 +1,5 @@
+import logging
+
 from typing import Any
 
 import pytest
@@ -134,11 +136,22 @@ async def test_a_missing_record_answers_with_a_status_not_a_reset():
 
 
 @pytest.mark.asyncio
-async def test_validation_errors_come_back_as_422():
+async def test_validation_errors_come_back_as_422_with_the_body_rest_answers():
     cls = make_viewset()
+    app = app_of(cls)
     stream = FakeStream({":method": "POST", ":path": "/tracks"})
-    await process_command({"title": 12345, "id": "not-an-int"}, stream, app=app_of(cls))
-    assert stream.status == 422
+    await process_command({"title": 12345}, stream, app=app)
+    rest = TestClient(app).post("/tracks", json={"title": 12345})
+    assert stream.status == rest.status_code == 422
+    assert stream.payload == rest.json()
+    assert stream.payload == {
+        "detail": "The request failed validation",
+        "detail_code": "fastapi-viewsets.validation_failed",
+        "detail_params": {},
+        "field_errors": {
+            "title": [{"code": "pydantic.string_type", "params": {}, "detail": "Input should be a valid string"}]
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -147,6 +160,24 @@ async def test_an_unregistered_path_answers_404():
     stream = FakeStream({":method": "GET", ":path": "/nonexistent"})
     assert await process_command(ABSENT, stream, app=app_of(cls)) is True
     assert stream.status == 404
+    assert stream.payload == {"detail": "Not Found"}
+
+
+@pytest.mark.asyncio
+async def test_an_unregistered_path_answers_http_error_once_the_app_installs_the_handlers():
+    from ..error_responses import install_error_handlers
+
+    app = app_of(make_viewset())
+    install_error_handlers(app)
+    stream = FakeStream({":method": "GET", ":path": "/nonexistent"})
+    await process_command(ABSENT, stream, app=app)
+    assert stream.status == 404
+    assert stream.payload == {
+        "detail": "Not Found",
+        "detail_code": "fastapi-viewsets.http_error",
+        "detail_params": {"status": 404},
+        "field_errors": {},
+    }
 
 
 @pytest.mark.asyncio
@@ -430,19 +461,24 @@ def test_two_viewsets_on_one_base_path_warn():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "headers",
+    ("headers", "reason", "detail"),
     [
-        {":method": "GET", ":path": "tracks"},
-        {":method": "GET", ":path": "/tracks", ":query": 42},
-        {":method": 1, ":path": "/tracks"},
+        ({":method": "GET", ":path": "tracks"}, "path_relative", ":path must be an absolute path"),
+        ({":method": "GET", ":path": "/tracks", ":query": 42}, "query_type", ":query must be a string or a mapping"),
+        ({":method": 1, ":path": "/tracks"}, "address_type", ":method and :path must both be strings"),
     ],
 )
-async def test_a_malformed_envelope_is_answered_with_a_400(headers):
+async def test_a_malformed_envelope_is_answered_with_a_400_command_invalid(headers, reason, detail):
     cls = make_viewset()
     stream = FakeStream(headers)
     assert await process_command(ABSENT, stream, app=app_of(cls)) is True
     assert stream.status == 400
-    assert isinstance(stream.payload["detail"], str)
+    assert stream.payload == {
+        "detail": detail,
+        "detail_code": "fastapi-viewsets.command_invalid",
+        "detail_params": {"reason": reason},
+        "field_errors": {},
+    }
 
 
 # A command goes through the application, as an HTTP request to the same path does.
@@ -476,12 +512,9 @@ async def test_the_command_goes_through_the_app_serving_the_connection():
 
 
 @pytest.mark.asyncio
-async def test_the_apps_exception_handler_shapes_a_viewset_error():
-    from ..exceptions import df_viewset_exception_handler, DfViewSetError
-
+async def test_a_viewset_error_carries_the_body_rest_answers():
     cls = make_viewset()
     app = app_of(cls)
-    app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
 
     rest = TestClient(app).get("/tracks/999")
     stream = FakeStream({":method": "GET", ":path": "/tracks/999"})
@@ -515,6 +548,48 @@ async def test_the_apps_500_handler_answers_an_unhandled_error():
     await process_command(ABSENT, stream, app=app)
     assert stream.status == 500
     assert stream.payload == {"detail": "crashed"}
+
+
+def broken_app() -> FastAPI:
+    router = APIRouter()
+
+    @route_viewset(router, base_path="/broken", pk_field_name="id")
+    class BrokenViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+        async def perform_list(self, context: Context) -> list[Track]:  # noqa: ARG002 - fails before reading it
+            raise RuntimeError("secret detail of the failure")
+
+    return app_of(BrokenViewSet)
+
+
+UNHANDLED = {
+    "detail": "Internal Server Error",
+    "detail_code": "fastapi-viewsets.unhandled_error",
+    "detail_params": {},
+    "field_errors": {},
+}
+
+
+@pytest.mark.asyncio
+async def test_an_unhandled_error_is_answered_500_unhandled_error_and_logged(caplog):
+    stream = FakeStream({":method": "GET", ":path": "/broken"})
+    with caplog.at_level(logging.ERROR):
+        await process_command(ABSENT, stream, app=broken_app())
+    assert (stream.status, stream.payload) == (500, UNHANDLED)
+    assert "secret detail of the failure" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_an_app_that_raises_before_it_responds_is_answered_500_unhandled_error():
+    async def raw_app(_scope, _receive, _send):
+        raise RuntimeError("secret detail of the failure")
+
+    make_viewset()
+    stream = FakeStream({":method": "GET", ":path": "/tracks"})
+    await process_command(ABSENT, stream, app=raw_app)
+    assert (stream.status, stream.payload) == (500, UNHANDLED)
 
 
 @pytest.mark.asyncio

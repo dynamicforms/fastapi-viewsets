@@ -20,7 +20,6 @@ from functools import wraps
 from typing import Any, get_args, get_origin, get_type_hints, TYPE_CHECKING, TypeVar, Union
 
 from fastapi import HTTPException
-from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -666,14 +665,13 @@ def celery_viewset_server(
                 _report("interrupted", task_name, call, lambda t: ActionInterruptedError(t, "time_limit"))
                 raise pool_timeout
             error = run.translate(caught)
-            if isinstance(error, RequestValidationError):
-                # a request the worker found invalid (a filter value that will not convert) answers as
-                # FastAPI answers one: 422 with the errors as `detail`
-                error = HTTPException(status_code=422, detail=jsonable_encoder(error.errors()))
             process_exit = isinstance(error, (KeyboardInterrupt, SystemExit))
             if process_exit:
                 pushed = ActionInterruptedError(task_name, "terminated")
-            elif isinstance(error, HTTPException):
+            elif isinstance(error, (HTTPException, RequestValidationError)):
+                # a request the worker found invalid (a filter value that will not convert) is pushed as
+                # the `RequestValidationError` it is, and answered as a request the FastAPI process found
+                # invalid
                 pushed = error
             else:
                 pushed = ActionFailedError(task_name)
@@ -686,12 +684,15 @@ def celery_viewset_server(
                     exc_info=caught,
                 )
             else:
+                status, detail = (
+                    (pushed.status_code, pushed.detail) if isinstance(pushed, HTTPException) else (422, pushed.errors())
+                )
                 logger.info(
                     "Celery task returned standard error: %s (correlation_id=%s): %d: %s",
                     task_name,
                     correlation_id,
-                    pushed.status_code,
-                    pushed.detail,
+                    status,
+                    detail,
                 )
             if process_exit and not _supervised():
                 _report("interrupted", task_name, call, lambda _t: pushed)

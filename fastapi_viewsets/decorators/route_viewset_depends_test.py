@@ -76,7 +76,12 @@ def test_depends_rejects_before_perform_runs():
 
     response = client.get("/items")
     assert response.status_code == 401
-    assert response.json() == {"detail": "Rejected early"}
+    assert response.json() == {
+        "detail": "Rejected early",
+        "detail_code": "fastapi-viewsets.http_error",
+        "detail_params": {"status": 401},
+        "field_errors": {},
+    }
 
 
 def test_depends_rejection_precedes_body_validation_422():
@@ -88,7 +93,12 @@ def test_depends_rejection_precedes_body_validation_422():
     # "name" should be a string - this body would fail Item validation (422) if it were ever parsed
     response = client.post("/items", json={"id": "not-an-int", "name": 123})
     assert response.status_code == 401
-    assert response.json() == {"detail": "Rejected early"}
+    assert response.json() == {
+        "detail": "Rejected early",
+        "detail_code": "fastapi-viewsets.http_error",
+        "detail_params": {"status": 401},
+        "field_errors": {},
+    }
 
 
 def test_dependency_overrides_can_bypass_the_middleware_bridge():

@@ -136,9 +136,9 @@ def _payload_error(data: dict) -> Exception:
 def error_payload(correlation_id: str, task: str | None, error: BaseException) -> dict:
     """
     The payload that fails one call with `error`: an `HTTPException` (a `DfViewSetError` with its
-    class), a `RequestValidationError` as a 422 with its errors as `detail`, any other error as
-    `ActionFailedError`. `http_status_code` and `http_detail` repeat the status and detail for a
-    reader that does not decode `error`.
+    class), a `RequestValidationError` as a 422 with its errors as `detail` and `class`
+    `"RequestValidationError"`, any other error as `ActionFailedError`. `http_status_code` and
+    `http_detail` repeat the status and detail for a reader that does not decode `error`.
     """
     if not isinstance(error, (HTTPException, RequestValidationError)):
         error = ActionFailedError(task)
@@ -169,9 +169,10 @@ def push_result(
     """
     Push a result or an error for one call. queue_key is the `_result_queue_key` the client sent with
     the task. An `error` that is an `HTTPException` reaches the caller as it is (a `DfViewSetError`
-    of a class `fastapi_viewsets.exceptions` defines keeps its class); a `RequestValidationError`
-    reaches it as an `HTTPException` 422 with its errors as `detail`; any other error reaches it as
-    `ActionFailedError`. `task` names the call's task in that error.
+    of a class `fastapi_viewsets.exceptions` defines keeps its class), and so does a
+    `RequestValidationError`; any other error reaches it as `ActionFailedError`. `task` names the
+    call's task in that error. The FastAPI process answers each as `fastapi_viewsets.error_responses`
+    answers it.
     """
     if error is not None:
         data = error_payload(correlation_id, task, error)

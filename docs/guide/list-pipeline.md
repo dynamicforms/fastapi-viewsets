@@ -275,8 +275,8 @@ Built in: `exact`, `iexact`, `contains`, `icontains`, `startswith`, `gt`, `gte`,
 
 `in` and `overlaps` take a comma-separated string (`?year__in=1999,2000`); FastAPI cannot expose a
 list-typed field of a `Depends()`-expanded model as a query parameter. Values are coerced to the
-field's own type, and one that will not convert is a 422 in FastAPI's validation shape, with `loc`
-`["query", parameter, index]` (`["query", "year__in", 1]` for `?year__in=1999,abc`).
+field's own type, and one that will not convert is a 422 `fastapi-viewsets.validation_failed`, with
+the failure in `field_errors` under `parameter.index` (`year__in.1` for `?year__in=1999,abc`).
 
 Hand-written `filter_list` keeps working: a filter model built by hand carries no declaration, and
 the pipeline falls through to it.
@@ -408,8 +408,8 @@ A concurrent update of the same row waits for the lock and then reads this one's
 does not revert fields it did not state, and a rule over several fields is checked against the
 values that end up stored. Two updates of the same field end with the later one's value.
 
-A row that fails validation answers 422 with the errors of `schema` and `loc` `["body", field]`, or
-`["body", pk, field]` for `PATCH /bulk` and `PUT /bulk`, which report every failing row. A bulk
+A row that fails validation answers 422 `fastapi-viewsets.validation_failed` with the errors of `schema` in
+`field_errors` under `field`, or under `pk.field` for `PATCH /bulk` and `PUT /bulk`, which report every failing row. A bulk
 update with a missing or invalid row writes none of its rows. A row already stored in breach of a
 `@model_validator` rejects every update that leaves it in breach, including one that changes an
 unrelated field.

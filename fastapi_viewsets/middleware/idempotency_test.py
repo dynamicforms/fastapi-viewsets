@@ -1,12 +1,14 @@
 import asyncio
 import fnmatch
+import json
 import time
 
 from typing import Any
 
 import pytest
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -18,11 +20,11 @@ from ..decorators import route_viewset
 from ..exceptions import (
     ActionDispatchError,
     ActionInterruptedError,
-    df_viewset_exception_handler,
     DfViewSetError,
     IdempotencyKeyInvalidError,
     IdempotencyKeyReusedError,
     NotFoundError,
+    UnhandledError,
 )
 from . import ViewSetResult
 from .idempotency import _ATTACH_SCRIPT, _RENEW_SCRIPT, Idempotency, parse_idempotency_key, request_fingerprint
@@ -198,14 +200,14 @@ async def test_a_call_that_could_not_be_dispatched_runs_again_on_a_repeat():
 
 
 @pytest.mark.asyncio
-async def test_an_unhandled_exception_is_replayed_as_a_500():
+async def test_an_unhandled_exception_is_replayed_as_an_unhandled_error():
     middleware, chain = Idempotency(), Counter(error=RuntimeError("boom"))
     with pytest.raises(RuntimeError):
         await call(middleware, chain)
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(UnhandledError) as exc_info:
         await call(middleware, chain)
     assert chain.calls == 1
-    assert (exc_info.value.status_code, exc_info.value.detail) == (500, "Internal Server Error")
+    assert (exc_info.value.status_code, exc_info.value.code) == (500, "fastapi-viewsets.unhandled_error")
 
 
 @pytest.mark.asyncio
@@ -311,7 +313,6 @@ def make_app() -> tuple[FastAPI, list]:
 
     app = FastAPI()
     app.include_router(router)
-    app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
     return app, created
 
 
@@ -336,6 +337,120 @@ def test_the_errors_carry_their_codes():
     assert (invalid.status_code, invalid.json()["detail_code"]) == (400, "fastapi-viewsets.idempotency_key_invalid")
     assert (reused.status_code, reused.json()["detail_code"]) == (422, "fastapi-viewsets.idempotency_key_reused")
     assert len(created) == 1
+
+
+def make_failing_app(error: Exception) -> tuple[FastAPI, list]:
+    calls: list = []
+    router = APIRouter()
+
+    @route_viewset(router, "/items")
+    class ItemViewSet:
+        __router = APIRouter()
+
+        @__router.post("", status_code=201)
+        async def create(self, item: Item) -> Item:
+            calls.append(item)
+            raise error
+
+    app = FastAPI()
+    app.include_router(router)
+    return app, calls
+
+
+_FIELD_ERRORS = [{"type": "value_error", "loc": ("body", "name"), "msg": "Value error, taken", "input": "a"}]
+
+VALIDATION_FAILED = {
+    "detail": "The request failed validation",
+    "detail_code": "fastapi-viewsets.validation_failed",
+    "detail_params": {},
+    "field_errors": {"name": [{"code": "pydantic.value_error", "params": {}, "detail": "Value error, taken"}]},
+}
+
+UNHANDLED = {
+    "detail": "Internal Server Error",
+    "detail_code": "fastapi-viewsets.unhandled_error",
+    "detail_params": {},
+    "field_errors": {},
+}
+
+
+@pytest.mark.parametrize(
+    ("error", "status", "body"),
+    [
+        (RequestValidationError(_FIELD_ERRORS), 422, VALIDATION_FAILED),
+        (RuntimeError("secret detail of the failure"), 500, UNHANDLED),
+    ],
+)
+def test_a_repeat_of_a_failed_call_answers_the_first_calls_body(error, status, body):
+    settings.viewsets_command_middleware = [Idempotency(redis_client=FakeRedis())]
+    app, calls = make_failing_app(error)
+    client = TestClient(app, raise_server_exceptions=False)
+    first = client.post("/items", json={"id": 1, "name": "a"}, headers={"Idempotency-Key": KEY})
+    repeat = client.post("/items", json={"id": 1, "name": "a"}, headers={"Idempotency-Key": KEY})
+    assert (first.status_code, first.json()) == (repeat.status_code, repeat.json()) == (status, body)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("error", "fields_0_11", "status", "body"),
+    [
+        (
+            RequestValidationError(_FIELD_ERRORS),
+            {"status_code": 422, "detail": [{"type": "missing", "loc": ["body", "name"], "msg": "m"}], "headers": None},
+            422,
+            {
+                "detail": "Unprocessable Entity",
+                "detail_code": "fastapi-viewsets.http_error",
+                "detail_params": {"status": 422, "detail": [{"type": "missing", "loc": ["body", "name"], "msg": "m"}]},
+                "field_errors": {},
+            },
+        ),
+        (
+            RuntimeError("boom"),
+            {"status_code": 500, "detail": "Internal Server Error", "headers": None},
+            500,
+            {
+                "detail": "Internal Server Error",
+                "detail_code": "fastapi-viewsets.http_error",
+                "detail_params": {"status": 500},
+                "field_errors": {},
+            },
+        ),
+        (
+            NotFoundError(3),
+            {
+                "status_code": 404,
+                "detail": "Item with pk 3 not found",
+                "headers": None,
+                "class": "NotFoundError",
+                "code": "not_found",
+                "params": {"pk": 3},
+            },
+            404,
+            {
+                "detail": "Item with pk 3 not found",
+                "detail_code": "not_found",
+                "detail_params": {"pk": 3},
+                "field_errors": {},
+            },
+        ),
+    ],
+)
+def test_a_record_a_0_11_process_wrote_is_replayed_with_the_error_body_and_its_code_as_given(
+    error, fields_0_11, status, body
+):
+    redis = FakeRedis()
+    settings.viewsets_command_middleware = [Idempotency(redis_client=redis)]
+    app, calls = make_failing_app(error)
+    client = TestClient(app, raise_server_exceptions=False)
+    client.post("/items", json={"id": 1, "name": "a"}, headers={"Idempotency-Key": KEY})
+    [storage_key] = [key for key in redis.values if not key.endswith(":attached")]
+    record = json.loads(redis.values[storage_key][0])
+    record["outcome"] = {"error": fields_0_11}
+    redis.values[storage_key] = (json.dumps(record), redis.values[storage_key][1])
+    repeat = client.post("/items", json={"id": 1, "name": "a"}, headers={"Idempotency-Key": KEY})
+    assert (repeat.status_code, repeat.json()) == (status, body)
+    assert len(calls) == 1
 
 
 # Redis records

@@ -39,20 +39,100 @@ releases at once, work from the bottom of the page upwards.
   | `cursor_missing_keys` | `fastapi-viewsets.cursor_missing_keys` |
   | `cursor_value_mismatch` | `fastapi-viewsets.cursor_value_mismatch` |
 
-- [ ] `toFieldErrors()` gives pydantic's `type` as `pydantic.<type>` (`ERROR_NAMESPACE_PYDANTIC`):
+- [ ] Field errors carry pydantic's `type` as `pydantic.<type>` (`ERROR_NAMESPACE_PYDANTIC`):
       `string_too_short` is `pydantic.string_too_short`.
 - [ ] Move the translations of these codes under a key prefix per namespace, and map the namespaces to
       the prefixes through `ERROR_NAMESPACE` and `ERROR_NAMESPACE_PYDANTIC`; see
       [Translating the codes](./error-codes#translating-the-codes).
 - [ ] Prefix the codes of the application's own `DfViewSetError` subclasses with a namespace of its
       own. The package passes them on as given.
-- [ ] A worker and a FastAPI process of 0.11 and 0.12 read each other's `celery_viewset` result
-      payloads, and 0.12 replays a 0.11 idempotency record: the payloads and records carry the
-      package's codes without the namespace in both versions, also for an application's subclass of
-      one of the package's errors. 0.12 rebuilds them with the namespace; a 0.11 process passes them
-      on without it. An application code without a namespace that equals one of the package's codes
-      is rebuilt by 0.12 as the package's (see
-      [Custom errors](./error-codes#custom-errors)).
+- [ ] Flush the idempotency records and the pending `celery_viewset` results on upgrade, or let them expire: 0.12
+      stores the full code (`fastapi-viewsets.not_found`) and reads a stored code as given, so a record 0.11 wrote
+      (an idempotency record within its TTL, a result a 0.11 worker pushed) replays with its bare code
+      (`not_found`), and its validation errors and unhandled errors as `fastapi-viewsets.http_error`.
+
+### One error body
+
+Every error of a viewset's route is answered with one body, `ApiErrorBody`, over REST and muxws, without a handler
+registered by the application (see [Error codes → The error body](./error-codes#the-error-body)):
+
+```json
+{ "detail": "...", "detail_code": "<namespace>.<code>", "detail_params": {}, "field_errors": {} }
+```
+
+- [ ] Remove the registration of `df_viewset_exception_handler`; the function no longer exists. Call
+      `install_error_handlers(app)` (`fastapi_viewsets.error_responses`) where the application's other routes, and a
+      path no route matches, are to answer with the same body:
+
+  ```python
+  # before
+  from fastapi_viewsets.exceptions import DfViewSetError, df_viewset_exception_handler
+
+  app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
+
+  # after
+  from fastapi_viewsets.error_responses import install_error_handlers
+
+  install_error_handlers(app)
+  ```
+
+- [ ] Read the bodies of the viewsets' errors as `ApiErrorBody`. Every body carries all four fields:
+
+  | Error | 0.11 body | 0.12 body |
+  |-------|-----------|-----------|
+  | `NotFoundError(42)`, handler registered | `{"detail": "Item with pk 42 not found", "detail_code": "not_found", "detail_params": {"pk": 42}}` | `{"detail": "Item with pk 42 not found", "detail_code": "fastapi-viewsets.not_found", "detail_params": {"pk": 42}, "field_errors": {}}` |
+  | `NotFoundError(42)`, no handler | `{"detail": "Item with pk 42 not found"}` | the same as above |
+  | a request that fails validation | `{"detail": [{"type": "string_too_short", "loc": ["body", "name"], "msg": "String should have at least 3 characters", "input": "a", "ctx": {"min_length": 3}}]}` | `{"detail": "The request failed validation", "detail_code": "fastapi-viewsets.validation_failed", "detail_params": {}, "field_errors": {"name": [{"code": "pydantic.string_too_short", "params": {"min_length": 3}, "detail": "String should have at least 3 characters"}]}}` |
+  | `raise HTTPException(403, "Not your item")` | `{"detail": "Not your item"}` | `{"detail": "Not your item", "detail_code": "fastapi-viewsets.http_error", "detail_params": {"status": 403}, "field_errors": {}}` |
+  | `raise HTTPException(400, {"field": "x"})` | `{"detail": {"field": "x"}}` | `{"detail": "Bad Request", "detail_code": "fastapi-viewsets.http_error", "detail_params": {"status": 400, "detail": {"field": "x"}}, "field_errors": {}}` |
+  | an exception without a handler | plain text `Internal Server Error` | `{"detail": "Internal Server Error", "detail_code": "fastapi-viewsets.unhandled_error", "detail_params": {}, "field_errors": {}}` |
+  | a muxws command with headers no route matches | `{"detail": ":path must be absolute, got 'tracks'"}` (400) | `{"detail": ":path must be an absolute path", "detail_code": "fastapi-viewsets.command_invalid", "detail_params": {"reason": "path_relative"}, "field_errors": {}}` (400) |
+  | an exception before a muxws command's response | payload `null` (500) | the body of `fastapi-viewsets.unhandled_error` (500) |
+
+  The response of an exception without a handler no longer contains its text; the exception is re-raised and logged
+  by the server as before. A handler the application registered for an exception class, a status, `HTTPException`,
+  or `Exception` / 500 keeps answering as it did.
+- [ ] Translate the new codes: `fastapi-viewsets.validation_failed`, `fastapi-viewsets.http_error` (by
+      `params.status`), `fastapi-viewsets.unhandled_error`, `fastapi-viewsets.command_invalid`, and the client's
+      `fastapi-viewsets.no_response` and `fastapi-viewsets.unexpected_response` (see
+      [Error codes → Codes](./error-codes#codes)).
+- [ ] An authorizer's `HTTPException` without a code refuses a topic of a poll with `fastapi-viewsets.http_error`
+      (`params.status`), no longer `fastapi-viewsets.event_topic_refused`.
+- [ ] `TopicAnswer.error` of a poll is the refusal's `ApiErrorBody`, no longer its code:
+
+  ```jsonc
+  // 0.11
+  {"rev": null, "events": null, "error": "fastapi-viewsets.event_topic_refused", "status": 403}
+  // 0.12
+  {"rev": null, "events": null, "error": {"detail": "Topic org:9 is not admitted", "detail_code": "fastapi-viewsets.event_topic_refused", "detail_params": {"topic": "org:9"}, "field_errors": {}}, "status": 403}
+  ```
+
+  The event client reports it as a `ViewSetRequestError` of `status` whose `response.data` is that body. Deploy the
+  frontend and the backend together: a 0.12 event client leaves a topic answered with a code string unanswered, and
+  a 0.11 one leaves a topic answered with a body unanswered.
+- [ ] Frontend: `ApiErrorBody` is the body above, with every field required. Replace `FieldErrorEntry` and
+      `FieldErrorsBody` with `ApiErrorBody` and `ApiFieldError`; `toFieldErrors()` takes an `ApiErrorBody` and reads
+      its `field_errors`. Take the body of a failed call with `errorBodyOf(error)`, which also describes a call the
+      BE did not answer:
+
+  ```ts
+  // before
+  const body = error.response?.data;
+  if (error.response?.status === 422) toFieldErrors(body as FieldErrorsBody);
+  else if (typeof body?.detail === 'string') toErrorDescription(body as ApiErrorBody);
+
+  // after
+  const body = errorBodyOf(error);
+  toFieldErrors(body); // {} for an error without field errors
+  toErrorDescription(body);
+  ```
+
+- [ ] OpenAPI: every operation of a viewset documents 422, 500 and `default` with the schema `ApiErrorBody`, and
+      the operations that address an item by `pk` 404; `HTTPValidationError`, `ValidationError` and
+      `NotFoundResponse` are gone from the document. Regenerate a client generated from it.
+- [ ] A field error of a type pydantic does not declare (an application's `PydanticCustomError`) is
+      `pydantic.custom_error` with `params` `{type, ctx}`; the primary key in a create's body is
+      `fastapi-viewsets.pk_assigned_by_server`.
 
 ## Upgrading to v0.11.0 (from v0.10.x)
 

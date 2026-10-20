@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from ..conf import settings
+from ..error_namespace import ERROR_NAMESPACE
 from . import store as store_module
 from .delivery import reset_subscriptions
 from .redis import _APPEND_SCRIPT
@@ -257,3 +258,8 @@ class FakePubSub:
     async def aclose(self) -> None:
         await self.unsubscribe(*list(self.subscribed))
         self.closed = True
+
+
+def envelope(detail: str, code: str, **params: Any) -> dict[str, Any]:
+    """The `ApiErrorBody` of the package's error `code` (without the namespace)."""
+    return {"detail": detail, "detail_code": f"{ERROR_NAMESPACE}.{code}", "detail_params": params, "field_errors": {}}

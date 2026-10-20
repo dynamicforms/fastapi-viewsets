@@ -195,7 +195,8 @@ transport follows the redirect itself; one it does not follow — a 304, or a re
 
 Both classes carry `error.response.status`, `error.response.data` and `error.response.headers`, so a
 handler reading those three reads the same fields whichever was thrown. `data` is the decoded
-response body — FastAPI's `{ detail: ... }` for a 404, the validation report for a 422.
+response body, the BE's `ApiErrorBody` for every error of a viewset (see
+[Error codes](./error-codes#the-body-of-a-failed-call), and `errorBodyOf(error)` for a call without a response).
 
 They differ in whether `response` is there at all: `ViewSetRequestError` always sets it, while
 `AxiosError.response` is `undefined` when the request never got a reply. A handler that also has to

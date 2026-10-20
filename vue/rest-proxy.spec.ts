@@ -857,10 +857,25 @@ describe('RestProxyImpl — Idempotency-Key and repeats', () => {
   });
 
   it('settles with a gateway status the application answered', async () => {
-    const timeout = statusError(504, { detail: 'No result for items.create within 3600 s' });
+    const timeout = statusError(504, {
+      detail: 'No result for items.create within 3600 s',
+      detail_code: 'fastapi-viewsets.result_timeout',
+      detail_params: { task: 'items.create', timeout: 3600 },
+      field_errors: {},
+    });
     http.post.mockRejectedValueOnce(timeout);
     await expect(proxy.create(MOCK_ITEM)).rejects.toBe(timeout);
     expect(http.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('repeats a gateway status whose body is not an error body', async () => {
+    http.post
+      .mockRejectedValueOnce(statusError(502, { detail: 'Bad Gateway' }))
+      .mockResolvedValueOnce({ data: MOCK_ITEM });
+    const call = proxy.create(MOCK_ITEM);
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(call).resolves.toEqual(MOCK_ITEM);
+    expect(http.post).toHaveBeenCalledTimes(2);
   });
 
   it('repeats with the headers the first attempt was sent with, interceptors’ included', async () => {

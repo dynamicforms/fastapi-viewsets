@@ -115,14 +115,24 @@ def test_missing_session_token_gets_401():
     client = TestClient(_make_app())
     response = client.get("/items")
     assert response.status_code == 401
-    assert response.json() == {"detail": "Session expired or invalid"}
+    assert response.json() == {
+        "detail": "Session expired or invalid",
+        "detail_code": "fastapi-viewsets.session_expired",
+        "detail_params": {},
+        "field_errors": {},
+    }
 
 
 def test_invalid_session_token_gets_401():
     client = TestClient(_make_app())
     response = client.get("/items", headers={"x-session-token": "tok-unknown"})
     assert response.status_code == 401
-    assert response.json() == {"detail": "Session expired or invalid"}
+    assert response.json() == {
+        "detail": "Session expired or invalid",
+        "detail_code": "fastapi-viewsets.session_expired",
+        "detail_params": {},
+        "field_errors": {},
+    }
 
 
 def test_action_configuration_opts_out_a_real_route_without_a_session():

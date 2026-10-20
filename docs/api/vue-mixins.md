@@ -223,24 +223,19 @@ either, is in [handling a failed call](../guide/vue-mixins#handling-a-failed-cal
 ### Error bodies
 
 ```ts
-/** A failed request's body naming one failure; `detail_*` appear with `df_viewset_exception_handler`. */
+/** The body of every error response of the BE. */
 interface ApiErrorBody {
   detail: string;
-  detail_code?: string;
-  detail_params?: Record<string, unknown>;
+  detail_code: string;
+  detail_params: Record<string, unknown>;
+  field_errors: Record<string, ApiFieldError[]>;
 }
 
-/** One failure of a 422 body, as FastAPI reports it. */
-interface FieldErrorEntry {
-  type: string;
-  loc: (string | number)[];
-  msg: string;
-  input?: unknown;
-  ctx?: Record<string, unknown>;
-}
-
-interface FieldErrorsBody {
-  detail: FieldErrorEntry[];
+/** One failure of one field of a request that failed validation. */
+interface ApiFieldError {
+  code: string; // pydantic.<type>
+  params: Record<string, unknown>;
+  detail: string;
 }
 
 /** Assignable to vue-forms' `ErrorDescription`. */
@@ -251,8 +246,11 @@ interface ErrorDescription {
   readonly origin: 'server';
 }
 
+function isApiErrorBody(data: unknown): data is ApiErrorBody;
+/** `error.response.data` when it is an `ApiErrorBody`, else `fastapi-viewsets.no_response` / `unexpected_response`. */
+function errorBodyOf(error: unknown): ApiErrorBody;
 function toErrorDescription(body: ApiErrorBody): ErrorDescription;
-function toFieldErrors(body: FieldErrorsBody): Record<string, ErrorDescription[]>;
+function toFieldErrors(body: ApiErrorBody): Record<string, ErrorDescription[]>;
 ```
 
 What each conversion produces is in [Error codes → Frontend](../guide/error-codes#frontend).

@@ -1,12 +1,9 @@
 """
 The HTTP exceptions this package raises on its own behalf.
 
-`detail` is the English default, fully interpolated - a plain string, so an application that does
-nothing further receives FastAPI's usual `{"detail": "..."}`. `code` names what went
-wrong independently of `detail`'s wording, and `params` are the raw values `detail` was
-interpolated with; both reach the response body only once the application registers
-`df_viewset_exception_handler` for `DfViewSetError` (see that function). A view's own
-`raise HTTPException(status_code, detail="...")` is unaffected either way.
+`detail` is the English default, fully interpolated. `code` names what went wrong independently of
+`detail`'s wording, and `params` are the raw values `detail` was interpolated with. A response
+carries all three in the error body of `fastapi_viewsets.error_responses`.
 
 `code` is a full code, `<namespace>.<code>`: the errors this module defines carry codes in the
 namespace `ERROR_NAMESPACE` (`fastapi-viewsets.not_found`). The code of an application's own
@@ -17,13 +14,12 @@ import sys
 
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 
 from .cursor import CursorError
-from .error_namespace import _code_from_wire, _code_to_wire, _namespaced
+from .error_namespace import _namespaced
 
 
 class DfViewSetError(HTTPException):
@@ -239,70 +235,83 @@ class EventCursorsExceededError(DfViewSetError):
         super().__init__(422, message, _namespaced("event_cursors_exceeded"), {"count": count, "limit": limit})
 
 
+class UnhandledError(DfViewSetError):
+    """The error an exception without a handler of its own is answered with. Its `detail` names no
+    part of the exception; the exception is logged."""
+
+    def __init__(self):
+        super().__init__(500, "Internal Server Error", _namespaced("unhandled_error"))
+
+
+class CommandInvalidError(DfViewSetError):
+    """
+    A muxws stream addressed to a viewset (its headers carry `:method` and `:path`) whose headers are
+    not a command a route can be matched against. `reason`:
+
+    - `address_missing`: `:method` or `:path` is absent
+    - `address_type`: `:method` or `:path` is not a string
+    - `path_relative`: `:path` does not start with `/`
+    - `query_type`: `:query` is neither a string nor a mapping
+    """
+
+    _MESSAGES = {
+        "address_missing": "The stream headers carry no :method or :path",
+        "address_type": ":method and :path must both be strings",
+        "path_relative": ":path must be an absolute path",
+        "query_type": ":query must be a string or a mapping",
+    }
+
+    def __init__(self, reason: str):
+        message = self._MESSAGES.get(reason, "The stream headers are not a viewset command")
+        super().__init__(400, message, _namespaced("command_invalid"), {"reason": reason})
+
+
 def _error_to_jsonable(error: BaseException) -> dict[str, Any]:
     """
     `error` as the JSON fields of an `HTTPException`: `status_code`, `detail` and `headers`, plus
-    `class`, `code` and `params` for a `DfViewSetError`. A `RequestValidationError` is a 422 with its
-    errors as `detail`; any other error a 500 with `detail` `"Internal Server Error"`.
+    `class`, `code` and `params` for a `DfViewSetError`, its `code` the full code as given. A
+    `RequestValidationError` is a 422 with its errors as `detail` and `class`
+    `"RequestValidationError"`; any other error is the fields of an `UnhandledError`.
 
     The fields are read back by another process (a `celery_viewset` result) or later (an idempotency
-    record), possibly by another version of this package. A `code` in the namespace `ERROR_NAMESPACE`
-    is written without it (`not_found`), whatever the error's class; every other code is written as
-    given. `_error_from_jsonable` adds the namespace back to the codes this package declares.
+    record) with `_error_from_jsonable`.
     """
     if isinstance(error, RequestValidationError):
-        return {"status_code": 422, "detail": jsonable_encoder(error.errors()), "headers": None}
-    if isinstance(error, HTTPException):
-        encoded = {
-            "status_code": error.status_code,
-            "detail": jsonable_encoder(error.detail),
-            "headers": dict(error.headers) if error.headers else None,
+        return {
+            "status_code": 422,
+            "detail": jsonable_encoder(error.errors()),
+            "headers": None,
+            "class": "RequestValidationError",
         }
-        if isinstance(error, DfViewSetError):
-            encoded["class"] = type(error).__name__
-            encoded["code"] = _code_to_wire(error.code)
-            encoded["params"] = jsonable_encoder(error.params)
-        return encoded
-    return {"status_code": 500, "detail": "Internal Server Error", "headers": None}
+    if not isinstance(error, HTTPException):
+        error = UnhandledError()
+    encoded = {
+        "status_code": error.status_code,
+        "detail": jsonable_encoder(error.detail),
+        "headers": dict(error.headers) if error.headers else None,
+    }
+    if isinstance(error, DfViewSetError):
+        encoded["class"] = type(error).__name__
+        encoded["code"] = error.code
+        encoded["params"] = jsonable_encoder(error.params)
+    return encoded
 
 
-def _error_from_jsonable(data: dict[str, Any]) -> HTTPException:
+def _error_from_jsonable(data: dict[str, Any]) -> Exception:
     """
-    The exception `_error_to_jsonable` encoded. Fields with a `code` are a `DfViewSetError`: of the
-    class `class` names when this module defines a `DfViewSetError` subclass of that name, else of
-    `DfViewSetError` itself, with the same fields either way. Fields without one are an
-    `HTTPException`. A `code` without a namespace that this package declares (`not_found`) gains
-    `ERROR_NAMESPACE`, whatever the class; every other code is read as given. A code a later version
-    of this package declares is therefore read without the namespace, and an application's code
-    without a namespace that equals one of this package's codes is read as this package's.
+    The exception `_error_to_jsonable` encoded. Fields with a `code` are a `DfViewSetError`, with
+    `code` as given: of the class `class` names when this module defines a `DfViewSetError` subclass
+    of that name, else of `DfViewSetError` itself, with the same fields either way. Fields without a
+    `code` whose `class` is `"RequestValidationError"` are a `RequestValidationError` of the errors
+    in `detail`. Any other fields are an `HTTPException`.
     """
     if "code" not in data:
+        if data.get("class") == "RequestValidationError":
+            return RequestValidationError(data["detail"])
         return HTTPException(status_code=data["status_code"], detail=data["detail"], headers=data.get("headers"))
     cls = getattr(sys.modules[__name__], data.get("class") or "", None)
     if not (isinstance(cls, type) and issubclass(cls, DfViewSetError)):
         cls = DfViewSetError
-    code = _code_from_wire(data["code"])
-    return _rebuild_error(cls, data["status_code"], data["detail"], code, data.get("params"), data.get("headers"))
-
-
-async def df_viewset_exception_handler(_request: Request, exc: DfViewSetError) -> JSONResponse:
-    """
-    Adds `detail_code` and `detail_params` alongside `detail` in the response body. `detail_code` is
-    the error's full `code`: `fastapi-viewsets.<code>` for the errors this package raises, the
-    application's own code as given for its own subclasses.
-
-    Opt in once, for `DfViewSetError` - every exception this package raises on its own descends
-    from it:
-
-        from fastapi_viewsets.exceptions import DfViewSetError, df_viewset_exception_handler
-
-        app.add_exception_handler(DfViewSetError, df_viewset_exception_handler)
-
-    An application that never registers this receives `{"detail": "..."}`, from FastAPI's own
-    default `HTTPException` handling; `code` and `params` reach nothing without it.
-    """
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail, "detail_code": exc.code, "detail_params": exc.params},
-        headers=exc.headers,
+    return _rebuild_error(
+        cls, data["status_code"], data["detail"], data["code"], data.get("params"), data.get("headers")
     )
