@@ -3,6 +3,7 @@ import fnmatch
 import json
 import time
 
+from http import HTTPStatus
 from typing import Any
 
 import pytest
@@ -399,7 +400,7 @@ def test_a_repeat_of_a_failed_call_answers_the_first_calls_body(error, status, b
             {"status_code": 422, "detail": [{"type": "missing", "loc": ["body", "name"], "msg": "m"}], "headers": None},
             422,
             {
-                "detail": "Unprocessable Entity",
+                "detail": HTTPStatus(422).phrase,
                 "detail_code": "fastapi-viewsets.http_error",
                 "detail_params": {"status": 422, "detail": [{"type": "missing", "loc": ["body", "name"], "msg": "m"}]},
                 "field_errors": {},
