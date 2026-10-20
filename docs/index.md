@@ -1,4 +1,6 @@
 ---
+title: DRF-style viewsets for FastAPI
+description: 'Compose FastAPI CRUD and bulk endpoints from DRF-style mixins, back them with a collection or Django ORM, and call them from a typed TypeScript client.'
 layout: home
 
 hero:
