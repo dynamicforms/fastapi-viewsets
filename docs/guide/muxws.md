@@ -261,7 +261,9 @@ route. A muxws-only `GET /music/live` therefore does not stand in the way of a R
 
 `GET /{base_path}/schema` answers over both transports, and each reports the endpoints reachable
 over the transport it was asked on. When an endpoint is published on only one of them, the two
-schemas differ.
+schemas differ. Both documents list `/schema` itself. Their paths start at `base_path`, without the
+prefix the router is included under (`include_router(prefix=...)`) and with path parameters
+unsubstituted.
 
 ## Python reference
 

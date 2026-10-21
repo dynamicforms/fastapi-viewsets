@@ -265,6 +265,11 @@ The proxy fetches `GET {basePath}/schema` in the background and emits one `conso
 every disagreement. The check is **non-critical**: an unreachable schema endpoint or an unexpected
 format is ignored silently.
 
+Paths in the schema start at the BE `base_path`, without the `include_router` prefix and with path
+parameters unsubstituted. The check reads the base from the document's own `…/schema` path, so a
+`basePath` such as `/api/v1/items` or `/orgs/acme/items` is compared correctly; a document that does
+not list `/schema` is read relative to `basePath`.
+
 ### What gets checked
 
 | Situation | Warning message |

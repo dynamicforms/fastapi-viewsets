@@ -6,6 +6,16 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-10-21
+
+### Fixed
+
+- TS schema check: a ViewSet whose `basePath` carries the `include_router` prefix (`/api/v1/tags`) or
+  a substituted path parameter no longer reports its `{pk}` actions (`retrieve`, `update`,
+  `partialUpdate`, `destroy`) as missing on the BE, and reports actual mismatches. The base is read
+  from the document's own `/schema` path.
+- The `/schema` document served over muxws lists `/schema` itself, as the REST one does.
+
 ## [0.12.0] - 2026-10-20
 
 ### Added

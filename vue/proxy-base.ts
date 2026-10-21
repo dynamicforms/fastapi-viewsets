@@ -358,13 +358,22 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
         background: true,
       });
       const paths = schema?.paths ?? {};
+      // Paths in the document are the viewset's routes as declared, without the prefixes the
+      // application routes them under (include_router) and with path parameters unsubstituted, so
+      // they share no common prefix with `basePath`. The base is taken from the document's own
+      // /schema path; `basePath` is used only for a document that does not list it.
+      const base =
+        Object.keys(paths)
+          .filter((path) => path.endsWith('/schema'))
+          .sort((a, b) => a.length - b.length)[0]
+          ?.slice(0, -'/schema'.length) ?? this.basePath;
 
       const beActions = new Set<string>();
       const beAlternatives: { endpoint: string; actions: readonly string[] }[] = [];
       const customEndpoints: { endpoint: string; action: string }[] = [];
 
       for (const [path, pathItem] of Object.entries(paths)) {
-        const suffix = path.slice(this.basePath.length).replace(/^\//, '');
+        const suffix = path.slice(base.length).replace(/^\//, '');
         const verbs = Object.keys(pathItem).filter((v) => HTTP_METHODS.has(v.toLowerCase()));
 
         let pathType: string;
