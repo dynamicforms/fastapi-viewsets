@@ -132,7 +132,8 @@ In-memory hooks:
   implementation; it returns `None`, which `apply_filter` reads as "unfiltered" and answers with the
   records as they stand.
 - `sort_list(sort: SortState, records: list[T]) -> list[T]` — post-sort hook. Default is a stable
-  multi-key in-memory sort through `compare_in_order`, placing NULLs where `nulls` says.
+  multi-key in-memory sort through `compare_in_order`, placing NULLs where `nulls` says. Strings
+  compare by code point.
 
 ### PaginatedListMixin `[T, TFilter=None]`
 
@@ -205,7 +206,8 @@ it with the response model.
 
 - `GET /lookup` → `get_lookup(context, query: ListQuery) -> list[TLookupItem]`, where `query.fltr`
   is the request's `TLookupFilter`, or `None` when no field of it is set. Its stages:
-  - `perform_lookup(context) -> ListRecords` — abstract; the source, lazy or not.
+  - `perform_lookup(context) -> ListRecords` — abstract; the source, lazy or not, ordered by group,
+    then by text. The endpoint answers in this order; no stage reorders it.
   - `apply_lookup_filter(context, query, records) -> ListRecords` — runs when `query.has_filter`
     and the `"filter"` stage is not marked applied. The default filters converted items in memory:
     by the declaration of a `make_filter_model` filter model, otherwise with `filter_lookup`.

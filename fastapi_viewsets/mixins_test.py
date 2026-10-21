@@ -12,6 +12,7 @@ from fastapi_viewsets.collection_viewset import CollectionViewSet
 from fastapi_viewsets.context import Context
 from fastapi_viewsets.decorators import route_viewset
 from fastapi_viewsets.filters import make_filter_model
+from fastapi_viewsets.list_query import build_list_query
 from fastapi_viewsets.mixins import (
     BulkViewSetMixin,
     CreateMixin,
@@ -494,6 +495,36 @@ async def test_lookup_with_q_filters_by_title():
     assert "Apricot" in titles
     assert "Banana" not in titles
     assert "Cherry" not in titles
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("q", [None, "e"])
+async def test_lookup_answers_in_the_order_of_the_source(q):
+    """
+    The source orders the lookup: by group, then by text, in a collation only it knows. Here
+    'Čebula' follows 'Cesar' as in Slovenian, which a comparison by code point would not keep.
+    """
+    source = [
+        ("fruit", "Cesar"),
+        ("fruit", "Čebula"),
+        ("fruit", "Dinja"),
+        ("vegetable", "Cvetača"),
+        ("vegetable", "Česen"),
+    ]
+
+    class OrderedLookup(CollectionViewSet[int, Item], LookupMixin):
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+        async def perform_lookup(self, _context: Context):
+            return ((n, group, title) for n, (group, title) in enumerate(source))
+
+        def to_lookup_item(self, raw) -> LookupItem:
+            return LookupItem(pk=raw[0], group=raw[1], title=raw[2], icon=None)
+
+    result = await OrderedLookup().get_lookup(None, build_list_query(LookupFilter(q=q), None))
+    expected = [title for _, title in source if q is None or q in title.lower()]
+    assert [item.title for item in result] == expected
 
 
 @pytest.mark.asyncio

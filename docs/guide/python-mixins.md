@@ -61,6 +61,8 @@ or declares the filter with `make_filter_model`, which needs no code at all. See
 **Sorting** (active when the `sort` query parameter is non-empty, or is absent and the viewset
 declares `default_sort`): `sort_list(sort, records)` sorts in memory. The default is a stable
 multi-key sort; NULLs sit where the viewset's `nulls` says, lowest in both directions by default.
+It compares strings by code point, so `Č` sorts after `Z`; a backend that sorts in the database
+(`DjangoORMViewSet`) applies the database's collation instead.
 
 To do either in the backend instead, override `apply_filter` or `apply_sort` — see
 [the list pipeline](./list-pipeline.md#the-stages).
@@ -175,13 +177,21 @@ A lookup request runs through the same stages as a [list](./list-pipeline):
 The filter is passed through `query`, so concurrent requests on one viewset instance (the default
 `singleton` lifecycle) do not share it.
 
+The endpoint answers in the order of the source; filtering and conversion keep it. `perform_lookup`
+returns the items ordered by group, then by their text, so that a select shows each group's items
+together. Ordering in the source applies its collation: `Tag.objects.order_by("name")` orders by the
+database's, so `Č` follows `C` under a Slovenian collation.
+
 ```python
+import locale
+
 from fastapi_viewsets.mixins import LookupMixin, LookupItem, LookupFilter
 
 # Default behaviour: q= query param, filters by title
 class MyViewSet(..., LookupMixin):
     async def perform_lookup(self, context: Context) -> list[LookupItem]:
-        return [LookupItem(group=None, pk=i.id, title=i.name, icon=None) for i in db.values()]
+        items = sorted(db.values(), key=lambda i: locale.strxfrm(i.name))
+        return [LookupItem(group=None, pk=i.id, title=i.name, icon=None) for i in items]
 ```
 
 A lookup with its own item type, `q` and `ids` parameters, filtered in the database:

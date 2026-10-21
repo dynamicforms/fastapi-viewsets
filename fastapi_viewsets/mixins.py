@@ -842,6 +842,11 @@ class LookupMixin(Generic[TLookupFilter, TLookupItem], ABC):
 
     The filter travels in `query.fltr`, never on the viewset instance, which serves concurrent
     requests under the default `singleton` lifecycle.
+
+    The endpoint answers in the order of the source; filtering and conversion keep it. The source
+    orders the items by group, then by their text, in its own collation - `order_by` in the
+    database - because a select shows each group's items together and only the source knows which
+    field the text comes from and how its language orders it.
     """
 
     __router = APIRouter()
@@ -849,7 +854,8 @@ class LookupMixin(Generic[TLookupFilter, TLookupItem], ABC):
     @abstractmethod
     async def perform_lookup(self, context: Context) -> ListRecords:
         """
-        Subclasses implement this to return the lookup source.
+        Subclasses implement this to return the lookup source, in the order the endpoint answers
+        in: by group, then by text.
 
         A lazy source - a generator, an unevaluated QuerySet - is what an overridden
         `apply_lookup_filter` pushes the filter into. Rows are TLookupItem once `to_lookup_item` has
