@@ -95,8 +95,9 @@ Class attributes:
   parameter's syntax (`"name:asc"`, `"category:asc,score:desc"`). `route_viewset` publishes it as the
   `sort` parameter's default in the schema, which the TS client's `defaultSort()` reads, and raises
   `ValueError` for an empty entry, a direction other than `asc` / `desc`, or a column the response
-  model has neither a field nor a computed field for (`check_declared_sort`). It also orders a direct `list_items` call without `sort`; `get_list` with a
-  `ListQuery` built by hand takes the query's `sort` as given.
+  model has neither a field nor a computed field for (`check_declared_sort`). It also orders a
+  direct `list_items` call without `sort`; `get_list` with a `ListQuery` built by hand takes the
+  query's `sort` as given.
 - `nulls: str = "first"` — which end NULLs sit at when sorting ascending, `"first"` or `"last"`.
 - `nulls_first: bool` — property, `self.nulls != "last"`.
 - `resolve_shapes() -> tuple` — classmethod returning `(default shape, shapes allowed)`; the default
