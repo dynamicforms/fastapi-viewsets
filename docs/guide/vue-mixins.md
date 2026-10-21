@@ -147,6 +147,23 @@ a `muxwsViewSet` uses the one created for its peer. The event client, the option
 grid examples are in [Events (Vue)](./vue-events#watch-on-a-viewset); the reference is
 [`watch()`](../api/vue-mixins#watch).
 
+### Default ordering: defaultSort()
+
+A ViewSet that declares `list`, `listPage` or `listCursor` has `defaultSort()`, the BE viewset's
+`default_sort` as a `SortState` (`[]` without one). Its shape is the grid's `SortState`, so it is the
+grid's initial `sortState`; `formatSort` turns a `sortState` back into the `sort` parameter:
+
+```ts
+const sortState = ref<SortState>(await api.defaultSort());
+async function reload() {
+  rows.value = await api.list({ sort: formatSort(sortState.value) });
+}
+```
+
+`defaultSort()` reads the viewset's `/schema`, fetched once per ViewSet instance and shared with the
+startup schema check. A list call without `sort` is ordered by `default_sort` on the BE either way.
+The reference is [`ListDefaultSort`](../api/vue-mixins#listdefaultsort).
+
 ### Overriding a declared action
 
 A declared action is an ordinary method and can be overridden, `super` included:

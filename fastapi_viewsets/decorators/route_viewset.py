@@ -216,12 +216,14 @@ def route_viewset(
             on a shared mixin cannot know which viewset it will end up on. Here it can: parameters
             no allowed shape uses are dropped so they never reach the schema, the `X-List-Shape`
             header is kept only when there is a choice to make, and the return annotation becomes
-            the union of exactly the models this viewset can produce.
+            the union of exactly the models this viewset can produce. A declared `default_sort` becomes
+            the `sort` parameter's default.
             """
             from fastapi_viewsets.list_shapes import response_model, shape_examples, SHAPE_HEADER
-            from fastapi_viewsets.mixins import T as ItemVar
+            from fastapi_viewsets.mixins import check_declared_sort, T as ItemVar
 
             default, allowed = cls.resolve_shapes()
+            item_type = type_map.get(ItemVar, ItemVar)
             uses = {
                 "offset": "paginated" in allowed,
                 "cursor": "cursor" in allowed,
@@ -243,9 +245,11 @@ def route_viewset(
                             ),
                         ]
                     )
+                if name == "sort" and cls.default_sort is not None:
+                    check_declared_sort(cls.default_sort, item_type)
+                    parameter = parameter.replace(default=cls.default_sort)
                 params.append(parameter)
 
-            item_type = type_map.get(ItemVar, ItemVar)
             nonlocal shape_openapi_extra
             shape_openapi_extra = shape_examples(allowed, item_type)
             return sig.replace(parameters=params, return_annotation=response_model(allowed, item_type))

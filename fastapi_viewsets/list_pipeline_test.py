@@ -278,3 +278,107 @@ def test_a_page_window_out_of_range_is_a_422(parameter, value):
     response = client.get("/tracks", params={parameter: value})
     assert response.status_code == 422
     assert list(response.json()["field_errors"]) == [parameter]
+
+
+# ---------------------------------------------------------------------------
+# default_sort
+# ---------------------------------------------------------------------------
+
+
+class DefaultSortedViewSet(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter]):
+    default_sort = "year:desc,id:asc"
+
+    def __init__(self):
+        super().__init__(container=library(12), pk_field="id")
+
+
+def test_default_sort_orders_a_request_without_sort():
+    body = client_for(DefaultSortedViewSet).get("/tracks").json()
+    assert [track["id"] for track in body[:4]] == [9, 8, 7, 6]
+    assert [track["id"] for track in body if track["year"] == 2000] == [10]
+    assert [track["id"] for track in body if track["year"] == 2001] == [1, 11]
+
+
+def test_a_sent_sort_replaces_default_sort():
+    body = client_for(DefaultSortedViewSet).get("/tracks", params={"sort": "id:desc"}).json()
+    assert [track["id"] for track in body] == list(range(12, 0, -1))
+
+
+def test_an_empty_sort_leaves_the_list_unordered():
+    body = client_for(DefaultSortedViewSet).get("/tracks", params={"sort": ""}).json()
+    assert [track["id"] for track in body] == list(range(1, 13))
+
+
+def test_default_sort_is_the_sort_parameters_default_in_the_schema():
+    schema = client_for(DefaultSortedViewSet).get("/tracks/schema").json()
+    (sort,) = [param for param in schema["paths"]["/tracks"]["get"]["parameters"] if param["name"] == "sort"]
+    assert sort["schema"]["default"] == "year:desc,id:asc"
+    assert sort["description"]
+
+
+def test_without_default_sort_the_sort_parameter_has_no_default():
+    class Unsorted(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter]):
+        def __init__(self):
+            super().__init__(container=library(3), pk_field="id")
+
+    schema = client_for(Unsorted).get("/tracks/schema").json()
+    (sort,) = [param for param in schema["paths"]["/tracks"]["get"]["parameters"] if param["name"] == "sort"]
+    assert sort["schema"].get("default") is None
+
+
+@pytest.mark.asyncio
+async def test_default_sort_applies_when_list_items_is_called_directly():
+    viewset = DefaultSortedViewSet()
+    result = await viewset.list_items(None)
+    assert [track.id for track in result[:2]] == [9, 8]
+
+
+def test_default_sort_feeds_the_cursor_keys():
+    from .mixins import CursorListMixin
+
+    class CursorSorted(CollectionViewSet[int, Track], CursorListMixin[Track, TrackFilter]):
+        default_sort = "year:desc"
+
+        def __init__(self):
+            super().__init__(container=library(12), pk_field="id")
+
+    client = client_for(CursorSorted)
+    first = client.get("/tracks", params={"limit": 3}).json()
+    second = client.get("/tracks", params={"limit": 3, "cursor": first["next"]}).json()
+    assert [track["id"] for track in first["results"] + second["results"]] == [9, 8, 7, 6, 5, 4]
+
+
+@pytest.mark.parametrize(
+    ("declared", "message"),
+    [
+        ("title:up", "is not 'asc' or 'desc'"),
+        ("title,,id", "empty entry"),
+        ("rating:desc", "has no field 'rating'"),
+    ],
+)
+def test_an_invalid_default_sort_is_refused_when_the_viewset_is_routed(declared, message):
+    class Invalid(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter]):
+        default_sort = declared
+
+        def __init__(self):
+            super().__init__(container=library(3), pk_field="id")
+
+    with pytest.raises(ValueError, match=message):
+        client_for(Invalid)
+
+
+def test_default_sort_may_name_a_computed_field():
+    from pydantic import computed_field
+
+    from .mixins import check_declared_sort
+
+    class Named(BaseModel):
+        first: str
+        last: str
+
+        @computed_field
+        @property
+        def full_name(self) -> str:
+            return f"{self.first} {self.last}"
+
+    assert check_declared_sort("full_name:desc", Named)[0].column_name == "full_name"

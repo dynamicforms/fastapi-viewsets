@@ -6,6 +6,23 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-10-21
+
+### Added
+
+- `ListMixin.default_sort`: the ordering of a list request that sends no `sort`, in the `sort`
+  parameter's syntax (`"name:asc"`). Published as the `sort` parameter's default in `/schema`. An
+  empty `sort=` leaves the list unordered. `route_viewset` raises `ValueError` for an empty entry, an
+  unrecognised direction or a column that is neither a field nor a computed field of the response
+  model (`check_declared_sort`).
+- The `sort` parameter of every list endpoint has a description in the schema.
+- TS: `defaultSort(): Promise<SortState>` on a ViewSet declaring `list`, `listPage` or `listCursor`
+  (`ListDefaultSort`), read from the viewset's `/schema`; the ViewSet fetches `/schema` once and
+  shares it with the startup schema check. `RestProxy<M>` and `MuxwsProxy<M>` carry it when `M` has a
+  list action (`DefaultSortOf`, `ListAction`). `SortState` / `SortStateColumn` have the shape of
+  `@dynamicforms/vue-grid`'s. `parseSort(sort)` and `formatSort(state)` convert between a
+  `SortState` and the `sort` parameter.
+
 ## [0.13.0] - 2026-10-21
 
 ### Added

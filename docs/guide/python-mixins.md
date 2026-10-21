@@ -58,8 +58,9 @@ memory. It has no default implementation, so a viewset that declares a filter ty
 or declares the filter with `make_filter_model`, which needs no code at all. See
 [Declarative filters](./list-pipeline.md#declarative-filters).
 
-**Sorting** (active when the `sort` query parameter is given): `sort_list(sort, records)` sorts in
-memory. The default is a stable multi-key sort with nulls lowest in both directions.
+**Sorting** (active when the `sort` query parameter is non-empty, or is absent and the viewset
+declares `default_sort`): `sort_list(sort, records)` sorts in memory. The default is a stable
+multi-key sort; NULLs sit where the viewset's `nulls` says, lowest in both directions by default.
 
 To do either in the backend instead, override `apply_filter` or `apply_sort` — see
 [the list pipeline](./list-pipeline.md#the-stages).
@@ -91,6 +92,15 @@ class MyViewSet(ListMixin[Item, ItemFilter], RetrieveMixin[int, Item]):
 
 ```text
 GET /items?sort=name:asc,score:desc
+```
+
+`default_sort` orders a request that sends no `sort`. It is published as the `sort` parameter's
+default in `/schema`, where the TS client reads it with `defaultSort()`, e.g. as a grid's initial
+`sortState`. An empty `sort=` leaves the list unordered:
+
+```python
+class CountryViewSet(CollectionViewSet[int, Country], ListMixin[Country, None]):
+    default_sort = "name:asc"
 ```
 
 For server-side sorting, override `apply_sort`, order the records in the backend and mark the stage

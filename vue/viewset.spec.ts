@@ -170,6 +170,7 @@ describe('restViewSet', () => {
         'http',
         'pkFieldName',
         'repeatOptions',
+        'schemaRequest',
         'schemaValidationEnabled',
         'topicOption',
       ].sort(),
@@ -234,6 +235,7 @@ describe('the type surface', () => {
     void api.retrieve;
     void api.lookup;
     void api.count;
+    void api.defaultSort;
 
     // @ts-expect-error create was not declared
     void api.create;
@@ -263,8 +265,13 @@ describe('the type surface', () => {
     void tags.lookup().then((items) => items[0].title);
   }
 
+  function _defaultSortOnlyWithAList(tags: TagApi) {
+    // @ts-expect-error a ViewSet without a list action has no defaultSort
+    void tags.defaultSort;
+  }
+
   it('exposes the declared actions and nothing else, and types the pk from the model', () => {
-    expect([_surface, _pkType, _lookupItemType]).toHaveLength(3);
+    expect([_surface, _pkType, _lookupItemType, _defaultSortOnlyWithAList]).toHaveLength(4);
   });
 
   it('lets a declared action be overridden with a method', () => {

@@ -29,7 +29,7 @@ import {
 } from './call';
 import { isApiErrorBody } from './errors';
 import type { KeyOf, RecordOf, ViewSetWatch } from './events/changes';
-import type { KeyType } from './mixins';
+import type { DefaultSortOf, KeyType } from './mixins';
 import {
   FACTORY_BUILT,
   type HttpMethod,
@@ -73,10 +73,11 @@ declare const FACTORY_BUILT_REJECTION: 'route_rest cannot take a factory-built c
 
 /**
  * The REST proxy type is the mixin interface `M` the caller declares, with every method returning a
- * `ViewSetCall`, and `watch()`. Because TypeScript cannot inspect Python class hierarchies at runtime, the caller
- * provides the explicit type via the generic parameter `M` (see route_rest).
+ * `ViewSetCall`, `watch()`, and `defaultSort()` when `M` has a list action. Because TypeScript cannot
+ * inspect Python class hierarchies at runtime, the caller provides the explicit type via the generic
+ * parameter `M` (see route_rest).
  */
-export type RestProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>>;
+export type RestProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>> & DefaultSortOf<keyof M>;
 
 export interface RestProxyOptions extends ProxyBaseOptions {
   /** Optional: existing axios instance. Defaults to the global axios. */
