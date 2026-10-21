@@ -196,11 +196,21 @@ export class BulkDestroyMixin<K extends KeyType> extends DestroyMixin<K> {
   static readonly actions: readonly string[] = [...DestroyMixin.actions, ...BulkOnlyDestroyMixin.actions];
 }
 
-export interface LookupMixin {
-  lookup(): ViewSetActionCall<LookupItem[]>;
+/**
+ * FE counterpart of the BE LookupMixin. `L` is the BE viewset's lookup item type; `params` are the
+ * fields of its lookup filter model, sent as query parameters.
+ */
+export interface LookupMixin<L = LookupItem> {
+  lookup(params?: LookupParams): ViewSetActionCall<L[]>;
 }
-export class LookupMixin {
+export class LookupMixin<L = LookupItem> {
   static readonly actions: readonly string[] = ['lookup'];
+}
+
+/** Query parameters a lookup call accepts: `q` and whatever else the BE lookup filter model declares. */
+export interface LookupParams {
+  q?: string;
+  [key: string]: string | number | boolean | null | undefined | Array<string | number>;
 }
 
 export interface ReadOnlyViewSetMixin<K extends KeyType, T> extends ListMixin<T>, RetrieveMixin<K, T> {}
@@ -242,7 +252,7 @@ export class BulkViewSetMixin<K extends KeyType, T, PK extends keyof T> extends 
  * An intersection rather than `Pick<>` of a table: a mapped type turns a method into a property,
  * and a subclass cannot then override an action with a method (TS2425).
  */
-export type ActionSurface<K extends KeyType, T, PK extends keyof T, A> = ('create' extends A
+export type ActionSurface<K extends KeyType, T, PK extends keyof T, A, L = LookupItem> = ('create' extends A
   ? CreateMixin<T, PK>
   : unknown) &
   ('bulkCreate' extends A ? BulkOnlyCreateMixin<T, PK> : unknown) &
@@ -254,7 +264,7 @@ export type ActionSurface<K extends KeyType, T, PK extends keyof T, A> = ('creat
   ('bulkUpdate' extends A ? BulkOnlyUpdateMixin<K, T> : unknown) &
   ('destroy' extends A ? DestroyMixin<K> : unknown) &
   ('bulkDestroy' extends A ? BulkOnlyDestroyMixin<K> : unknown) &
-  ('lookup' extends A ? LookupMixin : unknown);
+  ('lookup' extends A ? LookupMixin<L> : unknown);
 
 /** Every action name there is: `A = string` selects all of them. */
 export type ActionName = keyof ActionSurface<KeyType, unknown, never, string>;

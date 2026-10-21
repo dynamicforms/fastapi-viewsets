@@ -22,7 +22,7 @@ themselves live in the proxy underneath.
 | `DestroyMixin<K>` | `destroy(pk)` |
 | `BulkOnlyDestroyMixin<K>` | `bulkDestroy(pks[])` |
 | `BulkDestroyMixin<K>` | `destroy`, `bulkDestroy` |
-| `LookupMixin` | `lookup()` |
+| `LookupMixin<L = LookupItem>` | `lookup(params?)` |
 
 ## Combined viewset mixins
 
@@ -42,7 +42,10 @@ themselves live in the proxy underneath.
 
 ## LookupItem
 
-The `lookup()` method returns `LookupItem[]`:
+`lookup(params?)` sends `params` as query parameters, the fields of the BE viewset's lookup filter
+model (`q`, and e.g. `ids`; an array goes out as a repeated key). It returns `L[]`, where `L` is the
+second type argument of `restViewSet<T, L>()` / `muxwsViewSet<T, L>()`, the BE viewset's
+`TLookupItem`. The default is `LookupItem`:
 
 ```ts
 interface LookupItem {

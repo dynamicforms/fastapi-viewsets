@@ -186,15 +186,21 @@ SortState = list[SortStateColumn]
 `SortState`. Format: `"name:asc,score:desc"`; a bare column name means ascending. Entries with an
 unknown direction are skipped.
 
-### LookupMixin `[TLookupFilter=LookupFilter]`
+### LookupMixin `[TLookupFilter=LookupFilter, TLookupItem=LookupItem]`
 
-- `GET /lookup` → calls `perform_lookup(context) -> list[LookupItem]`
-- `TLookupFilter` defaults to `LookupFilter` (single `q: str | None` field), so basic title search
-  works without any configuration.
-- When the filter is active — any field of the filter model is non-`None`:
-  - `setup_lookup_filter(fltr: TLookupFilter)` — pre-filter hook (no-op by default)
-  - `filter_lookup(fltr: TLookupFilter, items: list[LookupItem]) -> list[LookupItem]` — post-filter hook;
-    default filters by `fltr.q` (case-insensitive substring of `title`)
+- `GET /lookup` → `get_lookup(context, query: ListQuery) -> list[TLookupItem]`, where `query.fltr`
+  is the request's `TLookupFilter`, or `None` when no field of it is set. Its stages:
+  - `perform_lookup(context) -> ListRecords` — abstract; the source, lazy or not.
+  - `apply_lookup_filter(context, query, records) -> ListRecords` — runs when `query.has_filter`
+    and the `"filter"` stage is not marked applied. The default filters converted items in memory:
+    by the declaration of a `make_filter_model` filter model, otherwise with `filter_lookup`.
+  - `filter_lookup(fltr: TLookupFilter, items: list[TLookupItem]) -> list[TLookupItem]` — in-memory
+    hook of a hand-written filter model; the default keeps items whose `title` contains `fltr.q`,
+    ignoring case.
+  - `to_lookup_item(raw) -> TLookupItem` — row conversion; identity by default.
+  - `land_lookup(query, records) -> list[TLookupItem]` — materialises the source and converts it,
+    once per request.
+- The response model is `list[TLookupItem]`.
 
 ```python
 class LookupItem(BaseModel):

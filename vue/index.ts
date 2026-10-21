@@ -30,6 +30,7 @@ export type {
   KeyType,
   ListParams,
   LookupItem,
+  LookupParams,
   PageParams,
   PaginatedList,
 } from './mixins';

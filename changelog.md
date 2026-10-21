@@ -6,6 +6,38 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-10-21
+
+### Added
+
+- `LookupMixin[TLookupFilter, TLookupItem]`: the item type is a type parameter, default `LookupItem`;
+  the endpoint's response model is `list[TLookupItem]`.
+- Lookup pipeline, the filter stage of the list pipeline: `get_lookup(context, query)` runs
+  `perform_lookup(context)`, `apply_lookup_filter(context, query, records)` and `land_lookup(query,
+  records)`. The filter is `query.fltr`; an override of `apply_lookup_filter` filters in the backend
+  and marks the stage applied. `perform_lookup` may return a lazy source. `to_lookup_item(raw)`
+  converts rows to `TLookupItem`.
+- A lookup filter model built with `make_filter_model` is applied without code.
+- TS: `lookup(params?: LookupParams)` sends the lookup filter as query parameters. `restViewSet<T, L>()`
+  and `muxwsViewSet<T, L>()` take the lookup item type as `L`, default `LookupItem`; `LookupMixin<L>`,
+  `ActionSurface<..., L>` and `ViewSetClass<..., L>` carry it. `LookupParams` is exported.
+
+### Changed
+
+- `filter_lookup` receives the converted `TLookupItem` items; its default matches `q` against the
+  item's `title`.
+- TS: `ViewSetProxyBase.lookup` is `lookup<I = LookupItem>(params?: LookupParams): ViewSetActionCall<I[]>`; an
+  override in a hand-written proxy takes that signature.
+
+### Removed
+
+- `setup_lookup_filter(fltr)`: override `apply_lookup_filter`, which receives the filter in `query`.
+
+### Fixed
+
+- TS REST transport: an array query parameter goes out as a repeated key (`ids=1&ids=2`), which
+  FastAPI reads into a list, instead of axios' `ids[]=1&ids[]=2`.
+
 ## [0.12.1] - 2026-10-21
 
 ### Fixed

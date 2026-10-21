@@ -133,6 +133,13 @@ describe('MuxwsProxyImpl — envelope', () => {
     expect(mock.last.headers[':query']).toEqual({ sort: 'id:desc', name: 'Test' });
   });
 
+  it('lookup(params) passes the filter through as :query', async () => {
+    mock.reply([]);
+    await proxy.lookup({ q: 'ap', ids: [1, 2] });
+    expect(mock.last.headers[':path']).toBe('/items/lookup');
+    expect(mock.last.headers[':query']).toEqual({ q: 'ap', ids: [1, 2] });
+  });
+
   it('listPage() renames the envelope fields the BE sends in snake_case', async () => {
     mock.reply({ results: MOCK_ITEMS, offset: 10, limit: 2, count: 42, has_more: true, has_previous: true });
     const page = await proxy.listPage({ offset: 10, limit: 2 });

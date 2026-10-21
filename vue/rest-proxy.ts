@@ -151,7 +151,11 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
   ): CallAttempt<R> {
     const controller = new AbortController();
     const config: AxiosRequestConfig = {
-      ...(options.query !== undefined && Object.keys(options.query).length > 0 ? { params: options.query } : {}),
+      // An array goes out as a repeated key (`ids=1&ids=2`), the form FastAPI reads into a list;
+      // axios' default, `ids[]=1&ids[]=2`, reaches FastAPI as an unknown `ids[]` parameter.
+      ...(options.query !== undefined && Object.keys(options.query).length > 0
+        ? { params: options.query, paramsSerializer: { indexes: null } }
+        : {}),
       headers,
       timeout: this.attemptTimeoutMs,
       signal: controller.signal,

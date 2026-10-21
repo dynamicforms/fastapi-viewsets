@@ -5,6 +5,43 @@ releases at once, work from the bottom of the page upwards.
 
 <!-- New releases go directly below this comment, above the previous one, as `## Upgrading to vX.Y.Z (from vA.B.x)`. -->
 
+## Upgrading to v0.13.0 (from v0.12.x)
+
+- [ ] Move an override of `setup_lookup_filter(fltr)` into an override of
+      `apply_lookup_filter(context, query, records)`; see [Lookup](./python-mixins#lookup). The filter
+      is `query.fltr`; narrow `records` (the source `perform_lookup` returned) instead of state on
+      the viewset, and call `query.mark_applied("filter")` when nothing is left for `filter_lookup`:
+
+  ```python
+  # 0.12
+  async def setup_lookup_filter(self, fltr):
+      self._ids = fltr.ids
+
+  async def perform_lookup(self, context):
+      return [to_item(tag) for tag in Tag.objects.filter(id__in=self._ids)]
+
+  # 0.13
+  async def perform_lookup(self, context):
+      return Tag.objects.all()
+
+  async def apply_lookup_filter(self, context, query, records):
+      if query.has_filter and query.fltr.ids:
+          records = records.filter(id__in=query.fltr.ids)
+          query.mark_applied("filter")
+      return await super().apply_lookup_filter(context, query, records)
+
+  def to_lookup_item(self, raw):
+      return to_item(raw)
+  ```
+
+- [ ] Rename a method of a `LookupMixin` viewset named `get_lookup`, `apply_lookup_filter`,
+      `land_lookup` or `to_lookup_item` that is not meant as the stage of that name.
+- [ ] A BE endpoint, outside the package's mixins, that reads an array query parameter sent by the TS
+      REST transport under `name[]` reads it under `name`: the transport sends `ids=1&ids=2`.
+- [ ] A hand-written proxy (a subclass of `RestProxyImpl` / `MuxwsProxyImpl`) that overrides `lookup()` takes the
+      base signature, `lookup<I = LookupItem>(params?: LookupParams): ViewSetActionCall<I[]>`; the 0.12 signature
+      `lookup(): ViewSetActionCall<LookupItem[]>` is TS2416.
+
 ## Upgrading to v0.12.0 (from v0.11.x)
 
 - [ ] Replace every comparison with one of the package's error codes by its full code. A code is

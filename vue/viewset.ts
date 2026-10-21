@@ -19,7 +19,7 @@
  */
 
 import type { ViewSetWatch } from './events/changes';
-import type { ActionName, ActionSurface, KeyType } from './mixins';
+import type { ActionName, ActionSurface, KeyType, LookupItem } from './mixins';
 import { MuxwsProxyImpl, type MuxwsProxyOptions } from './muxws-proxy';
 import { FACTORY_BUILT, type ProxyBaseOptions, ViewSetInternals, type ViewSetMixinDeclaration } from './proxy-base';
 import { RestProxyImpl, type RestProxyOptions } from './rest-proxy';
@@ -76,19 +76,23 @@ type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTO
  * `string`, since the factory already knows exactly which field it is. `watch()` is added the same
  * way: every ViewSet has it, whichever mixins it declares.
  */
-export type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> = [
-  D[number],
-] extends [never]
-  ? ViewSetClassOf<T, PK, D, O>
+export type ViewSetClass<
+  T,
+  PK extends keyof T,
+  D extends readonly ViewSetMixinClass[],
+  O extends ProxyBaseOptions,
+  L = LookupItem,
+> = [D[number]] extends [never]
+  ? ViewSetClassOf<T, PK, D, O, L>
   : [ActionsOf<D[number]>] extends [never]
     ? 'declares must name at least one action: pass the mixin classes themselves, unannotated'
-    : ViewSetClassOf<T, PK, D, O>;
+    : ViewSetClassOf<T, PK, D, O, L>;
 
-type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> = {
+type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions, L> = {
   new (
     options: Omit<O, 'pkFieldName' | 'declares'>,
   ): ViewSetInternals &
-    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>> &
+    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>, L> &
     ViewSetWatch<T, PkType<T, PK>> & { readonly pkFieldName: PK };
   readonly declares: FactoryDeclares<D>;
 };
@@ -127,20 +131,23 @@ function bindViewSet(
  * The empty `()` is not decoration: TypeScript has no partial type-argument inference, so the model
  * cannot be given explicitly while the pk field and the mixin list are inferred from arguments in
  * the same call (TS2558). Currying is the only way to have both.
+ *
+ * `L` is the item type `lookup()` answers with, the BE viewset's TLookupItem; it defaults to
+ * `LookupItem`.
  */
-export function restViewSet<T>() {
+export function restViewSet<T, L = LookupItem>() {
   return <PK extends PkFieldName<T> & keyof T, D extends readonly ViewSetMixinClass[]>(
     pkFieldName: PK,
     declares: D,
-  ): ViewSetClass<T, PK, D, RestProxyOptions> =>
-    bindViewSet(RestProxyImpl, pkFieldName, declares) as unknown as ViewSetClass<T, PK, D, RestProxyOptions>;
+  ): ViewSetClass<T, PK, D, RestProxyOptions, L> =>
+    bindViewSet(RestProxyImpl, pkFieldName, declares) as unknown as ViewSetClass<T, PK, D, RestProxyOptions, L>;
 }
 
-/** A muxws ViewSet base class. See `restViewSet` for why the call is curried. */
-export function muxwsViewSet<T>() {
+/** A muxws ViewSet base class. See `restViewSet` for why the call is curried and what `L` is. */
+export function muxwsViewSet<T, L = LookupItem>() {
   return <PK extends PkFieldName<T> & keyof T, D extends readonly ViewSetMixinClass[]>(
     pkFieldName: PK,
     declares: D,
-  ): ViewSetClass<T, PK, D, MuxwsProxyOptions> =>
-    bindViewSet(MuxwsProxyImpl, pkFieldName, declares) as unknown as ViewSetClass<T, PK, D, MuxwsProxyOptions>;
+  ): ViewSetClass<T, PK, D, MuxwsProxyOptions, L> =>
+    bindViewSet(MuxwsProxyImpl, pkFieldName, declares) as unknown as ViewSetClass<T, PK, D, MuxwsProxyOptions, L>;
 }

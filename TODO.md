@@ -65,6 +65,16 @@ To decide:
 - if it is not, a different way to run async actions under gevent (e.g. one loop per process that
   executions submit to), or a documented limit: gevent pools with async actions need `-c 1`.
 
+## Sort and limit for lookup
+
+2026-10-21, session cbbc7ae1-e00d-4dc7-8834-ccd0b86110b6.
+
+`LookupMixin` runs source → `apply_lookup_filter` → conversion, the filter stage of the list
+pipeline. It has no `sort` and no `limit`: an autocomplete over a large table returns every match,
+in the order `perform_lookup` produced. Adding them means `sort` and `limit` query parameters, the
+`apply_sort` / `take_page` stages with `mark_applied` push-down as in `ListMixin`, and the same
+parameters in the TS `LookupParams`. The answer stays a plain list.
+
 ## To assess: worth doing at all?
 
 None of these hurts in normal use. Each needs a decision on whether it is worth the change before

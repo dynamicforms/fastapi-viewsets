@@ -32,6 +32,7 @@ import type {
   KeyType,
   ListParams,
   LookupItem,
+  LookupParams,
   LookupMixin,
   PageParams,
   PaginatedList,
@@ -569,7 +570,8 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     return this.request<DestroyReturnData[]>('DELETE', '/bulk', { body: pks });
   }
 
-  lookup(): ViewSetActionCall<LookupItem[]> {
-    return this.request<LookupItem[]>('GET', '/lookup');
+  /** `I` is the BE viewset's lookup item type; a factory-built ViewSet takes it from `restViewSet<T, L>()`. */
+  lookup<I = LookupItem>(params?: LookupParams): ViewSetActionCall<I[]> {
+    return this.request<I[]>('GET', '/lookup', { query: params });
   }
 }

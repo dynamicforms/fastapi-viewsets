@@ -249,8 +249,22 @@ describe('the type surface', () => {
     void api.retrieve('1');
   }
 
+  interface TagLookup {
+    id: number;
+    name: string;
+    color: string;
+  }
+  class TagApi extends restViewSet<Item, TagLookup>()('id', [LookupMixin]) {}
+
+  function _lookupItemType(api: ItemApi, tags: TagApi) {
+    void api.lookup({ q: 'a' }).then((items) => items[0].title);
+    void tags.lookup({ ids: [1, 2] }).then((items) => items[0].color);
+    // @ts-expect-error a TagLookup has no title
+    void tags.lookup().then((items) => items[0].title);
+  }
+
   it('exposes the declared actions and nothing else, and types the pk from the model', () => {
-    expect([_surface, _pkType]).toHaveLength(2);
+    expect([_surface, _pkType, _lookupItemType]).toHaveLength(3);
   });
 
   it('lets a declared action be overridden with a method', () => {
