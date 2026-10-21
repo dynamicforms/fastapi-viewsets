@@ -210,6 +210,7 @@ async def test_schema_on_each_transport_lists_itself_under_the_viewset_base_path
         assert "/tracks/schema" in paths
         assert "/tracks/{pk}" in paths
 
+
 @pytest.mark.asyncio
 async def test_headers_stated_on_the_stream_override_the_connection():
     captured: dict[str, str] = {}
