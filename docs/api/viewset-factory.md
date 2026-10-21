@@ -31,16 +31,18 @@ it types them, and it is handed to the proxy so the startup schema check can com
 ## Signatures
 
 ```ts
-function restViewSet<T>(): <
+function restViewSet<T, L = LookupItem>(): <
   PK extends PkFieldName<T> & keyof T,
   D extends readonly ViewSetMixinClass[],
->(pkFieldName: PK, declares: D) => ViewSetClass<T, PK, D, RestProxyOptions>
+>(pkFieldName: PK, declares: D) => ViewSetClass<T, PK, D, RestProxyOptions, L>
 
-function muxwsViewSet<T>(): <
+function muxwsViewSet<T, L = LookupItem>(): <
   PK extends PkFieldName<T> & keyof T,
   D extends readonly ViewSetMixinClass[],
->(pkFieldName: PK, declares: D) => ViewSetClass<T, PK, D, MuxwsProxyOptions>
+>(pkFieldName: PK, declares: D) => ViewSetClass<T, PK, D, MuxwsProxyOptions, L>
 ```
+
+`L` is the item type `lookup()` answers with, the BE viewset's `TLookupItem`.
 
 Supporting types:
 
@@ -57,18 +59,24 @@ type PkFieldName<T> = Extract<
 /** The pk type of the model's pk field. */
 type PkType<T, PK extends keyof T> = NonNullable<T[PK]> & KeyType;
 
-type ViewSetClass<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> =
+type ViewSetClass<
+  T,
+  PK extends keyof T,
+  D extends readonly ViewSetMixinClass[],
+  O extends ProxyBaseOptions,
+  L = LookupItem,
+> =
   // `[]` builds a ViewSet with no standard action; a list whose mixins name no action resolves to
   // its own error message, see TS2507 below.
   [D[number]] extends [never]
-    ? ViewSetClassOf<T, PK, D, O>
+    ? ViewSetClassOf<T, PK, D, O, L>
     : [ActionsOf<D[number]>] extends [never]
       ? 'declares must name at least one action: pass the mixin classes themselves, unannotated'
-      : ViewSetClassOf<T, PK, D, O>;
+      : ViewSetClassOf<T, PK, D, O, L>;
 
-type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions> = {
+type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions, L> = {
   new (options: Omit<O, 'pkFieldName' | 'declares'>): ViewSetInternals &
-    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>> &
+    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>, L> &
     ViewSetWatch<T, PkType<T, PK>> & { readonly pkFieldName: PK };
   readonly declares: FactoryDeclares<D>;
 };

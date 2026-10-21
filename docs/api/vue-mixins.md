@@ -26,6 +26,12 @@ interface LookupItem {
   icon: string | null;
 }
 
+/** `q` and the other fields of the BE lookup filter model. */
+interface LookupParams {
+  q?: string;
+  [key: string]: string | number | boolean | null | undefined | Array<string | number>;
+}
+
 /** `sort` is 'column:asc,other:desc'; the rest are filters. */
 interface ListParams {
   sort?: string;
@@ -96,7 +102,7 @@ interface ViewSetMixinDeclaration {
 type ActionName = keyof ActionSurface<KeyType, unknown, never, string>;
 
 /** The members of the mixins whose actions are in `A`, intersected: the public surface of a factory-built ViewSet. */
-type ActionSurface<K extends KeyType, T, PK extends keyof T, A> = ('create' extends A
+type ActionSurface<K extends KeyType, T, PK extends keyof T, A, L = LookupItem> = ('create' extends A
   ? CreateMixin<T, PK>
   : unknown) &
   ('bulkCreate' extends A ? BulkOnlyCreateMixin<T, PK> : unknown) &
@@ -108,7 +114,7 @@ type ActionSurface<K extends KeyType, T, PK extends keyof T, A> = ('create' exte
   ('bulkUpdate' extends A ? BulkOnlyUpdateMixin<K, T> : unknown) &
   ('destroy' extends A ? DestroyMixin<K> : unknown) &
   ('bulkDestroy' extends A ? BulkOnlyDestroyMixin<K> : unknown) &
-  ('lookup' extends A ? LookupMixin : unknown);
+  ('lookup' extends A ? LookupMixin<L> : unknown);
 ```
 
 `request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>` is the one
@@ -337,11 +343,14 @@ bulkDestroy(pks: K[]): ViewSetActionCall<DestroyReturnData[]>;
 
 Interface extends `DestroyMixin<K>` and `BulkOnlyDestroyMixin<K>`; `actions` spreads both.
 
-### LookupMixin
+### LookupMixin `<L = LookupItem>`
 
 ```ts
-lookup(): ViewSetActionCall<LookupItem[]>;
+lookup(params?: LookupParams): ViewSetActionCall<L[]>;
 ```
+
+An array in `params` goes out as a repeated key (`ids=1&ids=2`) on both transports. On
+`ViewSetProxyBase` the method is `lookup<I = LookupItem>(params?: LookupParams): ViewSetActionCall<I[]>`.
 
 ## Combined viewset mixins
 

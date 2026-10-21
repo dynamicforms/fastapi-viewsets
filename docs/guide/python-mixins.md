@@ -146,39 +146,66 @@ async def perform_update(self, context: Context, pk: int, data: Item, partial: b
 
 ### Lookup
 
-`LookupMixin[TLookupFilter]` adds a `GET /lookup` endpoint that returns a list of `LookupItem`
-objects — useful for populating select/autocomplete widgets.
+`LookupMixin[TLookupFilter, TLookupItem]` adds a `GET /lookup` endpoint that returns a list of
+`TLookupItem` objects — useful for populating select/autocomplete widgets. `TLookupFilter` defaults
+to `LookupFilter` (a single `q: str | None` field) and `TLookupItem` to `LookupItem`
+(`group`, `pk`, `title`, `icon`). The fields of `TLookupFilter` are the endpoint's query parameters.
 
-The mixin is generic over an optional `TLookupFilter` type (default: `LookupFilter` with a single
-`q: str | None` field). When the filter is active, a two-phase pipeline runs:
+A lookup request runs through the same stages as a [list](./list-pipeline):
 
-1. **`setup_lookup_filter(fltr)`** — pre-filter hook (e.g., build a DB query). No-op by default.
-2. **`filter_lookup(fltr, items)`** — post-filter hook. The **default implementation** filters by
-   `fltr.q` (case-insensitive substring match on `title`), so basic search works out of the box.
+1. **`perform_lookup(context)`** returns the source: a list, a generator or an unevaluated QuerySet.
+2. **`apply_lookup_filter(context, query, records)`** narrows it when any filter field is set. The
+   filter is `query.fltr`. Override the stage to filter in the backend and call
+   `query.mark_applied("filter")`; the default then leaves the records as they are. Without an
+   override, the default filters the converted items in memory: by the declaration of a filter model
+   built with `make_filter_model`, otherwise through **`filter_lookup(fltr, items)`**, whose default
+   keeps the items whose `title` contains `fltr.q`, ignoring case.
+3. **`to_lookup_item(raw)`** converts each row to `TLookupItem`. The default is identity.
+
+The filter is passed through `query`, so concurrent requests on one viewset instance (the default
+`singleton` lifecycle) do not share it.
 
 ```python
 from fastapi_viewsets.mixins import LookupMixin, LookupItem, LookupFilter
 
-# Default behaviour: q= query param, filters by title automatically
+# Default behaviour: q= query param, filters by title
 class MyViewSet(..., LookupMixin):
     async def perform_lookup(self, context: Context) -> list[LookupItem]:
         return [LookupItem(group=None, pk=i.id, title=i.name, icon=None) for i in db.values()]
-
-# Custom filter model with additional fields
-class MyFilter(LookupFilter):
-    group: str | None = None
-
-class MyViewSet(..., LookupMixin[MyFilter]):
-    async def perform_lookup(self, context: Context) -> list[LookupItem]:
-        return [LookupItem(group=i.group, pk=i.id, title=i.name) for i in db.values()]
-
-    async def filter_lookup(self, fltr: MyFilter, items: list[LookupItem]) -> list[LookupItem]:
-        if fltr.q is not None:
-            items = [i for i in items if fltr.q.lower() in i.title.lower()]
-        if fltr.group is not None:
-            items = [i for i in items if i.group == fltr.group]
-        return items
 ```
+
+A lookup with its own item type, `q` and `ids` parameters, filtered in the database:
+
+```python
+class TagLookup(BaseModel):
+    id: int
+    name: str
+    color: str
+
+class TagLookupFilter(BaseModel):
+    q: str | None = None
+    ids: list[int] | None = None  # ?ids=1&ids=2
+
+class TagViewSet(..., LookupMixin[TagLookupFilter, TagLookup]):
+    async def perform_lookup(self, context: Context):
+        return Tag.objects.order_by("name")
+
+    async def apply_lookup_filter(self, context, query, records):
+        if query.has_filter:
+            if query.fltr.q:
+                records = records.filter(name__icontains=query.fltr.q)
+            if query.fltr.ids:
+                records = records.filter(id__in=query.fltr.ids)
+            query.mark_applied("filter")
+        return await super().apply_lookup_filter(context, query, records)
+
+    def to_lookup_item(self, raw: Tag) -> TagLookup:
+        return TagLookup(id=raw.id, name=raw.name, color=raw.color)
+```
+
+A filter model built with `make_filter_model(TLookupItem, {...})` is applied without code, in
+memory. Its operators compare values of the field's declared type, so `LookupItem.pk`, declared as
+`object`, takes no typed comparison: `pk__in=1,2` compares strings.
 
 ## Combined viewset mixins
 

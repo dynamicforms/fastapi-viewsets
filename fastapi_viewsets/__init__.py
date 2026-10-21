@@ -1,4 +1,4 @@
-__version__ = "0.12.1"
+__version__ = "0.13.0"
 
 from .error_namespace import ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC
 

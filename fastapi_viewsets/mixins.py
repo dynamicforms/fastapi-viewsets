@@ -775,73 +775,116 @@ class LookupFilter(BaseModel):
 
 
 TLookupFilter = TypeVar("TLookupFilter", default=LookupFilter)
+TLookupItem = TypeVar("TLookupItem", default=LookupItem)
 
 
-class LookupMixin(Generic[TLookupFilter], ABC):
+class LookupMixin(Generic[TLookupFilter, TLookupItem], ABC):
     """
     Lookup endpoint with optional search filtering.
 
-    Adds a GET /lookup endpoint that returns a list of LookupItem objects — useful for populating
-    select/autocomplete widgets.
+    Adds a GET /lookup endpoint that returns a list of TLookupItem objects (default: LookupItem) -
+    useful for populating select/autocomplete widgets.
 
-    The mixin is generic over TLookupFilter (default: LookupFilter). When no type argument is
-    given, the endpoint exposes a single 'q' query parameter and filter_lookup filters by
-    case-insensitive title match. Supply a custom filter model as a type argument to add extra
-    query parameters and override filter_lookup.
+    The fields of TLookupFilter (default: LookupFilter, a single `q`) are the endpoint's query
+    parameters. The request runs through the same stages as a list:
 
-    When the filter is active (any field is non-None), the following two-phase pipeline runs:
+    1. `perform_lookup(context)` returns the source, lazily or not.
+    2. `apply_lookup_filter(context, query, records)` narrows it. Override it to filter in the
+       backend and mark the stage applied (`query.mark_applied("filter")`); the default filters in
+       memory: by the declaration of a filter model built with `make_filter_model`, otherwise
+       through `filter_lookup`.
+    3. `to_lookup_item(raw)` converts each remaining row to TLookupItem.
 
-    1. Pre-filter: setup_lookup_filter is called before perform_lookup.
-       Override to apply server-side filtering (e.g., narrow a DB query).
-    2. Post-filter: filter_lookup is called after perform_lookup.
-       The default implementation filters by fltr.q (case-insensitive title match).
-       Override to customise in-memory filtering.
+    The filter travels in `query.fltr`, never on the viewset instance, which serves concurrent
+    requests under the default `singleton` lifecycle.
     """
 
     __router = APIRouter()
 
     @abstractmethod
-    async def perform_lookup(self, context: Context) -> list[LookupItem]:
+    async def perform_lookup(self, context: Context) -> ListRecords:
         """
-        Subclasses should implement this method to return lookup items.
-        This method is intentionally NOT in ImplMixin because it's expected to be a simple
-        transformation of perform_list.
+        Subclasses implement this to return the lookup source.
+
+        A lazy source - a generator, an unevaluated QuerySet - is what an overridden
+        `apply_lookup_filter` pushes the filter into. Rows are TLookupItem once `to_lookup_item` has
+        run over them.
         """
         raise NotImplementedError("Method 'perform_lookup' must be implemented.")
 
-    async def setup_lookup_filter(self, fltr: TLookupFilter) -> None:
-        """
-        Optional pre-filter hook called before perform_lookup when the filter is active.
-        Subclasses can override to set up server-side filtering (e.g., build a DB query).
-        """
+    async def get_lookup(self, context: Context, query: ListQuery) -> list[TLookupItem]:
+        """The lookup pipeline: source, filter, conversion. Overridable as a whole."""
+        records = await self.perform_lookup(context)
+        records = await self.apply_lookup_filter(context, query, records)
+        return await self.land_lookup(query, records)
 
-    async def filter_lookup(self, fltr: TLookupFilter, items: list[LookupItem]) -> list[LookupItem]:
+    async def apply_lookup_filter(
+        self,
+        context: Context,  # noqa: ARG002 - part of the hook signature, for overrides to use
+        query: ListQuery,
+        records: ListRecords,
+    ) -> ListRecords:
         """
-        Post-filter hook called after perform_lookup when the filter is active.
-        Default implementation filters by fltr.q (case-insensitive substring of title).
-        Subclasses can override to change the filtering behaviour.
+        Narrows `records` to those the filter accepts. Override to filter in the backend; mark the
+        stage applied so this default does not redo the work:
+
+            async def apply_lookup_filter(self, context, query, records):
+                if query.has_filter:
+                    records = records.filter(pk__in=query.fltr.ids)
+                    query.mark_applied("filter")
+                return await super().apply_lookup_filter(context, query, records)
+
+        The default filters TLookupItem records in memory: by the declaration of a filter model built
+        with `make_filter_model`, otherwise through the `filter_lookup` hook.
+        """
+        if not query.has_filter or not query.needs("filter"):
+            return records
+
+        items = await self.land_lookup(query, records)
+        declared = filters_from(query.fltr)
+        if declared is not None:
+            return declared.apply(items)
+        filtered = await self.filter_lookup(query.fltr, items)
+        return items if filtered is None else filtered
+
+    async def filter_lookup(self, fltr: TLookupFilter, items: list[TLookupItem]) -> list[TLookupItem]:
+        """
+        In-memory filter hook of a hand-written filter model, called with the converted items.
+        The default filters by `fltr.q`: a case-insensitive substring of the item's `title`.
         """
         q = getattr(fltr, "q", None)
         if q is None:
             return items
-        return [item for item in items if q.lower() in item.title.lower()]
+        needle = q.lower()
+        return [item for item in items if needle in str(getattr(item, "title", "")).lower()]
+
+    def to_lookup_item(self, raw: Any) -> TLookupItem:
+        """
+        Converts one row of the source into TLookupItem. The default is identity, for a source that
+        already yields TLookupItem.
+        """
+        return raw
+
+    async def land_lookup(self, query: ListQuery, records: ListRecords) -> list[TLookupItem]:
+        """
+        Materialises the source and converts it with `to_lookup_item`. Idempotent: the conversion
+        runs once per request, whichever stage lands the source first.
+        """
+        materialized = await materialize(records)
+        if query.needs("conversion"):
+            query.mark_applied("conversion")
+            if type(self).to_lookup_item is not LookupMixin.to_lookup_item:
+                return [self.to_lookup_item(row) for row in materialized]
+        return materialized
 
     @final
     @__router.get("lookup")
     async def lookup(
-        self: "ImplMixin[Any, LookupItem] | LookupMixin",
+        self: "LookupMixin",
         context: Context,
         fltr: Annotated[TLookupFilter, Query()] = None,
-    ) -> list[LookupItem]:
-        has_filter = (
-            fltr is not None and hasattr(fltr, "model_dump") and any(v is not None for v in fltr.model_dump().values())
-        )
-        if has_filter:
-            await self.setup_lookup_filter(fltr)
-        res = await self.perform_lookup(context)
-        if has_filter:
-            res = await self.filter_lookup(fltr, res)
-        return res
+    ) -> list[TLookupItem]:
+        return await self.get_lookup(context, build_list_query(fltr, None))
 
 
 ###################################################################################################

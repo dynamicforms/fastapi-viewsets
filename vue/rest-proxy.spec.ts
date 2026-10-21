@@ -50,6 +50,7 @@ const MOCK_ITEMS: Item[] = [MOCK_ITEM, { id: 2, name: 'Second item' }];
 function sent(config: { params?: unknown; headers?: Record<string, string>; data?: unknown } = {}) {
   return {
     ...config,
+    ...(config.params !== undefined ? { paramsSerializer: { indexes: null } } : {}),
     headers: { ...config.headers, 'Idempotency-Key': expect.stringMatching(/^"[0-9a-f-]{36}"$/) },
     timeout: 30000,
     signal: expect.any(AbortSignal),
@@ -215,6 +216,25 @@ describe('RestProxyImpl — direct instance', () => {
     const result = await proxy.lookup();
     expect(http.get).toHaveBeenCalledWith('/items/lookup', sent());
     expect(result).toEqual(lookupItems);
+  });
+
+  it('lookup(params) — sends the filter as query parameters', async () => {
+    http.get.mockResolvedValue({ data: [] });
+    await proxy.lookup({ q: 'ap', ids: [1, 2] });
+    expect(http.get).toHaveBeenCalledWith('/items/lookup', sent({ params: { q: 'ap', ids: [1, 2] } }));
+  });
+
+  it('sends an array query parameter as a repeated key, the form FastAPI reads into a list', async () => {
+    let url = '';
+    const real = axios.create({
+      adapter: async (config) => {
+        url = axios.getUri(config);
+        return { data: [], status: 200, statusText: 'OK', headers: {}, config };
+      },
+    });
+    class Tags extends restViewSet<Item>()('id', [LookupMixin]) {}
+    await new Tags({ basePath: '/tags', validateSchema: false, axiosInstance: real }).lookup({ q: 'a', ids: [1, 2] });
+    expect(url).toBe('/tags/lookup?q=a&ids=1&ids=2');
   });
 
   it('basePath trailing slash is stripped', () => {

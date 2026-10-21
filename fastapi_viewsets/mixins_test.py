@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from fastapi_viewsets.collection_viewset import CollectionViewSet
 from fastapi_viewsets.context import Context
 from fastapi_viewsets.decorators import route_viewset
+from fastapi_viewsets.filters import make_filter_model
 from fastapi_viewsets.mixins import (
     BulkViewSetMixin,
     CreateMixin,
@@ -527,13 +528,48 @@ async def test_lookup_fltr_none_returns_all():
 
 
 # ---------------------------------------------------------------------------
-# setup_lookup_filter pre-event hook
+# lookup pipeline
 # ---------------------------------------------------------------------------
 
 
+def lookup_endpoint(cls: type):
+    router = APIRouter()
+    route_viewset(router, base_path="/items")(cls)
+    return next(r for r in router.routes if r.path == "/items/lookup" and "GET" in r.methods).endpoint
+
+
+class IdsLookupFilter(LookupFilter):
+    ids: list[int] | None = None
+
+
 @pytest.mark.asyncio
-async def test_lookup_setup_filter_hook_called():
-    """setup_lookup_filter is called before perform_lookup when filter is active."""
+async def test_lookup_filter_reaches_the_backend_stage_through_the_query():
+    """An overridden apply_lookup_filter receives the request's filter and can mark it applied."""
+    seen = []
+
+    class PushDownViewSet(CollectionViewSet[int, Item], LookupMixin[IdsLookupFilter]):
+        def __init__(self):
+            super().__init__(container=_DB, pk_field="id")
+
+        async def perform_lookup(self, _context: Context) -> list[LookupItem]:
+            return list(_LOOKUP_DB)
+
+        async def apply_lookup_filter(self, context, query, records):
+            seen.append(query.fltr)
+            records = [item for item in records if item.pk in query.fltr.ids]
+            query.mark_applied("filter")
+            return await super().apply_lookup_filter(context, query, records)
+
+        async def filter_lookup(self, fltr, items):  # noqa: ARG002 - the hook signature the override must match
+            raise AssertionError("an applied filter stage is not redone in memory")
+
+    result = await lookup_endpoint(PushDownViewSet)(fltr=IdsLookupFilter(ids=[2, 4]))
+    assert [item.title for item in result] == ["Banana", "Cherry"]
+    assert seen == [IdsLookupFilter(ids=[2, 4])]
+
+
+@pytest.mark.asyncio
+async def test_lookup_without_filter_skips_the_filter_stage():
     calls = []
 
     class HookCheckViewSet(CollectionViewSet[int, Item], LookupMixin):
@@ -543,41 +579,96 @@ async def test_lookup_setup_filter_hook_called():
         async def perform_lookup(self, _context: Context) -> list[LookupItem]:
             return list(_LOOKUP_DB)
 
-        async def setup_lookup_filter(self, fltr: LookupFilter) -> None:
-            calls.append(("setup", fltr.q))
+        async def filter_lookup(self, fltr, items):
+            calls.append(fltr)
+            return items
 
-    router = APIRouter()
-    route_viewset(router, base_path="/items")(HookCheckViewSet)
-    lookup_route = next(r for r in router.routes if r.path == "/items/lookup" and "GET" in r.methods)
-
-    await lookup_route.endpoint(fltr=LookupFilter(q="ap"))
-    assert calls == [("setup", "ap")]
-
-
-@pytest.mark.asyncio
-async def test_lookup_setup_filter_hook_not_called_without_q():
-    """setup_lookup_filter is NOT called when filter is inactive."""
-    calls = []
-
-    class HookCheckViewSet(CollectionViewSet[int, Item], LookupMixin):
-        def __init__(self):
-            super().__init__(container=_DB, pk_field="id")
-
-        async def perform_lookup(self, _context: Context) -> list[LookupItem]:
-            return list(_LOOKUP_DB)
-
-        async def setup_lookup_filter(
-            self,
-            fltr: LookupFilter,  # noqa: ARG002 - part of the hook signature the override must match
-        ) -> None:
-            calls.append("called")
-
-    router = APIRouter()
-    route_viewset(router, base_path="/items")(HookCheckViewSet)
-    lookup_route = next(r for r in router.routes if r.path == "/items/lookup" and "GET" in r.methods)
-
-    await lookup_route.endpoint(fltr=LookupFilter())
+    await lookup_endpoint(HookCheckViewSet)(fltr=LookupFilter())
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_lookups_on_a_singleton_keep_their_own_filters():
+    import asyncio
+
+    release = asyncio.Event()
+
+    class SlowViewSet(CollectionViewSet[int, Item], LookupMixin):
+        def __init__(self):
+            super().__init__(container=_DB, pk_field="id")
+
+        async def perform_lookup(self, _context: Context) -> list[LookupItem]:
+            await release.wait()
+            return list(_LOOKUP_DB)
+
+    endpoint = lookup_endpoint(SlowViewSet)
+    first = asyncio.create_task(endpoint(fltr=LookupFilter(q="ban")))
+    second = asyncio.create_task(endpoint(fltr=LookupFilter(q="che")))
+    await asyncio.sleep(0)
+    release.set()
+    assert [item.title for item in await first] == ["Banana"]
+    assert [item.title for item in await second] == ["Cherry"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_filters_by_a_declared_filter_model():
+    declared = make_filter_model(LookupItem, {"title": ["icontains", "startswith"]})
+
+    class DeclaredViewSet(CollectionViewSet[int, Item], LookupMixin[declared]):
+        def __init__(self):
+            super().__init__(container=_DB, pk_field="id")
+
+        async def perform_lookup(self, _context: Context) -> list[LookupItem]:
+            return list(_LOOKUP_DB)
+
+    result = await lookup_endpoint(DeclaredViewSet)(fltr=declared(title__icontains="p", title__startswith="A"))
+    assert [item.title for item in result] == ["Apple", "Apricot"]
+
+
+class TagLookup(BaseModel):
+    id: int
+    name: str
+    color: str
+
+
+class TagLookupFilter(BaseModel):
+    q: str | None = None
+
+
+class TagLookupViewSet(CollectionViewSet[int, Item], LookupMixin[TagLookupFilter, TagLookup]):
+    """Its own item type, from a lazy source of rows that are not yet TagLookup."""
+
+    def __init__(self):
+        super().__init__(container=_DB, pk_field="id")
+
+    async def perform_lookup(self, _context: Context):
+        return ({"id": item.pk, "name": item.title, "color": "#000000"} for item in _LOOKUP_DB)
+
+    def to_lookup_item(self, raw) -> TagLookup:
+        return TagLookup(**raw)
+
+    async def filter_lookup(self, fltr: TagLookupFilter, items: list[TagLookup]) -> list[TagLookup]:
+        return [item for item in items if fltr.q.lower() in item.name.lower()]
+
+
+@pytest.mark.asyncio
+async def test_lookup_converts_a_lazy_source_to_its_own_item_type():
+    endpoint = lookup_endpoint(TagLookupViewSet)
+    assert [item.name for item in await endpoint(fltr=TagLookupFilter(q="an"))] == ["Banana"]
+    everything = await endpoint(fltr=TagLookupFilter())
+    assert all(isinstance(item, TagLookup) for item in everything)
+    assert len(everything) == len(_LOOKUP_DB)
+
+
+def test_lookup_documents_its_own_item_type():
+    router = APIRouter()
+    route_viewset(router, base_path="/items")(TagLookupViewSet)
+    app = FastAPI()
+    app.include_router(router)
+    schema = app.openapi()
+
+    answer = schema["paths"]["/items/lookup"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert answer["items"]["$ref"].endswith("/TagLookup")
 
 
 # ---------------------------------------------------------------------------
