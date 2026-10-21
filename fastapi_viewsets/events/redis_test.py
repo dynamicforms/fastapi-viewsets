@@ -1,8 +1,10 @@
 import asyncio
+import gc
 import json
 import logging
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -376,6 +378,30 @@ def test_per_loop_redis_forgets_the_client_of_a_loop_closed_without_cancelling_i
     loop.run_until_complete(use())
     loop.close()
     asyncio.run(use())
+    assert list(redis._clients) == []
+    assert len(clients.made) == 2
+
+
+def test_per_loop_redis_creates_a_client_while_the_garbage_collector_destroys_a_closed_loops_task():
+    redis, clients = per_loop()
+    make = clients.from_url
+
+    def from_url_collecting(url: str, **options):
+        gc.collect()
+        return make(url, **options)
+
+    clients.from_url = from_url_collecting
+    loop = asyncio.new_event_loop()
+
+    async def use() -> None:
+        redis.client()
+
+    loop.run_until_complete(use())
+    loop.close()
+    thread = threading.Thread(target=asyncio.run, args=(use(),), daemon=True)
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
     assert list(redis._clients) == []
     assert len(clients.made) == 2
 
