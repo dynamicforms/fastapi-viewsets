@@ -429,13 +429,16 @@ def route_viewset(
 
             if is_schema_route(route):
                 # Two /schema routes on one path, one per transport, each answering with the
-                # endpoints published on its own transport.
+                # endpoints published on its own transport, itself included: the TS client takes
+                # the viewset's base path in the document from the /schema path.
                 if on_rest:
                     rest_schema_kwargs = {**route_kwargs, "endpoint": openapi_endpoint(rest_routes)}
                     rest_routes.append(rest_schema_kwargs)
                     add_route(rest_schema_kwargs, {REST}, action_name)
                 if on_muxws_any:
-                    add_route({**route_kwargs, "endpoint": openapi_endpoint(muxws_routes)}, {MUXWS}, action_name)
+                    muxws_schema_kwargs = {**route_kwargs, "endpoint": openapi_endpoint(muxws_routes)}
+                    muxws_routes.append(muxws_schema_kwargs)
+                    add_route(muxws_schema_kwargs, {MUXWS}, action_name)
                 continue
 
             on_muxws = resolve_register_muxws(route.endpoint, register_muxws)

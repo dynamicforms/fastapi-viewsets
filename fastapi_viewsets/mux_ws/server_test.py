@@ -199,6 +199,19 @@ async def test_schema_reports_the_muxws_endpoint_set():
 
 
 @pytest.mark.asyncio
+async def test_schema_on_each_transport_lists_itself_under_the_viewset_base_path():
+    """The document's paths omit the include_router prefix; its own /schema path names the base."""
+    cls = make_viewset()
+    app = app_of(cls, prefix="/api/v1")
+    stream = FakeStream({":method": "GET", ":path": "/api/v1/tracks/schema"})
+    await process_command(ABSENT, stream, app=app)
+    rest_paths = TestClient(app).get("/api/v1/tracks/schema").json()["paths"]
+    for paths in (rest_paths, stream.payload["paths"]):
+        assert "/tracks/schema" in paths
+        assert "/tracks/{pk}" in paths
+
+
+@pytest.mark.asyncio
 async def test_headers_stated_on_the_stream_override_the_connection():
     captured: dict[str, str] = {}
 

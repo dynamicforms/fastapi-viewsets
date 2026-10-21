@@ -662,6 +662,44 @@ describe('schema validation — validateAgainstSchema()', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  /** Validates a ViewSet routed at `basePath` against a document whose paths lack its prefix. */
+  async function validateRoutedAt(
+    basePath: string,
+    schema: object,
+    declares: readonly { actions: readonly string[] }[] = [BulkViewSetMixin, LookupMixin],
+  ) {
+    http.get.mockImplementation((url: string) =>
+      url === `${basePath}/schema` ? Promise.resolve({ data: schema }) : Promise.resolve({ data: [] }),
+    );
+    const proxy = new (viewSetDeclaring(declares))({
+      basePath,
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    warnSpy.mockClear();
+    await (proxy as any).validateAgainstSchema();
+  }
+
+  it('takes the base from the document under an include_router prefix', async () => {
+    await validateRoutedAt('/api/v1/items', FULL_SCHEMA);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('still reports a mismatch under an include_router prefix', async () => {
+    await validateRoutedAt('/api/v1/items', FULL_SCHEMA, [CursorListMixin]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain("BE serves 'GET /items/{pk}'");
+  });
+
+  it('takes the base from the document when the base path has a path parameter', async () => {
+    const paths = Object.fromEntries(
+      Object.entries(FULL_SCHEMA.paths).map(([path, item]) => [`/orgs/{org}${path}`, item]),
+    );
+    await validateRoutedAt('/api/orgs/acme/items', { paths });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
   it('ignores non-HTTP-method keys in path items (parameters, summary, etc.)', async () => {
     await createAndValidate({
       paths: {
