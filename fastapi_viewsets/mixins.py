@@ -201,6 +201,15 @@ class SortStateColumn(BaseModel):
 SortState = list[SortStateColumn]
 
 
+SORT_DESCRIPTION = (
+    "Ordering: comma-separated `column:direction` entries in priority order (`name:asc,score:desc`)."
+    " The direction is `asc` or `desc`, `asc` when omitted; an entry with any other direction is"
+    " ignored. Without the parameter the list is ordered by its default value, where the endpoint"
+    " declares one; an empty value leaves the list unordered."
+)
+"""The `sort` parameter's description on every list endpoint."""
+
+
 def parse_sort_param(sort_csv: str | None) -> SortState:
     """
     Parse the 'sort' query parameter (comma-separated) into a SortState.
@@ -224,6 +233,31 @@ def parse_sort_param(sort_csv: str | None) -> SortState:
             result.append(SortStateColumn(column_name=column, direction=SortDirection(raw_direction)))
         except ValueError:
             pass  # skip entries with an unrecognised direction
+    return result
+
+
+def check_declared_sort(sort_csv: str, model: Any = None) -> SortState:
+    """
+    Parses a sort a viewset declares (`ListMixin.default_sort`) in the `sort` parameter's syntax.
+
+    Raises ValueError for an empty entry and an unrecognised direction, which `parse_sort_param`
+    skips in a request, and, when `model` is a pydantic model, for a column that is neither one of
+    its fields nor one of its computed fields.
+    """
+    entries = [entry.strip() for entry in sort_csv.split(",")]
+    if not all(entries):
+        raise ValueError(f"default_sort {sort_csv!r} has an empty entry")
+    result: SortState = []
+    for entry in entries:
+        column, _, raw_direction = entry.rpartition(":")
+        if not column:
+            column, raw_direction = entry, SortDirection.asc.value
+        if raw_direction not in SortDirection.__members__:
+            raise ValueError(f"default_sort {sort_csv!r}: direction of {column!r} is not 'asc' or 'desc'")
+        fields = getattr(model, "model_fields", None)
+        if isinstance(fields, dict) and column not in fields and column not in model.model_computed_fields:
+            raise ValueError(f"default_sort {sort_csv!r}: {model.__name__} has no field {column!r}")
+        result.append(SortStateColumn(column_name=column, direction=SortDirection(raw_direction)))
     return result
 
 
@@ -284,6 +318,17 @@ class ListMixin(Generic[T, TFilter], ABC):
     what stops a cursor walking straight past the NULL rows.
     """
 
+    default_sort: str | None = None
+    """
+    The ordering of a list request that sends no `sort` parameter, in that parameter's syntax:
+    `"name:asc"`, `"category:asc,score:desc"`. None leaves such a request unordered; so does an empty
+    `sort=` on a viewset that declares one.
+
+    `route_viewset` publishes it as the `sort` parameter's default in the schema, where the TS
+    client's `defaultSort()` reads it, and raises ValueError for an empty entry, an unrecognised
+    direction or a column the response model has neither a field nor a computed field for.
+    """
+
     @property
     def nulls_first(self) -> bool:
         return self.nulls != "last"
@@ -298,7 +343,7 @@ class ListMixin(Generic[T, TFilter], ABC):
         self: "ImplMixin[Any, T] | ListMixin[T]",
         context: Context,
         fltr: Annotated[TFilter, Query()] = None,
-        sort: str | None = None,
+        sort: Annotated[str | None, Query(description=SORT_DESCRIPTION)] = None,
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int | None, Query(ge=1)] = None,
         cursor: str | None = None,
@@ -320,7 +365,7 @@ class ListMixin(Generic[T, TFilter], ABC):
 
         query = build_list_query(
             fltr,
-            sort,
+            self.default_sort if sort is None else sort,
             offset=offset,
             limit=(
                 None

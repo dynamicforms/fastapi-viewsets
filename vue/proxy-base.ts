@@ -37,7 +37,9 @@ import type {
   PageParams,
   PaginatedList,
   PaginatedListMixin,
+  ListDefaultSort,
 } from './mixins';
+import { parseSort, type SortState } from './sort';
 
 export { ViewSetRequestError } from './errors';
 
@@ -166,6 +168,27 @@ const ACTION_NAME_COVERAGE: Record<ActionName, true> = {
 /** All standard FE method names, in a stable order for warning output. */
 const STANDARD_FE_METHODS: readonly ActionName[] = Object.keys(ACTION_NAME_COVERAGE) as ActionName[];
 
+/** The parts of the BE viewset's OpenAPI document this module reads. */
+interface SchemaDocument {
+  paths?: Record<string, Record<string, unknown>>;
+}
+
+/**
+ * The viewset's base path as the schema document states it. Paths in the document are the viewset's
+ * routes as declared, without the prefixes the application routes them under (include_router) and
+ * with path parameters unsubstituted, so they share no common prefix with `basePath`. The base is
+ * taken from the document's own /schema path; `basePath` is used only for a document that does not
+ * list it.
+ */
+function schemaBase(paths: Record<string, unknown>, basePath: string): string {
+  return (
+    Object.keys(paths)
+      .filter((path) => path.endsWith('/schema'))
+      .sort((a, b) => a.length - b.length)[0]
+      ?.slice(0, -'/schema'.length) ?? basePath
+  );
+}
+
 /** One entry of a ViewSet's `static declares` list: a mixin naming the actions it contributes. */
 export interface ViewSetMixinDeclaration {
   readonly actions: readonly string[];
@@ -269,7 +292,13 @@ export abstract class ViewSetInternals {
 
 export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   extends ViewSetInternals
-  implements BulkViewSetMixin<K, T, PK>, CursorListMixin<T>, PaginatedListMixin<T>, LookupMixin, ViewSetWatch<T, K>
+  implements
+    BulkViewSetMixin<K, T, PK>,
+    CursorListMixin<T>,
+    PaginatedListMixin<T>,
+    LookupMixin,
+    ListDefaultSort,
+    ViewSetWatch<T, K>
 {
   /**
    * The mixins this ViewSet is composed of — the FE counterpart of a BE viewset's base classes.
@@ -303,6 +332,9 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
 
   /** `ProxyBaseOptions.topic`. */
   protected readonly topicOption?: string;
+
+  /** The BE schema, once fetched; see `schemaDocument()`. */
+  private schemaRequest?: Promise<SchemaDocument>;
 
   /**
    * Binds every method of the class chain to set the `key` of the call it issues on the promise it
@@ -354,20 +386,8 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     if (declared === null) return;
 
     try {
-      const schema = await this.request<{ paths?: Record<string, Record<string, unknown>> }>('GET', '/schema', {
-        repeat: { withinMs: 0 },
-        background: true,
-      });
-      const paths = schema?.paths ?? {};
-      // Paths in the document are the viewset's routes as declared, without the prefixes the
-      // application routes them under (include_router) and with path parameters unsubstituted, so
-      // they share no common prefix with `basePath`. The base is taken from the document's own
-      // /schema path; `basePath` is used only for a document that does not list it.
-      const base =
-        Object.keys(paths)
-          .filter((path) => path.endsWith('/schema'))
-          .sort((a, b) => a.length - b.length)[0]
-          ?.slice(0, -'/schema'.length) ?? this.basePath;
+      const paths = (await this.schemaDocument({ repeat: { withinMs: 0 }, background: true }))?.paths ?? {};
+      const base = schemaBase(paths, this.basePath);
 
       const beActions = new Set<string>();
       const beAlternatives: { endpoint: string; actions: readonly string[] }[] = [];
@@ -438,6 +458,35 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     } catch {
       // Schema validation is non-critical; ignore fetch/parse errors silently
     }
+  }
+
+  /**
+   * The BE viewset's `/schema`, fetched over this proxy's transport on the first call and shared by
+   * every later one. A failed fetch is not kept, so the next call fetches again. `repeat` and
+   * `background` apply only to a call that issues the request.
+   */
+  private schemaDocument(options: Pick<RequestOptions, 'repeat' | 'background'>): Promise<SchemaDocument> {
+    if (!this.schemaRequest) {
+      const request = Promise.resolve(this.request<SchemaDocument>('GET', '/schema', options));
+      this.schemaRequest = request;
+      request.catch(() => {
+        if (this.schemaRequest === request) this.schemaRequest = undefined;
+      });
+    }
+    return this.schemaRequest;
+  }
+
+  /** See `ListDefaultSort.defaultSort`. */
+  async defaultSort(): Promise<SortState> {
+    const document = await this.schemaDocument({}).catch(() => this.schemaDocument({}));
+    const paths = document?.paths ?? {};
+    const base = schemaBase(paths, this.basePath);
+    // A viewset routed at base_path "" lists its collection as '/', next to '/schema'.
+    const operation = (paths[base] ?? paths[`${base}/`])?.get as
+      { parameters?: { name?: unknown; in?: unknown; schema?: { default?: unknown } }[] } | undefined;
+    const sort = operation?.parameters?.find((parameter) => parameter.name === 'sort' && parameter.in === 'query');
+    const declared = sort?.schema?.default;
+    return typeof declared === 'string' ? parseSort(declared) : [];
   }
 
   /**

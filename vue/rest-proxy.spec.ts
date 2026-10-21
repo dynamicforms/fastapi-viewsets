@@ -735,6 +735,91 @@ describe('schema validation — validateAgainstSchema()', () => {
 // 8. Idempotency-Key and repeats
 // ---------------------------------------------------------------------------
 
+describe('defaultSort()', () => {
+  let http: ReturnType<typeof makeMockAxios>;
+
+  beforeEach(() => {
+    http = makeMockAxios();
+  });
+
+  function schemaWithSort(sortDefault?: string, base = '/items') {
+    const sort = { name: 'sort', in: 'query', schema: sortDefault === undefined ? {} : { default: sortDefault } };
+    return { paths: { [base]: { get: { parameters: [sort] } }, [`${base}/schema`]: { get: {} } } };
+  }
+
+  function makeApi(declares: readonly { actions: readonly string[] }[] = [ReadOnlyViewSetMixin]) {
+    class Api extends RestProxyImpl<number, Item, 'id'> {
+      static declares = declares;
+    }
+    return new Api({ basePath: '/items', pkFieldName: 'id', axiosInstance: http as unknown as typeof axios });
+  }
+
+  it("parses the list endpoint's sort parameter default", async () => {
+    http.get.mockResolvedValue({ data: schemaWithSort('year:desc,title') });
+    await expect(makeApi().defaultSort()).resolves.toEqual([
+      { columnName: 'year', direction: 'desc' },
+      { columnName: 'title', direction: 'asc' },
+    ]);
+  });
+
+  it('is [] when the BE viewset declares no default_sort', async () => {
+    http.get.mockResolvedValue({ data: schemaWithSort() });
+    await expect(makeApi().defaultSort()).resolves.toEqual([]);
+  });
+
+  it('reads the base path from the schema document, not from basePath', async () => {
+    http.get.mockResolvedValue({ data: schemaWithSort('title:asc', '/catalogue/items') });
+    await expect(makeApi().defaultSort()).resolves.toEqual([{ columnName: 'title', direction: 'asc' }]);
+  });
+
+  it('finds the collection of a viewset routed at base_path ""', async () => {
+    const schema = schemaWithSort('id:desc');
+    http.get.mockResolvedValue({ data: { paths: { '/': schema.paths['/items'], '/schema': { get: {} } } } });
+    await expect(makeApi().defaultSort()).resolves.toEqual([{ columnName: 'id', direction: 'desc' }]);
+  });
+
+  it("issues its own /schema request when the schema check's fails", async () => {
+    http.get.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ data: schemaWithSort('title:asc') });
+    const api = makeApi();
+    await expect(api.defaultSort()).resolves.toEqual([{ columnName: 'title', direction: 'asc' }]);
+    expect(http.get.mock.calls.filter(([url]) => url === '/items/schema')).toHaveLength(2);
+  });
+
+  it('shares one /schema request with the schema check and with later calls', async () => {
+    http.get.mockResolvedValue({ data: schemaWithSort('title:asc') });
+    const api = makeApi();
+    await api.defaultSort();
+    await api.defaultSort();
+    expect(http.get.mock.calls.filter(([url]) => url === '/items/schema')).toHaveLength(1);
+  });
+
+  it('is on a route_rest proxy whose mixin interface has a list action', async () => {
+    http.get.mockResolvedValue({ data: schemaWithSort('title:asc') });
+    class Plain extends RestProxyImpl<number, Item, 'id'> {}
+    const api = route_rest<ListMixin<Item>>(Plain, {
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+    });
+    await expect(api.defaultSort()).resolves.toEqual([{ columnName: 'title', direction: 'asc' }]);
+    const lookupOnly = route_rest<LookupMixin>(Plain, {
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+    });
+    // @ts-expect-error a proxy without a list action has no defaultSort
+    void lookupOnly.defaultSort;
+  });
+
+  it('rejects when /schema cannot be fetched, and the next call fetches again', async () => {
+    http.get.mockRejectedValue(new Error('offline'));
+    const api = makeApi([]);
+    await expect(api.defaultSort()).rejects.toThrow();
+    http.get.mockResolvedValue({ data: schemaWithSort('title:desc') });
+    await expect(api.defaultSort()).resolves.toEqual([{ columnName: 'title', direction: 'desc' }]);
+  });
+});
+
 describe('RestProxyImpl — Idempotency-Key and repeats', () => {
   let http: ReturnType<typeof makeMockAxios>;
   let proxy: RestProxyImpl<number, Item, 'id'>;

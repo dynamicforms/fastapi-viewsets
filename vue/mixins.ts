@@ -36,6 +36,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-declaration-merging, @typescript-eslint/no-unused-vars */
 
 import type { ViewSetActionCall } from './call';
+import type { SortState } from './sort';
 
 export interface LookupItem {
   group: unknown;
@@ -76,11 +77,36 @@ export class ListMixin<T> {
   static readonly actions: readonly string[] = ['list'];
 }
 
-/** Query parameters a list call accepts. `sort` is 'column:asc,other:desc'; the rest are filters. */
+/**
+ * Query parameters a list call accepts. `sort` is 'column:asc,other:desc' (`formatSort` writes it
+ * from a `SortState`); the rest are filters. Without `sort` the BE applies its `default_sort`; `''`
+ * leaves the list unordered.
+ */
 export interface ListParams {
   sort?: string;
   [key: string]: string | number | boolean | null | undefined | Array<string | number>;
 }
+
+/**
+ * What a ViewSet declaring `list`, `listPage` or `listCursor` has besides those actions. Not an
+ * action: it reads the BE viewset's schema rather than calling an endpoint of its own.
+ */
+export interface ListDefaultSort {
+  /**
+   * The BE viewset's `default_sort`: the ordering its list endpoint applies when a call sends no
+   * `sort`, e.g. a grid's initial `sortState`. `[]` when it declares none. Read from the `sort`
+   * parameter's default in the viewset's `/schema`, which the ViewSet fetches once and shares with
+   * the startup schema check. When the shared request fails, it issues one of its own, repeated as
+   * any other call is; when that fails too, it rejects, and the next call fetches again.
+   */
+  defaultSort(): Promise<SortState>;
+}
+
+/** The actions that read the list endpoint. */
+export type ListAction = 'list' | 'listPage' | 'listCursor';
+
+/** `ListDefaultSort` when the member names `A` include a list action, `unknown` otherwise. */
+export type DefaultSortOf<A> = [Extract<A, ListAction>] extends [never] ? unknown : ListDefaultSort;
 
 /**
  * One page, mirroring the BE PaginatedList.

@@ -56,7 +56,7 @@ async def list_items(
     self,
     context: Context,
     fltr: Annotated[TFilter, Query()] = None,
-    sort: str | None = None,
+    sort: Annotated[str | None, Query(description=SORT_DESCRIPTION)] = None,
     offset: int = 0,
     limit: int | None = None,
     cursor: str | None = None,
@@ -66,8 +66,9 @@ async def list_items(
 
 - `GET /` → `list_items`, which builds a `ListQuery` out of the parameters and hands it to
   `get_list(context, query)`; `get_list` calls `perform_list(context)` itself, as its first stage.
-- `sort` is always exposed (`column:asc,column:desc`, comma-separated). When `TFilter` is provided,
-  its fields are exposed as individual query parameters.
+- `sort` is always exposed (`column:asc,column:desc`, comma-separated). Without it the list is
+  ordered by `default_sort`; an empty `sort=` leaves it unordered. When `TFilter` is provided, its
+  fields are exposed as individual query parameters.
 - `route_viewset` narrows both the parameters and the return type per viewset: `offset` survives
   only when `paginated` is among the declared shapes, `cursor` only when `cursor` is, `limit` when
   either is, and the `X-List-Shape` header only when more than one shape is declared. The return
@@ -90,6 +91,12 @@ Class attributes:
   that is a 422.
 - `pk_field_name: str = "id"` — appended to the cursor's ordering so every key tuple is unique.
   `DjangoORMViewSet` supplies the model's own primary key instead.
+- `default_sort: str | None = None` — the ordering of a request that sends no `sort`, in the `sort`
+  parameter's syntax (`"name:asc"`, `"category:asc,score:desc"`). `route_viewset` publishes it as the
+  `sort` parameter's default in the schema, which the TS client's `defaultSort()` reads, and raises
+  `ValueError` for an empty entry, a direction other than `asc` / `desc`, or a column the response
+  model has neither a field nor a computed field for (`check_declared_sort`). It also orders a direct `list_items` call without `sort`; `get_list` with a
+  `ListQuery` built by hand takes the query's `sort` as given.
 - `nulls: str = "first"` — which end NULLs sit at when sorting ascending, `"first"` or `"last"`.
 - `nulls_first: bool` — property, `self.nulls != "last"`.
 - `resolve_shapes() -> tuple` — classmethod returning `(default shape, shapes allowed)`; the default
@@ -185,6 +192,13 @@ SortState = list[SortStateColumn]
 `parse_sort_param(sort_csv: str | None) -> SortState` — parses the `sort` query string into a
 `SortState`. Format: `"name:asc,score:desc"`; a bare column name means ascending. Entries with an
 unknown direction are skipped.
+
+`check_declared_sort(sort_csv: str, model: Any = None) -> SortState` — parses a declared
+`default_sort` and raises `ValueError` for an empty entry, an unknown direction, and, when `model` is
+a pydantic model, a column that is neither a field nor a computed field of it. `route_viewset` calls
+it with the response model.
+
+`SORT_DESCRIPTION: str` — the `sort` parameter's description on every list endpoint.
 
 ### LookupMixin `[TLookupFilter=LookupFilter, TLookupItem=LookupItem]`
 

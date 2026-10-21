@@ -32,11 +32,21 @@ interface LookupParams {
   [key: string]: string | number | boolean | null | undefined | Array<string | number>;
 }
 
-/** `sort` is 'column:asc,other:desc'; the rest are filters. */
+/**
+ * `sort` is 'column:asc,other:desc'; the rest are filters. Without `sort` the BE applies its
+ * `default_sort`; '' leaves the list unordered.
+ */
 interface ListParams {
   sort?: string;
   [key: string]: string | number | boolean | null | undefined | Array<string | number>;
 }
+
+/** The shape of `@dynamicforms/vue-grid`'s `SortStateColumn`: a `SortState` is a grid's `sortState`. */
+interface SortStateColumn {
+  columnName: string;
+  direction: 'asc' | 'desc';
+}
+type SortState = SortStateColumn[];
 
 interface PageParams extends ListParams {
   offset?: number;
@@ -302,6 +312,29 @@ The three methods read the same `GET {basePath}`. Each sends `X-List-Shape` with
 does not read the header and answers in that shape, so a ViewSet declares the mixins of the shapes the BE viewset offers
 through `list_shape` and `list_shapes`. A shape the BE viewset's `list_shapes` leave out is a 422
 `fastapi-viewsets.unsupported_list_shape`.
+
+### ListDefaultSort
+
+A ViewSet declaring any of the three list mixins has `defaultSort()` as well. It is not an action and
+is not in `ActionName`:
+
+```ts
+interface ListDefaultSort {
+  defaultSort(): Promise<SortState>;
+}
+```
+
+`defaultSort()` resolves to the BE viewset's `default_sort`, `[]` when it declares none. It reads the
+`sort` parameter's default of `GET {base}` in the viewset's `/schema`, fetched over the ViewSet's
+transport once per instance and shared with the startup schema check. When the shared request fails,
+`defaultSort()` issues one of its own, repeated as any other call is; when that fails too, it rejects,
+and the next call fetches again. `ViewSetProxyBase` implements it, so a hand-written proxy
+has it too; `RestProxy<M>` and `MuxwsProxy<M>` carry it when `M` has `list`, `listPage` or
+`listCursor` (`DefaultSortOf<keyof M>`).
+
+`parseSort(sort: string | null | undefined): SortState` reads a `sort` value as the BE does: a
+missing direction is `asc`, and an empty entry or one with any other direction is skipped.
+`formatSort(state: readonly SortStateColumn[]): string` writes one, `''` for an empty state.
 
 ### RetrieveMixin `<K extends KeyType, T>`
 

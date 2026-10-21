@@ -19,7 +19,7 @@
  */
 
 import type { ViewSetWatch } from './events/changes';
-import type { ActionName, ActionSurface, KeyType, LookupItem } from './mixins';
+import type { ActionName, ActionSurface, DefaultSortOf, KeyType, LookupItem } from './mixins';
 import { MuxwsProxyImpl, type MuxwsProxyOptions } from './muxws-proxy';
 import { FACTORY_BUILT, type ProxyBaseOptions, ViewSetInternals, type ViewSetMixinDeclaration } from './proxy-base';
 import { RestProxyImpl, type RestProxyOptions } from './rest-proxy';
@@ -74,7 +74,8 @@ type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTO
  * `pkFieldName`, but `ViewSetInternals` is deliberately narrow (see its own doc comment), so this
  * type would otherwise hide a field that is genuinely there. Typed as the literal `PK` rather than
  * `string`, since the factory already knows exactly which field it is. `watch()` is added the same
- * way: every ViewSet has it, whichever mixins it declares.
+ * way: every ViewSet has it, whichever mixins it declares. `defaultSort()` is added to a ViewSet that
+ * declares a list action.
  */
 export type ViewSetClass<
   T,
@@ -93,6 +94,7 @@ type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[
     options: Omit<O, 'pkFieldName' | 'declares'>,
   ): ViewSetInternals &
     ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>, L> &
+    DefaultSortOf<ActionsOf<D[number]>> &
     ViewSetWatch<T, PkType<T, PK>> & { readonly pkFieldName: PK };
   readonly declares: FactoryDeclares<D>;
 };
