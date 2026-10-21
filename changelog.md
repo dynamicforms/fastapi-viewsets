@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `filter_lookup` receives the converted `TLookupItem` items; its default matches `q` against the
   item's `title`.
+- TS: `ViewSetProxyBase.lookup` is `lookup<I = LookupItem>(params?: LookupParams): ViewSetActionCall<I[]>`; an
+  override in a hand-written proxy takes that signature.
 
 ### Removed
 
