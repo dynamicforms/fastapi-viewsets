@@ -102,15 +102,14 @@ class PerLoopRedis:
         return client
 
     async def _close_with_loop(self, loop: asyncio.AbstractEventLoop, client: "Redis") -> None:
+        # A task destroyed with its closed loop is finalised by the garbage collector, which can run
+        # inside `client()` while it holds `_lock`: taking the lock there deadlocks, so that loop's
+        # client is left to the next `client()` call.
         try:
             await loop.create_future()
         except asyncio.CancelledError:
             self._forget(loop, client)
             await client.aclose()
-            raise
-        except GeneratorExit:
-            # The task is destroyed with its loop: there is no loop to close the client on.
-            self._forget(loop, client)
             raise
 
     def _forget(self, loop: asyncio.AbstractEventLoop, client: "Redis") -> None:

@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@dynamicforms/vue-grid`'s. `parseSort(sort)` and `formatSort(state)` convert between a
   `SortState` and the `sort` parameter.
 
+### Fixed
+
+- `PerLoopRedis.client()` no longer deadlocks when the garbage collector, running inside it,
+  destroys the client-closing task of a loop that was closed without cancelling its tasks.
+
 ## [0.13.0] - 2026-10-21
 
 ### Added
