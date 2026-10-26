@@ -28,7 +28,7 @@ SPEC_ATTRIBUTE = "__filter_spec__"
 """Where the (parameter name -> field, operator, item type) map is stashed on a generated model."""
 
 _LIST_LOOKUPS = frozenset({"in", "overlaps"})
-"""Operators whose value is several values, sent comma-separated. See _parameter_annotation."""
+"""Operators whose value is several values, sent comma-separated."""
 
 
 def _optional(annotation: Any) -> Any:
@@ -49,13 +49,8 @@ def _item_annotation(field_annotation: Any, lookup: str) -> Any:
 
 def _parameter_annotation(field_annotation: Any, lookup: str) -> Any:
     """
-    Always a scalar, even for the operators that mean several values.
-
-    FastAPI cannot expose a list-typed field of a `Depends()`-expanded model as a query parameter:
-    it drops the field from the schema and never populates it, with or without an explicit
-    `Query()` annotation. Since that expansion is how `route_viewset` turns a filter model into
-    individual query parameters, `in` and `overlaps` take a comma-separated string instead - the
-    same convention the `sort` parameter already uses.
+    Always a scalar, even for the operators that mean several values: `in` and `overlaps` take a
+    comma-separated string, the form of the `sort` parameter.
     """
     if lookup == "isnull":
         return bool | None

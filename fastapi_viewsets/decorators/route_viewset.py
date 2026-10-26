@@ -3,7 +3,7 @@ import inspect
 from functools import wraps
 from typing import Annotated, get_args, get_origin, Literal, TypeVar
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.params import FieldInfo
 from pydantic import BaseModel
 
@@ -36,6 +36,7 @@ from .primary_key_model_helper import (
     PARTIAL_UPDATE_ACTIONS,
     typecast_to_original_model,
 )
+from .query_model import query_model_dependency
 
 T = TypeVar("T")
 
@@ -196,9 +197,8 @@ def route_viewset(
             )
 
         def _is_model_query_param(annotation) -> bool:
-            """Return True for Annotated[PydanticModel, <FieldInfo>] (e.g. Query() or Depends()).
-            These should use Depends() in the wrapper so FastAPI expands model fields as
-            individual query params even when other parameters are present on the same endpoint."""
+            """Return True for Annotated[PydanticModel, <FieldInfo>] (e.g. Query()): a model read from
+            the query string, one query parameter per field (see query_model)."""
             args = getattr(annotation, "__args__", None)
             metadata = getattr(annotation, "__metadata__", None)
             if not (args and metadata):
@@ -282,20 +282,15 @@ def route_viewset(
                     needs_context = True
                     continue
 
-                # Transform Annotated[T, FilterParam()] → Annotated[TFilter, Query()]
-                if _is_filter_param(annotation):
+                # Annotated[PydanticModel, FilterParam() | <FieldInfo>] → a dependency
+                # reading every field of the model as its own query parameter, sequence-typed
+                # fields included (see query_model)
+                if _is_filter_param(annotation) or _is_model_query_param(annotation):
                     inner_type = annotation.__args__[0]
                     if inspect.isclass(inner_type) and issubclass(inner_type, BaseModel):
-                        new_p = new_p.replace(annotation=Annotated[inner_type, Query()])
-                    new_params.append(new_p)
-                    continue
-
-                # Convert Annotated[PydanticModel, FieldInfo] → Annotated[PydanticModel, Depends()]
-                # so that FastAPI expands model fields as individual query params even when
-                # other parameters (e.g. sort) are present on the same endpoint.
-                if _is_model_query_param(annotation):
-                    inner_type = annotation.__args__[0]
-                    new_p = new_p.replace(annotation=Annotated[inner_type, Depends()])
+                        new_p = new_p.replace(
+                            annotation=Annotated[inner_type, Depends(query_model_dependency(inner_type))]
+                        )
                     new_params.append(new_p)
                     continue
 

@@ -237,6 +237,23 @@ describe('RestProxyImpl — direct instance', () => {
     expect(url).toBe('/tags/lookup?q=a&ids=1&ids=2');
   });
 
+  it('sends an array list filter as a repeated key on every list shape', async () => {
+    const urls: string[] = [];
+    const real = axios.create({
+      adapter: async (config) => {
+        urls.push(axios.getUri(config));
+        const shape = AxiosHeaders.from(config.headers).get('X-List-Shape');
+        const data = shape === 'paginated' ? { results: [], offset: 0, limit: 10, count: 0 } : [];
+        return { data, status: 200, statusText: 'OK', headers: {}, config };
+      },
+    });
+    class Tracks extends restViewSet<Item>()('id', [PaginatedListMixin, ListMixin]) {}
+    const tracks = new Tracks({ basePath: '/tracks', validateSchema: false, axiosInstance: real });
+    await tracks.list({ tags: ['bebop', 'ballad'], sort: 'id:asc' });
+    await tracks.listPage({ tags: ['modal'], limit: 10 });
+    expect(urls).toEqual(['/tracks?tags=bebop&tags=ballad&sort=id:asc', '/tracks?tags=modal&limit=10']);
+  });
+
   it('basePath trailing slash is stripped', () => {
     const p = new RestProxyImpl({
       basePath: '/items/',

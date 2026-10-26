@@ -273,8 +273,8 @@ An unknown field or operator raises at import time.
 Built in: `exact`, `iexact`, `contains`, `icontains`, `startswith`, `gt`, `gte`, `lt`, `lte`, `in`,
 `isnull`, `overlaps`.
 
-`in` and `overlaps` take a comma-separated string (`?year__in=1999,2000`); FastAPI cannot expose a
-list-typed field of a `Depends()`-expanded model as a query parameter. Values are coerced to the
+`in` and `overlaps` take a comma-separated string (`?year__in=1999,2000`), the form of the `sort`
+parameter. Values are coerced to the
 field's own type, and one that will not convert is a 422 `fastapi-viewsets.validation_failed`, with
 the failure in `field_errors` under `parameter.index` (`year__in.1` for `?year__in=1999,abc`).
 

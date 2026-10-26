@@ -133,6 +133,12 @@ describe('MuxwsProxyImpl — envelope', () => {
     expect(mock.last.headers[':query']).toEqual({ sort: 'id:desc', name: 'Test' });
   });
 
+  it('list() passes an array filter through as an array, which the server reads as a repeated key', async () => {
+    mock.reply(MOCK_ITEMS);
+    await proxy.list({ tags: ['bebop', 'ballad'] });
+    expect(mock.last.headers[':query']).toEqual({ tags: ['bebop', 'ballad'] });
+  });
+
   it('lookup(params) passes the filter through as :query', async () => {
     mock.reply([]);
     await proxy.lookup({ q: 'ap', ids: [1, 2] });

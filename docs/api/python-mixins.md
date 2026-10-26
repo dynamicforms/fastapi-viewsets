@@ -68,7 +68,8 @@ async def list_items(
   `get_list(context, query)`; `get_list` calls `perform_list(context)` itself, as its first stage.
 - `sort` is always exposed (`column:asc,column:desc`, comma-separated). Without it the list is
   ordered by `default_sort`; an empty `sort=` leaves it unordered. When `TFilter` is provided, its
-  fields are exposed as individual query parameters.
+  fields are exposed as individual query parameters; a sequence-typed field is read from a repeated
+  key (`?ids=1&ids=2`).
 - `route_viewset` narrows both the parameters and the return type per viewset: `offset` survives
   only when `paginated` is among the declared shapes, `cursor` only when `cursor` is, `limit` when
   either is, and the `X-List-Shape` header only when more than one shape is declared. The return
