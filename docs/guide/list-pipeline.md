@@ -273,10 +273,10 @@ An unknown field or operator raises at import time.
 Built in: `exact`, `iexact`, `contains`, `icontains`, `startswith`, `gt`, `gte`, `lt`, `lte`, `in`,
 `isnull`, `overlaps`.
 
-`in` and `overlaps` take a comma-separated string (`?year__in=1999,2000`), the form of the `sort`
-parameter. Values are coerced to the
-field's own type, and one that will not convert is a 422 `fastapi-viewsets.validation_failed`, with
-the failure in `field_errors` under `parameter.index` (`year__in.1` for `?year__in=1999,abc`).
+`in` and `overlaps` take several values, one per repeated parameter (`?year__in=1999&year__in=2000`);
+a value may contain a comma. Values are coerced to the field's own type, and one that will not
+convert is a 422 `fastapi-viewsets.validation_failed`, with the failure in `field_errors` under
+`parameter.index` (`year__in.1` for `?year__in=1999&year__in=abc`).
 
 Hand-written `filter_list` keeps working: a filter model built by hand carries no declaration, and
 the pipeline falls through to it.

@@ -5,6 +5,15 @@ releases at once, work from the bottom of the page upwards.
 
 <!-- New releases go directly below this comment, above the previous one, as `## Upgrading to vX.Y.Z (from vA.B.x)`. -->
 
+## Upgrading to v0.14.0 (from v0.13.x)
+
+- [ ] A client that sends the `in` or `overlaps` parameter of a `make_filter_model` filter as one
+      comma-separated value sends one parameter per value: `?year__in=1999&year__in=2000` instead
+      of `?year__in=1999,2000`. The TS client sends an array in this form
+      (`list({ year__in: [1999, 2000] })`); a string joined with commas is one value.
+- [ ] Code that builds a `make_filter_model` model directly passes a list to an `in` or
+      `overlaps` field: `TrackFilter(year__in=[1999, 2000])`.
+
 ## Upgrading to v0.13.0 (from v0.12.x)
 
 - [ ] Move an override of `setup_lookup_filter(fltr)` into an override of
