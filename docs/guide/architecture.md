@@ -193,7 +193,9 @@ worker runs the route method, which calls `perform_*` there.
 `serialize_context`/`deserialize_context` carry it: plain values cross as-is, a `SerializableObject`
 as a tagged JSON payload, and a `LazyObject` (such as `context.user`) as its unresolved *recipe*,
 which the worker resolves only if the worker-side `perform_list` awaits it. The auth backends need
-no Celery-specific code. → full depth in [Routers & Decorators](./routers).
+no Celery-specific code. The action's arguments and result cross as the types its annotations
+declare - a `date` query parameter arrives as a `date`, an `UploadFile` as an `UploadFile`, a
+returned `Response` as that `Response`. → full depth in [Routers & Decorators](./routers).
 
 ## The request pipeline
 

@@ -193,7 +193,7 @@ The errors that end a call to a `celery_viewset` action without its result, by `
 | `code` | `reason` | The action |
 |--------|----------|------------|
 | `fastapi-viewsets.action_dispatch_failed` | `send` | was not sent: the broker is unreachable, or the message cannot be encoded |
-| | `serialization` | was not sent: its arguments, context or request cannot be serialized |
+| | `serialization` | was not sent: its arguments, context or request cannot be serialized (e.g. a `BackgroundTasks` argument, see [Arguments and results](./routers#arguments-and-results)) |
 | | `unknown_task` | did not run: the worker has no task of that name |
 | | `rejected` | did not run: the worker rejected the message |
 | | `revoked`, `expired` | did not run: it was revoked, or expired, before it started |
@@ -201,7 +201,7 @@ The errors that end a call to a `celery_viewset` action without its result, by `
 | | `terminated` | was terminated (503) |
 | | `lost` | lost the worker process executing it (503) |
 | `fastapi-viewsets.action_failed` | `error` | raised an error that is not an `HTTPException`; `detail` names the task only, the error is logged in the worker |
-| | `result` | returned a result that cannot be serialized, or that the caller cannot deserialize |
+| | `result` | returned a result that cannot be serialized (e.g. a `StreamingResponse`), or that the caller cannot deserialize |
 | | `executor` | did not complete because the worker failed around it, or `Middleware.executor_started()` raised |
 
 `ResultTimeoutError` and `ResultReaderStoppedError` descend from `ActionOutcomeUnknownError`: the

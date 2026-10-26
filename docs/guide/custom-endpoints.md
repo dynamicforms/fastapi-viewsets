@@ -94,5 +94,7 @@ class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
   fresh `APIRouter()` directly on your class.
 - Route paths are relative to `base_path`. `"search"` becomes `/items/search`.
 - All standard FastAPI route parameters (`tags`, `summary`, `response_model`, `status_code`, …) are supported.
+- A method annotated to return a `Response` class (`-> Response`, `-> FileResponse`, …) has no response model: the
+  response it returns is sent as it is, with its own status code, headers and body.
 - The method receives `self` — the viewset instance — so you have full access to `perform_*` helpers and any other
   instance state.

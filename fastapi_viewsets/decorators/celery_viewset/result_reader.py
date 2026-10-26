@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 
 from ...context import from_jsonable
 from ...exceptions import _error_from_jsonable, _error_to_jsonable, ActionFailedError, ResultReaderStoppedError
+from .transport import EncodedResult
 
 if TYPE_CHECKING:
     import redis
@@ -111,9 +112,11 @@ def _resolve(future: asyncio.Future, data: dict) -> None:
     try:
         if data.get("error") is not None:
             future.set_exception(_payload_error(data))
+        elif "result_encoding" in data:
+            # decoded by the caller, which knows the action's return annotation (see transport.py)
+            future.set_result(EncodedResult(data.get("result"), data["result_encoding"]))
         else:
-            # Undoes _to_jsonable's SerializableObject tagging (see server.py) at any depth - an
-            # untagged value passes through unchanged.
+            # a result pushed by push_result(): every SerializableObject in it is rebuilt, at any depth
             future.set_result(from_jsonable(data.get("result")))
     except Exception as error:
         logger.exception("Result of %s (correlation_id=%s) cannot be read", task, data.get("correlation_id"))
@@ -172,7 +175,8 @@ def push_result(
     of a class `fastapi_viewsets.exceptions` defines keeps its class), and so does a
     `RequestValidationError`; any other error reaches it as `ActionFailedError`. `task` names the
     call's task in that error. The FastAPI process answers each as `fastapi_viewsets.error_responses`
-    answers it.
+    answers it. A `result` reaches the caller in its JSON form, with every `SerializableObject` in it
+    rebuilt; it is not decoded by the action's return annotation.
     """
     if error is not None:
         data = error_payload(correlation_id, task, error)

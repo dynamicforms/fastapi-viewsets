@@ -17,7 +17,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, get_args, get_origin, get_type_hints, TYPE_CHECKING, TypeVar, Union
+from typing import Any, get_args, get_origin, TYPE_CHECKING, TypeVar, Union
 
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
@@ -25,7 +25,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from ...action_configuration import resolve_action_configuration
 from ...conf import settings
-from ...context import Context, deserialize_context, to_jsonable
+from ...context import Context, deserialize_context, from_jsonable
 from ...exceptions import ActionDispatchError, ActionFailedError, ActionInterruptedError, DfViewSetError
 from ...middleware import ActionTransition, ExecutionRef, run_executor_started, run_transition_listeners
 from ..build_schema import build_schema
@@ -34,12 +34,11 @@ from ..primary_key_model_helper import (
     create_model_without_pk,
     from_partial_body,
     partial_body_annotation,
-    PARTIAL_UPDATE_ACTIONS,
     typecast_to_original_model,
 )
-from ..route_viewset import build_type_map, resolve_typevars
-from .payload import CONTEXT_KWARG, PARENT_KWARG, request_from_jsonable, REQUEST_KWARG
+from .payload import CONTEXT_KWARG, PARENT_KWARG, request_from_jsonable, REQUEST_KWARG, UNTYPED_KWARG
 from .result_reader import error_payload, push_payload
+from .transport import ActionCodec
 
 if TYPE_CHECKING:
     import redis
@@ -60,12 +59,6 @@ def _unwrap_optional(hint):
         if len(args) == 1:
             return args[0]
     return hint
-
-
-# `fastapi_viewsets.context.to_jsonable`: converts Pydantic models, dicts, lists/tuples and
-# SerializableObject values (e.g. a ViewSetResult a worker-side action returned directly); also used
-# by ViewSetResult's own (de)serialization.
-_to_jsonable = to_jsonable
 
 
 def _reconstruct_value(hint, value):
@@ -116,35 +109,31 @@ def _sole_missing_field(model: type[BaseModel], error: ValidationError) -> str |
 _model_without_pk = functools.lru_cache(create_model_without_pk)
 
 
-def _reconstruct_kwargs(original_endpoint, kwargs: dict, cls: type = None) -> dict:
-    """Reconstruct dict values back into Pydantic BaseModel instances based on endpoint type hints.
+def _reconstruct_kwargs(
+    original_endpoint, kwargs: dict, cls: type = None, untyped=(), codec: ActionCodec | None = None
+) -> dict:
+    """The action's keyword arguments from the task's kwargs, each decoded by its parameter's kind
+    (see `transport`): a model validated as its model, a partial update body as the partial model the
+    FastAPI side validated it with, a typed value validated by its hint, and a value named in
+    `untyped` (or of an untyped parameter) with every `SerializableObject` in it rebuilt.
 
     The call's context, request and parent arrive under the reserved kwargs of `payload`, which the
     task consumes before this runs.
     """
+    codec = codec or ActionCodec(cls, original_endpoint)
     result = {}
-    remaining = dict(kwargs)
-
-    try:
-        hints = get_type_hints(original_endpoint)
-    except Exception:
-        result.update(remaining)
-        return result
-
-    type_map = build_type_map(cls) if cls is not None else {}
-
-    partial = original_endpoint.__name__ in PARTIAL_UPDATE_ACTIONS
-    for key, value in remaining.items():
-        hint = hints.get(key)
-        if hint is not None:
-            hint = resolve_typevars(type_map, hint)
-        partial_annotation = partial_body_annotation(hint, None) if partial else None
-        if partial_annotation is not None:
+    for key, value in kwargs.items():
+        param = codec.params.get(key)
+        kind = param.kind if param is not None else "untyped"
+        if kind == "partial":
             # validated as the partial model the FastAPI side validated it with, so the model holds
             # the fields the request stated and no others
-            result[key] = from_partial_body(TypeAdapter(partial_annotation).validate_python(value, by_name=True), hint)
+            annotation = partial_body_annotation(param.hint, None)
+            result[key] = from_partial_body(TypeAdapter(annotation).validate_python(value, by_name=True), param.hint)
+        elif kind == "model":
+            result[key] = _reconstruct_value(param.hint, value)
         else:
-            result[key] = _reconstruct_value(hint, value)
+            result[key] = codec.decode_argument(key, value, kind == "typed" and key not in untyped)
     return result
 
 
@@ -561,7 +550,9 @@ def celery_viewset_server(
     """
     Decorator for the Celery worker side. Registers a task per route of the viewset that executes
     the action and pushes its result or error to the caller's result queue through `redis_client`
-    (a synchronous `redis.Redis`, required).
+    (a synchronous `redis.Redis`, required). The action's arguments are decoded, and its result
+    encoded, by its type hints (see `transport`); a result that cannot be encoded fails the call
+    with `ActionFailedError` (reason `result`).
 
     The tasks are registered with `ignore_result=True`, `acks_late=False`,
     `reject_on_worker_lost=False` and `store_errors_even_if_ignored=False`, overriding the
@@ -585,6 +576,7 @@ def celery_viewset_server(
 
         def get_sync_wrapper(original_endpoint, task_name: str):
             parameters = inspect.signature(original_endpoint).parameters
+            codec = ActionCodec(cls, original_endpoint)
 
             @wraps(original_endpoint)
             def sync_wrapper(*args, **kwargs):
@@ -602,7 +594,9 @@ def celery_viewset_server(
                     context = Context(deserialize_context(kwargs.pop(CONTEXT_KWARG, None) or {}))
                     request = request_from_jsonable(kwargs.pop(REQUEST_KWARG, None))
                     parent = ExecutionRef.from_jsonable(kwargs.pop(PARENT_KWARG, None))
-                    kwargs = _reconstruct_kwargs(original_endpoint, kwargs, cls)
+                    untyped = kwargs.pop(UNTYPED_KWARG, None) or ()
+                    args = tuple(from_jsonable(arg) for arg in args)
+                    kwargs = _reconstruct_kwargs(original_endpoint, kwargs, cls, untyped, codec)
                     marker = execution_translator.set(run.translate)
                     try:
                         with _soft_limit_raises(task_name):
@@ -628,10 +622,12 @@ def celery_viewset_server(
                     logger.info("Celery task completed: %s (correlation_id=%s)", task_name, correlation_id)
                     if correlation_id and result_queue_key:
                         try:
+                            data, encoding = codec.encode_result(result)
                             payload = {
                                 "correlation_id": correlation_id,
                                 "task": task_name,
-                                "result": _to_jsonable(result),
+                                "result": data,
+                                "result_encoding": encoding,
                             }
                         except Exception as error:
                             raise ActionFailedError(task_name, "result") from error

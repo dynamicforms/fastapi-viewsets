@@ -1,9 +1,11 @@
+import inspect
 import warnings
 
 from typing import get_args, TypeVar
 
 from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
+from starlette.responses import Response
 
 from ..endpoint_docs import docs_for, viewset_tags
 from ..middleware import unwrap_viewset_result_type
@@ -185,6 +187,10 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
                 # unwrapped here too, or an endpoint declared this way would document/validate as the
                 # wrapper instead of the wire body whenever use_resolved is False.
                 response_model = unwrap_viewset_result_type(response_model)
+                # an endpoint returning a Response answers with it as it is, as FastAPI does for an
+                # endpoint annotated with a Response class
+                if inspect.isclass(response_model) and issubclass(response_model, Response):
+                    response_model = None
 
             # Per-viewset wording, applied here because this is where the schema-serving app is
             # built; patching the caller's router afterwards would leave /schema showing the

@@ -328,7 +328,7 @@ def test_celery_viewset_server_metadata():
 
 def test_to_jsonable_with_pydantic_model():
     """_to_jsonable converts Pydantic model to dict."""
-    from fastapi_viewsets.decorators.celery_viewset.server import _to_jsonable
+    from fastapi_viewsets.context import to_jsonable as _to_jsonable
 
     item = Item(id=1, name="test")
     result = _to_jsonable(item)
@@ -337,7 +337,7 @@ def test_to_jsonable_with_pydantic_model():
 
 def test_to_jsonable_with_list_of_models():
     """_to_jsonable converts list of Pydantic models to list of dicts."""
-    from fastapi_viewsets.decorators.celery_viewset.server import _to_jsonable
+    from fastapi_viewsets.context import to_jsonable as _to_jsonable
 
     items = [Item(id=1, name="a"), Item(id=2, name="b")]
     result = _to_jsonable(items)
@@ -348,7 +348,7 @@ def test_to_jsonable_with_date_field():
     """_to_jsonable serializes date/datetime fields to JSON-safe strings (mode="json")."""
     import json
 
-    from fastapi_viewsets.decorators.celery_viewset.server import _to_jsonable
+    from fastapi_viewsets.context import to_jsonable as _to_jsonable
 
     item = ItemWithDate(id=1, created=date(2026, 8, 1), updated=datetime(2026, 8, 1, 12, 30))
     result = _to_jsonable(item)
@@ -360,7 +360,7 @@ def test_to_jsonable_with_date_field():
 
 def test_to_jsonable_with_plain_value():
     """_to_jsonable returns plain values unchanged."""
-    from fastapi_viewsets.decorators.celery_viewset.server import _to_jsonable
+    from fastapi_viewsets.context import to_jsonable as _to_jsonable
 
     assert _to_jsonable(42) == 42
     assert _to_jsonable("hello") == "hello"
@@ -374,7 +374,7 @@ def test_to_jsonable_with_viewset_result():
     SerializableObject) rather than crash on a plain dataclass json.dumps can't handle."""
     import json
 
-    from fastapi_viewsets.decorators.celery_viewset.server import _to_jsonable
+    from fastapi_viewsets.context import to_jsonable as _to_jsonable
     from fastapi_viewsets.middleware import ViewSetResult
 
     result = ViewSetResult(body=Item(id=1, name="test"), status_code=302, headers={"Location": "/x"})
@@ -428,8 +428,10 @@ def test_celery_viewset_server_pushes_viewset_result_to_redis():
     sync_func(_correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
 
     payload = json.loads(redis_mock.rpush.call_args[0][1])
-    assert payload["result"]["__fpv_type__"] == "fastapi_viewsets.middleware.ViewSetResult"
-    assert payload["result"]["__fpv_value__"]["body"] == {"id": 1, "name": "test"}
+    assert payload["result_encoding"] == "viewset_result"
+    assert payload["result"]["body"] == {"id": 1, "name": "test"}
+    assert payload["result"]["body_encoding"] == "typed"
+    assert payload["result"]["status_code"] == 200
 
 
 # ---------------------------------------------------------------------------

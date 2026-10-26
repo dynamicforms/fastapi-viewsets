@@ -6,6 +6,27 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-10-26
+
+### Fixed
+
+- `celery_viewset`: an action's arguments and result cross between the FastAPI process and the
+  worker as the types its annotations declare, encoded and decoded with a pydantic `TypeAdapter` of
+  each hint. A `date`, `datetime`, `UUID`, `Decimal`, enum member, `set` or any other type pydantic
+  validates arrives as that type, not as its JSON form; `bytes` cross as base64. An `UploadFile`
+  argument (also `list[UploadFile]`) is read in the FastAPI process and arrives in the worker as an
+  `UploadFile` with its filename, headers, content type, size and content. A returned `Response`,
+  `JSONResponse`, `HTMLResponse`, `PlainTextResponse` or `RedirectResponse` arrives with its class,
+  status code, raw headers and body; a `ViewSetResult`'s body arrives as the type of its
+  `ViewSetResult[X]` annotation. A `SerializableObject` argument is rebuilt in the worker. A value
+  with no usable annotation crosses in its JSON form, as before.
+- `celery_viewset`: a `WebSocket` or `BackgroundTasks` argument fails the call with
+  `ActionDispatchError` (reason `serialization`), and a `StreamingResponse`, `FileResponse` or a
+  response with a background task as the result fails it with `ActionFailedError` (reason `result`),
+  each with a `TypeError` naming the reason as the `__cause__`.
+- `route_viewset`: an endpoint annotated to return a `Response` class has no response model and its
+  response is sent as it is.
+
 ## [0.13.1] - 2026-10-21
 
 ### Added

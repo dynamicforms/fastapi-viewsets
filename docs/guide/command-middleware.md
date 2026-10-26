@@ -243,11 +243,10 @@ route method (`list_items`, `create`, ...) calls them and does further work with
 `__router` method has no such pipeline around it - it *is* the registered endpoint - which is why
 `ViewSetResult` only ever applies there.
 
-`ViewSetResult` is itself a `SerializableObject` (see [Context Processors](./context-processors)),
-the same mechanism `LazyObject`/`Context` values already use to survive the Celery/Redis boundary -
-a `celery_viewset`-dispatched action's worker-side return value is tagged and reconstructed exactly
-like any other `SerializableObject`, so this works whether the action runs in-process or in a
-worker.
+A `celery_viewset`-dispatched action's `ViewSetResult` crosses back from the worker with its status
+code, headers and cookies, and its body as the type `X` of the `-> ViewSetResult[X]` annotation
+states (see [Arguments and results](./routers#arguments-and-results)), so this works whether the
+action runs in-process or in a worker.
 
 ## OpenAPI response schema: `modifies_response_shape`
 

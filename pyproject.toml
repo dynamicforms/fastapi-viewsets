@@ -43,6 +43,7 @@ dev = [
     "pytest-asyncio",
     "pytest-cov",
     "httpx2",
+    "python-multipart",
     "redis",
     "celery",
     "gevent",

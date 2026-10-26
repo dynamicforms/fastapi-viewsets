@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from fastapi_viewsets.action_configuration import action_configuration, TimeLimits
@@ -88,7 +89,6 @@ def test_celery_viewset_client_sends_date_fields_as_json_safe_strings():
     import json
 
     from fastapi_viewsets.decorators.celery_viewset import result_reader
-    from fastapi_viewsets.mixins import CreateMixin
 
     celery_app = MagicMock()
     redis_mock = MagicMock()
@@ -119,11 +119,10 @@ def test_celery_viewset_client_sends_date_fields_as_json_safe_strings():
 
 
 def test_celery_viewset_client_serializes_positional_basemodel_args():
-    """BaseModel values passed positionally (not as kwargs) must also be serialized to JSON-safe structures."""
+    """A positional argument crosses as the keyword argument of its parameter, encoded as one."""
     import json
 
     from fastapi_viewsets.decorators.celery_viewset import result_reader
-    from fastapi_viewsets.mixins import CreateMixin
 
     celery_app = MagicMock()
     redis_mock = MagicMock()
@@ -137,19 +136,23 @@ def test_celery_viewset_client_serializes_positional_basemodel_args():
     try:
 
         @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
-        class ItemViewSet(CreateMixin[int, ItemWithDate]):
-            async def perform_create(self, data: ItemWithDate) -> ItemWithDate:
+        class ItemViewSet:
+            __router = APIRouter()
+
+            @__router.post("save")
+            async def save(self, data: ItemWithDate) -> ItemWithDate:
                 return data
 
         instance = ItemViewSet()
         payload = ItemWithDate(id=1, created=date(2026, 8, 1), updated=datetime(2026, 8, 1, 12, 30))
         # Call with a positional arg rather than a keyword arg.
-        asyncio.run(instance.create(payload))
+        asyncio.run(instance.save(payload))
 
-        sent_args = celery_app.send_task.call_args.kwargs["args"]
-        assert sent_args == [{"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}]
+        sent = celery_app.send_task.call_args.kwargs
+        assert sent["args"] == []
+        assert sent["kwargs"]["data"] == {"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}
         # Must not raise - this is what Kombu's JSON encoder does under the hood.
-        json.dumps(sent_args)
+        json.dumps(sent["kwargs"])
     finally:
         result_reader.register_future = original_register
 

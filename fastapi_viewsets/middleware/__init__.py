@@ -43,10 +43,9 @@ class ViewSetResult(SerializableObject, Generic[T]):
     own response validation (see unwrap_viewset_result_type below), so the two forms
     document/validate identically.
 
-    Inherits `SerializableObject` so it survives the Celery/Redis boundary: a
-    `celery_viewset`-dispatched action's worker-side return value is passed through
-    `to_jsonable()`/`from_jsonable()` (see fastapi_viewsets.context) exactly like any other
-    `SerializableObject`, the same mechanism `LazyObject`/`Context` values already rely on. Only
+    Inherits `SerializableObject` so it survives the Celery/Redis boundary wherever it is not
+    typed; a `celery_viewset`-dispatched action's `ViewSetResult` result crosses with its body
+    encoded by the `-> ViewSetResult[X]` annotation (see decorators/celery_viewset/transport.py). Only
     `__serialize__`/`__deserialize__` are overridden here - a `ViewSetResult` is never itself placed
     in a `Context` and never awaited, so `SerializableObject`'s `value`/`__await__`/`__init__` go
     unused, the same way `LazyObject` replaces those with its own.

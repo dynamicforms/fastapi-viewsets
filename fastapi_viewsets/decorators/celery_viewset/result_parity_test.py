@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from fastapi_viewsets.decorators import celery_viewset_server, route_viewset
 from fastapi_viewsets.decorators.celery_viewset import result_reader
+from fastapi_viewsets.decorators.celery_viewset.transport import ActionCodec
 from fastapi_viewsets.mux_ws.registry import reset_registry
 from fastapi_viewsets.mux_ws.server import process_command
 from fastapi_viewsets.mux_ws.server_test import FakeStream
@@ -82,7 +83,8 @@ async def celery_result() -> Any:
         return deck
 
     celery_app.task.side_effect = mock_task
-    celery_viewset_server(celery_app=celery_app, task_prefix="reports", redis_client=redis_mock)(make_viewset())
+    server = celery_viewset_server(celery_app=celery_app, task_prefix="reports", redis_client=redis_mock)
+    viewset = server(make_viewset())
 
     correlation_id = "parity"
     queue_key = "celery_viewset_results:reports"
@@ -97,7 +99,7 @@ async def celery_result() -> Any:
     result_reader.register_future(correlation_id, future)
     task = asyncio.create_task(result_reader.result_reader_loop(reader_redis, queue_key, poll_interval=0.01))
     try:
-        return await asyncio.wait_for(future, timeout=2.0)
+        return ActionCodec(viewset, viewset.report).decode_result(await asyncio.wait_for(future, timeout=2.0))
     finally:
         task.cancel()
 
