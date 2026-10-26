@@ -51,7 +51,9 @@ primary key unless `Item` gives it a default. See
 
 `ListMixin` is generic over an optional `TFilter` type (default: `None`). The endpoint always
 exposes a `sort` query parameter (comma-separated `column:direction` pairs). When a filter model
-is also provided, its fields appear as individual query parameters.
+is also provided, its fields appear as individual query parameters, with their types,
+descriptions, defaults and constraints in the schema; a sequence-typed field (`list[int]`) is read
+from a repeated key (`?ids=1&ids=2`).
 
 **Filtering** (active when any filter field is set): `filter_list(fltr, records)` filters in
 memory. It has no default implementation, so a viewset that declares a filter type implements it —

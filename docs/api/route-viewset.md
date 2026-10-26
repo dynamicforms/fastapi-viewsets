@@ -84,6 +84,13 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
   plus `settings.viewsets_security_scheme` when one is set. That dependency is the last entry of the route's
   `dependencies` and carries the attribute named by `MIDDLEWARE_DEPENDS_ATTRIBUTE`
   (`"__viewset_middleware_depends__"`, in `fastapi_viewsets.decorators.route_viewset`) set to `True`.
+- Reads the filter model of an endpoint parameter annotated `Annotated[Model, Query()]` (a list's `TFilter`, a
+  lookup's `TLookupFilter`) from the query string: every field of the model is a query parameter, documented with its
+  type, default, description and constraints, under its alias when it has one. A sequence-typed field (`list[int]`)
+  is read from a repeated key (`?ids=1&ids=2`). The sent parameters are validated into the model; a field the request
+  does not send takes the model's default. A value that does not validate, against its field or against a validator
+  of the model, is a 422 `fastapi-viewsets.validation_failed` with the failure in `field_errors` under the parameter
+  name (`ids.1` for the second `ids` of `?ids=1&ids=x`).
 - Drops the declared `response_model` from every route when a middleware in `settings.viewsets_command_middleware`
   declares `modifies_response_shape`, since that middleware may reshape the body.
 - Raises `ValueError` when `lifecycle` is none of `"singleton"`, `"per-request"`, `"instance-key"`, and when

@@ -6,6 +6,18 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-10-26
+
+### Fixed
+
+- The filter model of a list or lookup endpoint is read from the query string field by field: a
+  sequence-typed field (`ids: list[int]`) is a query parameter read from a repeated key
+  (`?ids=1&ids=2`), not a request body field. Every field is documented in the schema as a query
+  parameter with its type, default, description and constraints, under its alias when it has one.
+  A field the request does not send takes the model's default; a value that does not validate,
+  against its field or a model validator, is a 422 `fastapi-viewsets.validation_failed` with the
+  failure in `field_errors` under the parameter name (`ids.1`).
+
 ## [0.13.1] - 2026-10-21
 
 ### Added
