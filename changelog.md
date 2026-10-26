@@ -6,7 +6,17 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.13.2] - 2026-10-26
+## [0.14.0] - 2026-10-26
+
+### Changed
+
+- **Breaking:** the `in` and `overlaps` operators of a filter model built by `make_filter_model`
+  read their values from a repeated query parameter (`?year__in=1999&year__in=2000`), the form the
+  TS client sends an array in, instead of a comma-separated string. `?year__in=1999,2000` is one
+  value, `"1999,2000"`, which does not validate as an integer (422); a value of a string field may
+  contain a comma. The parameter is documented in the schema as an array of the field's item type.
+  The model field is `list[<item type>] | None`; code that builds such a model directly passes a
+  list.
 
 ### Fixed
 

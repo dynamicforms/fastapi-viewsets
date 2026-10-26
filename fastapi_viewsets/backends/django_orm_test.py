@@ -462,7 +462,7 @@ async def test_the_in_memory_fallback_sees_response_models_not_raw_rows(tagged_r
     backend stores. This viewset stores a list as a comma-joined string; the in-memory fallback
     filters on the response-model value (a list of words), not on the stored string.
     """
-    query = ListQuery(fltr=TaggedFilter(tags__overlaps="jazz"), limit=10)
+    query = ListQuery(fltr=TaggedFilter(tags__overlaps=["jazz"]), limit=10)
     page = await TaggedViewSet().get_list(None, query)
     assert "filter" not in query.applied  # overlaps has no compiler, so this is the fallback
     assert [record.title for record in page.results] == ["one"]
@@ -1003,7 +1003,7 @@ async def test_a_partial_update_leaves_an_unstated_relation_alone(note_rows):
 @pytest.mark.asyncio
 async def test_a_filter_on_a_relation_field_is_pushed_into_sql(note_rows):
     viewset = NoteViewSet()
-    query = build_list_query(NoteFilter(owner__in=f"{note_rows[0].pk},{note_rows[2].pk}"), "id:asc", limit=10)
+    query = build_list_query(NoteFilter(owner__in=[note_rows[0].pk, note_rows[2].pk]), "id:asc", limit=10)
     page = await viewset.get_list(None, query)
     assert "filter" in query.applied
     assert [record.id for record in page.results] == [2, 3, 5, 6, 8, 9]

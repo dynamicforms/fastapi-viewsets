@@ -259,13 +259,35 @@ def test_a_filter_value_that_will_not_convert_is_a_422_on_the_query_parameter():
             super().__init__(container=library(3), pk_field="id")
 
     client = client_for(FilteredViewSet)
-    assert client.get("/tracks", params={"year__in": "2001,2002"}).status_code == 200
+    assert client.get("/tracks", params={"year__in": ["2001", "2002"]}).status_code == 200
 
-    response = client.get("/tracks", params={"year__in": "2001,abc"})
+    response = client.get("/tracks", params={"year__in": ["2001", "abc"]})
     assert response.status_code == 422
     assert response.json()["detail_code"] == "fastapi-viewsets.validation_failed"
     [error] = response.json()["field_errors"]["year__in.1"]
     assert error["code"] == "pydantic.int_parsing"
+
+
+def test_in_reads_a_repeated_query_parameter_and_keeps_commas_in_a_value():
+    from .filters import make_filter_model
+
+    class Titled(CollectionViewSet[int, Track], ListMixin[Track, make_filter_model(Track, {"title": ["in"]})]):
+        def __init__(self):
+            super().__init__(
+                container={1: Track(id=1, title="a,b", year=2001), 2: Track(id=2, title="a", year=2002)}, pk_field="id"
+            )
+
+    client = client_for(Titled)
+    assert [r["id"] for r in client.get("/tracks", params={"title__in": ["a,b"]}).json()] == [1]
+    assert [r["id"] for r in client.get("/tracks", params={"title__in": ["a,b", "a"]}).json()] == [1, 2]
+
+    [parameter] = [
+        p
+        for p in client.get("/openapi.json").json()["paths"]["/tracks"]["get"]["parameters"]
+        if p["name"] == "title__in"
+    ]
+    assert parameter["schema"]["anyOf"][0] == {"type": "array", "items": {"type": "string"}}
+    assert "repeats" in parameter["description"]
 
 
 @pytest.mark.parametrize(("parameter", "value"), [("limit", -1), ("limit", 0), ("offset", -1)])

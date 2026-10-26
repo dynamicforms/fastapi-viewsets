@@ -227,7 +227,7 @@ class TagViewSet(..., LookupMixin[TagLookupFilter, TagLookup]):
 
 A filter model built with `make_filter_model(TLookupItem, {...})` is applied without code, in
 memory. Its operators compare values of the field's declared type, so `LookupItem.pk`, declared as
-`object`, takes no typed comparison: `pk__in=1,2` compares strings.
+`object`, takes no typed comparison: `?pk__in=1&pk__in=2` compares strings.
 
 ## Combined viewset mixins
 
