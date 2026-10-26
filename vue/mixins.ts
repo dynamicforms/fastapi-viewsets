@@ -70,10 +70,77 @@ export class BulkCreateMixin<T, PK extends keyof T> extends CreateMixin<T, PK> {
   static readonly actions: readonly string[] = [...CreateMixin.actions, ...BulkOnlyCreateMixin.actions];
 }
 
-export interface ListMixin<T> {
-  list(params?: ListParams): ViewSetActionCall<T[]>;
+/**
+ * The row types a BE viewset's list adds through `MultiTypeListMixin`, as `{ wireName: RowType }`;
+ * `{}` when it adds none.
+ */
+export type ListTypes = object;
+
+/** The wire names of the list types `V`, the values `ListOptions.listType` accepts. */
+export type ListTypeName<V extends ListTypes> = keyof V & string;
+
+/**
+ * What a list call that sends `listType` `N` answers with: `V[N]`. `T` when `V` names no type, so
+ * that a subclass of a ViewSet without list types overrides `list()` with a method that is not
+ * generic.
+ */
+export type ListRow<T, V extends ListTypes, N extends ListTypeName<V>> = [keyof V] extends [never] ? T : V[N];
+
+/**
+ * What a list call whose `listType` may be absent answers with: `T` or any of `V`'s row types. The
+ * type of a call whose options are only known as `ListOptions`.
+ */
+export type AnyListRow<T, V extends ListTypes> = T | V[ListTypeName<V>];
+
+/** The options of `list()`, `listPage()` and `listCursor()`. */
+export interface ListOptions<N extends string = string> {
+  /**
+   * The row type the BE answers with, by its wire name, sent as `X-List-Type`. Without it the
+   * header is not sent and the BE answers with its default row type.
+   */
+  listType?: N;
 }
-export class ListMixin<T> {
+
+/** The options of a list call that selects the row type `N`: `listType` is required. */
+export interface ListTypeOptions<N extends string> extends ListOptions<N> {
+  listType: N;
+}
+
+/** The key under which a list mixin carries its row types. Type-level only: no value has it. */
+export declare const LIST_ROWS: unique symbol;
+
+/**
+ * The row types of a list mixin: `T` for a call without `listType`, `V` for the named ones. A
+ * phantom member, never set; `ViewSetCalls` and `watch()` read the types off it, because a generic
+ * method's type parameters are lost when its type is inferred.
+ */
+export interface ListRows<T, V extends ListTypes> {
+  readonly [LIST_ROWS]?: { readonly row: T; readonly types: V };
+}
+
+/** The `ListRows` member of `M`, `{ row, types }`; `never` when `M` has none. */
+export type ListRowsOf<M> = typeof LIST_ROWS extends keyof M ? NonNullable<M[typeof LIST_ROWS]> : never;
+
+/**
+ * FE counterpart of the BE ListMixin. `T` is the row type a call without `listType` answers with;
+ * `V` maps the wire name of every row type the BE viewset adds with `MultiTypeListMixin` to that
+ * type, and `options.listType` selects one of them:
+ *
+ * - no `listType`: `T`;
+ * - a `listType` literal of `V`: that type, `V[N]`;
+ * - options typed `ListOptions`, whose `listType` may be absent: `AnyListRow<T, V>`.
+ *
+ * A `listType` that `V` does not name does not compile.
+ */
+export interface ListMixin<T, V extends ListTypes = {}> extends ListRows<T, V> {
+  list(params?: ListParams, options?: ListOptions<never>): ViewSetActionCall<T[]>;
+  list<N extends ListTypeName<V>>(
+    params: ListParams | undefined,
+    options: ListTypeOptions<N>,
+  ): ViewSetActionCall<ListRow<T, V, N>[]>;
+  list(params?: ListParams, options?: ListOptions<ListTypeName<V>>): ViewSetActionCall<AnyListRow<T, V>[]>;
+}
+export class ListMixin<T, V extends ListTypes = {}> {
   static readonly actions: readonly string[] = ['list'];
 }
 
@@ -155,23 +222,43 @@ export interface CursorParams extends ListParams {
   limit?: number;
 }
 
-/** FE counterpart of the BE CursorListMixin. See PaginatedListMixin on declaring several shapes. */
-export interface CursorListMixin<T> {
-  listCursor(params?: CursorParams): ViewSetActionCall<CursorPage<T>>;
+/**
+ * FE counterpart of the BE CursorListMixin. See PaginatedListMixin on declaring several shapes and
+ * ListMixin on `T` and `V`.
+ */
+export interface CursorListMixin<T, V extends ListTypes = {}> extends ListRows<T, V> {
+  listCursor(params?: CursorParams, options?: ListOptions<never>): ViewSetActionCall<CursorPage<T>>;
+  listCursor<N extends ListTypeName<V>>(
+    params: CursorParams | undefined,
+    options: ListTypeOptions<N>,
+  ): ViewSetActionCall<CursorPage<ListRow<T, V, N>>>;
+  listCursor(
+    params?: CursorParams,
+    options?: ListOptions<ListTypeName<V>>,
+  ): ViewSetActionCall<CursorPage<AnyListRow<T, V>>>;
 }
-export class CursorListMixin<T> {
+export class CursorListMixin<T, V extends ListTypes = {}> {
   static readonly actions: readonly string[] = ['listCursor'];
 }
 
 /**
  * FE counterpart of the BE PaginatedListMixin. `list()`, `listPage()` and `listCursor()` read the same
  * `GET {basePath}` and each requests its shape with `X-List-Shape`, so a ViewSet declares one mixin
- * per shape the BE viewset offers through `list_shape` and `list_shapes`.
+ * per shape the BE viewset offers through `list_shape` and `list_shapes`. The row types (`T`, `V`,
+ * see ListMixin) are independent of the shape.
  */
-export interface PaginatedListMixin<T> {
-  listPage(params?: PageParams): ViewSetActionCall<PaginatedList<T>>;
+export interface PaginatedListMixin<T, V extends ListTypes = {}> extends ListRows<T, V> {
+  listPage(params?: PageParams, options?: ListOptions<never>): ViewSetActionCall<PaginatedList<T>>;
+  listPage<N extends ListTypeName<V>>(
+    params: PageParams | undefined,
+    options: ListTypeOptions<N>,
+  ): ViewSetActionCall<PaginatedList<ListRow<T, V, N>>>;
+  listPage(
+    params?: PageParams,
+    options?: ListOptions<ListTypeName<V>>,
+  ): ViewSetActionCall<PaginatedList<AnyListRow<T, V>>>;
 }
-export class PaginatedListMixin<T> {
+export class PaginatedListMixin<T, V extends ListTypes = {}> {
   static readonly actions: readonly string[] = ['listPage'];
 }
 
@@ -239,14 +326,26 @@ export interface LookupParams {
   [key: string]: string | number | boolean | null | undefined | Array<string | number>;
 }
 
-export interface ReadOnlyViewSetMixin<K extends KeyType, T> extends ListMixin<T>, RetrieveMixin<K, T> {}
-export class ReadOnlyViewSetMixin<K extends KeyType, T> extends ListMixin<T> {
+/**
+ * `V` and `R` are the list's row types (ListMixin's `V` and `T`): `R` is what a call without
+ * `listType` answers with, default `T`.
+ */
+export interface ReadOnlyViewSetMixin<K extends KeyType, T, V extends ListTypes = {}, R = T>
+  extends ListMixin<R, V>, RetrieveMixin<K, T> {}
+export class ReadOnlyViewSetMixin<K extends KeyType, T, V extends ListTypes = {}, R = T> extends ListMixin<R, V> {
   static readonly actions: readonly string[] = [...ListMixin.actions, ...RetrieveMixin.actions];
 }
 
-export interface ViewSetMixin<K extends KeyType, T, PK extends keyof T>
-  extends ReadOnlyViewSetMixin<K, T>, CreateMixin<T, PK>, UpdateMixin<K, T>, DestroyMixin<K> {}
-export class ViewSetMixin<K extends KeyType, T, PK extends keyof T> extends ReadOnlyViewSetMixin<K, T> {
+/** See ReadOnlyViewSetMixin on `V` and `R`. */
+export interface ViewSetMixin<K extends KeyType, T, PK extends keyof T, V extends ListTypes = {}, R = T>
+  extends ReadOnlyViewSetMixin<K, T, V, R>, CreateMixin<T, PK>, UpdateMixin<K, T>, DestroyMixin<K> {}
+export class ViewSetMixin<
+  K extends KeyType,
+  T,
+  PK extends keyof T,
+  V extends ListTypes = {},
+  R = T,
+> extends ReadOnlyViewSetMixin<K, T, V, R> {
   static readonly actions: readonly string[] = [
     ...ReadOnlyViewSetMixin.actions,
     ...CreateMixin.actions,
@@ -255,9 +354,20 @@ export class ViewSetMixin<K extends KeyType, T, PK extends keyof T> extends Read
   ];
 }
 
-export interface BulkViewSetMixin<K extends KeyType, T, PK extends keyof T>
-  extends ViewSetMixin<K, T, PK>, BulkOnlyCreateMixin<T, PK>, BulkOnlyUpdateMixin<K, T>, BulkOnlyDestroyMixin<K> {}
-export class BulkViewSetMixin<K extends KeyType, T, PK extends keyof T> extends ViewSetMixin<K, T, PK> {
+/** See ReadOnlyViewSetMixin on `V` and `R`. */
+export interface BulkViewSetMixin<K extends KeyType, T, PK extends keyof T, V extends ListTypes = {}, R = T>
+  extends
+    ViewSetMixin<K, T, PK, V, R>,
+    BulkOnlyCreateMixin<T, PK>,
+    BulkOnlyUpdateMixin<K, T>,
+    BulkOnlyDestroyMixin<K> {}
+export class BulkViewSetMixin<
+  K extends KeyType,
+  T,
+  PK extends keyof T,
+  V extends ListTypes = {},
+  R = T,
+> extends ViewSetMixin<K, T, PK, V, R> {
   static readonly actions: readonly string[] = [
     ...ViewSetMixin.actions,
     ...BulkOnlyCreateMixin.actions,
@@ -277,14 +387,23 @@ export class BulkViewSetMixin<K extends KeyType, T, PK extends keyof T> extends 
  *
  * An intersection rather than `Pick<>` of a table: a mapped type turns a method into a property,
  * and a subclass cannot then override an action with a method (TS2425).
+ *
+ * `L` is the lookup item type; `V` and `R` are the row types of `list`, `listPage` and `listCursor`
+ * (see ReadOnlyViewSetMixin).
  */
-export type ActionSurface<K extends KeyType, T, PK extends keyof T, A, L = LookupItem> = ('create' extends A
-  ? CreateMixin<T, PK>
-  : unknown) &
+export type ActionSurface<
+  K extends KeyType,
+  T,
+  PK extends keyof T,
+  A,
+  L = LookupItem,
+  V extends ListTypes = {},
+  R = T,
+> = ('create' extends A ? CreateMixin<T, PK> : unknown) &
   ('bulkCreate' extends A ? BulkOnlyCreateMixin<T, PK> : unknown) &
-  ('list' extends A ? ListMixin<T> : unknown) &
-  ('listPage' extends A ? PaginatedListMixin<T> : unknown) &
-  ('listCursor' extends A ? CursorListMixin<T> : unknown) &
+  ('list' extends A ? ListMixin<R, V> : unknown) &
+  ('listPage' extends A ? PaginatedListMixin<R, V> : unknown) &
+  ('listCursor' extends A ? CursorListMixin<R, V> : unknown) &
   ('retrieve' extends A ? RetrieveMixin<K, T> : unknown) &
   ('update' extends A ? UpdateMixin<K, T> : unknown) &
   ('bulkUpdate' extends A ? BulkOnlyUpdateMixin<K, T> : unknown) &
@@ -293,4 +412,4 @@ export type ActionSurface<K extends KeyType, T, PK extends keyof T, A, L = Looku
   ('lookup' extends A ? LookupMixin<L> : unknown);
 
 /** Every action name there is: `A = string` selects all of them. */
-export type ActionName = keyof ActionSurface<KeyType, unknown, never, string>;
+export type ActionName = Exclude<keyof ActionSurface<KeyType, unknown, never, string>, typeof LIST_ROWS>;

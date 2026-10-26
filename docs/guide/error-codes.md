@@ -145,6 +145,7 @@ see [Frontend](#translating-the-codes).
 | `ActionInterruptedError(task, reason)` | 504 for `time_limit`, else 503 | `fastapi-viewsets.action_interrupted` | `{task, reason}` |
 | `ActionFailedError(task, reason="error")` | 500 | `fastapi-viewsets.action_failed` | `{task, reason}` |
 | `UnsupportedListShapeError(shape, allowed)` | 422 | `fastapi-viewsets.unsupported_list_shape` | `{shape, allowed}` |
+| `UnsupportedListTypeError(list_type, allowed)` | 422 | `fastapi-viewsets.unsupported_list_type` | `{type, allowed}` |
 | `EventTopicInvalidError(topic)` | 422 | `fastapi-viewsets.event_topic_invalid` | `{topic}` |
 | `EventTopicRefusedError(topic)` | 403 | `fastapi-viewsets.event_topic_refused` | `{topic}` |
 | `EventScopeMissingError(topic)` | 403 | `fastapi-viewsets.event_scope_missing` | `{topic}` |
@@ -424,6 +425,7 @@ The codes this package raises, with their English `detail`:
 | `fastapi-viewsets.idempotency_key_invalid` | `Idempotency-Key must be a non-empty Structured Field string` | — |
 | `fastapi-viewsets.idempotency_key_reused` | `Idempotency key {key} was used for a different request` | `key` |
 | `fastapi-viewsets.unsupported_list_shape` | `unsupported list shape '{shape}'; this endpoint offers {allowed}` | `shape`, `allowed` |
+| `fastapi-viewsets.unsupported_list_type` | `unsupported list type '{type}'; this endpoint offers {allowed}` | `type`, `allowed` |
 | `fastapi-viewsets.event_topic_invalid` | `Topic {topic} is neither a path starting with / nor a source name with an optional key` | `topic` |
 | `fastapi-viewsets.event_topic_refused` | `Topic {topic} is not admitted` | `topic` |
 | `fastapi-viewsets.event_scope_missing` | `Topic {topic} has no event scope for this caller` | `topic` |

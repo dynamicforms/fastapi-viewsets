@@ -24,6 +24,7 @@ export {
 export type {
   ActionName,
   ActionSurface,
+  AnyListRow,
   CursorPage,
   DestroyReturnData,
   CursorParams,
@@ -31,7 +32,14 @@ export type {
   DefaultSortOf,
   ListAction,
   ListDefaultSort,
+  ListOptions,
   ListParams,
+  ListRow,
+  ListRows,
+  ListRowsOf,
+  ListTypeName,
+  ListTypeOptions,
+  ListTypes,
   LookupItem,
   LookupParams,
   PageParams,
@@ -99,7 +107,17 @@ export {
   handleEventStream,
 } from './events';
 
-export type { Change, KeyOf, RecordOf, RecordsChanged, ViewSetWatch, WatchOptions } from './events';
+export type {
+  Change,
+  FetchOption,
+  FetchRows,
+  KeyOf,
+  RecordOf,
+  RecordsChanged,
+  RowOf,
+  ViewSetWatch,
+  WatchOptions,
+} from './events';
 export { applyChanges, RECORDS_CHANGED } from './events';
 
 export type { Draw, PollLadderState, PollSettings } from './events';

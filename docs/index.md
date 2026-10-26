@@ -33,7 +33,7 @@ features:
   - title: Backend-to-frontend events
     details: Publish an event to a topic and every frontend following it learns of it, as a muxws push or on its next poll. Every event is written to the store before it is pushed, so a dropped push or a lost socket delays an event and does not lose it. ChangeEvents publishes every create, update and destroy of a viewset, globally or per viewset, with no change to the viewset, and watch() on the frontend ViewSet follows them.
   - title: Three list shapes
-    details: A bare array, offset paging that carries a total wherever the source can be counted — a materialised collection, or a backend that counts in its store — and null where it cannot, or cursor paging whose next and previous links never re-read a row and never drift. A viewset declares which, and may let a client pick per request with an X-List-Shape header.
+    details: A bare array, offset paging that carries a total wherever the source can be counted — a materialised collection, or a backend that counts in its store — and null where it cannot, or cursor paging whose next and previous links never re-read a row and never drift. A viewset declares which, and may let a client pick per request with an X-List-Shape header. Further row types, such as a compact row beside the full record, are picked with an X-List-Type header.
   - title: Declarative filters
     details: Say which fields accept which operators and get query parameters, an OpenAPI schema and in-memory filtering for free. A backend that can do better takes the whole filter set into its own query, and only when it can translate every filter in it.
   - title: Transparent Celery delegation

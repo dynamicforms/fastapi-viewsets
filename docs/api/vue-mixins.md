@@ -79,6 +79,46 @@ interface CursorPage<T> {
 }
 ```
 
+### List types
+
+```ts
+/** The row types a BE viewset's list adds through `MultiTypeListMixin`, as `{ wireName: RowType }`; `{}` for none. */
+type ListTypes = object;
+
+/** The wire names of the list types `V`: the values `ListOptions.listType` accepts. */
+type ListTypeName<V extends ListTypes> = keyof V & string;
+
+/** The row type of a list call that sends `listType` `N`: `V[N]`, or `T` when `V` names no type. */
+type ListRow<T, V extends ListTypes, N extends ListTypeName<V>> = [keyof V] extends [never] ? T : V[N];
+
+/** The row type of a list call whose `listType` may be absent: `T` or any of `V`'s row types. */
+type AnyListRow<T, V extends ListTypes> = T | V[ListTypeName<V>];
+
+/** The options of `list()`, `listPage()` and `listCursor()`. */
+interface ListOptions<N extends string = string> {
+  /** Sent as `X-List-Type`; without it the header is not sent and the BE answers in its default row type. */
+  listType?: N;
+}
+
+/** The options of a list call that selects the row type `N`: `listType` is required. */
+interface ListTypeOptions<N extends string> extends ListOptions<N> {
+  listType: N;
+}
+
+/** The row types of a list mixin, `T` without `listType` and `V` by wire name. A type-level member only. */
+interface ListRows<T, V extends ListTypes> {
+  readonly [LIST_ROWS]?: { readonly row: T; readonly types: V };
+}
+
+/** The `ListRows` member of `M`, `{ row, types }`; `never` when `M` has none. */
+type ListRowsOf<M> = typeof LIST_ROWS extends keyof M ? NonNullable<M[typeof LIST_ROWS]> : never;
+```
+
+`ListRows` is a phantom member: no ViewSet object carries it at runtime. `ViewSetCalls`, `RowOf`
+and `RecordOf` read the row types off it, since inferring a type from an overloaded method sees its
+last overload only. A mixin interface without it - one written by hand, `list(): Promise<Item[]>` -
+is read off its methods' return types. `ActionName` excludes its key.
+
 ### Requests and actions
 
 ```ts
@@ -109,16 +149,25 @@ interface ViewSetMixinDeclaration {
 }
 
 /** Every action a mixin can name: 'list', 'listPage', 'listCursor', 'create', 'retrieve', ... */
-type ActionName = keyof ActionSurface<KeyType, unknown, never, string>;
+type ActionName = Exclude<keyof ActionSurface<KeyType, unknown, never, string>, typeof LIST_ROWS>;
 
-/** The members of the mixins whose actions are in `A`, intersected: the public surface of a factory-built ViewSet. */
-type ActionSurface<K extends KeyType, T, PK extends keyof T, A, L = LookupItem> = ('create' extends A
-  ? CreateMixin<T, PK>
-  : unknown) &
+/**
+ * The members of the mixins whose actions are in `A`, intersected: the public surface of a
+ * factory-built ViewSet. `L` is the lookup item type; `V` and `R` are the list's row types.
+ */
+type ActionSurface<
+  K extends KeyType,
+  T,
+  PK extends keyof T,
+  A,
+  L = LookupItem,
+  V extends ListTypes = {},
+  R = T,
+> = ('create' extends A ? CreateMixin<T, PK> : unknown) &
   ('bulkCreate' extends A ? BulkOnlyCreateMixin<T, PK> : unknown) &
-  ('list' extends A ? ListMixin<T> : unknown) &
-  ('listPage' extends A ? PaginatedListMixin<T> : unknown) &
-  ('listCursor' extends A ? CursorListMixin<T> : unknown) &
+  ('list' extends A ? ListMixin<R, V> : unknown) &
+  ('listPage' extends A ? PaginatedListMixin<R, V> : unknown) &
+  ('listCursor' extends A ? CursorListMixin<R, V> : unknown) &
   ('retrieve' extends A ? RetrieveMixin<K, T> : unknown) &
   ('update' extends A ? UpdateMixin<K, T> : unknown) &
   ('bulkUpdate' extends A ? BulkOnlyUpdateMixin<K, T> : unknown) &
@@ -138,30 +187,36 @@ Every ViewSet has `watch()`, whichever mixins it declares: a factory-built one, 
 `route_rest` proxy built from positional arguments, which take no `events`, carries no `watch()`.
 
 ```ts
-interface ViewSetWatch<T, K extends KeyType = KeyType> {
-  watch(options: WatchOptions<T, K>): EventSubscription;
+interface ViewSetWatch<T, K extends KeyType = KeyType, F = boolean | FetchRows<T, K>> {
+  watch(options: WatchOptions<T, K> & { fetch?: F }): EventSubscription;
 }
 
 interface WatchOptions<T, K extends KeyType = KeyType> {
   onChange: (change: RecordsChanged<T, K>, meta: EventMeta) => void;
   onResync: () => void;
-  fetch?: boolean;
+  fetch?: boolean | FetchRows<T, K>;
   onError?: (error: unknown) => void;
   topic?: string;
 }
 
+/** The rows of `pks`, in any order. */
+type FetchRows<T, K extends KeyType = KeyType> = (pks: K[]) => Promise<readonly T[]>;
+
+/**
+ * `boolean | FetchRows<R, K>` when `R`, the row type of a list call without `listType`, is the record
+ * type `T`; `false | FetchRows<R, K>` otherwise.
+ */
+type FetchOption<R, T, K extends KeyType = KeyType> = /* ... */;
+
 /** The record type a mixin interface `M` names, read off its actions; `Record<string, unknown>` for none. */
 type RecordOf<M> = M extends { retrieve(...args: any[]): Promise<infer T> }
   ? T
-  : M extends { list(...args: any[]): Promise<(infer T)[]> }
-    ? T
-    : M extends { create(...args: any[]): Promise<infer T> }
-      ? T
-      : M extends { listPage(...args: any[]): Promise<PaginatedList<infer T>> }
-        ? T
-        : M extends { listCursor(...args: any[]): Promise<CursorPage<infer T>> }
-          ? T
-          : Record<string, unknown>;
+  : [ListRowsOf<M>] extends [never]
+    ? RecordFromActions<M> // the row type of list(), else create(), listPage(), listCursor(); else Record<string, unknown>
+    : ListRowsOf<M>['row'];
+
+/** The row type of a list call of `M` without `listType`: its `ListRows` row type, else `RecordOf<M>`. */
+type RowOf<M> = [ListRowsOf<M>] extends [never] ? RecordOf<M> : ListRowsOf<M>['row'];
 
 /** The pk type a mixin interface `M` names, read off its actions; `KeyType` for none. */
 type KeyOf<M> = M extends { retrieve(pk: infer K): any }
@@ -181,16 +236,16 @@ ViewSet's options; without it, a muxws ViewSet uses `eventsOf(peer)`, and a REST
 
 | Option | Meaning |
 |--------|---------|
-| `onChange` | Required. Called once per `records_changed` event of version `1` of the topic (with `fetch`, twice for an event some of whose retrieves answer 404), with its [`RecordsChanged`](./vue-events#records-changed) payload and its [`EventMeta`](./vue-events#eventmeta) |
+| `onChange` | Required. Called once per `records_changed` event of version `1` of the topic (with `fetch`, twice for an event some of whose records are gone), with its [`RecordsChanged`](./vue-events#records-changed) payload and its [`EventMeta`](./vue-events#eventmeta) |
 | `onResync` | Required. Called on a resync of the topic, and for a `records_changed` event whose version is not `1`, with or without `fetch`: the caller re-reads what it displays |
-| `fetch` | `true`: every `created` and `updated` change without `record` is completed with `retrieve(pk)`, issued inside [`inBackground`](./idempotency#frontend) so call activity reports it as a background call, before `onChange`, and the changes whose retrieve answers 404 follow the event in a second `onChange` with `op: 'deleted'` and the same `meta`; when every retrieve answers 404 only that one is called. A retrieve that fails with another error is passed to `onError` and the event ends in `onResync` instead of `onChange`. Default `false` |
-| `onError` | Called with the error of a refused `subscribe` or `poll` of the topic, and of a failed `fetch` retrieve |
+| `fetch` | Completes every `created` and `updated` change without `record` before `onChange`, with calls issued inside [`inBackground`](./idempotency#frontend) so call activity reports them as background calls. `true`: one `retrieve(pk)` per change; a 404 means the record is gone, another error is passed to `onError` and the event ends in `onResync` instead of `onChange`. A `FetchRows` function: one call per event with the pks of those changes; each returned row is matched to its change by `pkFieldName` (pks compare by their string form), a pk without a row is gone, and a rejection is passed to `onError` and ends the event in `onResync`. The changes whose record is gone follow the event in a second `onChange` with `op: 'deleted'` and the same `meta`; when every record is gone only that one is called. Default `false` |
+| `onError` | Called with the error of a refused `subscribe` or `poll` of the topic, of a failed `fetch: true` retrieve and of a rejected `fetch` function |
 | `topic` | The client topic to subscribe: the BE path relative to the application's `root_path`, without a Starlette `Mount` prefix. Default the ViewSet's `topic` option, else its `basePath` |
 
 `onChange` and `onResync` are called in the order their events arrived, also while `fetch` waits for
-a retrieve. With `fetch`, `onChange` is called for an event whose changes were all dropped, with an
+its calls. With `fetch`, `onChange` is called for an event whose changes were all dropped, with an
 empty `changes`. After `unsubscribe()` of the returned subscription no option is called, also for an
-event that arrived before it and whose retrieve is still in flight.
+event that arrived before it and whose `fetch` call is still in flight.
 
 The callbacks are function-typed properties: a callback whose parameter is typed other than the
 option's, a wider record type included, does not compile. An `onChange` that declares only the
@@ -201,8 +256,16 @@ change parameter compiles.
 | ``[ViewSet {basePath}] watch() needs an event client: pass `events` in the ViewSet's options`` | A REST ViewSet without `events` |
 | `[ViewSet {basePath}] watch() found no event client for the peer: createEventClient({ peer }) registers one` | A muxws ViewSet without `events` whose peer has no client. Before a function `peer` has resolved, `watch()` returns, and once the peer resolves `ready` rejects with the error and `onError` is called with it; without `onError` it is rethrown in a microtask |
 
-`RestProxy<M>` and `MuxwsProxy<M>` carry `watch()` as `ViewSetWatch<RecordOf<M>, KeyOf<M>>`, a
-factory-built ViewSet as `ViewSetWatch<T, PkType<T, PK>>` ([`PkType`](./viewset-factory#signatures)).
+`RestProxy<M>` and `MuxwsProxy<M>` carry `watch()` as
+`ViewSetWatch<RowOf<M>, KeyOf<M>, FetchOption<RowOf<M>, RecordOf<M>, KeyOf<M>>>`, a factory-built
+ViewSet as `ViewSetWatch<R, PkType<T, PK>, FetchOption<R, T, PkType<T, PK>>>`
+([`PkType`](./viewset-factory#signatures)): the changes carry the rows of a list call without
+`listType`, and `fetch: true`, which reads records, compiles only where those rows are records. A
+mixin interface with list actions only names no separate record type, so `RecordOf<M>` is its row
+type and `fetch: true` compiles for it. A class extending `RestProxyImpl` or
+`MuxwsProxyImpl` carries `ViewSetWatch<T, K>`. `ViewSetWatch` also has the overload
+`watch<Row>(options & { fetch: FetchRows<Row, K> })`: with a `fetch` function, `onChange` receives
+the rows that function returns.
 Applying the changes to a list of rows is [`applyChanges`](./vue-events#records-changed); the guide
 is [`watch()` on a ViewSet](../guide/vue-events#watch-on-a-viewset).
 
@@ -289,29 +352,60 @@ bulkCreate(data: Omit<T, PK>[]): ViewSetActionCall<T[]>;
 
 Interface extends `CreateMixin<T, PK>` and `BulkOnlyCreateMixin<T, PK>`; `actions` spreads both.
 
-### ListMixin `<T>`
+### ListMixin `<T, V = {}>`
 
 ```ts
-list(params?: ListParams): ViewSetActionCall<T[]>;
+list(params?: ListParams, options?: ListOptions<never>): ViewSetActionCall<T[]>;
+list<N extends ListTypeName<V>>(
+  params: ListParams | undefined,
+  options: ListTypeOptions<N>,
+): ViewSetActionCall<ListRow<T, V, N>[]>;
+list(params?: ListParams, options?: ListOptions<ListTypeName<V>>): ViewSetActionCall<AnyListRow<T, V>[]>;
 ```
 
-### PaginatedListMixin `<T>`
+### PaginatedListMixin `<T, V = {}>`
 
 ```ts
-listPage(params?: PageParams): ViewSetActionCall<PaginatedList<T>>;
+listPage(params?: PageParams, options?: ListOptions<never>): ViewSetActionCall<PaginatedList<T>>;
+listPage<N extends ListTypeName<V>>(
+  params: PageParams | undefined,
+  options: ListTypeOptions<N>,
+): ViewSetActionCall<PaginatedList<ListRow<T, V, N>>>;
+listPage(params?: PageParams, options?: ListOptions<ListTypeName<V>>): ViewSetActionCall<PaginatedList<AnyListRow<T, V>>>;
 ```
 
-### CursorListMixin `<T>`
+### CursorListMixin `<T, V = {}>`
 
 ```ts
-listCursor(params?: CursorParams): ViewSetActionCall<CursorPage<T>>;
+listCursor(params?: CursorParams, options?: ListOptions<never>): ViewSetActionCall<CursorPage<T>>;
+listCursor<N extends ListTypeName<V>>(
+  params: CursorParams | undefined,
+  options: ListTypeOptions<N>,
+): ViewSetActionCall<CursorPage<ListRow<T, V, N>>>;
+listCursor(params?: CursorParams, options?: ListOptions<ListTypeName<V>>): ViewSetActionCall<CursorPage<AnyListRow<T, V>>>;
 ```
+
+Each interface extends `ListRows<T, V>`. `T` is the row type of a call without `listType`; `V` maps
+the wire name of every row type the BE viewset adds with
+[`MultiTypeListMixin`](./python-mixins#multitypelistmixin-ts) to that type. A call with
+`{ listType: 'compact' }` sends `X-List-Type: compact` and answers with `V['compact']`; a `listType`
+that is not a key of `V` does not compile. A call without `listType` sends no `X-List-Type` and
+answers with `T`. A call whose options are typed `ListOptions<...>`, so that `listType` may be
+absent, answers with `AnyListRow<T, V>`. An explicit type argument without `listType` in the
+options (`list<'compact'>()`) does not compile.
 
 The three methods read the same `GET {basePath}`. Each sends `X-List-Shape` with its own shape - `plain`, `paginated`,
 `cursor` - and throws `ListShapeMismatchError` when the reply is in another one. A BE viewset that declares one shape
 does not read the header and answers in that shape, so a ViewSet declares the mixins of the shapes the BE viewset offers
 through `list_shape` and `list_shapes`. A shape the BE viewset's `list_shapes` leave out is a 422
 `fastapi-viewsets.unsupported_list_shape`.
+
+A row type the BE viewset does not offer is a 422 `fastapi-viewsets.validation_failed` on the
+`X-List-Type` header. The composites and `restViewSet<T, L, V, R>()` / `muxwsViewSet<T, L, V, R>()`
+pass their `R` and `V` to the three mixins. On `ViewSetProxyBase` the methods are
+`list(params?: ListParams, options?: ListOptions): ViewSetActionCall<T[]>`,
+`listPage(params?: PageParams, options?: ListOptions)` and
+`listCursor(params?: CursorParams, options?: ListOptions)`, with rows typed `T`.
 
 ### ListDefaultSort
 
@@ -390,16 +484,19 @@ An array in `params` goes out as a repeated key (`ids=1&ids=2`) on both transpor
 A composite restates no signature: its interface extends the leaves its `actions` names, so each action is written in
 exactly one place.
 
-### ReadOnlyViewSetMixin `<K extends KeyType, T>`
+`V` and `R` are the list's row types, `ListMixin`'s `V` and `T`: `R` is the row type of a list call
+without `listType`, default `T`.
 
-Interface extends `ListMixin<T>` and `RetrieveMixin<K, T>`; `actions` spreads both.
+### ReadOnlyViewSetMixin `<K extends KeyType, T, V extends ListTypes = {}, R = T>`
 
-### ViewSetMixin `<K extends KeyType, T, PK extends keyof T>`
+Interface extends `ListMixin<R, V>` and `RetrieveMixin<K, T>`; `actions` spreads both.
 
-Interface extends `ReadOnlyViewSetMixin<K, T>`, `CreateMixin<T, PK>`, `UpdateMixin<K, T>` and `DestroyMixin<K>`;
+### ViewSetMixin `<K extends KeyType, T, PK extends keyof T, V extends ListTypes = {}, R = T>`
+
+Interface extends `ReadOnlyViewSetMixin<K, T, V, R>`, `CreateMixin<T, PK>`, `UpdateMixin<K, T>` and `DestroyMixin<K>`;
 `actions` spreads all four.
 
-### BulkViewSetMixin `<K extends KeyType, T, PK extends keyof T>`
+### BulkViewSetMixin `<K extends KeyType, T, PK extends keyof T, V extends ListTypes = {}, R = T>`
 
-Interface extends `ViewSetMixin<K, T, PK>`, `BulkOnlyCreateMixin<T, PK>`, `BulkOnlyUpdateMixin<K, T>` and
+Interface extends `ViewSetMixin<K, T, PK, V, R>`, `BulkOnlyCreateMixin<T, PK>`, `BulkOnlyUpdateMixin<K, T>` and
 `BulkOnlyDestroyMixin<K>`; `actions` spreads all four.

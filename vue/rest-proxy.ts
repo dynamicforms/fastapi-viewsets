@@ -28,7 +28,7 @@ import {
   withKeyHeader,
 } from './call';
 import { isApiErrorBody } from './errors';
-import type { KeyOf, RecordOf, ViewSetWatch } from './events/changes';
+import type { FetchOption, KeyOf, RecordOf, RowOf, ViewSetWatch } from './events/changes';
 import type { DefaultSortOf, KeyType } from './mixins';
 import {
   FACTORY_BUILT,
@@ -77,7 +77,9 @@ declare const FACTORY_BUILT_REJECTION: 'route_rest cannot take a factory-built c
  * inspect Python class hierarchies at runtime, the caller provides the explicit type via the generic
  * parameter `M` (see route_rest).
  */
-export type RestProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>> & DefaultSortOf<keyof M>;
+export type RestProxy<M> = ViewSetCalls<M> &
+  ViewSetWatch<RowOf<M>, KeyOf<M>, FetchOption<RowOf<M>, RecordOf<M>, KeyOf<M>>> &
+  DefaultSortOf<keyof M>;
 
 export interface RestProxyOptions extends ProxyBaseOptions {
   /** Optional: existing axios instance. Defaults to the global axios. */

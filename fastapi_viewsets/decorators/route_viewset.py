@@ -22,7 +22,7 @@ from fastapi_viewsets.endpoint_docs import (
     viewset_description,
 )
 from fastapi_viewsets.middleware import any_modifies_response_shape, Middleware, unwrap_viewset_result_type
-from fastapi_viewsets.mixins import FilterParam
+from fastapi_viewsets.mixins import FilterParam, ListEndpoint, MultiTypeListMixin
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
 from fastapi_viewsets.response_classes import with_error_responses
 from fastapi_viewsets.routing import MUXWS, openapi_endpoint, REST, transport_route_class
@@ -67,6 +67,9 @@ def build_type_map(cls: type[T], current_map: dict = None) -> dict:
         params = getattr(origin, "__parameters__", ())
 
         new_map = {}
+        if any(type(param).__name__ == "TypeVarTuple" for param in params):
+            # A variadic class (MultiTypeListMixin) binds no TypeVar the endpoints' annotations use
+            params, args = (), ()
         for param, arg in zip(params, args, strict=False):
             # Try to resolve arg (which can be a TypeVar or e.g. List[T]) from current mapping
             new_map[param] = resolve_typevars(type_map, arg)
@@ -179,6 +182,9 @@ def route_viewset(
         instance = cls() if lifecycle == "singleton" else None
 
         type_map = build_type_map(cls)
+        if issubclass(cls, ListEndpoint):
+            cls.resolve_list_types()  # raises ValueError for a MultiTypeListMixin declaration it refuses
+        responds_unreshaped = not any_modifies_response_shape(settings.viewsets_command_middleware)
 
         # Derive tag from class name: strip "ViewSet" suffix if present
         cls_name = cls.__name__
@@ -215,20 +221,30 @@ def route_viewset(
             `ListMixin.list_items` declares every parameter any shape could need, because a method
             on a shared mixin cannot know which viewset it will end up on. Here it can: parameters
             no allowed shape uses are dropped so they never reach the schema, the `X-List-Shape`
-            header is kept only when there is a choice to make, and the return annotation becomes
-            the union of exactly the models this viewset can produce. A declared `default_sort` becomes
-            the `sort` parameter's default.
+            and `X-List-Type` headers are kept only when there is a choice to make, and the return
+            annotation becomes the union of exactly the models this viewset can produce, every
+            shape of every row type. A declared `default_sort` becomes the `sort` parameter's
+            default. A `MultiTypeListMixin` viewset's response schema carries `x-list-types`: the
+            default type's wire name and each wire name's row model (see `ListTypesSchema`).
             """
-            from fastapi_viewsets.list_shapes import response_model, shape_examples, SHAPE_HEADER
+            from fastapi_viewsets.list_shapes import (
+                list_examples,
+                ListTypesSchema,
+                response_model,
+                SHAPE_HEADER,
+                TYPE_HEADER,
+            )
             from fastapi_viewsets.mixins import check_declared_sort, T as ItemVar
 
             default, allowed = cls.resolve_shapes()
-            item_type = type_map.get(ItemVar, ItemVar)
+            list_types = cls.resolve_list_types()
+            record_type = type_map.get(ItemVar, ItemVar)
             uses = {
                 "offset": "paginated" in allowed,
                 "cursor": "cursor" in allowed,
                 "limit": bool({"paginated", "cursor"} & set(allowed)),
                 "x_list_shape": len(allowed) > 1,
+                "x_list_type": len(list_types.types) > 1,
             }
 
             params = []
@@ -245,14 +261,56 @@ def route_viewset(
                             ),
                         ]
                     )
+                if name == "x_list_type":
+                    parameter = parameter.replace(
+                        annotation=Annotated[
+                            Literal[(*list_types.types, None)],
+                            Header(
+                                alias=TYPE_HEADER,
+                                description=f"Row type. Omit for this endpoint's default ({list_types.default}).",
+                            ),
+                        ]
+                    )
                 if name == "sort" and cls.default_sort is not None:
-                    check_declared_sort(cls.default_sort, item_type)
+                    check_declared_sort(cls.default_sort, record_type)
                     parameter = parameter.replace(default=cls.default_sort)
                 params.append(parameter)
 
             nonlocal shape_openapi_extra
-            shape_openapi_extra = shape_examples(allowed, item_type)
-            return sig.replace(parameters=params, return_annotation=response_model(allowed, item_type))
+            shape_openapi_extra = list_examples(allowed, list_types.types)
+            returns = response_model(allowed, *list_types.types.values())
+            if issubclass(cls, MultiTypeListMixin):
+                returns = Annotated[returns, ListTypesSchema(list_types.default, list_types.types)]
+            return sig.replace(parameters=params, return_annotation=returns)
+
+        def _list_model_selector(original_endpoint):
+            """
+            For the list endpoint of a viewset with several row types, a function that validates
+            the endpoint's result into the response model of the shape and the row type the request
+            selected; None otherwise.
+
+            The response model is a union of envelopes that differ only in their row type, and the
+            rows of one type can validate as another's. A result already built as the selected
+            model passes through; a bare list of rows and a worker's JSON (celery_viewset) would
+            otherwise validate as whichever member pydantic tries first.
+            """
+            if not getattr(original_endpoint, "__list_shape_aware__", False) or not responds_unreshaped:
+                return None
+            from fastapi_viewsets.list_shapes import response_model
+
+            list_types = cls.resolve_list_types()
+            if len(list_types.types) < 2:
+                return None
+            default, allowed = cls.resolve_shapes()
+
+            def select(kwargs: dict, result):
+                shape = kwargs.get("x_list_shape") or default
+                item_type = list_types.types.get(kwargs.get("x_list_type") or list_types.default)
+                if shape not in allowed or item_type is None or isinstance(result, Response):
+                    return result
+                return response_model((shape,), item_type).model_validate(result)
+
+            return select
 
         shape_openapi_extra = None
 
@@ -262,6 +320,7 @@ def route_viewset(
             sig = inspect.signature(original_endpoint)
             if getattr(original_endpoint, "__list_shape_aware__", False):
                 sig = _shape_signature(sig)
+            select_list_model = _list_model_selector(original_endpoint)
             new_params = []
             needs_context = False
             # the body parameters of a partial update, by name, with the annotation they replace
@@ -354,7 +413,7 @@ def route_viewset(
                     else:
                         new_kwargs[param_name] = value
 
-                return await lifecycle_runner(
+                result = await lifecycle_runner(
                     original_endpoint,
                     instance,
                     cls,
@@ -366,6 +425,7 @@ def route_viewset(
                     forwards_request=forwards_request,
                     **new_kwargs,
                 )
+                return result if select_list_model is None else select_list_model(new_kwargs, result)
 
             wrapper.__signature__ = new_sig
             # Carried on the wrapper because build_schema, which registers the route, has no other
@@ -383,7 +443,7 @@ def route_viewset(
             base_path,
             default_tags,
             get_wrapper,
-            disable_response_model=any_modifies_response_shape(settings.viewsets_command_middleware),
+            disable_response_model=not responds_unreshaped,
         )
 
         def is_schema_route(route) -> bool:

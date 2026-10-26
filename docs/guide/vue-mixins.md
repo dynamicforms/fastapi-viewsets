@@ -12,9 +12,9 @@ themselves live in the proxy underneath.
 | `CreateMixin<T, PK>` | `create(data)` |
 | `BulkOnlyCreateMixin<T, PK>` | `bulkCreate(data[])` |
 | `BulkCreateMixin<T, PK>` | `create`, `bulkCreate` |
-| `ListMixin<T>` | `list(params?)` |
-| `PaginatedListMixin<T>` | `listPage(params?)` |
-| `CursorListMixin<T>` | `listCursor(params?)` |
+| `ListMixin<T, V = {}>` | `list(params?, options?)` |
+| `PaginatedListMixin<T, V = {}>` | `listPage(params?, options?)` |
+| `CursorListMixin<T, V = {}>` | `listCursor(params?, options?)` |
 | `RetrieveMixin<K, T>` | `retrieve(pk)` |
 | `UpdateMixin<K, T>` | `update(pk, data)`, `partialUpdate(pk, data)` |
 | `BulkOnlyUpdateMixin<K, T>` | `bulkUpdate(records)`, `bulkPartialUpdate(records)` |
@@ -28,9 +28,9 @@ themselves live in the proxy underneath.
 
 | Class | Extends |
 |-------|---------|
-| `ReadOnlyViewSetMixin<K, T>` | `ListMixin`, `RetrieveMixin` |
-| `ViewSetMixin<K, T, PK>` | `ReadOnlyViewSetMixin` + `CreateMixin`, `UpdateMixin`, `DestroyMixin` |
-| `BulkViewSetMixin<K, T, PK>` | `ViewSetMixin` + `BulkOnlyCreateMixin`, `BulkOnlyUpdateMixin`, `BulkOnlyDestroyMixin` |
+| `ReadOnlyViewSetMixin<K, T, V = {}, R = T>` | `ListMixin<R, V>`, `RetrieveMixin` |
+| `ViewSetMixin<K, T, PK, V = {}, R = T>` | `ReadOnlyViewSetMixin` + `CreateMixin`, `UpdateMixin`, `DestroyMixin` |
+| `BulkViewSetMixin<K, T, PK, V = {}, R = T>` | `ViewSetMixin` + `BulkOnlyCreateMixin`, `BulkOnlyUpdateMixin`, `BulkOnlyDestroyMixin` |
 
 ## Type parameters
 
@@ -39,6 +39,51 @@ themselves live in the proxy underneath.
 | `K` | Primary key type — `number` or `string` |
 | `T` | Model interface |
 | `PK` | Key of the PK field on `T` (e.g. `'id'`) — used to omit it from create payloads |
+| `V` | List types: the wire name of every row type the BE viewset adds with `MultiTypeListMixin`, mapped to that type. Default `{}` |
+| `R` | Row type of a list call without `listType`, default `T` |
+
+### List types
+
+`restViewSet<T, L, V, R>()` and `muxwsViewSet<T, L, V, R>()` take the lookup item type as `L` and
+the list's row types as `V` and `R`. A BE viewset with
+[`MultiTypeListMixin`](./python-mixins#several-list-row-types) answers its list in the row type a
+request names in `X-List-Type`; `V` is the same table on the TS side, wire name to row type.
+`list()`, `listPage()` and `listCursor()` take it as `options.listType`:
+
+```ts
+interface Member { id: number; name: string; email: string; address: string }
+interface MemberRow { id: number; name: string }
+interface MemberCard { id: number; name: string; photo: string | null }
+
+class MemberApi extends restViewSet<Member, LookupItem, { compact: MemberRow; MemberCard: MemberCard }>()('id', [
+  BulkViewSetMixin,
+  PaginatedListMixin,
+]) {}
+
+const members = new MemberApi({ basePath: '/members' });
+const all = await members.list(); // Member[]
+const page = await members.listPage({ limit: 50 }, { listType: 'compact' }); // PaginatedList<MemberRow>
+const member = await members.retrieve(page.results[0].id); // Member
+```
+
+- Without `listType` no `X-List-Type` header is sent and the BE answers in its default row type, typed
+  `R`.
+- A `listType` that is not a key of `V` does not compile.
+- Options typed `ListOptions`, whose `listType` may be absent, give rows of any of the types,
+  `AnyListRow<T, V>`.
+- Every other action answers with `T`.
+
+A BE viewset whose list comes from `MultiTypeListMixin` alone, with no `ListMixin` of its own, has
+the first added type as its default. `R` names it:
+
+```ts
+class MemberRowApi extends restViewSet<Member, LookupItem, { compact: MemberRow; MemberCard: MemberCard }, MemberRow>()(
+  'id',
+  [ListMixin, RetrieveMixin],
+) {}
+
+await new MemberRowApi({ basePath: '/member-rows' }).list(); // MemberRow[]
+```
 
 ## LookupItem
 
@@ -142,6 +187,22 @@ const watching = api.watch({
 onUnmounted(() => watching.unsubscribe());
 ```
 
+The changes carry rows of the type a list call without `listType` answers with, `R`. `fetch` also
+takes a function, `(pks) => Promise<readonly R[]>`, called once per event with the pks of the changes
+that carry no record; the rows it returns are matched to them by `pkFieldName`:
+
+```ts
+members.watch({
+  fetch: (pks) => members.list({ id__in: pks }),
+  onChange(change) { rows.value = applyChanges(rows.value, change, members.pkFieldName); },
+  onResync() { void reload(); },
+});
+```
+
+`onChange` receives the rows the `fetch` function returns: `members.list({ id__in: pks }, { listType:
+'compact' })` watches the `compact` rows. `fetch: true` completes the changes with `retrieve(pk)`,
+which answers with `T`, so it compiles only when `R` is `T`.
+
 A `restViewSet` needs an event client in its options, `new ItemApi({ basePath: '/items', events })`;
 a `muxwsViewSet` uses the one created for its peer. The event client, the options and complete
 grid examples are in [Events (Vue)](./vue-events#watch-on-a-viewset); the reference is
@@ -172,6 +233,26 @@ A declared action is an ordinary method and can be overridden, `super` included:
 class Cached extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin]) {
   override async list(): Promise<Item[]> {
     return super.list();
+  }
+}
+```
+
+On a ViewSet with list types, `list()`, `listPage()` and `listCursor()` have one overload per form
+of `options` - no `listType`, a `listType` of `V`, `listType` possibly absent - and an override
+repeats the overloads of the mixin's method ([`ListMixin`](../api/vue-mixins#listmixin-t-v)):
+
+```ts
+type Types = { compact: ItemRow };
+
+class Cached extends restViewSet<Item, LookupItem, Types>()('id', [ReadOnlyViewSetMixin]) {
+  override list(params?: ListParams, options?: ListOptions<never>): Promise<Item[]>;
+  override list<N extends ListTypeName<Types>>(
+    params: ListParams | undefined,
+    options: ListTypeOptions<N>,
+  ): Promise<ListRow<Item, Types, N>[]>;
+  override list(params?: ListParams, options?: ListOptions<ListTypeName<Types>>): Promise<AnyListRow<Item, Types>[]>;
+  override list(params?: ListParams, options?: ListOptions<ListTypeName<Types>>): Promise<AnyListRow<Item, Types>[]> {
+    return super.list(params, options);
   }
 }
 ```
@@ -243,4 +324,4 @@ reply. See [reconnection](./muxws#reconnection).
 `list()`, `listPage()` and `listCursor()` on either transport reject with `ListShapeMismatchError`
 when a successful reply is in another list shape than the one the method requested. It carries no
 `response` either; `expected` and `received` name the two shapes. See
-[the list mixins](../api/vue-mixins#cursorlistmixin-t).
+[the list mixins](../api/vue-mixins#cursorlistmixin-t-v).

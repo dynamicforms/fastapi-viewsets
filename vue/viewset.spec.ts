@@ -9,14 +9,24 @@
  */
 
 import axios from 'axios';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import { muxwsViewSet, restViewSet, type ViewSetMixinClass } from './viewset';
 
 import {
+  type AnyListRow,
   BulkViewSetMixin,
   CursorListMixin,
+  type CursorPage,
+  type ListOptions,
+  type ListParams,
+  type ListRow,
+  type ListTypeName,
+  type ListTypeOptions,
+  type LookupItem,
   LookupMixin,
+  type PaginatedList,
+  PaginatedListMixin,
   ReadOnlyViewSetMixin,
   RetrieveMixin,
   ViewSetInternals,
@@ -270,8 +280,60 @@ describe('the type surface', () => {
     void tags.defaultSort;
   }
 
+  interface ItemRow {
+    id: number;
+    label: string;
+  }
+  interface ItemCard {
+    id: number;
+    image: string;
+  }
+  type ItemListTypes = { compact: ItemRow; card: ItemCard };
+  class TypedApi extends restViewSet<Item, LookupItem, ItemListTypes>()('id', [
+    BulkViewSetMixin,
+    PaginatedListMixin,
+    CursorListMixin,
+  ]) {}
+  class TypedWs extends muxwsViewSet<Item, LookupItem, ItemListTypes>()('id', [ReadOnlyViewSetMixin]) {}
+  /** A BE viewset without a ListMixin of its own: its first added type is the default. */
+  class RowOnlyApi extends restViewSet<Item, LookupItem, { compact: ItemRow }, ItemRow>()('id', [
+    CursorListMixin,
+    RetrieveMixin,
+  ]) {}
+
+  function _listTypes(plain: ItemApi, api: TypedApi, ws: TypedWs, rowOnly: RowOnlyApi) {
+    expectTypeOf(plain.list()).resolves.toEqualTypeOf<Item[]>();
+    // @ts-expect-error a ViewSet without list types takes no listType
+    void plain.list({}, { listType: 'compact' });
+
+    expectTypeOf(api.list()).resolves.toEqualTypeOf<Item[]>();
+    expectTypeOf(api.list({}, {})).resolves.toEqualTypeOf<Item[]>();
+    expectTypeOf(api.list({}, { listType: 'compact' })).resolves.toEqualTypeOf<ItemRow[]>();
+    expectTypeOf(api.listPage({}, { listType: 'card' })).resolves.toEqualTypeOf<PaginatedList<ItemCard>>();
+    expectTypeOf(api.listCursor({}, { listType: 'compact' })).resolves.toEqualTypeOf<CursorPage<ItemRow>>();
+    expectTypeOf(api.listCursor()).resolves.toEqualTypeOf<CursorPage<Item>>();
+    expectTypeOf(ws.list(undefined, { listType: 'card' })).resolves.toEqualTypeOf<ItemCard[]>();
+    expectTypeOf(api.retrieve(1)).resolves.toEqualTypeOf<Item>();
+    // @ts-expect-error 'full' is not one of the list types
+    void api.list({}, { listType: 'full' });
+    // @ts-expect-error 'full' is not one of the list types
+    void ws.list({}, { listType: 'full' });
+
+    const someOptions: ListOptions<'compact'> | undefined = undefined as ListOptions<'compact'> | undefined;
+    expectTypeOf(api.list({}, someOptions)).resolves.toEqualTypeOf<(Item | ItemRow | ItemCard)[]>();
+    expectTypeOf(api.listPage({}, someOptions)).resolves.toEqualTypeOf<PaginatedList<Item | ItemRow | ItemCard>>();
+    // @ts-expect-error a list type needs `listType` in the options, else the BE answers with its default
+    void api.list<'compact'>();
+    // @ts-expect-error a list type needs `listType` in the options, else the BE answers with its default
+    void api.list<'compact'>({}, {});
+
+    expectTypeOf(rowOnly.listCursor()).resolves.toEqualTypeOf<CursorPage<ItemRow>>();
+    expectTypeOf(rowOnly.listCursor({}, { listType: 'compact' })).resolves.toEqualTypeOf<CursorPage<ItemRow>>();
+    expectTypeOf(rowOnly.retrieve(1)).resolves.toEqualTypeOf<Item>();
+  }
+
   it('exposes the declared actions and nothing else, and types the pk from the model', () => {
-    expect([_surface, _pkType, _lookupItemType, _defaultSortOnlyWithAList]).toHaveLength(4);
+    expect([_surface, _pkType, _lookupItemType, _defaultSortOnlyWithAList, _listTypes]).toHaveLength(5);
   });
 
   it('lets a declared action be overridden with a method', () => {
@@ -280,6 +342,32 @@ describe('the type surface', () => {
     class Cached extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin]) {
       override async list(): Promise<Item[]> {
         return super.list();
+      }
+    }
+    expect(typeof Cached.prototype.list).toBe('function');
+  });
+
+  it('lets a list action with list types be overridden with the same overloads', () => {
+    interface ItemRow {
+      id: number;
+      label: string;
+    }
+    type Types = { compact: ItemRow };
+    class Cached extends restViewSet<Item, LookupItem, Types>()('id', [ReadOnlyViewSetMixin]) {
+      override list(params?: ListParams, options?: ListOptions<never>): Promise<Item[]>;
+      override list<N extends ListTypeName<Types>>(
+        params: ListParams | undefined,
+        options: ListTypeOptions<N>,
+      ): Promise<ListRow<Item, Types, N>[]>;
+      override list(
+        params?: ListParams,
+        options?: ListOptions<ListTypeName<Types>>,
+      ): Promise<AnyListRow<Item, Types>[]>;
+      override list(
+        params?: ListParams,
+        options?: ListOptions<ListTypeName<Types>>,
+      ): Promise<AnyListRow<Item, Types>[]> {
+        return super.list(params, options);
       }
     }
     expect(typeof Cached.prototype.list).toBe('function');

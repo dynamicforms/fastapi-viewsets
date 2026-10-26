@@ -358,7 +358,7 @@ interface RecordsChanged<T, K extends KeyType = KeyType> {
 /** One changed record. */
 interface Change<T, K extends KeyType = KeyType> {
   pk: K;
-  /** The record retrieve(pk) answered; set by watch({ fetch: true }), absent otherwise. */
+  /** The row watch() with `fetch` read: retrieve(pk)'s answer for `fetch: true`, the function's row otherwise; absent without `fetch`. */
   record?: T | null;
 }
 

@@ -36,6 +36,7 @@ from fastapi_viewsets.exceptions import (
     SessionExpiredError,
     UnhandledError,
     UnsupportedListShapeError,
+    UnsupportedListTypeError,
 )
 
 
@@ -105,6 +106,14 @@ def test_unsupported_list_shape_error_carries_shape_and_allowed_as_params():
     assert "cursor" in error.detail
     assert error.code == "fastapi-viewsets.unsupported_list_shape"
     assert error.params == {"shape": "cursor", "allowed": ["plain", "paginated"]}
+
+
+def test_unsupported_list_type_error_carries_type_and_allowed_as_params():
+    error = UnsupportedListTypeError("full", ["Track", "compact"])
+    assert error.status_code == 422
+    assert "full" in error.detail
+    assert error.code == "fastapi-viewsets.unsupported_list_type"
+    assert error.params == {"type": "full", "allowed": ["Track", "compact"]}
 
 
 def test_cursor_request_error_carries_the_wrapped_cursor_errors_code_and_params():
@@ -329,6 +338,7 @@ def test_every_error_this_module_defines_carries_a_full_code_of_the_package_name
         IdempotencyKeyInvalidError(),
         IdempotencyKeyReusedError("k"),
         UnsupportedListShapeError("x", ["plain"]),
+        UnsupportedListTypeError("x", ["Track"]),
         EventTopicInvalidError("t"),
         EventTopicRefusedError("t"),
         EventScopeMissingError("t"),

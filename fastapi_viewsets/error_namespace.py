@@ -32,6 +32,7 @@ _DECLARED_CODES = frozenset(
         "idempotency_key_invalid",
         "idempotency_key_reused",
         "unsupported_list_shape",
+        "unsupported_list_type",
         "event_topic_invalid",
         "event_topic_refused",
         "event_scope_missing",

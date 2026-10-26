@@ -10,6 +10,22 @@
  * that was not stored, an outcome that set a cookie, an expired record), the repeat runs the action.
  */
 
+import type {
+  AnyListRow,
+  CursorPage,
+  CursorParams,
+  ListAction,
+  ListOptions,
+  ListParams,
+  ListRow,
+  ListRowsOf,
+  ListTypeName,
+  ListTypeOptions,
+  ListTypes,
+  PageParams,
+  PaginatedList,
+} from './mixins';
+
 /** The header that carries the key. */
 export const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
 
@@ -31,12 +47,45 @@ export type ViewSetCall<R> = Promise<R> & { readonly key: string };
  */
 export type ViewSetActionCall<R> = Promise<R> & { readonly key?: string };
 
+/** The list actions of a mixin with the row types `T` and `V` (see ListMixin), returning `ViewSetCall`s. */
+interface ListCalls<T, V extends ListTypes> {
+  list(params?: ListParams, options?: ListOptions<never>): ViewSetCall<T[]>;
+  list<N extends ListTypeName<V>>(
+    params: ListParams | undefined,
+    options: ListTypeOptions<N>,
+  ): ViewSetCall<ListRow<T, V, N>[]>;
+  list(params?: ListParams, options?: ListOptions<ListTypeName<V>>): ViewSetCall<AnyListRow<T, V>[]>;
+  listPage(params?: PageParams, options?: ListOptions<never>): ViewSetCall<PaginatedList<T>>;
+  listPage<N extends ListTypeName<V>>(
+    params: PageParams | undefined,
+    options: ListTypeOptions<N>,
+  ): ViewSetCall<PaginatedList<ListRow<T, V, N>>>;
+  listPage(params?: PageParams, options?: ListOptions<ListTypeName<V>>): ViewSetCall<PaginatedList<AnyListRow<T, V>>>;
+  listCursor(params?: CursorParams, options?: ListOptions<never>): ViewSetCall<CursorPage<T>>;
+  listCursor<N extends ListTypeName<V>>(
+    params: CursorParams | undefined,
+    options: ListTypeOptions<N>,
+  ): ViewSetCall<CursorPage<ListRow<T, V, N>>>;
+  listCursor(params?: CursorParams, options?: ListOptions<ListTypeName<V>>): ViewSetCall<CursorPage<AnyListRow<T, V>>>;
+}
+
+/** `F` returning `ViewSetCall<R>` where it returns `Promise<R>`; `F` itself when it is not such a function. */
+type CallOf<F> = F extends (...args: infer A) => Promise<infer R> ? (...args: A) => ViewSetCall<R> : F;
+
 /**
  * `M` with every method that returns `Promise<R>` returning `ViewSetCall<R>` instead; the type
- * `route_rest` and `route_muxws` hand back. Other members are unchanged.
+ * `route_rest` and `route_muxws` hand back. Other members are unchanged. The list actions of a
+ * mixin that carries its row types (`ListRows`) are rebuilt from them, since mapping an overloaded
+ * method keeps its last signature only.
  */
 export type ViewSetCalls<M> = {
-  [P in keyof M]: M[P] extends (...args: infer A) => Promise<infer R> ? (...args: A) => ViewSetCall<R> : M[P];
+  [P in keyof M]: P extends ListAction
+    ? [ListRowsOf<M>] extends [never]
+      ? CallOf<M[P]>
+      : ListRowsOf<M> extends { row: infer T; types: infer V extends ListTypes }
+        ? ListCalls<T, V>[P]
+        : CallOf<M[P]>
+    : CallOf<M[P]>;
 };
 
 /** When and how long a proxy repeats a call that ended without an answer. */

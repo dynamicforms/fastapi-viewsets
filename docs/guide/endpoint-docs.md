@@ -122,7 +122,9 @@ They compose; using all three is normal.
 
 A list endpoint that offers several response shapes documents each of them automatically, with the
 example named after the `X-List-Shape` value that produces it — see
-[the list pipeline](./list-pipeline.md#declaring-a-shape). Nothing to write.
+[the list pipeline](./list-pipeline.md#declaring-a-shape). A list with several row types does the
+same per `X-List-Type` value, and names an example `<shape>, <type>` when both vary — see
+[row types](./list-pipeline.md#row-types). Nothing to write.
 
 ## Error responses
 

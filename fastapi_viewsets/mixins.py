@@ -1,11 +1,14 @@
+import types
+
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Any, final, Generic, get_args, get_origin, Union
 
 from fastapi import APIRouter, Header, Query
 from pydantic import BaseModel, ConfigDict, create_model
 from pydantic.alias_generators import to_camel
-from typing_extensions import TypeVar
+from typing_extensions import TypeVar, TypeVarTuple, Unpack
 
 from fastapi_viewsets.conf import settings
 from fastapi_viewsets.context import Context
@@ -21,7 +24,7 @@ from fastapi_viewsets.cursor import (
     make_predicate,
     position_of,
 )
-from fastapi_viewsets.exceptions import CursorRequestError, UnsupportedListShapeError
+from fastapi_viewsets.exceptions import CursorRequestError, UnsupportedListShapeError, UnsupportedListTypeError
 from fastapi_viewsets.filters import filters_from, FilterSet
 from fastapi_viewsets.list_query import (
     build_list_query,
@@ -37,6 +40,7 @@ from fastapi_viewsets.response_classes import NOT_FOUND_RESPONSE
 T = TypeVar("T")
 K = TypeVar("K")
 TFilter = TypeVar("TFilter", default=None)
+TListTypes = TypeVarTuple("TListTypes")
 
 
 class ImplMixin(Generic[K, T], ABC):
@@ -261,21 +265,62 @@ def check_declared_sort(sort_csv: str, model: Any = None) -> SortState:
     return result
 
 
+class _Attributes:
+    """
+    `obj`'s attributes, read one by one. pydantic returns an instance of a model's subclass as it
+    is rather than validating it into the model; through this view it reads the fields instead.
+    """
+
+    __slots__ = ("_obj",)
+
+    def __init__(self, obj: Any):
+        self._obj = obj
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._obj, name)
+
+
+def validate_list_item(item_type: type[BaseModel], row: Any) -> Any:
+    """
+    `row` validated into the list row type `item_type` with `from_attributes=True`; `row` itself
+    when its type is exactly `item_type`.
+    """
+    if type(row) is item_type:
+        return row
+    if isinstance(row, item_type):
+        row = _Attributes(row)
+    return item_type.model_validate(row, from_attributes=True)
+
+
+@dataclass(frozen=True)
+class ListTypes:
+    """The row types a list endpoint answers in, as `ListMixin.resolve_list_types` resolves them."""
+
+    default: str
+    """The wire name of the type a request without `X-List-Type` gets."""
+
+    types: dict[str, Any]
+    """Wire name to row type, the default first."""
+
+    record: str | None
+    """The wire name whose rows are the record type `T`; None when the list has no such entry."""
+
+    record_type: Any
+    """The record type `T`, which filtering, sorting and the cursor work on whichever type is listed."""
+
+    def row_type(self, name: str) -> Any:
+        """`ListQuery.list_type` for the type `name`: None for the record type, else the type."""
+        return None if name == self.record else self.types[name]
+
+
 ###################################################################################################
 # LIST
 ###################################################################################################
-class ListMixin(Generic[T, TFilter], ABC):
+class ListEndpoint:
     """
-    List a queryset, in whichever shape the viewset declares - see fastapi_viewsets/list_shapes.py.
-
-        class TrackViewSet(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter]):
-            list_shape = "cursor"                 # what this endpoint answers in
-            list_shapes = ("cursor", "plain")     # what a client may ask for instead
-
-    Declaring one shape - the default - keeps the schema down to that single model and the endpoint
-    down to the parameters it actually uses. Listing more adds an `X-List-Shape` header and turns
-    the response into a union of exactly those models; `route_viewset` computes both from these two
-    attributes, so nothing here is written twice.
+    The list endpoint, `GET ""`, and its pipeline, shared by `ListMixin` and `MultiTypeListMixin`.
+    A viewset composes one or both of those; the attributes and hooks below are documented as
+    `ListMixin`'s.
     """
 
     __router = APIRouter()
@@ -337,6 +382,42 @@ class ListMixin(Generic[T, TFilter], ABC):
     def resolve_shapes(cls) -> tuple:
         return resolve_shapes(cls.list_shape, cls.list_shapes, settings.default_list_shape)
 
+    @classmethod
+    def resolve_list_types(cls) -> ListTypes:
+        """
+        The row types of this list, resolved once per class.
+
+        A viewset that composes a list mixin other than `MultiTypeListMixin` (`ListMixin`,
+        `PaginatedListMixin`, `CursorListMixin`, `ReadOnlyViewSetMixin`, `ViewSetMixin`,
+        `BulkViewSetMixin`) has the record type `T` as its default, named `T.__name__`, followed by
+        the types `MultiTypeListMixin` adds. Without one, the added types are the only ones and the
+        first is the default.
+
+        Raises ValueError for a `MultiTypeListMixin` without types, a type that is not a pydantic
+        model and two types with the same wire name.
+        """
+        cached = cls.__dict__.get("_resolved_list_types")
+        if cached is not None:
+            return cached
+
+        from fastapi_viewsets.decorators.route_viewset import build_type_map, resolve_typevars
+
+        added = _added_list_types(cls) if issubclass(cls, MultiTypeListMixin) else None
+        record_type = resolve_typevars(build_type_map(cls), T)
+        row_types: dict[str, Any] = {}
+        record = None
+        if added is None or issubclass(cls, ListMixin):
+            record = getattr(record_type, "__name__", str(record_type))
+            row_types[record] = record_type
+        for name, item_type in added or ():
+            if name in row_types:
+                raise ValueError(f"{cls.__name__}: two list types are named {name!r}")
+            row_types[name] = item_type
+
+        resolved = ListTypes(default=next(iter(row_types)), types=row_types, record=record, record_type=record_type)
+        cls._resolved_list_types = resolved
+        return resolved
+
     @final
     @__router.get("")
     async def list_items(
@@ -348,6 +429,7 @@ class ListMixin(Generic[T, TFilter], ABC):
         limit: Annotated[int | None, Query(ge=1)] = None,
         cursor: str | None = None,
         x_list_shape: Annotated[str | None, Header()] = None,
+        x_list_type: Annotated[str | None, Header()] = None,
     ) -> Union[ListOf[T], PaginatedList[T], CursorPage[T]]:  # noqa: UP007 - see list_shapes.response_model
         """List the collection."""
         # Declares every parameter and every shape any viewset could ask for; route_viewset narrows
@@ -362,6 +444,10 @@ class ListMixin(Generic[T, TFilter], ABC):
         shape = x_list_shape or default
         if shape not in allowed:
             raise UnsupportedListShapeError(shape, list(allowed))
+        list_types = self.resolve_list_types()
+        type_name = x_list_type or list_types.default
+        if type_name not in list_types.types:
+            raise UnsupportedListTypeError(type_name, list(list_types.types))
 
         query = build_list_query(
             fltr,
@@ -375,6 +461,7 @@ class ListMixin(Generic[T, TFilter], ABC):
         )
         query.shape = shape
         query.cursor = cursor if shape == "cursor" else None
+        query.list_type = list_types.row_type(type_name)
         return await self.get_list(context, query)
 
     list_items.__list_shape_aware__ = True
@@ -390,6 +477,10 @@ class ListMixin(Generic[T, TFilter], ABC):
         """
         if query.shape is None:
             query.shape = self.resolve_shapes()[0]
+        if query.list_type is None:
+            list_types = self.resolve_list_types()
+            if list_types.record is None:
+                query.list_type = list_types.types[list_types.default]
         if query.shape == "cursor":
             if query.limit is None:
                 query.limit = self.default_page_size
@@ -540,16 +631,24 @@ class ListMixin(Generic[T, TFilter], ABC):
             # The query ran in reversed order to read backwards; the page is handed back the way
             # the client reads it.
             page = list(reversed(page))
-        results = page if not query.needs("conversion") else self._to_records(page)
+        results = self._list_rows(query, page)
 
         keys = getattr(query, "_cursor_keys", ())
-        anchors = self._cursor_anchors(results, keys, getattr(query, "_cursor_query", ""))
+        if query.list_type is None:
+            edges = results
+        else:
+            # The cursor keys are fields of the record type, which the selected row type need not
+            # carry: the anchors are read off the page's first and last row as records.
+            edges = page[:: max(len(page) - 1, 1)]
+            if query.needs("conversion"):
+                edges = [self.to_record(row) for row in edges]
+        anchors = self._cursor_anchors(edges, keys, getattr(query, "_cursor_query", ""))
 
         # Reading backwards, "more in the reading direction" means more *before* the page.
         has_more_forward = has_more if not backwards else bool(query.cursor)
         has_previous = bool(query.cursor) if not backwards else has_more
 
-        return CursorPage[Any](
+        return CursorPage[self._page_row_type(query)](
             results=results,
             limit=query.limit,
             has_more=has_more_forward,
@@ -570,10 +669,10 @@ class ListMixin(Generic[T, TFilter], ABC):
         Cuts one page out of `records`, or returns the lot when the client asked for no page.
 
         Only reads as far as the page needs, so paging a lazy source stays lazy. Conversion to the
-        response model happens here, on the page and nowhere else: the stages before this one carry
-        whatever the backend's own source is - a QuerySet, a cursor - because that is the only
-        thing they can push a filter or an ordering into. Converting earlier would hand them a bag
-        of records with nothing left to push into.
+        response's row type happens here, on the page and nowhere else: the stages before this one
+        carry whatever the backend's own source is - a QuerySet, a cursor - because that is the
+        only thing they can push a filter or an ordering into. Converting earlier would hand them a
+        bag of records with nothing left to push into.
         """
         if query.shape == "cursor":
             return await self._cursor_page(query, records)
@@ -581,13 +680,14 @@ class ListMixin(Generic[T, TFilter], ABC):
             # A plain list, not a ListOf: FastAPI validates it into the declared RootModel on the
             # way out, and everything that calls get_list() directly - tests, other endpoints -
             # keeps getting something it can index and iterate.
-            return await self.land(query, records)
+            if query.list_type is None:
+                return await self.land(query, records)
+            return self._list_rows(query, await materialize(records))
 
         count = await self.count_records(context, query, records)
         page, has_more = await self.take_page(query, records)
-        # Already converted if an in-memory stage had to land the source earlier; see land().
-        results = page if not query.needs("conversion") else self._to_records(page)
-        return PaginatedList[Any](
+        results = self._list_rows(query, page)
+        return PaginatedList[self._page_row_type(query)](
             results=results,
             offset=query.offset,
             limit=query.limit,
@@ -640,14 +740,55 @@ class ListMixin(Generic[T, TFilter], ABC):
         """
         return raw
 
+    def to_list_item(self, raw: Any, item_type: type) -> Any:
+        """
+        Converts one row of the page into `item_type`, the row type the request selected with
+        `X-List-Type` when that is not the record type `T`.
+
+        `raw` is a row of the backend's source when no stage has landed the source, otherwise a
+        record `land()` converted. The default returns `raw` when its type is exactly `item_type`,
+        and otherwise validates the record - `raw` itself when it is a `T`, else `to_record(raw)` -
+        into `item_type` with `from_attributes=True`; a `T` that subclasses `item_type` is validated
+        too, so that the row carries `item_type`'s fields only. A backend that can build
+        `item_type` straight from its own row overrides this, as `DjangoORMViewSet` does.
+        Synchronous for the same reason as `to_record`.
+        """
+        if type(raw) is item_type:
+            return raw
+        record_type = self.resolve_list_types().record_type
+        is_record = isinstance(record_type, type) and isinstance(raw, record_type)
+        record = raw if is_record else self.to_record(raw)
+        return validate_list_item(item_type, record)
+
     def _to_records(self, rows: list) -> list:
         """
         Skips the conversion pass entirely for viewsets that never override `to_record`, which is
         most of them - the in-memory ones already hold the response model.
         """
-        if type(self).to_record is ListMixin.to_record:
+        if type(self).to_record is ListEndpoint.to_record:
             return rows
         return [self.to_record(row) for row in rows]
+
+    def _page_row_type(self, query: ListQuery) -> Any:
+        """
+        The row type a page envelope is parameterised with: `Any` on a list with one row type, the
+        selected one on a list with several. The response model is then a union of envelopes that
+        differ only in their row type, and an envelope of the selected type is the member it
+        validates as; an envelope of `Any` can validate as another type's and lose fields.
+        """
+        list_types = self.resolve_list_types()
+        if len(list_types.types) < 2:
+            return Any
+        return query.list_type or list_types.types.get(list_types.record, Any)
+
+    def _list_rows(self, query: ListQuery, rows: list) -> list:
+        """
+        The page's rows in the row type the request selected: records through `to_record` unless
+        a stage already landed them, any other type through `to_list_item`.
+        """
+        if query.list_type is None:
+            return rows if not query.needs("conversion") else self._to_records(rows)
+        return [self.to_list_item(row, query.list_type) for row in rows]
 
     async def filter_list(self, fltr: TFilter, records: list[T]) -> list[T]:
         """
@@ -680,6 +821,24 @@ class ListMixin(Generic[T, TFilter], ABC):
         return sorted(records, key=functools.cmp_to_key(compare))
 
 
+class ListMixin(ListEndpoint, Generic[T, TFilter], ABC):
+    """
+    List a queryset, in whichever shape the viewset declares - see fastapi_viewsets/list_shapes.py.
+
+        class TrackViewSet(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter]):
+            list_shape = "cursor"                 # what this endpoint answers in
+            list_shapes = ("cursor", "plain")     # what a client may ask for instead
+
+    Declaring one shape - the default - keeps the schema down to that single model and the endpoint
+    down to the parameters it actually uses. Listing more adds an `X-List-Shape` header and turns
+    the response into a union of exactly those models; `route_viewset` computes both from these two
+    attributes, so nothing here is written twice.
+
+    The list's rows are `T`. `MultiTypeListMixin` adds further row types, which a client selects
+    with `X-List-Type`.
+    """
+
+
 class PaginatedListMixin(ListMixin[T, TFilter], ABC):
     """
     Shorthand for `ListMixin` with `list_shape = "paginated"`.
@@ -699,6 +858,60 @@ class CursorListMixin(ListMixin[T, TFilter], ABC):
     """
 
     list_shape = "cursor"
+
+
+class MultiTypeListMixin(ListEndpoint, Generic[Unpack[TListTypes]], ABC):
+    """
+    Adds row types to a viewset's list endpoint, which a client selects per request with the
+    `X-List-Type` header:
+
+        class MemberViewSet(
+            DjangoORMViewSet[int, Member],
+            ViewSetMixin[int, Member, MemberFilter],
+            MultiTypeListMixin[Annotated[MemberRow, "compact"], MemberCard],
+        ): ...
+
+    A type's wire name is the string in its `Annotated` metadata (`compact`), else its class name
+    (`MemberCard`). With a list mixin composed beside it, as above, the list's types are the record
+    type - `Member`, the default - and the added ones. Without one, this mixin provides the list
+    endpoint itself: the added types are the only ones, the first is the default, and the list has
+    no filter. The order of the bases does not matter.
+
+    Filtering, sorting and the cursor work on records (`T`, through `to_record`) whichever type
+    is selected; only the page that goes into the response is converted into the selected type,
+    by `to_list_item`. A cursor's keys are therefore fields of the record, not of the row type.
+    The list shapes (`list_shape`, `list_shapes`) apply to every type.
+
+    `route_viewset` raises ValueError for no types, a type that is not a pydantic model and two
+    types with the same wire name.
+    """
+
+
+def _added_list_types(cls: type) -> list[tuple[str, Any]]:
+    """(wire name, type) of each type `cls` passes to `MultiTypeListMixin`, in declaration order."""
+    args: tuple = ()
+    for klass in cls.__mro__:
+        subscription = next(
+            (base for base in klass.__dict__.get("__orig_bases__", ()) if get_origin(base) is MultiTypeListMixin),
+            None,
+        )
+        if subscription is not None:
+            args = get_args(subscription)
+            break
+    if not args:
+        raise ValueError(f"{cls.__name__}: MultiTypeListMixin declares no list types")
+
+    added = []
+    for arg in args:
+        item_type, name = arg, None
+        if get_origin(arg) is Annotated:
+            item_type = get_args(arg)[0]
+            name = next((meta for meta in arg.__metadata__ if isinstance(meta, str)), None)
+        is_class = isinstance(item_type, type) and not isinstance(item_type, types.GenericAlias)
+        if not is_class or not issubclass(item_type, BaseModel):
+            raise ValueError(f"{cls.__name__}: list type {arg!r} is not a pydantic model")
+        added.append((name or item_type.__name__, item_type))
+    return added
 
 
 ###################################################################################################

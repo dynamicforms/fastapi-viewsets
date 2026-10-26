@@ -189,6 +189,22 @@ describe('MuxwsProxyImpl — envelope', () => {
     expect(mock.last.headers.authorization).toBe('Bearer tok');
   });
 
+  it('sends listType as X-List-Type, and no X-List-Type without it', async () => {
+    mock.reply(MOCK_ITEMS);
+    await proxy.list(undefined, { listType: 'compact' });
+    expect(mock.last.headers['X-List-Type']).toBe('compact');
+    expect(mock.last.headers['X-List-Shape']).toBe('plain');
+    mock.reply({ results: MOCK_ITEMS, offset: 0, limit: 2, count: 2, has_more: false, has_previous: false });
+    await proxy.listPage(undefined, { listType: 'compact' });
+    expect(mock.last.headers['X-List-Type']).toBe('compact');
+    mock.reply({ results: [], limit: 2, has_more: false, has_previous: false, next: null, previous: null });
+    await proxy.listCursor(undefined, { listType: 'compact' });
+    expect(mock.last.headers['X-List-Type']).toBe('compact');
+    mock.reply(MOCK_ITEMS);
+    await proxy.list();
+    expect(mock.last.headers).not.toHaveProperty('X-List-Type');
+  });
+
   it('listCursor() rejects an answer in another shape', async () => {
     mock.reply(MOCK_ITEMS);
     await expect(proxy.listCursor()).rejects.toBeInstanceOf(ListShapeMismatchError);

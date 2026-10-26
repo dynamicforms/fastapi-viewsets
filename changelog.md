@@ -8,8 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.14.0] - 2026-10-26
 
+### Added
+
+- `MultiTypeListMixin[*Ts]` adds row types to a viewset's list endpoint. A type's wire name is the
+  string in its `Annotated` metadata (`Annotated[MemberRow, "compact"]`), else its class name.
+  Composed beside a list mixin, the list's types are the record type `T`, the default, and the added
+  ones; without one, the mixin provides the list endpoint, the first added type is the default and
+  the list has no filter. The order of the bases does not matter, a reusable subclass of the mixin
+  included. `route_viewset` raises `ValueError` for no types, a type that is not a pydantic model and
+  two types with the same wire name.
+- The `X-List-Type` request header selects the row type of a list response
+  (`fastapi_viewsets.list_shapes.TYPE_HEADER`), over REST, muxws and `celery_viewset`. Without it the
+  list answers in its default type. The header is in the schema as a `Literal` of the wire names when
+  the list has more than one type; the response model is the union of every shape of every type,
+  with one example per combination, and a response is validated as the selected shape and type. The
+  response schema carries `x-list-types` (the default and a `$ref` to each wire name's model) in the
+  OpenAPI document and in `/schema`.
+- Filtering, sorting and the cursor work on records, `T`, whichever type is selected; only the page
+  is converted into the selected type, by the new hook `ListMixin.to_list_item(raw, item_type)`, with
+  `validate_list_item()` for an override. `DjangoORMViewSet.to_list_item` builds the selected type
+  straight from the Django row. A cursor page in another type converts only its first and last row
+  to records for its anchors.
+- `ListMixin.resolve_list_types()` returning `ListTypes`, `ListQuery.list_type` (a direct `get_list`
+  without it answers in the list's default type), `ListEndpoint` (the base of `ListMixin` and
+  `MultiTypeListMixin`), and
+  `UnsupportedListTypeError` (422, `fastapi-viewsets.unsupported_list_type`) for a direct
+  `list_items` call naming a type the list does not have.
+- TS: `restViewSet<T, L, V, R>()` and `muxwsViewSet<T, L, V, R>()`. `V` maps each wire name to its
+  row type, `R` is the row type of a list call without a list type (default `T`). `list()`,
+  `listPage()` and `listCursor()` take `options.listType` and send it as `X-List-Type`: a call
+  without it answers with `R`, a call with a `listType` literal with `V[listType]`, and a call whose
+  options are typed `ListOptions` with any of them (`AnyListRow`); a name not in `V` does not
+  compile. The list mixins and the composites take `V` (and `R`) as type parameters. New types
+  `ListTypes`, `ListTypeName`, `ListRow`, `AnyListRow`, `ListOptions`, `ListTypeOptions`,
+  `ListRows`, `ListRowsOf`, `RowOf`.
+- TS: `watch({ fetch })` takes a function `(pks) => Promise<readonly R[]>`, called once per event
+  with the pks of the changes without a record; its rows are matched by `pkFieldName`, and a pk
+  without a row is reported as deleted. With a `fetch` function, `watch()` changes are typed with
+  the rows it returns, so a list type is watched by fetching with its `listType`; otherwise with
+  `R`, and `fetch: true` compiles only when `R` is `T` (`FetchOption`, `FetchRows`).
+
 ### Changed
 
+- `ViewSetProxyBase.list()`, `listPage()` and `listCursor()` take `options?: ListOptions` as their
+  second parameter.
 - **Breaking:** the `in` and `overlaps` operators of a filter model built by `make_filter_model`
   read their values from a repeated query parameter (`?year__in=1999&year__in=2000`), the form the
   TS client sends an array in, instead of a comma-separated string. `?year__in=1999,2000` is one

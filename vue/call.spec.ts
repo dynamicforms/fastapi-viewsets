@@ -3,7 +3,7 @@
  * is covered in rest-proxy.spec.ts and muxws-proxy.spec.ts.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import {
   type AttemptFailure,
@@ -19,7 +19,11 @@ import {
   pendingCalls,
   retryNow,
   runCall,
+  type ViewSetCall,
+  type ViewSetCalls,
 } from './call';
+import type { RecordOf, RowOf } from './events/changes';
+import type { CursorPage, ListMixin, PaginatedList, RetrieveMixin } from './mixins';
 
 const { crypto } = globalThis;
 
@@ -410,5 +414,39 @@ describe('pendingCalls', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(pendingCalls().map((call) => call.key)).toEqual(['p2', 'p3']);
     void second;
+  });
+});
+
+describe('ViewSetCalls and RecordOf over a mixin interface', () => {
+  interface Item {
+    id: number;
+    name: string;
+  }
+  interface ItemRow {
+    id: number;
+  }
+
+  it('maps a hand-written list action and reads the record off it', () => {
+    interface Hand {
+      list(): Promise<Item[]>;
+      listPage(): Promise<PaginatedList<Item>>;
+    }
+    expectTypeOf<ReturnType<ViewSetCalls<Hand>['list']>>().toEqualTypeOf<ViewSetCall<Item[]>>();
+    expectTypeOf<ReturnType<ViewSetCalls<Hand>['listPage']>>().toEqualTypeOf<ViewSetCall<PaginatedList<Item>>>();
+    expectTypeOf<RecordOf<Hand>>().toEqualTypeOf<Item>();
+    expectTypeOf<RowOf<Hand>>().toEqualTypeOf<Item>();
+    expectTypeOf<RecordOf<{ listCursor(): Promise<CursorPage<Item>> }>>().toEqualTypeOf<Item>();
+  });
+
+  it('rebuilds the list actions of a library list mixin from its row types', () => {
+    type Typed = ListMixin<ItemRow, { full: Item }> & RetrieveMixin<number, Item>;
+    const calls = {} as ViewSetCalls<Typed>;
+    const _typed = () => {
+      expectTypeOf(calls.list()).toEqualTypeOf<ViewSetCall<ItemRow[]>>();
+      expectTypeOf(calls.list({}, { listType: 'full' })).toEqualTypeOf<ViewSetCall<Item[]>>();
+    };
+    expectTypeOf<RecordOf<Typed>>().toEqualTypeOf<Item>();
+    expectTypeOf<RowOf<Typed>>().toEqualTypeOf<ItemRow>();
+    expect(_typed).toBeTypeOf('function');
   });
 });

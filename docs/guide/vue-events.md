@@ -341,6 +341,39 @@ later version subscribes to `records_changed` with an event definition of its ow
 `unsubscribe()` neither is called, also for an event whose retrieve is still in flight. The options
 are in [`watch()`](../api/vue-mixins#watch).
 
+`fetch` also takes a function, `(pks) => Promise<rows>`. `watch()` calls it once per `created` or
+`updated` event with the pks of the changes that carry no `record`, inside `inBackground`, and
+matches the rows it returns to the changes by the ViewSet's `pkFieldName`; a pk it returns no row for
+is gone and follows in the `deleted` `onChange`, as a 404 does for `fetch: true`. A rejection is
+passed to `onError` and the event ends in `onResync`. Here the BE filter model declares `id` with
+the `in` operator:
+
+```ts
+const watching = members.watch({
+  fetch: (pks) => members.list({ id__in: pks }),
+  onChange(change) { rows.value = applyChanges(rows.value, change, members.pkFieldName); },
+  onResync() { void reload(); },
+});
+```
+
+One list call per event reads the rows the way the list endpoint shows them, under the same
+`get_queryset` scoping; a row the list no longer shows to the reader is removed.
+
+With a `fetch` function, the changes are typed with the rows that function returns, so a grid that
+shows a list type watches by fetching with the same `listType`:
+
+```ts
+members.watch({
+  fetch: (pks) => members.list({ id__in: pks }, { listType: 'compact' }),
+  onChange(change) { compactRows.value = applyChanges(compactRows.value, change, members.pkFieldName); },
+  onResync() { void reload(); },
+});
+```
+
+Without a `fetch` function, the changes are typed with `R`, the row type of a list call without
+`listType` ([`restViewSet<T, L, V, R>()`](./vue-mixins#list-types)). `fetch: true` reads records with
+`retrieve`, so it compiles only when `R` is `T`.
+
 ### A grid that holds every row
 
 `applyChanges(rows, change, pkFieldName)` returns `rows` with the change applied: `deleted` removes

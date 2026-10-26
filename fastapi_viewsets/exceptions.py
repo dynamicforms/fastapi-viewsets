@@ -189,6 +189,12 @@ class UnsupportedListShapeError(DfViewSetError):
         super().__init__(422, message, _namespaced("unsupported_list_shape"), {"shape": shape, "allowed": allowed})
 
 
+class UnsupportedListTypeError(DfViewSetError):
+    def __init__(self, list_type: str, allowed: list[str]):
+        message = f"unsupported list type {list_type!r}; this endpoint offers {', '.join(allowed)}"
+        super().__init__(422, message, _namespaced("unsupported_list_type"), {"type": list_type, "allowed": allowed})
+
+
 class CursorRequestError(DfViewSetError):
     """Raised in place of a caught `CursorError`, carrying the same `code`/`params` as a 400 response."""
 

@@ -26,7 +26,8 @@ ListRecords = Iterable[TItem] | AsyncIterable[TItem]
 What flows through the list pipeline: anything iterable, lazily or not, over items of one type.
 
 Written bare it means `ListRecords[Any]`, which is what a pipeline stage writes: what flows through
-it is whatever the backend's source yields, and only `to_record` turns that into the response model.
+it is whatever the backend's source yields, and only `to_record` turns that into records, or
+`to_list_item` into the row type a request selected.
 """
 
 
@@ -52,6 +53,12 @@ class ListQuery:
     Which envelope the answer goes into. `list_items` sets it from the request; left unset - by a
     test, or by one endpoint calling another - `get_list` fills in the viewset's own default, so a
     direct call answers in the shape the viewset advertises rather than in a fixed one.
+    """
+    list_type: Any = None
+    """
+    The row type the page is converted into: None for the record type `T`, else the type the
+    request selected with `X-List-Type`. `list_items` sets it; filtering, sorting and the cursor
+    work on records either way.
     """
     extra_filters: list = field(default_factory=list)
     """

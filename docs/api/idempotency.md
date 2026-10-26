@@ -101,10 +101,20 @@ type ViewSetCall<R> = Promise<R> & { readonly key: string };
 /** What a declared action returns in a ViewSet's type; `key` is optional so an override may return a Promise. */
 type ViewSetActionCall<R> = Promise<R> & { readonly key?: string };
 
-/** `M` with every method that returns `Promise<R>` returning `ViewSetCall<R>`; other members unchanged. */
+/**
+ * `M` with every method that returns `Promise<R>` returning `ViewSetCall<R>`; other members unchanged.
+ * The list actions of a library list mixin keep their overloads, rebuilt from its row types (`ListRows`).
+ */
 type ViewSetCalls<M> = {
-  [P in keyof M]: M[P] extends (...args: infer A) => Promise<infer R> ? (...args: A) => ViewSetCall<R> : M[P];
+  [P in keyof M]: P extends ListAction
+    ? [ListRowsOf<M>] extends [never]
+      ? CallOf<M[P]>
+      : ListCalls<ListRowsOf<M>['row'], ListRowsOf<M>['types']>[P] // ListMixin's overloads, returning ViewSetCall
+    : CallOf<M[P]>;
 };
+
+/** `F` returning `ViewSetCall<R>` where it returns `Promise<R>`; `F` itself otherwise. */
+type CallOf<F> = F extends (...args: infer A) => Promise<infer R> ? (...args: A) => ViewSetCall<R> : F;
 ```
 
 | Where | Return type |

@@ -25,7 +25,9 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
   is pushed, so a dropped push costs latency, not an event. On the frontend, `watch()` on a ViewSet
   follows its topic and `applyChanges()` applies each change to a list of rows.
 - **Three list shapes** — a bare array, offset paging, or cursor paging. A viewset declares which,
-  and may let a client pick per request with an `X-List-Shape` header.
+  and may let a client pick per request with an `X-List-Shape` header. `MultiTypeListMixin` adds
+  row types to the list, such as a compact row beside the full record, picked with `X-List-Type`;
+  filtering, sorting and the cursor work on the record, and only the page is converted.
 - **Declarative filters** — declare which fields accept which operators and get query parameters,
   an OpenAPI schema and filtering for free; backends translate what they can into their own query.
 - **Vue / TypeScript counterpart** — mirror mixin classes and the `restViewSet` / `muxwsViewSet` class

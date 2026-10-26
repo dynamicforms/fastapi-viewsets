@@ -47,6 +47,7 @@ primary key unless `Item` gives it a default. See
 | Class | Endpoint | Description |
 |-------|----------|-------------|
 | `ListMixin[T, TFilter]` | `GET /` | Return all records, with optional filter and sort |
+| `MultiTypeListMixin[*Ts]` | `GET /` | Add row types a client selects per request with `X-List-Type` |
 | `RetrieveMixin[K, T]` | `GET /{pk}` | Return a single record by PK |
 
 `ListMixin` is generic over an optional `TFilter` type (default: `None`). The endpoint always
@@ -117,6 +118,78 @@ async def apply_sort(self, context, query, records):
         query.mark_applied("sort")
     return await super().apply_sort(context, query, records)
 ```
+
+#### Several list row types
+
+`MultiTypeListMixin` adds row types to the list endpoint. A list of members can answer with the full
+`Member` for an edit grid and with a two-field `MemberRow` for a picker, from one endpoint; the client
+names the type it wants in the `X-List-Type` header:
+
+```python
+from typing import Annotated
+
+from fastapi_viewsets.mixins import MultiTypeListMixin, ViewSetMixin
+
+
+class Member(BaseModel):
+    id: int
+    name: str
+    email: str
+    address: str
+
+
+class MemberRow(BaseModel):
+    id: int
+    name: str
+
+
+class MemberCard(BaseModel):
+    id: int
+    name: str
+    photo: str | None = None
+
+
+MemberFilter = make_filter_model(Member, {"name": ["icontains"], "email": ["iexact"]})
+
+
+@route_viewset(router, base_path="/members", pk_field_name="id")
+class MemberViewSet(
+    DjangoORMViewSet[int, Member],
+    ViewSetMixin[int, Member, MemberFilter],
+    MultiTypeListMixin[Annotated[MemberRow, "compact"], MemberCard],
+):
+    model = MemberModel
+    schema = Member
+    default_sort = "name:asc"
+```
+
+```text
+GET /members                             → Member rows
+GET /members   X-List-Type: compact      → MemberRow rows
+GET /members   X-List-Type: MemberCard   → MemberCard rows
+```
+
+- **Wire names.** `Annotated[MemberRow, "compact"]` is named `compact`; a bare class by its class
+  name, `MemberCard`. The record type is named by its class name, `Member`.
+- **Default type.** With a list mixin composed beside it, as above, `T` is the default and the added
+  types follow. A viewset without one — `MultiTypeListMixin` beside `RetrieveMixin` alone, say — gets
+  its list endpoint from `MultiTypeListMixin`, and the first added type is the default. That list has
+  no filter.
+- **Pipeline.** Filtering, sorting and the cursor work on `Member` whichever type is selected: the
+  filter model, `default_sort` and the cursor's keys name fields of `Member`, and `MemberRow` need not
+  carry them. Only the page that goes into the response is converted into the selected type, by
+  `to_list_item(raw, item_type)`. `DjangoORMViewSet` builds `MemberRow` straight from the Django row
+  of a page whose filter and sort went to the database, without building `Member` first.
+- **Shapes.** `list_shape` and `list_shapes` apply to every type; the response is the union of every
+  shape of every type, and `X-List-Shape` and `X-List-Type` combine.
+- **Schema.** The header is a `Literal` of the wire names, and the list operation's response schema
+  carries `x-list-types`, each wire name with its model, in `/openapi.json` and in the viewset's
+  `/schema`. A value the list does not offer is a 422.
+
+On the TS side the list types are the `V` type parameter of
+[`restViewSet` / `muxwsViewSet`](./vue-mixins#list-types), and a call selects one with
+`list(params, { listType: 'compact' })`. The reference is
+[`MultiTypeListMixin`](../api/python-mixins#multitypelistmixin-ts).
 
 ### Update
 

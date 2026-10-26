@@ -25,7 +25,17 @@ export {
   handleEventStream,
 } from './client';
 
-export type { Change, KeyOf, RecordOf, RecordsChanged, ViewSetWatch, WatchOptions } from './changes';
+export type {
+  Change,
+  FetchOption,
+  FetchRows,
+  KeyOf,
+  RecordOf,
+  RecordsChanged,
+  RowOf,
+  ViewSetWatch,
+  WatchOptions,
+} from './changes';
 export { applyChanges, RECORDS_CHANGED } from './changes';
 
 export type { Draw, PollLadderState, PollSettings } from './poll';
