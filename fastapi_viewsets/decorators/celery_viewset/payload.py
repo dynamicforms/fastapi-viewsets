@@ -1,8 +1,6 @@
 """
-The call data a `celery_viewset` task carries beside the action's own arguments: the call's context,
-its request, the execution it was dispatched in and the arguments that crossed untyped.
-`celery_viewset_client` writes them under the reserved kwargs below, and `celery_viewset_server`
-consumes them before the action is called.
+The call data a `celery_viewset` task carries in reserved kwargs beside the action's arguments: the
+call's context, request, parent execution and untyped arguments.
 """
 
 from typing import Any
@@ -15,11 +13,9 @@ CONTEXT_KWARG = "_context"
 REQUEST_KWARG = "_request"
 """The call's request, as `request_to_jsonable` encodes it; None without one."""
 UNTYPED_KWARG = "_untyped"
-"""The names of the arguments that crossed untyped (see `transport`); absent when every argument
-crossed by its type hint."""
+"""The names of the arguments that crossed untyped (see `transport`); absent when there are none."""
 PARENT_KWARG = "_parent"
-"""The `ExecutionRef` the call was dispatched in, as `ExecutionRef.to_jsonable` encodes it; None
-for a call a request made."""
+"""The `ExecutionRef` the call was dispatched in (`ExecutionRef.to_jsonable`); None for a request's call."""
 
 
 def _address(value: Any) -> list | None:

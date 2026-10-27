@@ -50,11 +50,8 @@ def test_celery_viewset_server_decorator_registration():
 
 
 def test_celery_viewset_server_registers_tasks_with_ignore_result():
-    """celery_viewset_client never reads Celery's own result backend (it awaits the redis_client
-    queue in client.py instead) - ignore_result=True must be set so Celery does not also try to
-    JSON-serialize/store the raw return value (which may be a Pydantic model). acks_late=False and
-    reject_on_worker_lost=False override the application's settings, so a call is never delivered a
-    second time; store_errors_even_if_ignored=False stores no failure in the unused backend."""
+    """Tasks register with ignore_result=True, acks_late=False, reject_on_worker_lost=False and
+    store_errors_even_if_ignored=False: the result backend is unused and a call is delivered once."""
     celery_app = MagicMock()
     task_decorator = MagicMock()
     celery_app.task.return_value = task_decorator
@@ -202,9 +199,8 @@ def test_celery_viewset_server_pushes_result_with_date_field_to_redis():
 
 
 def test_celery_viewset_server_returns_json_trivial_value_once_pushed_to_redis():
-    """Once the real result is on the Redis queue, the task's own retval must not be the raw
-    endpoint result - celery_viewset_client never reads it, and Celery itself would otherwise try
-    to encode it (result backend, task-succeeded event, ...) even with ignore_result=True set."""
+    """Once the result is pushed to Redis, the task returns a JSON-trivial value, not the raw result
+    Celery would otherwise encode."""
     celery_app = MagicMock()
     redis_mock = MagicMock()
     registered_tasks = {}
@@ -354,7 +350,7 @@ def test_to_jsonable_with_date_field():
     result = _to_jsonable(item)
 
     assert result == {"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}
-    # Must not raise - this is the actual celery round-trip failure mode.
+    # must not raise
     json.dumps(result)
 
 
@@ -369,9 +365,7 @@ def test_to_jsonable_with_plain_value():
 
 
 def test_to_jsonable_with_viewset_result():
-    """A worker-side action may return a ViewSetResult directly (see
-    fastapi_viewsets.middleware.ViewSetResult) - _to_jsonable must tag it (it's a
-    SerializableObject) rather than crash on a plain dataclass json.dumps can't handle."""
+    """_to_jsonable tags a ViewSetResult (a SerializableObject) a worker-side action returns."""
     import json
 
     from fastapi_viewsets.context import to_jsonable as _to_jsonable
@@ -391,12 +385,8 @@ def test_to_jsonable_with_viewset_result():
 
 
 def test_celery_viewset_server_pushes_viewset_result_to_redis():
-    """A worker-side custom endpoint returning ViewSetResult directly (see ViewSetResult in
-    fastapi_viewsets.middleware) survives the push to Redis - see test_to_jsonable_with_viewset_result
-    for the tagging itself. Uses a custom __router endpoint, not a mixin hook like perform_list:
-    ListMixin.list_items itself expects perform_list to return plain records (it still does its own
-    pagination/shaping around them), so ViewSetResult is only meaningful as the actual route
-    endpoint's own return value."""
+    """A custom endpoint returning a ViewSetResult survives the push to Redis. A route endpoint, as a
+    mixin hook like perform_list returns plain records."""
     import json
 
     from fastapi import APIRouter
@@ -562,12 +552,8 @@ def test_reconstruct_kwargs_with_optional_list_of_models():
 
 
 def test_reconstruct_kwargs_with_none_defaulted_optional_model():
-    """A None-defaulted parameter reconstructs from a dict just like a required one.
-
-    Before Python 3.11, `get_type_hints()` implicitly wraps a None-defaulted parameter's annotation
-    in `Optional[...]`, so `data: Item = None` arrives here as `Union[Item, None]` rather than
-    `Item` - which must still be recognised as a BaseModel hint.
-    """
+    """A None-defaulted parameter reconstructs from a dict like a required one; before Python 3.11
+    its hint arrives as `Optional[Item]`."""
     from fastapi_viewsets.decorators.celery_viewset.server import _reconstruct_kwargs
 
     async def endpoint(data: Item = None) -> Item:

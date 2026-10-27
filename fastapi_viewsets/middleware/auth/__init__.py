@@ -12,25 +12,10 @@ if TYPE_CHECKING:
 
 class Session(Middleware):
     """
-    Pairs with `auth_context_processor` (see `fastapi_viewsets.context.auth`): that processor only
-    ever *gathers* the fact ("user is None" or a real user) by resolving whichever `AuthBackend`
-    claimed the request - this is what actually *decides* what to do about it. It doesn't re-derive
-    or re-resolve anything itself - it just checks the already-resolved `context.user` that
-    `context.auth` produced.
+    Rejects a call without a user (`context.user` from `auth_context_processor`) with 401
+    `SessionExpiredError`, in `depends()`, before the body is parsed.
 
-    The whole check lives in `depends()` - bridged onto FastAPI's own `Depends()` by route_viewset,
-    so an expired/missing session is rejected before FastAPI parses the request body.
-    `__call__` (the onion command-middleware chain) only calls `call_next()`: if `depends()`
-    rejects, `__call__` is not reached.
-
-    A viewset (or a specific `perform_*` method) opts out - e.g. a login/signup endpoint that must
-    be reachable without a session - via `@action_configuration({Session: False})` (see
-    `fastapi_viewsets.action_configuration`); everything else is protected by default, since
-    `settings.viewsets_command_middleware` is global and applies to every route.
-
-    401, not 403: an expired/missing/unrecognized session means the credential itself no longer
-    establishes who's calling - that's "unauthorized" (401), not "authorized but forbidden" (403),
-    which would apply to a *known* caller lacking permission for this specific action.
+    Applies to every route; opt out with `@action_configuration({Session: False})` (e.g. login).
     """
 
     async def depends(self, _request: "Request | None", _cls: type, context: "Context") -> None:

@@ -1,10 +1,7 @@
 """
-What a client asked a list endpoint for, and what it gets back.
-
-`perform_list` receives the `Context` alone and answers with `ListRecords`. The `ListQuery` arrives
-one stage later: `apply_filter`, `apply_sort`, `take_page` and `count_records` each take it as a
-parameter, so a backend that can answer part of the query in its own store does it by overriding one
-of those. Whatever no stage answers, `ListMixin` answers in memory. See docs/guide/list-pipeline.md.
+The list request (`ListQuery`) and answer types. `perform_list` returns `ListRecords`; `apply_filter`,
+`apply_sort`, `take_page` and `count_records` receive the `ListQuery`, so a backend pushes part of the
+query down by overriding one of them. See docs/guide/list-pipeline.md.
 """
 
 from collections.abc import AsyncIterable, AsyncIterator, Iterable
@@ -15,30 +12,19 @@ from pydantic import BaseModel
 
 TItem = TypeVar("TItem")
 """
-The item type of `ListRecords` and of `PaginatedList`, deliberately not the same TypeVar the mixins
-use for their item type. Pydantic treats `M[X]`, where X is M's *own* parameter, as a no-op and
-hands back the bare class - which would strip the item type out of `PaginatedList[T]` before FastAPI
-ever saw it.
+Not the mixins' TypeVar: Pydantic returns the bare class for `M[X]` when X is M's own parameter, which
+would strip the item type from `PaginatedList[T]`.
 """
 
 ListRecords = Iterable[TItem] | AsyncIterable[TItem]
-"""
-What flows through the list pipeline: anything iterable, lazily or not, over items of one type.
-
-Written bare it means `ListRecords[Any]`, which is what a pipeline stage writes: what flows through
-it is whatever the backend's source yields, and only `to_record` turns that into the response model.
-"""
+"""Any sync or async iterable flowing through the list pipeline; `to_record` converts its items."""
 
 
 @dataclass
 class ListQuery:
     """
-    The list request, as one value rather than four parameters threaded through five methods.
-
-    `applied` is how a backend reports what it already did. A viewset that translated the sort
-    into an ORDER BY adds "sort" to it, and the in-memory sort step then knows to leave the rows
-    alone instead of redoing the work - which is what makes push-down composable rather than an
-    all-or-nothing override of the whole pipeline.
+    The list request. A backend that performed a stage in its store calls `mark_applied(stage)`, and
+    the in-memory step for that stage is skipped.
     """
 
     fltr: Any = None
@@ -48,17 +34,9 @@ class ListQuery:
     applied: set[str] = field(default_factory=set)
     cursor: str | None = None
     shape: str | None = None
-    """
-    Which envelope the answer goes into. `list_items` sets it from the request; left unset - by a
-    test, or by one endpoint calling another - `get_list` fills in the viewset's own default, so a
-    direct call answers in the shape the viewset advertises rather than in a fixed one.
-    """
+    """The answer envelope; when unset, `get_list` uses the viewset's default shape."""
     extra_filters: list = field(default_factory=list)
-    """
-    Filters the pipeline adds itself rather than the client asking for them - today only the
-    cursor predicate. They ride the same stage as declared filters so a backend translates them
-    through the same registry, and decline them the same way.
-    """
+    """Filters the pipeline adds itself (the cursor predicate), applied in the filter stage."""
 
     @property
     def has_filter(self) -> bool:
@@ -70,10 +48,7 @@ class ListQuery:
 
     @property
     def is_paginated(self) -> bool:
-        """
-        Pagination is opt-in per request: without a `limit` the endpoint answers with a plain list,
-        and only a client that asks for a page gets a page envelope.
-        """
+        """Whether the request sent a `limit`."""
         return self.limit is not None
 
     def mark_applied(self, *stages: str) -> None:
@@ -84,14 +59,7 @@ class ListQuery:
 
 
 class PaginatedList(BaseModel, Generic[TItem]):
-    """
-    One page of results.
-
-    `count` is None when nobody knows it - a generator cannot be counted without draining it, and
-    draining it is the thing pagination exists to avoid. `has_more` and `has_previous` are stated
-    outright rather than left to be inferred from a null link, because inference is how a client
-    ends up guessing wrong at exactly the boundary that matters.
-    """
+    """One page of results; `count` is None when the source cannot be counted without draining it."""
 
     results: list[TItem]
     offset: int
@@ -102,12 +70,7 @@ class PaginatedList(BaseModel, Generic[TItem]):
 
 
 def build_list_query(fltr: Any, sort: str | None, offset: int = 0, limit: int | None = None) -> ListQuery:
-    """
-    Turns the raw query parameters into a ListQuery.
-
-    A filter model whose every field is None means the client sent no filter at all - FastAPI
-    builds the model regardless, so "was a filter asked for" cannot be answered by a null check.
-    """
+    """Build a ListQuery from raw query parameters; a filter model with every field None counts as no filter."""
     from .mixins import parse_sort_param
 
     has_filter = (
@@ -134,14 +97,8 @@ async def materialize(records: ListRecords[TItem]) -> list[TItem]:
 
 async def take_page(records: ListRecords[TItem], offset: int, limit: int) -> tuple[list[TItem], bool]:
     """
-    Reads one page out of `records`, plus whether anything follows it.
-
-    Reads `limit + 1` rows and reports the extra one as `has_more` rather than returning it. That
-    is one row of overhead in exchange for never having to count the whole collection, which for a
-    lazy source is the difference between paging and not.
-
-    A list is sliced directly; anything else is consumed only as far as the page needs, so a
-    generator over a million rows still costs `offset + limit + 1` steps rather than a million.
+    One page of `records` and whether more follow, found by reading `limit + 1` rows. A lazy source is
+    consumed only up to `offset + limit + 1` items.
     """
     if isinstance(records, list):
         page = records[offset : offset + limit + 1]

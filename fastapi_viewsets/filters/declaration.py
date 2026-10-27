@@ -1,17 +1,8 @@
 """
 Turning a filter declaration into query parameters, and query parameters back into filters.
 
-A viewset declares which fields accept which operators:
-
-    TrackFilter = make_filter_model(Track, {"year": ["exact", "gte", "lte"], "title": ["icontains"]})
-
-which becomes the query parameters `year`, `year__gte`, `year__lte`, `title__icontains` - and
-nothing else. Generating every field crossed with every operator would put dozens of parameters in
-the OpenAPI schema, most of them meaningless for the field they hang off, so the declaration is
-explicit. `exact` keeps the bare field name, since `?year=2003` is what anyone would write.
-
-The resulting model is an ordinary pydantic model, so FastAPI validates and documents the
-parameters as it does for `make_all_optional`, which is the case of "every field, exact only".
+`make_filter_model(Track, {"year": ["exact", "gte"], "title": ["icontains"]})` yields the parameters `year`,
+`year__gte` and `title__icontains` only; `exact` keeps the bare field name.
 """
 
 from typing import Any, get_args, get_origin, Union
@@ -49,11 +40,7 @@ def _item_annotation(field_annotation: Any, lookup: str) -> Any:
 
 
 def _parameter_annotation(field_annotation: Any, lookup: str) -> Any:
-    """
-    The type of the query parameter: a list of the item type for `in` and `overlaps`, read from a
-    repeated key (`?year__in=1999&year__in=2000`) and validated item by item into the field's own
-    type; a scalar for every other operator.
-    """
+    """The query parameter's type: a list for `in` and `overlaps` (repeated key), else a scalar."""
     if lookup == "isnull":
         return bool | None
     if lookup in _LIST_LOOKUPS:
@@ -62,12 +49,7 @@ def _parameter_annotation(field_annotation: Any, lookup: str) -> Any:
 
 
 def make_filter_model(model: type[BaseModel], declaration: FilterDeclaration) -> type[BaseModel]:
-    """
-    Builds the query-parameter model for a filter declaration.
-
-    Raises rather than ignoring an unknown field or operator: a typo in a declaration would
-    otherwise produce a filter parameter that silently never matches anything.
-    """
+    """The query-parameter model for a filter declaration; raises `FilterError` for an unknown field or operator."""
     fields: dict[str, tuple[Any, Any]] = {}
     spec: dict[str, tuple[str, str, Any]] = {}
 
@@ -101,11 +83,7 @@ def make_filter_model(model: type[BaseModel], declaration: FilterDeclaration) ->
 
 
 def filters_from(fltr: Any) -> FilterSet | None:
-    """
-    The FilterSet a populated filter model asks for, or None when the model was not built from a
-    declaration - in which case the viewset is on the hand-written `filter_list` path and
-    this machinery stays out of its way.
-    """
+    """The FilterSet a populated filter model asks for, or None for a model not built by `make_filter_model`."""
     spec = getattr(type(fltr), SPEC_ATTRIBUTE, None)
     if spec is None:
         return None

@@ -1,19 +1,7 @@
 /**
- * Transport-independent half of the ViewSet proxies.
- *
- * Every ViewSet method is the same regardless of how the request travels — `list()` is always a
- * GET on the base path, `destroy(pk)` is always a DELETE on `/{pk}`. Only the sending differs, so
- * that is the only thing subclasses supply: one `request()` method. `RestProxyImpl` sends over
- * HTTP with axios, `MuxwsProxyImpl` sends over a muxws stream.
- *
- * Custom endpoints should be written against `request()` rather than against a transport, so that
- * the same ViewSet class works on either:
- *
- *   class MusicTrackViewSet extends RestProxyImpl<number, MusicTrack, 'id'> {
- *     async count(): Promise<number> {
- *       return this.request<number>('GET', '/count');
- *     }
- *   }
+ * Transport-independent half of the ViewSet proxies: every ViewSet method maps to one `request()`,
+ * which `RestProxyImpl` (axios) and `MuxwsProxyImpl` (muxws stream) implement. Custom endpoints
+ * call `request()` so that one ViewSet class works on either transport.
  *
  * Every call carries an `Idempotency-Key` and is repeated with it when an attempt ends without an
  * answer; see call.ts.
@@ -54,16 +42,13 @@ export interface RequestOptions {
   /** Headers for this call only; on muxws they override the proxy's own `headers`. */
   headers?: Record<string, string>;
   /**
-   * The `Idempotency-Key` of this call. Defaults to a new UUID. An application that repeats a call
-   * itself passes the `key` of the first one. It overrides an `Idempotency-Key` in `headers`.
+   * The `Idempotency-Key` of this call; default a new UUID. Pass the first call's `key` to repeat it.
+   * Overrides an `Idempotency-Key` in `headers`.
    */
   key?: string;
   /** Overrides the proxy's `repeat` for this call. */
   repeat?: RepeatOptions;
-  /**
-   * Reported to `onCallActivity` listeners as `background: true`, for a call a busy indicator leaves
-   * out. Default false.
-   */
+  /** Reported to `onCallActivity` listeners, so a busy indicator can leave the call out. Default false. */
   background?: boolean;
 }
 
@@ -71,11 +56,9 @@ export interface RequestOptions {
 export type ListShape = 'plain' | 'paginated' | 'cursor';
 
 /**
- * Thrown by `list()`, `listPage()` and `listCursor()` when the BE answers in a shape other than the
- * one the method asked for. A BE viewset that declares a single shape does not read `X-List-Shape`
- * and answers in that shape; this error is what such a viewset produces for the other two methods.
- *
- * `received` is `'unknown'` when the body matches none of the three envelopes.
+ * Thrown by `list()`, `listPage()` and `listCursor()` when the BE answers in another shape, e.g. a
+ * viewset declaring a single shape ignores `X-List-Shape`. `received` is `'unknown'` when the body
+ * matches none of the three envelopes.
  */
 export class ListShapeMismatchError extends Error {
   readonly expected: ListShape;
@@ -109,22 +92,16 @@ const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', '
 /** The OpenAPI extension in which the BE names the method serving an operation, e.g. `top_rated`. */
 const ACTION_EXTENSION = 'x-viewset-action';
 
-/**
- * The FE method names that serve the BE method `action`: its camelCase form, and the name itself
- * where that differs. `top_rated` is served by `topRated()` or `top_rated()`.
- */
+/** The FE method names that serve the BE method `action`: `top_rated` → `topRated()` or `top_rated()`. */
 function customMethodNames(action: string): string[] {
   const camel = action.replace(/(?<=[a-zA-Z0-9])_+([a-z0-9])/g, (_, char: string) => char.toUpperCase());
   return camel === action ? [action] : [camel, action];
 }
 
 /**
- * Maps (path type, HTTP method) → the actions that endpoint can satisfy.
- * Path types: 'base' = root, 'pk' = /{pk}, 'bulk' = /bulk, 'lookup' = /lookup.
- *
- * A list is a list of alternatives rather than one name because `GET {base}` is a single BE
- * endpoint that answers in whichever shape the viewset declared - see list_shapes.py. Declaring
- * `listCursor` and being served `GET {base}` is agreement, not a mismatch.
+ * Maps (path type, HTTP method) → the alternative actions that endpoint satisfies. Path types:
+ * 'base' = root, 'pk' = /{pk}, 'bulk' = /bulk, 'lookup' = /lookup. `GET {base}` serves all three
+ * list shapes (see list_shapes.py), so any one of them declared counts as a match.
  */
 const ENDPOINT_TO_FE_METHOD: Readonly<Record<string, Readonly<Record<string, readonly ActionName[]>>>> = {
   base: { GET: ['list', 'listPage', 'listCursor'], POST: ['create'] },
@@ -144,10 +121,8 @@ const ENDPOINT_TO_FE_METHOD: Readonly<Record<string, Readonly<Record<string, rea
 };
 
 /**
- * Every `ActionName` mapped to `true`, in a stable order for warning output. A `Record<ActionName,
- * true>` rather than a plain array: an action added to (or dropped from) the `ActionName` union
- * without a matching change here fails to compile - a missing key or an excess one - instead of
- * silently narrowing what the mismatch check below is able to report.
+ * Every `ActionName`, in a stable order for warning output. A `Record` so that a change to the
+ * `ActionName` union without a matching change here fails to compile.
  */
 const ACTION_NAME_COVERAGE: Record<ActionName, true> = {
   list: true,
@@ -174,11 +149,9 @@ interface SchemaDocument {
 }
 
 /**
- * The viewset's base path as the schema document states it. Paths in the document are the viewset's
- * routes as declared, without the prefixes the application routes them under (include_router) and
- * with path parameters unsubstituted, so they share no common prefix with `basePath`. The base is
- * taken from the document's own /schema path; `basePath` is used only for a document that does not
- * list it.
+ * The viewset's base path as the schema document states it, taken from its /schema path. Document
+ * paths lack the application's router prefixes, so they need not share a prefix with `basePath`,
+ * which is the fallback for a document without /schema.
  */
 function schemaBase(paths: Record<string, unknown>, basePath: string): string {
   return (
@@ -195,25 +168,15 @@ export interface ViewSetMixinDeclaration {
 }
 
 /**
- * Marks a class's `declares` as coming from the ViewSet factory (viewset.ts's `FactoryDeclares<D>`)
- * rather than being hand-written. Declared here, the module both viewset.ts and the two proxy
- * implementations already import from, so all three sides see the same `unique symbol` and a
- * structural check against it type-checks identically everywhere - `route_rest`/`route_muxws` use it
- * to reject a factory-built class at the call site (see rest-proxy.ts, muxws-proxy.ts), which would
- * otherwise type-check and hand back a bare proxy missing the class's own custom methods.
+ * Marks a class's `declares` as coming from the ViewSet factory (viewset.ts's `FactoryDeclares<D>`).
+ * `route_rest` / `route_muxws` use it to reject a factory-built class, for which they would return a
+ * bare proxy without the class's custom methods.
  */
 export declare const FACTORY_BUILT: unique symbol;
 
 /**
- * Which actions this ViewSet claims to have, from the `static declares` list on its class.
- *
- * Ordinary static lookup, so a subclass that declares its own list replaces its parent's rather
- * than adding to it - which is what a subclass pointed at a smaller BE viewset means. The new list
- * still has to be assignable to the parent's, since TypeScript checks a subclass's static side
- * against its base; a list the parent's type does not cover needs its own ViewSet.
- *
- * A ViewSet that declares nothing yields null rather than an empty set: "said nothing" and "said
- * it has no actions" are different claims, and only the second is worth checking against.
+ * Which actions this ViewSet claims to have, from its `static declares` (a subclass's own list
+ * replaces its parent's). Null when nothing is declared, as opposed to an empty declared list.
  */
 function declaredActions(instance: object, fromOptions?: readonly ViewSetMixinDeclaration[]): Set<string> | null {
   const declares = fromOptions ?? (instance.constructor as { declares?: readonly ViewSetMixinDeclaration[] }).declares;
@@ -231,11 +194,7 @@ export interface ProxyBaseOptions {
   pkFieldName: string;
   /** Set false to skip the startup schema check (it is advisory and costs one request). */
   validateSchema?: boolean;
-  /**
-   * The mixins the ViewSet declares, for the `route_rest` / `route_muxws` path: those build a bare
-   * proxy and use the ViewSet class only for typing, so a `static declares` on it would otherwise
-   * never reach the object being checked.
-   */
+  /** The mixins the ViewSet declares, for `route_rest` / `route_muxws`, whose bare proxy has no `static declares`. */
   declares?: readonly ViewSetMixinDeclaration[];
   /** When the proxy repeats a call whose attempt ended without an answer. See `RepeatOptions`. */
   repeat?: RepeatOptions;
@@ -252,13 +211,9 @@ export interface ProxyBaseOptions {
 }
 
 /**
- * What a ViewSet's own methods may reach - everything a custom endpoint needs, and nothing a caller
- * does.
- *
- * A real base class rather than a type, because `protected` is checked nominally: a subclass body
- * reaches `request()` only if it genuinely descends from the class that declared it. The ViewSet
- * factory hands back a class typed as this plus the declared actions, which is how a factory-built
- * ViewSet ends up with a narrow public surface and a usable private one.
+ * What a ViewSet's own methods may reach: everything a custom endpoint needs, nothing a caller does.
+ * A class rather than a type because `protected` is checked nominally; the ViewSet factory types its
+ * classes as this plus the declared actions.
  */
 export abstract class ViewSetInternals {
   protected readonly basePath: string;
@@ -268,21 +223,13 @@ export abstract class ViewSetInternals {
   }
 
   /**
-   * Sends one call and returns the decoded response body, on a `ViewSetCall` carrying the call's
-   * `Idempotency-Key`. The request of the first attempt is issued synchronously, so a method that
-   * returns this promise before its first `await` returns a promise with the same key.
+   * Sends one call and returns the decoded body on a `ViewSetCall` carrying its `Idempotency-Key`.
+   * The first attempt is issued synchronously. `path` is relative to `basePath` ('', '/1', '/bulk').
+   * Throws on status >= 400 with `response.status` on the error; a 3xx is returned by muxws and
+   * followed by REST.
    *
-   * `path` is relative to `basePath` — '' for the collection, '/1' for a record, '/bulk', and so
-   * on. Implementations must throw on a status of 400 or above, with `response.status` readable on
-   * the thrown value. Below 400 the two differ, on a band a caller rarely sees: the muxws proxy
-   * returns the body for any 3xx, while the REST proxy follows a redirect it can follow and rejects
-   * whatever axios' default `validateStatus` then leaves outside 200-299.
-   *
-   * Concrete here, and never reached: ViewSetProxyBase re-declares it abstract, which is where a
-   * transport is actually held to implementing it. It cannot be abstract at this level because
-   * TypeScript propagates an abstract member through a constructor type, and the factory hands one
-   * back - every ViewSet a consumer wrote would then fail TS2515 for a method the transport
-   * underneath it implements.
+   * Concrete but never reached: abstract here would fail TS2515 on every factory-built ViewSet;
+   * ViewSetProxyBase re-declares it abstract.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the signature is the point; the body cannot run
   protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R> {
@@ -301,23 +248,12 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     ViewSetWatch<T, K>
 {
   /**
-   * The mixins this ViewSet is composed of — the FE counterpart of a BE viewset's base classes.
-   *
-   *     class ItemViewSet extends RestProxyImpl<number, Item, 'id'> {
-   *       static declares = [ReadOnlyViewSetMixin, LookupMixin];
-   *     }
-   *
-   * Left undefined, the ViewSet is not checked against the BE schema at all: with no declared
-   * mixins there is nothing to compare, and checking every standard action would report actions
-   * the ViewSet does not have.
+   * The mixins this ViewSet is composed of, e.g. `[ReadOnlyViewSetMixin, LookupMixin]`. Left undefined,
+   * the ViewSet is not checked against the BE schema.
    */
   static declares?: readonly ViewSetMixinDeclaration[];
 
-  /**
-   * Which field of `T` is the primary key, e.g. `'id'`. `public`, not `protected`: nothing in this
-   * library reads it back, but a generic caller holding a ViewSet instance - a grid or table
-   * component needing to know which column identifies a row - has no other way to ask.
-   */
+  /** Which field of `T` is the primary key, e.g. `'id'`; public for generic callers such as a grid. */
   readonly pkFieldName: string;
 
   private readonly schemaValidationEnabled: boolean;
@@ -336,11 +272,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   /** The BE schema, once fetched; see `schemaDocument()`. */
   private schemaRequest?: Promise<SchemaDocument>;
 
-  /**
-   * Binds every method of the class chain to set the `key` of the call it issues on the promise it
-   * returns (see call.ts's `bindCallKeys`). The methods are bound per instance, here, so a subclass's
-   * own methods are bound as well.
-   */
+  /** Binds every method of the class chain, subclass included, to put its call's `key` on the returned promise. */
   protected constructor(options: ProxyBaseOptions) {
     super(options.basePath);
     this.pkFieldName = options.pkFieldName;
@@ -353,10 +285,8 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   }
 
   /**
-   * Starts the advisory schema check. Subclasses must call this as the *last* statement of their
-   * constructor, never the base constructor itself: `request()` reads fields the subclass has not
-   * assigned yet while `super()` is still running, and since the check swallows its own errors,
-   * doing it here would leave it permanently and silently dead.
+   * Starts the advisory schema check. Subclasses call this as the last statement of their constructor:
+   * during `super()` `request()` reads unassigned fields, and the check swallows its own errors.
    */
   protected initSchemaValidation(): void {
     if (this.schemaValidationEnabled) void this.validateAgainstSchema();
@@ -366,22 +296,11 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   protected abstract override request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>;
 
   /**
-   * Fetches the BE schema and compares it against what this ViewSet declared.
-   * Logs a console warning for any mismatch found.
-   *
-   * The comparison is against `static declares`, not against which methods exist on the object:
-   * every action is implemented unconditionally on this class, so `typeof this[action]` is true for
-   * every ViewSet.
-   *
-   * Non-critical: errors during fetch or parsing are silently ignored. Note that the schema is
-   * fetched over this proxy's own transport, so a muxws proxy validates against the muxws
-   * endpoint set and a REST proxy against the REST one — which is the point, since the two are
-   * allowed to differ.
+   * Compares the BE schema, fetched over this proxy's own transport, against `static declares` (every
+   * action exists as a method on this class) and logs a console warning per mismatch. Errors are
+   * ignored.
    */
   private async validateAgainstSchema(): Promise<void> {
-    // A ViewSet that declares nothing is not checked, and does not pay for the schema request
-    // either. Assuming it meant "all of them" would report, for a viewset built from one mixin,
-    // every action it never claimed to have.
     const declared = declaredActions(this, this.declaredMixins);
     if (declared === null) return;
 
@@ -409,9 +328,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
         } else if (suffix.startsWith('{') && !suffix.includes('/')) {
           pathType = 'pk';
         } else {
-          // A custom endpoint: the base implements no custom actions, so a method of that name is one
-          // the ViewSet defines. The name is the BE method's, from the operation's
-          // `x-viewset-action`; an operation without it is not checked.
+          // A custom endpoint, named by the operation's `x-viewset-action`; one without it is not checked.
           for (const verb of verbs) {
             const action = (pathItem[verb] as { [ACTION_EXTENSION]?: unknown } | undefined)?.[ACTION_EXTENSION];
             if (typeof action !== 'string' || !action) continue;
@@ -501,10 +418,9 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   }
 
   /**
-   * Subscribes the ViewSet's topic to `records_changed`: `options.topic`, else
-   * `ProxyBaseOptions.topic`, else `basePath`; see `WatchOptions`. With `fetch`, a change without
-   * `record` is completed with `retrieve(pk)` (`fetch: true`) or by the `fetch` function, issued as
-   * background calls.
+   * Subscribes to `records_changed` on `options.topic`, else `ProxyBaseOptions.topic`, else `basePath`.
+   * With `fetch`, a change without `record` is completed by `retrieve(pk)` (`fetch: true`) or the
+   * `fetch` function, as background calls.
    */
   watch(options: WatchOptions<T, K>): EventSubscription {
     return watchRecords<T, K>(
@@ -541,13 +457,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     return this.requestList<T[]>('plain', params);
   }
 
-  /**
-   * Fetches one cursor page, from a BE viewset whose `list_shape` is `cursor` or whose `list_shapes`
-   * include it.
-   *
-   * Follow `next` to walk forward. Unlike offset paging, a row inserted or removed behind you
-   * cannot make the next page repeat or skip anything.
-   */
+  /** Fetches one cursor page from a BE viewset serving the `cursor` list shape; follow `next` to walk forward. */
   listCursor(params?: CursorParams): ViewSetActionCall<CursorPage<T>> {
     return this.requestList<{
       results: T[];
@@ -571,12 +481,8 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   }
 
   /**
-   * Fetches one page, from a BE viewset whose `list_shape` is `paginated` or whose `list_shapes`
-   * include it.
-   *
-   * The BE speaks snake_case (`has_more`); the rest of this client speaks whatever the model
-   * declares, so only the envelope's own fields are renamed here. The records inside are passed
-   * through untouched.
+   * Fetches one page from a BE viewset serving the `paginated` list shape. Only the envelope's fields
+   * are renamed to camelCase; records pass through untouched.
    */
   listPage(params?: PageParams): ViewSetActionCall<PaginatedList<T>> {
     return this.requestList<{

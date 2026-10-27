@@ -37,10 +37,8 @@ IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 # Methods whose outcome is stored only when a repeat attached to the call while it ran.
 _SAFE_METHODS = frozenset({"GET", "HEAD"})
 
-# Replaces the running record written by this process with the outcome, or deletes it. A record that
-# is no longer the one this process wrote (its lock expired and another call took the key over) is
-# left alone. Returns 2 when the outcome was stored, 1 when the record was deleted, 0 when it was not
-# this process's record.
+# Replaces this process's running record with the outcome, or deletes it; a record another call took
+# over after the lock expired is left alone. Returns 2 stored, 1 deleted, 0 not this process's record.
 _FINISH_SCRIPT = """
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then
     return 0
@@ -86,10 +84,8 @@ return 1
 
 def parse_idempotency_key(value: str) -> str:
     """
-    The key carried by an `Idempotency-Key` header value: a Structured Field string (RFC 8941,
-    section 3.3.3), e.g. `"8e03978e-40d5-43e8-bc93-6894a57f9324"` with the quotes. Raises
-    `IdempotencyKeyInvalidError` for anything else: a token, a parameter after the string, an
-    escape other than `\\"` and `\\\\`, a character outside printable ASCII, or an empty string.
+    The key carried by an `Idempotency-Key` header value, a non-empty Structured Field string (RFC 8941,
+    section 3.3.3) such as `"8e03978e-..."` with the quotes. Anything else raises `IdempotencyKeyInvalidError`.
     """
     text = value.strip(" \t")
     if len(text) < 2 or text[0] != '"':
@@ -295,50 +291,13 @@ class _Run:
 class Idempotency(Middleware):
     """
     Makes every call that carries an `Idempotency-Key` header repeatable: a repeat with the same key
-    answers with the outcome of the first call instead of running the action again, and a repeat
-    that arrives while the first call is running attaches to it and answers with its outcome. See
-    the Idempotency guide page for the rules.
+    answers with the first call's stored outcome, or attaches to the call while it runs. Placed first in
+    `viewsets_command_middleware`: a middleware ahead of it runs again on every repeat.
 
         settings.viewsets_command_middleware = [Idempotency(redis_client=redis), ...]
 
-    Placed first in `viewsets_command_middleware`: a middleware ahead of it runs again on every
-    repeat.
-
-    - The header value is a Structured Field string; anything else raises
-      `IdempotencyKeyInvalidError` (400) from `depends()`.
-    - The fingerprint of a call is its method, path, query string and body hash
-      (`request_fingerprint`). A key recorded with a different fingerprint raises
-      `IdempotencyKeyReusedError` (422).
-    - The record is written when the chain reaches this middleware, as running, for
-      `settings.viewsets_idempotency_lock_ttl` seconds. While the call runs, this process extends the
-      running record to the lock TTL every third of the lock TTL, so it expires only once the process
-      stops running the call without completing it. When the call completes, its outcome replaces
-      the running record for `settings.viewsets_idempotency_ttl` seconds. An outcome of `GET` or
-      `HEAD` is stored only when a repeat attached while the call ran; an outcome with a cookie or a
-      `set-cookie` header is never stored. A record that is not stored is deleted.
-    - A result whose body is a starlette `Response` with a buffered `body` is recorded as its status,
-      raw headers and body, and a repeat receives a new `Response` built from them, without a
-      background task; the response's own status is the answer's. A `Response` without a buffered
-      body (`StreamingResponse`, `FileResponse`) is not stored, and a `set-cookie` among its headers
-      is a cookie.
-    - An error outcome is stored too and raised again on a repeat: an `HTTPException` as it was
-      raised (a `DfViewSetError` with its `code` and `params`, and with its class when
-      `fastapi_viewsets.exceptions` defines it), a `RequestValidationError` as the
-      `RequestValidationError` of the same errors, any other exception as an `UnhandledError`. The
-      repeat is answered with the body of `fastapi_viewsets.error_responses`, as the first call was.
-      An `ActionDispatchError` is not an outcome: the action did not run (it was not sent, or the
-      executor revoked, rejected or did not know it), the record is deleted, and a repeat runs the
-      call again.
-
-    Without `redis_client` the records live in this instance, which serves one process. With a
-    `redis_client` (`redis.asyncio.Redis`) the record of a key is the Redis string
-    `<key_prefix><key>`, written with `SET NX PX`; a repeat on another process marks
-    `<key_prefix><key>:attached` while the running record it read still exists, subscribes to the
-    channel `<key_prefix><key>`, reads the record again and waits for the message published after
-    the outcome is stored or the record deleted, or for the running record to expire. An outcome
-    that cannot be JSON-encoded is not stored. An events gate run (`GATE_RUN_SCOPE_KEY` in the request
-    scope) passes through. A repeat on the process running the call awaits it in
-    process either way.
+    Without `redis_client` (`redis.asyncio.Redis`) the records live in this instance and serve one
+    process. The storage and replay rules are on the Idempotency guide page.
     """
 
     def __init__(self, redis_client: "Redis | None" = None, key_prefix: str = "idempotency:"):
@@ -427,9 +386,8 @@ class Idempotency(Middleware):
 
     async def _finish(self, storage_key: str, run: _Run, outcome: _Outcome | None, method: str) -> None:
         """Stores the outcome or deletes the record, publishes on the key's channel and resolves the
-        in-process repeats, in that order. `outcome` None (the call was cancelled), an outcome that
-        sets a cookie and an outcome that is not storable are not stored, and the in-process repeats
-        claim the key again."""
+        in-process repeats, in that order. A cancelled call (`outcome` None), a cookie-setting or an
+        unstorable outcome is not stored, and the in-process repeats claim the key again."""
         if outcome is None or outcome.sets_cookie or not outcome.storable:
             mode, outcome = "never", None
         else:
@@ -532,9 +490,8 @@ class Idempotency(Middleware):
         return self._decode(await self.redis_client.get(storage_key))
 
     async def _finish_in_redis(self, storage_key: str, run: _Run, outcome: _Outcome | None, mode: str) -> None:
-        """An outcome that cannot be encoded is not stored. The message on the key's channel is
-        published whether or not the script succeeds, so the repeats on other processes read the
-        record again at once."""
+        """An outcome that cannot be encoded is not stored. The channel message is published even when
+        the script fails, so repeats on other processes re-read the record at once."""
         done = ""
         if outcome is not None:
             fingerprint = json.loads(run.running)["fingerprint"]

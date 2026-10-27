@@ -26,12 +26,9 @@ class _AssignedByServer:
 
 def create_model_without_pk(model: type[T], pk_field_name: str) -> type[BaseModel]:
     """
-    The body of a create of `model`: a subclass of `model` whose `pk_field_name` is not in the JSON
-    schema and is None. The body may leave the primary key out or give it as null; any other value
-    fails validation with `pk_assigned_by_server`. Every other field, the model's config and its
-    validators are inherited. A `@field_validator` of the primary key in `after` mode never runs; one
-    in `before`, `wrap` or `plain` mode runs on a value other than null. A `@model_validator` in
-    `after` mode sees the primary key as None.
+    The create body of `model`: a subclass without `pk_field_name` in the JSON schema. The key may be
+    omitted or null; any other value fails with `pk_assigned_by_server`. Its `after` field validators
+    never run, other modes run on non-null values; `after` model validators see the key as None.
     """
     original = model.model_fields[pk_field_name]
     pk = Field(default=None, validate_default=False, alias=original.alias, validation_alias=original.validation_alias)
@@ -56,8 +53,7 @@ def _is_model_without_pk(model: type[BaseModel]) -> bool:
 
 
 def _without_pk_to_original_model(value: BaseModel, model: type[T]) -> T:
-    """`value`, an instance of `create_model_without_pk(model, ...)`, as a `model` without the primary
-    key unless `model` gives it a default. Its fields are taken as validated, not validated again."""
+    """A `create_model_without_pk` instance as `model`, without revalidation and without the primary key."""
     data = {
         name: getattr(value, name)
         for name, field in type(value).model_fields.items()
@@ -68,10 +64,8 @@ def _without_pk_to_original_model(value: BaseModel, model: type[T]) -> T:
 
 def typecast_to_original_model(value: Any, original_annotation: type[T]) -> T:
     """
-    `value` as `original_annotation`, the parameter's own annotation. An instance of
-    `create_model_without_pk(model, ...)` becomes a `model` (see `_without_pk_to_original_model`);
-    an instance of the model itself and a value that is no model are returned as they are; any other
-    model is validated as the model.
+    `value` as the parameter's own annotation: a pk-less create body becomes the model, the model itself
+    and non-models pass through, any other model is validated as the annotation.
     """
     annotation = original_annotation
     if get_origin(annotation) is Annotated:
@@ -79,9 +73,7 @@ def typecast_to_original_model(value: Any, original_annotation: type[T]) -> T:
 
     origin = get_origin(annotation)
     if origin is Union or origin is types.UnionType:
-        # Optional[Model] / Model | None: unwrap to the model member so isinstance() and
-        # model_validate()/model_construct() below run against the model class rather than
-        # the union object itself (which has neither).
+        # Optional[Model]: use the model member, the union has no isinstance()/model_validate().
         annotation = next(
             (arg for arg in get_args(annotation) if isinstance(arg, type) and issubclass(arg, BaseModel)),
             annotation,
@@ -101,10 +93,8 @@ def typecast_to_original_model(value: Any, original_annotation: type[T]) -> T:
 
 def create_partial_model(model: type[T], pk_field_name: str | None) -> type[BaseModel]:
     """
-    The body of a partial update of `model`: every field optional, without `pk_field_name`. A field
-    the body states is validated by its annotation, its constraints and the model's
-    `@field_validator`s; one it leaves out stays unset. `@model_validator`s are not applied: they see
-    the whole model, and a partial body is not one.
+    The partial-update body of `model`: every field optional, without `pk_field_name`. Stated fields
+    are validated with the model's field validators; `@model_validator`s are not applied.
     """
     fields = {
         name: (field.annotation, _without_default(field))
@@ -131,8 +121,7 @@ def _without_default(field: FieldInfo) -> FieldInfo:
 
 def partial_to_original_model(value: BaseModel, model: type[T]) -> T:
     """
-    `value`, an instance of `create_partial_model(model, ...)`, as a `model` that holds the fields
-    `value` set, as validated, and no others: its `model_fields_set` names them, so
+    A `create_partial_model` instance as `model` holding only the stated fields, so
     `model_dump(exclude_unset=True)` returns exactly what the request stated.
     """
     data = {name: getattr(value, name) for name in value.model_fields_set}

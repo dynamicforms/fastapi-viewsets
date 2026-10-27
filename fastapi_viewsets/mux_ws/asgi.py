@@ -1,11 +1,6 @@
 """
-Runs one request through a FastAPI app without a socket underneath it.
-
-The muxws transport deliberately does not re-implement parameter binding, validation, dependency
-resolution or response-model serialisation - it hands the request to the application, the same one
-an HTTP server hands a request to, so the two transports cannot drift apart on anything the
-application declares. The scope marks the request as a muxws one (`fastapi_viewsets.routing`).
-Each call is one in-process ASGI round trip.
+Runs one muxws command through the FastAPI app as an in-process ASGI request, so binding, validation,
+dependencies and serialisation are the same as over HTTP. The scope marks the transport as muxws.
 """
 
 import json
@@ -31,13 +26,7 @@ class AsgiResponse:
         self.body = body
 
     def json(self) -> Any:
-        """
-        The decoded body, or None when there is none (204, or a handler that returned nothing).
-
-        A body that is not valid JSON is returned as a string rather than raising: by the time we
-        get here the app has already decided this is a successful response, and turning a
-        content-type surprise into a transport-level failure would be the wrong trade.
-        """
+        """The decoded JSON body, None when empty, or the body as a string when it is not JSON."""
         if not self.body:
             return None
         try:
@@ -60,15 +49,9 @@ async def call_asgi(
     peer: Any = None,
 ) -> AsgiResponse:
     """
-    `client` and `server` become the request's `scope["client"]` and `scope["server"]`. Without
-    them both are `("muxws", 0)`, and every call carries the same client address. `state` is the
-    application's lifespan state; the request gets a shallow copy of it, as from an HTTP server.
-    `peer` becomes `scope["fastapi_viewsets.peer"]` (`routing.PEER_SCOPE_KEY`), None without it.
-
-    An exception the app raises after it has started its response (Starlette's
-    `ServerErrorMiddleware` sends the 500, through the application's own handler where it has one,
-    and re-raises) is logged, and the response is returned: it is what an HTTP client receives. An
-    exception raised before any response propagates.
+    One ASGI round trip. `client`/`server` default to `("muxws", 0)`; `state` (lifespan state) is
+    copied shallowly; `peer` goes to `scope[PEER_SCOPE_KEY]`. An exception after the response started
+    (Starlette's 500) is logged and the response returned; one before it propagates.
     """
     scope = {
         "type": "http",
@@ -93,8 +76,7 @@ async def call_asgi(
     async def receive() -> dict[str, Any]:
         nonlocal request_sent
         if request_sent:
-            # An app that reads past the end of the body must see a disconnect rather than block
-            # forever - there is no socket here to eventually drop.
+            # Reading past the body must see a disconnect, not block forever.
             return {"type": "http.disconnect"}
         request_sent = True
         return {"type": "http.request", "body": body, "more_body": False}
@@ -124,12 +106,7 @@ async def call_asgi(
 
 
 def payload_to_body(payload: Any) -> bytes:
-    """
-    Re-encodes an already-decoded muxws payload as the JSON bytes FastAPI expects to parse.
-
-    FastAPI parses the request body from bytes, so a decoded payload is encoded again as JSON;
-    `bytes` pass through unchanged and an absent or `None` payload is an empty body.
-    """
+    """A decoded muxws payload as JSON body bytes; `bytes` pass through, absent or None is empty."""
     from muxws.frames import ABSENT
 
     if payload is ABSENT or payload is None:

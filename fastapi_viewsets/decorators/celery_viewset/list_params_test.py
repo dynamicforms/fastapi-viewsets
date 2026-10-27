@@ -1,11 +1,6 @@
 """
-The list pipeline's parameters crossing into a Celery worker.
-
-`celery_viewset_client` patches the *route endpoints* - `list_items`, not `perform_list` - so the
-whole pipeline runs in the worker: filter, sort and pagination included. These tests pin that,
-because it is the property that decides where push-down belongs. A backend that translates part of
-the query into its own query does so in the worker, where the records are; nothing has to be
-reported back to the FastAPI process, and nothing unreduced has to cross the queue.
+The list pipeline's parameters crossing into a Celery worker. `celery_viewset_client` patches the
+route endpoints (`list_items`, not `perform_list`), so filter, sort and pagination run in the worker.
 """
 
 from unittest.mock import MagicMock
@@ -74,10 +69,7 @@ def test_the_sort_parameter_reaches_the_worker():
 
 
 def test_the_filter_model_survives_the_round_trip_as_a_dict():
-    """
-    Celery carries the filter as JSON; the worker rebuilds it from the endpoint's type hints. If
-    that reconstruction broke, the filter would arrive as a plain dict and `fltr.year` would raise.
-    """
+    """The worker rebuilds the JSON filter as the filter model from the endpoint's type hints."""
     task = worker_tasks_for(paged_viewset)["tracks.list_items"]
     page = task(fltr={"year": 2003}, limit=50)
     assert page.results
@@ -97,12 +89,7 @@ def test_the_default_page_size_applies_in_the_worker():
 
 
 def test_a_stage_the_backend_handled_is_not_redone_in_the_worker():
-    """
-    mark_applied() is an intra-process contract, and the worker is that process. A backend that
-    sorted in its own query says so and the in-memory sort leaves the rows alone - no round trip
-    back to the FastAPI side, which would mean shipping unsorted records across the queue only to
-    sort them somewhere else.
-    """
+    """mark_applied() holds in the worker: a stage the backend applied is not redone in memory."""
 
     def pushdown_viewset(decorate):
         @decorate

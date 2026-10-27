@@ -1,9 +1,8 @@
 """
-`celery_viewset` against a real Celery worker (prefork, and gevent where gevent is installed) and
-the Redis named by FASTAPI_VIEWSETS_TEST_REDIS_URL (skipped without it), called over HTTP: what a
-caller receives, and what `execute()`, `executor_started()` and `on_transition()` observe, when the
-executor interrupts an execution or never runs it; the events a standard and a custom write of
-a scoped class publish from the worker; and the cookies an action sets and deletes in the worker.
+`celery_viewset` over HTTP against a real Celery worker (prefork, and gevent when installed) and the
+Redis of FASTAPI_VIEWSETS_TEST_REDIS_URL (skipped without it): outcomes and middleware hooks when the
+executor interrupts or never runs an execution, events published from the worker, and cookies an
+action sets and deletes in the worker.
 """
 
 import asyncio

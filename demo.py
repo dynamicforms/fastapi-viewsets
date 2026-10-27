@@ -4,21 +4,8 @@ Runs the demo: FastAPI, the Vue dev server, and optionally a Celery worker.
     python demo.py              # backend + frontend
     python demo.py --celery     # ... and every viewset call routed through a Celery worker
 
-Celery is off by default because it dominates the latency the demo exists to measure: queueing a
-task through Redis and waiting for a worker dwarfs the difference between an HTTP request and a
-WebSocket frame. With `--celery` that path is exercised instead, at the cost of the benchmark
-measuring the queue.
-
-Ctrl-C stops everything, in order, quietly. Shutdown relies on two settings:
-
-* Each child gets its **own session** (`start_new_session=True`). Otherwise Ctrl-C goes to the
-  whole foreground process group at once - every process gets the signal simultaneously, each
-  prints its own traceback, and the ones that shut down slowly are still running when the shell
-  hands you the prompt back. With their own session they hear nothing until this process tells
-  them, one at a time.
-* Each is stopped by **process group**, not by pid. `npm run` is a shell that spawns node; killing
-  the shell leaves the dev server holding the port, and the next run fails with address already in
-  use.
+Celery is off by default: its queueing latency would dominate the HTTP vs WebSocket benchmark.
+Ctrl-C stops the children one by one; each runs in its own session and is stopped by process group.
 """
 
 import argparse
@@ -33,16 +20,14 @@ STOP_GRACE_SECONDS = 5
 
 
 def spawn(command: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:
-    """Starts a child in its own session, so that Ctrl-C reaches it only through us."""
+    """Start a child in its own session, so Ctrl-C reaches it only through this process."""
     return subprocess.Popen(command, env={**os.environ, **(env or {})}, start_new_session=True)  # noqa: S603
 
 
 def stop(process: subprocess.Popen, label: str) -> None:
     """
-    Asks a child's whole process group to stop, and insists if it will not.
-
-    The group, not the process: `npm run dev` is a shell whose child holds the port, and signalling
-    only the shell orphans the server that matters.
+    SIGTERM a child's process group, SIGKILL after the grace period. The group, because `npm run` is a
+    shell whose child holds the port.
     """
     if process.poll() is not None:
         return
@@ -60,12 +45,8 @@ def stop(process: subprocess.Popen, label: str) -> None:
 
 def _interrupt(*_args) -> None:
     """
-    Turns a stop signal into the one exception the shutdown path already handles.
-
-    Both are installed explicitly. SIGTERM because that is what a supervisor, an IDE's stop button
-    and plain `kill` send, and its default action is to die on the spot, leaving every child still
-    holding its port. SIGINT because a process started in the background never gets Python's own
-    handler at all - the shell sets it to ignored, and Python leaves an inherited SIG_IGN alone.
+    Turn SIGINT/SIGTERM into KeyboardInterrupt. SIGTERM would otherwise kill this process and leave the
+    children running; a background process inherits SIGINT as ignored.
     """
     raise KeyboardInterrupt
 
@@ -79,8 +60,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Read at import time by demo.backend.viewsets, so it has to be set before the app is imported;
-    # uvicorn imports it inside its own event loop.
+    # demo.backend.viewsets reads it at import time
     env = {"DEMO_CELERY": "1"} if args.celery else {}
 
     children: list[tuple[str, subprocess.Popen]] = [
@@ -114,9 +94,7 @@ def main() -> int:
     try:
         backend.wait()
     except KeyboardInterrupt:
-        # The children are in their own sessions, so this process is the only one the terminal
-        # interrupted. A blank line puts "Stopping..." past the ^C the shell echoed.
-        print()
+        print()  # past the echoed ^C
     finally:
         for label, process in children:
             stop(process, label)

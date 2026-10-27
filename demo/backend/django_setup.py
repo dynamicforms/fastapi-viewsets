@@ -1,12 +1,6 @@
 """
-A minimal Django ORM setup for the demo, backed by SQLite.
-
-There is no Django project here and no manage.py - `settings.configure()` plus `django.setup()` is
-the whole of it. That is deliberate: the point is that the ORM backend needs a database, not a
-Django application, and a FastAPI service that wants one should not have to become a Django
-project to get it.
-
-Import this module before anything that touches the models.
+A minimal Django ORM setup for the demo, backed by SQLite: `settings.configure()` plus
+`django.setup()`, with no Django project. Import this module before anything that touches the models.
 """
 
 import os
@@ -33,12 +27,7 @@ from django.db import models  # noqa: E402
 
 
 class MusicTrackRow(models.Model):
-    """
-    The same shape as the in-memory MusicTrack, so the two viewsets are directly comparable.
-
-    Genres and moods are lists in the API model and TEXT here - the demo keeps them denormalised
-    because normalising them would add joins that say nothing about the list pipeline.
-    """
+    """The in-memory MusicTrack's shape; genres and moods are comma-separated TEXT."""
 
     title = models.CharField(max_length=200)
     artist = models.CharField(max_length=200, db_index=True)
@@ -54,17 +43,13 @@ class MusicTrackRow(models.Model):
     class Meta:
         app_label = "backend"
         indexes = [models.Index(fields=["year", "id"])]
-        """
-        Composite, in that order: a cursor over (year, id) seeks on it instead of scanning.
-        """
+        """A cursor over (year, id) seeks on this index instead of scanning."""
 
 
 def ensure_database(records: list[dict]) -> None:
     """
-    Creates the table if it is missing and fills it once.
-
-    Synchronous: Django refuses a synchronous query inside a running event loop, so the lifespan
-    calls it in a worker thread (`sync_to_async`).
+    Creates the table if it is missing and fills it. Synchronous, as Django refuses a synchronous query
+    in a running event loop: call it via `sync_to_async`.
     """
     from django.db import connection
 
@@ -72,11 +57,8 @@ def ensure_database(records: list[dict]) -> None:
         with connection.schema_editor() as editor:
             editor.create_model(MusicTrackRow)
 
-    # Refill when the table no longer matches what was asked for. It is written once and reused
-    # across runs, so a demo started with a different DEMO_LIBRARY_SIZE would otherwise serve a
-    # stale library from one backend and a fresh one from the other. The highest id is checked as
-    # well as the count: SQLite's AUTOINCREMENT never reuses a value, so a refilled table has the
-    # right number of rows under the wrong ids.
+    # Refill when the table does not match `records` (e.g. another DEMO_LIBRARY_SIZE). The highest id
+    # is checked too, as AUTOINCREMENT never reuses ids.
     highest = MusicTrackRow.objects.order_by("-id").values_list("id", flat=True).first()
     if MusicTrackRow.objects.count() == len(records) and highest == len(records):
         return
@@ -85,9 +67,7 @@ def ensure_database(records: list[dict]) -> None:
     MusicTrackRow.objects.bulk_create(
         (
             MusicTrackRow(
-                # The generator's own id, not one the database invents: the demo's whole claim is
-                # that the two backends serve the same records, and a record with a different id is
-                # a different record as far as any client is concerned.
+                # The generator's id, so both backends serve the same records.
                 id=record["id"],
                 title=record["title"],
                 artist=record["artist"],

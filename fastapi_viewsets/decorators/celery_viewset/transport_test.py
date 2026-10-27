@@ -1,12 +1,7 @@
 """
-The types of a `celery_viewset` call's arguments and result across the FastAPI process and the
-worker: each value an action receives, and each value its caller receives, is of the type it is
-when the action runs in the FastAPI process.
-
-The in-process harness runs both ends in one process: `send_task` runs the task a
-`celery_viewset_server` registered for a twin of the viewset class, with its kwargs passed through
-JSON as Kombu passes them, and the result travels through a result list the FastAPI side's result
-reader pops.
+A `celery_viewset` call's arguments and result keep the types they have in the FastAPI process. The
+in-process harness runs both ends: `send_task` runs the server's task for a twin viewset class with
+JSON-passed kwargs, and the result travels through a result list the reader pops.
 """
 
 import asyncio

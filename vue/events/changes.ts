@@ -18,11 +18,7 @@ import {
 /** One changed record: its pk, and the row `watch()` with `fetch` read for it. */
 export interface Change<T, K extends KeyType = KeyType> {
   pk: K;
-  /**
-   * The row `fetch` read after the change: what `retrieve(pk)` answered for `fetch: true`, the row a
-   * `fetch` function returned for the pk otherwise. The BE sends the pk only; `record` is absent
-   * without `fetch`.
-   */
+  /** The row `watch()`'s `fetch` read after the change; absent without `fetch` (the BE sends pks only). */
   record?: T | null;
 }
 
@@ -36,11 +32,8 @@ export interface RecordsChanged<T, K extends KeyType = KeyType> {
 export const RECORDS_CHANGED = defineEvent<RecordsChanged<unknown>>('records_changed');
 
 /**
- * `WatchOptions.fetch` as a function: the rows of `pks`, in any order. `watch()` calls it once per
- * `created` or `updated` event, with the pks of the changes that carry no `record`, and matches the
- * rows it returns to them by the ViewSet's `pkFieldName`; a pk without a row is a deleted one.
- *
- *   fetch: (pks) => members.list({ id__in: pks })
+ * `WatchOptions.fetch` as a function: the rows of `pks`, in any order, matched back by the ViewSet's
+ * `pkFieldName`; a pk without a row is a deleted one. E.g. `(pks) => members.list({ id__in: pks })`.
  */
 export type FetchRows<T, K extends KeyType = KeyType> = (pks: K[]) => Promise<readonly T[]>;
 
@@ -50,56 +43,35 @@ export type FetchRows<T, K extends KeyType = KeyType> = (pks: K[]) => Promise<re
  */
 export interface WatchOptions<T, K extends KeyType = KeyType> {
   /**
-   * Called once per `records_changed` event of version 1 of the ViewSet's topic, in rev order, with
-   * the change and the event's `EventMeta`; with `fetch`, twice for an event some of whose records
-   * are gone. An event of any other version calls `onResync` instead.
+   * Called per `records_changed` event of version 1, in rev order; with `fetch`, a second time with
+   * `op: 'deleted'` for the records that are gone. Another version calls `onResync` instead.
    */
   onChange: (change: RecordsChanged<T, K>, meta: EventMeta) => void;
-  /**
-   * Called on a resync of the topic, and for a `records_changed` event whose version is not 1: the
-   * caller re-reads what it displays.
-   */
+  /** Called on a resync and for a `records_changed` event whose version is not 1: re-read the data. */
   onResync: () => void;
   /**
-   * Completes every `created` and `updated` change without `record` before `onChange`:
-   *
-   * - `true` with `retrieve(pk)`, one call per change; a 404 means the record is gone.
-   * - a `FetchRows` function with the rows it returns for the event's pks, one call per event; a pk
-   *   without a row is gone. The rows need not be the ViewSet's records: a ViewSet whose events
-   *   another ViewSet's rows describe (a sub-viewset listing `MemberRow`s of the parent's `Account`s)
-   *   fetches them with that ViewSet's `list()`.
-   *
-   * The changes whose record is gone leave the event and follow it in a second `onChange` with
-   * `op: 'deleted'` and the same `meta`, in their order in the event; an event whose every record is
-   * gone calls `onChange` once, with `op: 'deleted'`. Default `false`.
+   * Completes `created` and `updated` changes without `record` before `onChange`: `true` with one
+   * `retrieve(pk)` per change (404 = gone), a `FetchRows` function with one call per event (its rows
+   * may come from another ViewSet). Default `false`.
    */
   fetch?: boolean | FetchRows<T, K>;
   /**
-   * Called with the error of a refused `subscribe` or `poll` of the topic, with the error of a
-   * `retrieve` that `fetch: true` sent and that failed with anything but a 404, and with the error of
-   * a `fetch` function; `onResync()` follows the latter two.
+   * Called with the error of a refused `subscribe` or `poll`, and of a failed `fetch` (a `retrieve`
+   * failing with anything but 404); `onResync()` follows a failed `fetch`.
    */
   onError?: (error: unknown) => void;
   /**
-   * The client topic to subscribe: the BE path of the viewset relative to the application's
-   * `root_path`, without a Starlette `Mount` prefix. Default `ProxyBaseOptions.topic`, else the
-   * ViewSet's `basePath`.
+   * The topic: the viewset's BE path relative to `root_path`, without a Starlette `Mount` prefix.
+   * Default `ProxyBaseOptions.topic`, else the ViewSet's `basePath`.
    */
   topic?: string;
 }
 
-/**
- * `watch()`, which every ViewSet has. `onChange` receives the ViewSet's records `T`, or, with a
- * `fetch` function, the rows that function returns:
- *
- *   accounts.watch({ fetch: (pks) => members.list({ id__in: pks }), onChange, onResync }) // MemberRow
- */
+/** `watch()`, which every ViewSet has. `onChange` receives records `T`, or the rows a `fetch` function returns. */
 export interface ViewSetWatch<T, K extends KeyType = KeyType> {
   /**
-   * Subscribes the ViewSet's topic (`WatchOptions.topic`, else `ProxyBaseOptions.topic`, else
-   * `basePath`) to `records_changed` and returns the subscription. Uses the
-   * `events` client of the ViewSet's options; without one, a muxws ViewSet uses the client
-   * registered for its peer (`eventsOf`), and a REST ViewSet throws.
+   * Subscribes the ViewSet's topic to `records_changed`, on the `events` client of its options; without
+   * one, a muxws ViewSet uses the client registered for its peer and a REST ViewSet throws.
    */
   watch<Row>(options: Omit<WatchOptions<NoInfer<Row>, K>, 'fetch'> & { fetch: FetchRows<Row, K> }): EventSubscription;
   watch(options: WatchOptions<T, K>): EventSubscription;
@@ -128,13 +100,8 @@ export type KeyOf<M> = M extends { retrieve(pk: infer K): any }
       : KeyType;
 
 /**
- * `rows` with `change` applied, as a new array; `rows` is not modified.
- *
- * - `deleted` removes every row whose pk is a changed pk.
- * - `created` and `updated` replace every row with the change's pk by the change's `record`, or
- *   append the record when no row has that pk. A change without `record` is skipped.
- *
- * Pks compare by their string form, so `7` and `'7'` name one row.
+ * `rows` with `change` applied, as a new array. `created` / `updated` replace the row with the pk, or
+ * append the record; a change without `record` is skipped. Pks compare as strings (`7` equals `'7'`).
  */
 export function applyChanges<T, K extends KeyType = KeyType>(
   rows: readonly T[],
@@ -172,14 +139,9 @@ export interface WatchTarget<T, K extends KeyType> {
 }
 
 /**
- * `watch()` of a ViewSet: subscribes `target.topic` to `records_changed` on `client`, or on the
- * client `client` resolves to. The calls of `fetch` are issued inside `inBackground`, so call
- * activity reports them as background calls.
- *
- * `onChange` and `onResync` are called in the order their events arrived, also while `fetch` is
- * waiting for a `retrieve`. An event whose version is not 1 has a payload `RecordsChanged` does not
- * describe; it calls `onResync`, with or without `fetch`. After `unsubscribe()` of the returned
- * subscription no option callback is called, also for an event that arrived before it.
+ * `watch()` of a ViewSet. `fetch` calls run as background calls. `onChange` and `onResync` keep the
+ * events' arrival order while `fetch` waits; after `unsubscribe()` no callback is called, also for an
+ * event that arrived before it.
  */
 export function watchRecords<T, K extends KeyType>(
   target: WatchTarget<T, K>,

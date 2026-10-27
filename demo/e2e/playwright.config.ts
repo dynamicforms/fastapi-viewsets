@@ -4,13 +4,8 @@ const API_PORT = 8123;
 const FE_PORT = 15173;
 
 /**
- * End-to-end cover for the demo, which is the only place the whole stack is assembled: the
- * viewsets, both transports, both backends, cursor paging, the grid's incremental loading and the
- * change events that reach a second tab. Unit tests cover each of those; nothing but this covers
- * them wired together.
- *
- * Its own ports, so a run never depends on - or fights with - a dev server the developer already
- * has up.
+ * End-to-end tests of the assembled demo stack: both transports, both backends, cursor paging, grid
+ * loading and change events across tabs. Uses its own ports, independent of running dev servers.
  */
 export default defineConfig({
   testDir: '.',
@@ -32,9 +27,7 @@ export default defineConfig({
 
   webServer: [
     {
-      // Deliberately the string form. Uvicorn imports the app inside its own event loop when given
-      // "module:app", and anything the demo does at import time has to survive that; passing the
-      // app object imports it earlier and would not exercise it.
+      // "module:app" form: uvicorn then imports the app inside its event loop, as in the demo.
       command: `python -m uvicorn demo.backend.main:app --host 127.0.0.1 --port ${API_PORT}`,
       url: `http://127.0.0.1:${API_PORT}/music?limit=1`,
       cwd: '../..',

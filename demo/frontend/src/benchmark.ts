@@ -1,19 +1,8 @@
 /**
- * Latency comparison between the REST and muxws transports.
- *
- * Two measurements, because they answer different questions:
- *
- * - **Sequential** sends one request at a time and reports the distribution. This is the per-call
- *   cost of the transport: no connection setup on either side once HTTP keep-alive is warm, so
- *   what is left is header parsing against frame decoding. Expect the two to be close.
- *
- * - **Burst** sends N requests at once and measures how long until the last one lands. This is
- *   where they diverge: a browser opens at most ~6 concurrent HTTP/1.1 connections to one host,
- *   so request 7 waits for request 1 to finish. muxws multiplexes every call onto one socket.
- *
- * A warm-up round runs before each measurement and is discarded — the first call on either
- * transport pays for connection setup, and including it would credit muxws with a cost that only
- * happens once.
+ * Latency comparison between the REST and muxws transports. **Sequential** measures the per-call
+ * cost, one request at a time; **burst** sends N at once and times the last, where the browser's
+ * ~6 HTTP/1.1 connections per host queue REST while muxws multiplexes one socket. A discarded
+ * warm-up round precedes each measurement.
  */
 
 import type { Backend, Transport } from './viewsets';

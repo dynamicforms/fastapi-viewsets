@@ -51,9 +51,8 @@ T = TypeVar("T")
 
 
 def _unwrap_optional(hint):
-    """Before Python 3.11, `get_type_hints()` implicitly wraps a None-defaulted parameter's
-    annotation in `Optional[...]`, so a hint that is actually a bare model class arrives as
-    `Union[Model, None]` and the `inspect.isclass` check below sees a `Union`, not a class."""
+    """`Optional[X]` as `X`: before Python 3.11 `get_type_hints()` wraps a None-defaulted parameter's
+    annotation in `Optional`."""
     if get_origin(hint) in (Union, types.UnionType):
         args = [arg for arg in get_args(hint) if arg is not type(None)]
         if len(args) == 1:
@@ -62,12 +61,8 @@ def _unwrap_optional(hint):
 
 
 def _reconstruct_value(hint, value):
-    """Rebuild a dict (or list/tuple of dicts) back into BaseModel instance(s) per `hint`.
-
-    `_reconstruct_kwargs` only unwraps `Optional[...]` at the top level, so a hint arriving here
-    may still be `list[Model]` or `Optional[list[Model]]` - handled by recursing into the origin's
-    type args rather than requiring `hint` itself to be a bare BaseModel subclass.
-    """
+    """Rebuilds a dict, or a list/tuple of dicts, into BaseModel instance(s) per `hint`, recursing into
+    `list[Model]` and `Optional[list[Model]]`."""
     hint = _unwrap_optional(hint)
     if hint is not None and isinstance(value, dict) and inspect.isclass(hint) and issubclass(hint, BaseModel):
         return _validate_model(hint, value)
@@ -79,10 +74,8 @@ def _reconstruct_value(hint, value):
 
 
 def _validate_model(model: type[BaseModel], value: dict) -> BaseModel:
-    """`value`, a `model` the FastAPI side dumped by field name, validated as `model`. A create body
-    arrives without its primary key: a value whose only error is one missing top-level field is
-    validated as `create_model_without_pk(model, field)` and handed on as `model`, as the FastAPI
-    side does. Any other error raises."""
+    """`value`, dumped by field name on the FastAPI side, validated as `model`. A create body arrives
+    without its primary key, so a sole missing top-level field validates as the model without it."""
     try:
         return model.model_validate(value, by_name=True)
     except ValidationError as error:
@@ -113,21 +106,14 @@ def _reconstruct_kwargs(
     original_endpoint, kwargs: dict, cls: type = None, untyped=(), codec: ActionCodec | None = None
 ) -> dict:
     """The action's keyword arguments from the task's kwargs, each decoded by its parameter's kind
-    (see `transport`): a model validated as its model, a partial update body as the partial model the
-    FastAPI side validated it with, a typed value validated by its hint, and a value named in
-    `untyped` (or of an untyped parameter) with every `SerializableObject` in it rebuilt.
-
-    The call's context, request and parent arrive under the reserved kwargs of `payload`, which the
-    task consumes before this runs.
-    """
+    (see `transport`). The reserved kwargs of `payload` are consumed before this runs."""
     codec = codec or ActionCodec(cls, original_endpoint)
     result = {}
     for key, value in kwargs.items():
         param = codec.params.get(key)
         kind = param.kind if param is not None else "untyped"
         if kind == "partial":
-            # validated as the partial model the FastAPI side validated it with, so the model holds
-            # the fields the request stated and no others
+            # the partial model holds the fields the request stated and no others
             annotation = partial_body_annotation(param.hint, None)
             result[key] = from_partial_body(TypeAdapter(annotation).validate_python(value, by_name=True), param.hint)
         elif kind == "model":
@@ -183,11 +169,9 @@ def _pool_timeout_in(error: BaseException) -> BaseException | None:
 
 class _Run:
     """
-    One execution in this process. Maps the exceptions the executor raises into it to this
-    package's: a soft time limit and the gevent pool's hard time limit (`gevent.Timeout`) to
-    `ActionInterruptedError`, any other celery, billiard or kombu exception to `ActionFailedError`, and
-    the `asyncio.CancelledError` of an execution an interruption cancelled to that interruption, or
-    to the `SystemExit` / `KeyboardInterrupt` of a process exit.
+    One execution in this process. Translates executor exceptions: time limits to
+    `ActionInterruptedError`, other celery/billiard/kombu exceptions to `ActionFailedError`, and the
+    `CancelledError` of an interrupted execution to the interruption that caused it.
     """
 
     def __init__(self, task: str):
@@ -221,9 +205,8 @@ class _Run:
 @contextlib.contextmanager
 def _soft_limit_raises(task: str):
     """
-    While active, the soft time limit raises `ActionInterruptedError` at the executing frame in
-    place of billiard's `SoftTimeLimitExceeded`. It takes effect on the main thread of a process
-    whose soft time limit signal runs billiard's handler, which is restored on exit.
+    While active, the soft time limit raises `ActionInterruptedError` in place of billiard's
+    `SoftTimeLimitExceeded`; only on the main thread, where billiard's handler is installed.
     """
     previous = None
     if _SOFT_LIMIT_SIGNAL is not None and threading.current_thread() is threading.main_thread():
@@ -247,10 +230,9 @@ def _soft_limit_raises(task: str):
 
 
 def _run_to_end(loop: asyncio.AbstractEventLoop, coroutine, run: _Run | None = None) -> Any:
-    """Runs `coroutine` on `loop` as a task and returns its result. An exception that interrupts the
-    loop while the task is suspended (the executor's time limit, raised from a signal handler) is
-    recorded on `run`, cancels the task and runs it until it has unwound, so its `finally` blocks and
-    `Middleware.execute()` see the interruption; the exception is then raised."""
+    """Runs `coroutine` on `loop` as a task. An exception that interrupts the loop while the task is
+    suspended (a time limit from a signal handler) cancels the task and lets it unwind, so `finally`
+    blocks and `Middleware.execute()` see the interruption, then propagates."""
     task = loop.create_task(coroutine)
     try:
         return loop.run_until_complete(task)
@@ -290,9 +272,8 @@ _started_lock = threading.Lock()
 
 
 def _ensure_executor_started(loop: asyncio.AbstractEventLoop, task: str) -> None:
-    """Runs `Middleware.executor_started()` once on each event loop this process runs executions on,
-    before the loop's first execution. A failure raises `ActionFailedError` (reason `executor`) and
-    leaves it to run again before the loop's next execution."""
+    """Runs `Middleware.executor_started()` once per event loop of this process. A failure raises
+    `ActionFailedError` (reason `executor`) and is retried before the loop's next execution."""
     global _started_pid
     if _started_pid == os.getpid() and loop in _started_loops:
         return
@@ -352,10 +333,9 @@ def _first_report(correlation_id: str) -> bool:
 
 class _TransitionLoop:
     """
-    A daemon thread of this process that runs `on_transition()` listeners, one transition at a time,
-    on its own event loop, after `Middleware.executor_started()` once. The loop runs only while a
-    transition is reported: under gevent's monkey-patching the thread is a greenlet of the thread the
-    executions run on, which shares that thread's running event loop.
+    A daemon thread that runs `on_transition()` listeners one at a time on its own event loop. The loop
+    runs only while a transition is reported: under gevent the thread is a greenlet sharing the
+    executions' thread and its running loop.
     """
 
     def __init__(self):
@@ -435,9 +415,8 @@ def _report(
     kind: str, task_name: str | None, task_kwargs: Any, error_of: Callable[[str], DfViewSetError]
 ) -> concurrent.futures.Future | None:
     """
-    Pushes the error `error_of(task)` to the caller of the call `task_kwargs` belong to, then submits
-    the transition. Does nothing for a task outside the registered prefixes, for kwargs without the
-    call's result queue and for a call already reported in this process.
+    Pushes `error_of(task)` to the call's caller and submits the transition; once per call, and only
+    for a registered task whose kwargs name a result queue.
     """
     resolved = _action_of(task_name)
     if resolved is None or not isinstance(task_kwargs, dict):
@@ -548,24 +527,13 @@ def celery_viewset_server(
     redis_client: "redis.Redis | None" = None,
 ):
     """
-    Decorator for the Celery worker side. Registers a task per route of the viewset that executes
-    the action and pushes its result or error to the caller's result queue through `redis_client`
-    (a synchronous `redis.Redis`, required). The action's arguments are decoded, and its result
-    encoded, by its type hints (see `transport`); a result that cannot be encoded fails the call
-    with `ActionFailedError` (reason `result`).
+    Decorator for the Celery worker side: registers a task per route that executes the action and
+    pushes its result or error to the caller's result queue through `redis_client` (a synchronous
+    `redis.Redis`, required). Arguments and results are coded by the action's type hints (`transport`).
 
-    The tasks are registered with `ignore_result=True`, `acks_late=False`,
-    `reject_on_worker_lost=False` and `store_errors_even_if_ignored=False`, overriding the
-    application's `task_acks_late`: a call is acknowledged when its execution starts, and never
-    delivered a second time, since its caller receives one outcome only.
-
-    No celery, billiard or kombu exception reaches `Middleware.execute()` or the caller: a soft
-    time limit, and the gevent pool's hard time limit, arrive as `ActionInterruptedError`, any other
-    one as `ActionFailedError`. The
-    worker's supervisor reports what ends an execution from outside it (a hard time limit, a
-    termination, a lost process) and a call that never runs (revoked, expired, unknown, rejected)
-    to the caller and to `Middleware.on_transition()`; a process no supervisor outlives (any pool but
-    `prefork`) reports its own exit as `interrupted` with reason `terminated`.
+    Tasks are registered with `acks_late=False` (overriding `task_acks_late`): a call is never
+    delivered twice. No celery, billiard or kombu exception reaches `Middleware.execute()` or the
+    caller; outcomes are listed in docs/guide/routers.md.
     """
     if redis_client is None:
         raise ValueError("redis_client is required for celery_viewset_server")
@@ -632,9 +600,8 @@ def celery_viewset_server(
                         except Exception as error:
                             raise ActionFailedError(task_name, "result") from error
                         push_payload(redis_client, result_queue_key, payload)
-                        # The caller reads the pushed payload only, so the task returns a JSON-trivial
-                        # value instead of handing Celery a raw endpoint return value - e.g. a Pydantic
-                        # model - to encode on its own (task-succeeded event, ...).
+                        # The caller reads the pushed payload only; Celery is not handed a raw return
+                        # value (e.g. a Pydantic model) to encode for its task-succeeded event.
                         return True
                     return result
                 except BaseException as caught:
@@ -643,17 +610,10 @@ def celery_viewset_server(
             return sync_wrapper
 
         def _fail(caught: BaseException, run: _Run, task_name: str, call: dict):
-            """Pushes the error of a failed execution and re-raises what Celery is to record: the
-            translated error, or a process exit as it is. An `HTTPException` the action raised is its
-            answer and is not re-raised.
-
-            A process exit is reported as `interrupted` with reason `terminated` where no supervisor
-            outlives the process (any process but a prefork pool child); a prefork pool child's
-            supervisor reports it.
-
-            The gevent pool's hard time limit is reported here as the supervisor reports another
-            pool's, as `interrupted` with reason `time_limit`, and its `gevent.Timeout` is re-raised
-            as it is: the pool handles the time limit only when that exception reaches it."""
+            """Pushes the error of a failed execution and re-raises what Celery is to record; an
+            `HTTPException` is the action's answer and is not re-raised. A process exit is reported here
+            only without a supervisor (any pool but prefork). A `gevent.Timeout` is re-raised as it is:
+            the gevent pool handles its time limit only when that exception reaches it."""
             correlation_id = call.get("_correlation_id")
             result_queue_key = call.get("_result_queue_key")
             pool_timeout = _pool_timeout_in(caught)
@@ -665,9 +625,7 @@ def celery_viewset_server(
             if process_exit:
                 pushed = ActionInterruptedError(task_name, "terminated")
             elif isinstance(error, (HTTPException, RequestValidationError)):
-                # a request the worker found invalid (a filter value that will not convert) is pushed as
-                # the `RequestValidationError` it is, and answered as a request the FastAPI process found
-                # invalid
+                # e.g. a filter value that will not convert: answered as a 422, as in the FastAPI process
                 pushed = error
             else:
                 pushed = ActionFailedError(task_name)
@@ -711,10 +669,8 @@ def celery_viewset_server(
             seen_tasks.add(task_name)
             _task_actions[task_name] = (cls, route.endpoint.__name__)
 
-            # ignore_result=True - celery_viewset_client never reads Celery's own result backend, it
-            # awaits the result queue pushed to above instead (see client.py). acks_late=False and
-            # reject_on_worker_lost=False: a call is never delivered twice. store_errors_even_if_ignored=False:
-            # the supervisor stores no failure in the unused backend either.
+            # The client reads the result queue, never Celery's result backend; a call is never
+            # delivered twice.
             celery_app.task(
                 name=task_name,
                 ignore_result=True,

@@ -14,40 +14,15 @@ if TYPE_CHECKING:
 
 class Authorization(Middleware):
     """
-    Command middleware for authorization (is this caller allowed to do *this*) - complements
-    `Session` (authentication: who's calling). Configured via `@action_configuration` (see
-    `fastapi_viewsets.action_configuration`), keyed by this class. The configured value has two
-    roles at once, depending on its shape:
+    Command middleware for authorization, configured per action with `@action_configuration`:
 
-    - If it's callable, it's evaluated as `check(request, cls, context)` (sync or async) in
-      `depends()` - bridged onto FastAPI's own `Depends()` by route_viewset - a falsy result
-      rejects the request with 403 before `perform_*` (or even FastAPI's own body parsing) ever
-      runs. Use this for checks that don't need a specific record (e.g. a role check). A callable
-      config is consumed entirely by `depends()` and never reaches `context.authorization` - there
-      is nothing left for `perform_*` to do with the check function itself, and a bare function
-      isn't something a `celery_viewset` worker could receive anyway.
-    - Otherwise (non-callable, or unconfigured/`None`), nothing is enforced by the middleware
-      itself; the value is made available as `context.authorization` (set in `__call__`, in the
-      onion chain - there's no reject decision here, so there's no benefit to doing this any
-      earlier) - `perform_*` can inspect it once it has whatever record-specific info a check
-      needs (e.g. the object a `pk` resolved to) and reject itself (`raise HTTPException(403,
-      ...)`) if it decides to. This is the "no hook in the middleware layer needed" case - just
-      raise, same as anywhere else in the pipeline (see docs/guide/action-configuration.md's
-      "Rejecting a request: just raise").
-
-    Unconfigured (no `@action_configuration` entry for `Authorization` at all): nothing is
-    enforced, `context.authorization` resolves to `None`.
+    - a callable config is evaluated as `check(request, cls, context)` (sync or async) in `depends()`;
+      a falsy result rejects the request with 403 before the body is parsed;
+    - any other value (or `None` when unconfigured) is enforced by nothing and becomes
+      `context.authorization`, for `perform_*` to check and raise 403 itself.
 
         @action_configuration({Authorization: lambda request, cls, context: is_admin(context)})
         class AdminOnlyViewSet(...): ...
-
-        @action_configuration({Authorization: "owner-only"})
-        class ItemViewSet(...):
-            async def perform_retrieve(self, context: Context, pk: int) -> Item:
-                item = await fetch(pk)
-                if await context.authorization == "owner-only" and item.owner != await context.user:
-                    raise HTTPException(403, "Not your item")
-                return item
     """
 
     async def depends(self, request: "Request | None", cls: type, context: "Context") -> None:

@@ -1,23 +1,9 @@
 """
-A viewset backed by the Django ORM.
+A viewset backed by the Django ORM, pushing filter, sort and page down into SQL.
 
-This is the second real backend, and it exists as much to constrain the design as to be useful: an
-abstraction built only against an in-memory dict inevitably assumes the records are already in
-memory, and you find out when the second backend arrives. A QuerySet is lazy, iterates
-asynchronously, and can absorb a filter, an ordering and a slice into SQL - so it exercises every
-push-down path the pipeline offers.
-
-    class TrackViewSet(DjangoORMViewSet[int, Track], PaginatedListMixin[Track, TrackFilter]):
-        model = TrackModel
-        schema = Track
-
-The backend comes before the list mixin, and that order is required: `pk_field_name` is a property
-here and a plain class attribute on `ListMixin`, so a viewset that lists the mixin first finds the
-mixin's `"id"` and never asks the model.
-
-Requires the `django` extra. Django's ORM is synchronous underneath; every call here uses either
-its native async API (`aget`, `acount`, `__aiter__`, added in Django 4.1) or `sync_to_async`, so
-nothing blocks the event loop.
+The backend must precede the list mixin in the bases: `pk_field_name` is a property here and a plain
+class attribute on `ListMixin`. Requires the `django` extra; every ORM call uses the async API or
+`sync_to_async`.
 """
 
 import operator
@@ -72,11 +58,10 @@ T = TypeVar("T", bound=BaseModel)
 
 class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
     """
-    A relation field - `ForeignKey`, `OneToOneField` - appears in `schema` under its `name` and
-    carries the related row's key: `owner: int`, not `owner_id: int` and not a nested model. The
-    backend reads and writes the `owner_id` column for it, filters and sorts on that column, and
-    never loads the related row. A `schema` that declares the column name (`owner_id`) raises
-    `TypeError` when the viewset class is defined.
+    Viewset over `model`, converting rows into `schema`.
+
+    A relation field appears in `schema` under its name and carries the related row's key (`owner: int`);
+    declaring the column name (`owner_id`) raises `TypeError` at class definition.
     """
 
     model: ClassVar[type["Model"]]
@@ -101,33 +86,15 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
                 )
 
     pk_field: ClassVar[str] = "pk"
-    """
-    The lookup `_get_or_404` hands to `aget()` when a record is fetched by its key. `pk` is Django's
-    alias for whichever field carries the primary key, so a renamed primary key needs no change
-    here; what that field is *called* is `pk_field_name`.
-    """
+    """The lookup `_get_or_404` hands to `aget()`; `pk` is Django's alias for the primary key."""
 
     @property
     def pk_field_name(self) -> str:
         """
-        The primary key's name, taken from `Model._meta.pk`.
+        `Model._meta.pk.name` when `schema` carries it, else the inherited default.
 
-        The cursor appends it to the ordering and filters on it - and this backend pushes a filter
-        set down only when every name in it is a concrete model field - while the position the
-        cursor emits is read off the converted *response* record. The name therefore has to be one
-        both the model and `schema` carry, or the cursor's own key would take the whole set, the
-        client's own filters with it, to the in-memory pass, and emit a position read off a field
-        that is not there.
-
-        That name is `_meta.pk.name`, also for a relation primary key (`artist`, carrying the
-        related row's key). A `schema` without it names the key something else - a
-        multi-table-inheritance child, whose `_meta.pk` is the parent link - and the default
-        declared further along the MRO stands.
-
-        Assigning `pk_field_name` on a subclass overrides this at any depth; assigning it on an
-        instance raises `AttributeError`, because this is a read-only property. A subclass with no
-        `model` yet takes the same default, so an abstract base is free to leave the model to its
-        own subclasses.
+        The cursor filters on this name in SQL and reads it off the response record, so it must exist in both.
+        A composite primary key raises `TypeError`. Read-only: assign it on the class to override.
         """
         model = getattr(self, "model", None)
         if model is None:
@@ -147,10 +114,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         return super().pk_field_name
 
     def get_queryset(self, context: Context) -> "QuerySet":  # noqa: ARG002 - for overrides to narrow per user
-        """
-        The base queryset. Override to scope it - by tenant, by permission, by anything on the
-        context - and everything downstream narrows what you return here rather than replacing it.
-        """
+        """The base queryset. Override to scope it (tenant, permission); every operation narrows it."""
         return self.model.objects.all()
 
     # -----------------------------------------------------------------------
@@ -159,16 +123,9 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
 
     def to_record(self, raw: Any) -> T:
         """
-        Django row to pydantic model. Runs on the page alone for as long as no stage has landed the
-        source, which means the filter and the sort each pushed down or had nothing to do; a
-        declined `take_page` still cuts its page out of the queryset. A declined filter or sort runs
-        this on whatever reached that stage instead - the whole table where the filter declined -
-        because the in-memory pass goes through `land()`, which converts what it materialises. Every
-        one of those rows and its pydantic model are held at once, before the page is cut, so
-        `limit=10` against a table of hundreds of thousands of rows can exhaust memory.
+        Django row to `schema`; a relation field is read from its column, never fetching the related row.
 
-        A relation field is read from its column (`owner_id` for `owner`), so the related row is
-        never fetched.
+        A declined filter or sort converts every row reaching that stage, all held in memory at once.
         """
         if isinstance(raw, self.schema):
             return raw
@@ -189,20 +146,15 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
     # -----------------------------------------------------------------------
 
     async def perform_list(self, context: Context) -> ListRecords:
-        """
-        Returns the queryset itself, unevaluated. Nothing is read until a later stage asks for
-        rows, and by then the filter, the ordering and the slice are all part of the SQL.
-        """
+        """The queryset, unevaluated, so later stages can add filter, ordering and slice to the SQL."""
         return self.get_queryset(context)
 
     async def apply_filter(self, context: Context, query: ListQuery, records: ListRecords) -> ListRecords:
         """
-        Translates the filter model into `.filter(...)` where it can, and leaves the rest to the
-        in-memory default.
+        Translates the filter set into `.filter(...)`, or leaves all of it to the in-memory default.
 
-        Only fields that map to a concrete model field are pushed down, and the stage is marked
-        applied only when *every* set field was - a filter half-done in SQL and half-forgotten
-        would silently return too many rows.
+        Pushed down only when every filter names a concrete field and has a compiler: a partial push-down
+        would return too many rows.
         """
         queryset = _as_queryset(records)
         if queryset is None or not query.has_filter or not query.needs("filter"):
@@ -210,8 +162,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
 
         filter_set = filter_set_for(query)
         if not filter_set and filters_from(query.fltr) is None:
-            # A hand-written filter model, on the filter_list path. Nothing declarative to
-            # translate, so the in-memory pass takes it.
+            # A hand-written filter model: nothing declarative to translate.
             return await super().apply_filter(context, query, records)
 
         concrete = self._concrete_fields()
@@ -228,13 +179,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         return {field.name for field in _model_columns(self.model)}
 
     async def apply_sort(self, context: Context, query: ListQuery, records: ListRecords) -> ListRecords:
-        """
-        Translates the sort order into `.order_by(...)`, with the viewset's NULL placement.
-
-        `F(col).asc(nulls_first=...)` states the placement outright, which is the same thing
-        `nulls` means and the same thing the in-memory comparison does - so both directions push
-        down and the two agree about where NULLs went.
-        """
+        """Translates the sort into `.order_by(...)` with explicit NULL placement, matching the in-memory sort."""
         queryset = _as_queryset(records)
         if queryset is None or not query.has_sort or not query.needs("sort"):
             return await super().apply_sort(context, query, records)
@@ -243,9 +188,8 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         if not all(column.column_name in concrete for column in query.sort):
             return await super().apply_sort(context, query, records)
 
-        # `nulls` says where NULLs go when ascending, so a descending key needs the opposite SQL
-        # placement to mean the same thing. One flag or the other, and only ever True: Django
-        # rejects False and refuses both at once.
+        # `nulls` is the ascending placement, so a descending key flips it. Django accepts only one
+        # flag, and only True.
         ordering = []
         for column in query.sort:
             descending = column.direction == SortDirection.desc
@@ -258,14 +202,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         return await super().apply_sort(context, query, queryset)
 
     async def take_page(self, query: ListQuery, records: ListRecords) -> tuple[list, bool]:
-        """
-        Slices in SQL rather than in Python.
-
-        The default walks the source and stops once the page is full - which for a queryset means
-        streaming every skipped row across the connection before throwing it away. Slicing the
-        queryset turns that into LIMIT/OFFSET, so page 500 costs the same as page 1. One row beyond
-        the page is still fetched, and it is what answers `has_more`.
-        """
+        """Slices the queryset into LIMIT/OFFSET, fetching one extra row to answer `has_more`."""
         queryset = _as_queryset(records)
         if queryset is None:
             return await super().take_page(query, records)
@@ -275,7 +212,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         return rows[: query.limit], len(rows) > query.limit
 
     async def count_records(self, context: Context, query: ListQuery, records: ListRecords) -> int | None:
-        """One extra SELECT COUNT(*), rather than the null a lazy source would otherwise report."""
+        """One `SELECT COUNT(*)`."""
         queryset = _as_queryset(records)
         if queryset is None:
             return await super().count_records(context, query, records)
@@ -299,40 +236,27 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
 
     async def perform_update(self, context: Context, pk: K, data: T, partial: bool = True) -> T:
         """
-        Writes `data` onto the row `pk` under a row lock; see `_update_locked`. A merged record that
-        fails `schema` raises `RequestValidationError` with `loc` `("body", *field)`.
+        Writes `data` onto row `pk` under a row lock; see `_update_locked`. A merged record that fails
+        `schema` raises `RequestValidationError` with `loc` `("body", *field)`.
         """
         (record,) = await sync_to_async(self._update_locked)(context, {pk: data}, partial, bulk=False)
         return record
 
     async def perform_bulk_update(self, context: Context, records: dict[K, T], partial: bool = True) -> list[T]:
         """
-        Writes every record in one transaction, under a lock on each row; see `_update_locked`. A
-        missing row or a merged record that fails `schema` writes none of them. Every failing record
-        is reported in one `RequestValidationError`, with `loc` `("body", pk, *field)`.
+        Writes every record in one transaction under row locks; one missing or invalid row writes none.
+        All failures raise one `RequestValidationError` with `loc` `("body", pk, *field)`.
         """
         return await sync_to_async(self._update_locked)(context, records, partial, bulk=True)
 
     def _update_locked(self, context: Context, records: dict[K, T], partial: bool, bulk: bool) -> list[T]:
         """
-        Reads each row with `SELECT ... FOR UPDATE`, sets the fields of its record on it, validates
-        the result as `schema` and saves the whole row, in one transaction.
+        In one transaction: locks each row (`SELECT ... FOR UPDATE`), sets the record's fields, validates
+        as `schema` and saves.
 
-        The lock holds the row from the read to the commit, so a concurrent update of the same row
-        waits and then reads this one's result: it neither reverts the fields this one wrote nor
-        validates against values that are no longer stored. Two updates of the same field still
-        end with the later one's value.
-
-        The rows are locked in key order, so two bulk updates over the same rows do not deadlock.
-        The lock is taken through `_base_manager`, a query on the model's table alone: `FOR UPDATE`
-        refuses `distinct()`, aggregation and a nullable `select_related`, any of which
-        `get_queryset` may add. `get_queryset` decides whether the row is visible, and a row it
-        excludes is a `NotFoundError`. On SQLite, which has no row locks, the write
-        transaction locks the database instead.
-
-        `save()` and the model's signals run inside the transaction, before the commit. Work they
-        start that reads the row over another connection (a Celery task) is scheduled with
-        `transaction.on_commit`; started directly, it can read the values from before the update.
+        Rows lock in key order so overlapping bulk updates do not deadlock. The lock goes through
+        `_base_manager` because `FOR UPDATE` refuses the `distinct()`, aggregation or nullable
+        `select_related` that `get_queryset` may add; `get_queryset` still decides visibility (`NotFoundError`).
         """
         locked = self.model._base_manager.db_manager(router.db_for_write(self.model)).select_for_update()
         errors: list[dict] = []
@@ -382,14 +306,10 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
 
     def _writable_fields(self, data: T, exclude_unset: bool = False, creating: bool = False) -> dict[str, Any]:
         """
-        The fields of `data` that are concrete model fields, keyed by column (`owner_id` for
-        `owner`), so a relation is set from the key the body carries.
+        The concrete model fields of `data`, keyed by column (`owner_id` for `owner`).
 
-        The primary key is left out of an update: saving an instance under a different key writes
-        to the row that key names. A create leaves out only a key the database or Django assigns -
-        an auto-incrementing field, or the parent link of a multi-table-inheritance child - and
-        keeps any other: a natural key or a relation primary key has no value unless the body
-        supplies it.
+        An update omits the primary key (saving under another key writes that row). A create omits only a
+        key the database or Django assigns (auto field, multi-table-inheritance parent link).
         """
         editable = {
             field.name: field.attname
@@ -412,10 +332,7 @@ def _assigned_key(field) -> bool:
 
 
 class _ColumnView:
-    """
-    A model instance as `to_record` reads it: a relation field's name answers with its column's
-    value, every other attribute with the instance's own.
-    """
+    """A model instance whose relation field names answer with their column's value."""
 
     __slots__ = ("_columns", "_row")
 
@@ -428,12 +345,7 @@ class _ColumnView:
 
 
 def _as_queryset(records: ListRecords) -> "QuerySet | None":
-    """
-    `records` if it is still an unevaluated QuerySet, else None.
-
-    Once an earlier stage has fallen back to the in-memory path, what flows on is a list, and every
-    push-down below has to decline - which is exactly what returning None makes them do.
-    """
+    """`records` if it is still an unevaluated QuerySet, else None, which makes every push-down decline."""
     try:
         from django.db.models import QuerySet
     except ImportError:  # pragma: no cover - the django extra is not installed
@@ -442,12 +354,8 @@ def _as_queryset(records: ListRecords) -> "QuerySet | None":
 
 
 # ---------------------------------------------------------------------------
-# Filter compilers
+# Filter compilers (registered per backend; see fastapi_viewsets/filters/registry.py)
 # ---------------------------------------------------------------------------
-# Registered here rather than on the filters themselves. A filter knows only how to answer in
-# memory; how it becomes a queryset is this backend's business, and keeping it here means a new
-# operator needs no change to this file's imports being complete, while a new backend needs no
-# change to any filter. See fastapi_viewsets/filters/registry.py.
 
 _LOOKUPS = {
     Exact: "exact",
@@ -463,10 +371,7 @@ _LOOKUPS = {
     IsNull: "isnull",
 }
 """
-Every one of these happens to be spelled the same way in Django's own lookup language, so the
-compilers are one shared function rather than eleven near-identical ones. `Overlaps` is absent on
-purpose: it has no portable Django equivalent (ArrayField's `overlap` is Postgres-only), so a
-viewset using it falls back to the in-memory pass - which is the contract working, not a gap.
+Filter type to Django lookup. `Overlaps` is absent: its Django equivalent is Postgres-only, so it runs in memory.
 """
 
 
@@ -507,22 +412,9 @@ def _cursor_condition(viewset: "DjangoORMViewSet", fltr: CursorPredicate) -> Q:
     """
     "Everything past this row", as SQL.
 
-    Two forms, because one is faster and the other is always correct:
-
-    * A **row-value comparison** - `WHERE (year, id) > (2003, 42)` - is a single predicate that a
-      composite index on exactly those columns can seek with, so page 500 costs what page 1 costs.
-      It is only usable when every key sorts the same way (a row constructor cannot express
-      `a ASC, b DESC`) and no key is nullable, because SQL evaluates any comparison involving NULL
-      as unknown while this library defines NULL as the smallest value there is. The two rules
-      disagree, and SQL's wins inside the database - so where they could differ, this form is not
-      used.
-    * A **union of segments** - key₁ past the anchor, OR key₁ equal and key₂ past, OR … - which
-      spells the NULL handling out and copes with mixed directions. The planner usually degrades
-      it to a scan, which is the price of being right.
-
-    Verified against Django + SQLite; `Func(..., function='ROW')`, the recipe usually cited for
-    this, is Postgres-only, and a row constructor fails outright if annotated rather than used
-    directly as a condition.
+    A row-value comparison (`(year, id) > (2003, 42)`, index-seekable) when all keys share a direction and
+    none is nullable, since SQL compares NULL as unknown; otherwise a union of per-key segments that spells
+    out NULL placement and mixed directions.
     """
     keys = [(viewset._column(name), descending) for name, descending in fltr.keys]
     position = {viewset._column(name): value for name, value in fltr.position.items()}
@@ -561,8 +453,7 @@ def _segment_condition(keys, position, backwards: bool, inclusive: bool, nulls_f
 
         value = position[name]
         greater = wants_greater(descending, backwards)
-        # Whether NULLs come before the values as this page is read. Two reversals on top of where
-        # `nulls` puts them ascending: a descending key, and reading the page backwards.
+        # Whether NULLs come first as this page is read: `nulls`, flipped by descending and by backwards.
         nulls_lead = (nulls_first != descending) != backwards
 
         if value is None:
@@ -572,8 +463,7 @@ def _segment_condition(keys, position, backwards: bool, inclusive: bool, nulls_f
             segment &= Q(**{f"{name}__isnull": False})
         else:
             beyond = Q(**{f"{name}__gt" if greater else f"{name}__lt": value})
-            # SQL drops NULLs from every comparison - they are unknown, not true - so when the
-            # ordering puts them past this anchor they have to be added back by hand.
+            # SQL comparisons never match NULL, so NULLs ordered past the anchor are added explicitly.
             segment &= beyond if nulls_lead else beyond | Q(**{f"{name}__isnull": True})
         segments.append(segment)
 

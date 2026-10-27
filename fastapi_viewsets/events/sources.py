@@ -18,12 +18,9 @@ async def publish(topic: str, event: Event) -> tuple[int, int]:
     """
     Publishes `event` to `topic` and returns the `(rev, prev)` the store assigned to it.
 
-    `topic` is a viewset topic, a custom topic, or a scoped topic `@{name}:{key}` (a store topic,
-    see `fastapi_viewsets.events.scopes`). Raises `ValueError` for a topic of none of these forms;
-    the form is all that is checked. Records the
-    event's `event_name`, payload and `event_version` with `store.append`, then carries them to
-    every process whose store is started with `store.publish`. An exception of `store.publish` is
-    logged and not raised: the event is recorded, and a frontend learns of it on its next poll.
+    `topic` is a viewset, custom or scoped (`@{name}:{key}`) topic; another form raises `ValueError`. The event
+    is recorded with `store.append`, then pushed with `store.publish`, whose failure is only logged: a
+    frontend then learns of the event on its next poll.
     """
     _validate_published_topic(topic)
     if not isinstance(event, Event):
@@ -47,10 +44,9 @@ _sources: dict[str, "Source"] = {}
 
 class Source:
     """
-    The declared owner of the custom topics `name` and `name:key`. Creating one registers `name` in
-    this process; a name that does not match `[a-z0-9_.-]+`, or that is already declared, raises
-    `ValueError`. `authorizer` is the `EventAuthorizer` `DeclaredSources()` consults for the
-    source's topics.
+    The declared owner of the custom topics `name` and `name:key`, registered in this process on creation.
+    A name not matching `[a-z0-9_.-]+`, or already declared, raises `ValueError`. `DeclaredSources()`
+    consults `authorizer` for the source's topics.
     """
 
     def __init__(self, name: str, authorizer: "EventAuthorizer | None" = None):
@@ -71,8 +67,7 @@ class Source:
         return await publish(self.topic(key), event)
 
     async def drop(self, key: str | int) -> None:
-        """Removes the rev and the log of the topic `name:key` from the store, for a topic that has no
-        further events. Its next event, if any, carries `prev` 0."""
+        """Removes the rev and log of topic `name:key` from the store; a later event carries `prev` 0."""
         await get_store().drop(self.topic(key))
 
     def __repr__(self) -> str:

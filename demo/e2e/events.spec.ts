@@ -1,11 +1,8 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 /**
- * Two tabs on one library. A Favorite toggled in one appears in the other: the backend's
- * `ChangeEvents` publishes `records_changed` to the viewset's topic, and the other tab's grid,
- * following it with `watch()`, retrieves the changed row and replaces it.
- *
- * Over REST the other tab learns of the change on its next poll, over muxws as a push.
+ * Two tabs on one library: a Favorite toggled in one appears in the other through `ChangeEvents` and
+ * `watch()` (polled over REST, pushed over muxws).
  */
 
 const FOLLOWING_TIMEOUT = 30_000;

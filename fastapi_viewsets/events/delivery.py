@@ -1,11 +1,8 @@
 """
-The subscriptions of this process and the delivery of an event to them.
-
-A subscription is one (socket, client topic) pair, held by the process that holds the socket. Its
-events are delivered by its store topic: the client topic itself, or, for a scoped viewset topic,
-the `@{name}:{key}` the server resolved for the subscriber (see `fastapi_viewsets.events.scopes`).
-A socket is the muxws peer the request scope carries (`routing.PEER_SCOPE_KEY`); this module calls
-its `notify()` and `on_close()` and imports nothing of muxws.
+The subscriptions of this process and the delivery of an event to them. A subscription is one
+(socket, client topic) pair; its events come from its store topic, which is the client topic or,
+for a scoped topic, `@{name}:{key}`. A socket is a muxws peer, used only through `notify()` and
+`on_close()`.
 """
 
 import asyncio
@@ -29,16 +26,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, eq=False)
 class Subscription:
-    """
-    One socket following one topic, or, for the delivery filters of a poll, the poll of one topic.
-    """
+    """One socket following one topic, or, for the delivery filters of a poll, the poll of one topic."""
 
     peer: Any | None
-    """The muxws peer of the socket. On a poll, the peer the poll arrived on; None for a poll over
-    REST."""
+    """The muxws peer of the socket; on a poll, the peer it arrived on, None over REST."""
     context: Context
-    """The context of the `subscribe` call that made the subscription; on a poll, the context of the
-    poll call."""
+    """The context of the `subscribe` call; on a poll, of the poll call."""
     topic: str
     """The client topic: what the socket subscribed to and receives in `:topic`."""
     store_topic: str | None = None
@@ -48,26 +41,21 @@ class Subscription:
     authorized_at: float = 0.0
     """`time.monotonic()` of the subscribe, or of the last reauthorization."""
     reauthorize: Callable[[], Awaitable[str]] | None = field(default=None, repr=False)
-    """Runs the topic's gate again and returns the store topic it answers; raises `HTTPException`
-    on a refusal. None for a subscription that is never reauthorized."""
+    """Re-runs the topic's gate and returns its store topic; raises `HTTPException` on a refusal. None: never."""
 
 
 DeliveryFilter = Callable[[Subscription, str, int, str, Any, int], "bool | Awaitable[bool]"]
 """
-`filter(subscription, topic, rev, event_name, payload, version)`, sync or async; `version` is the
-event's `event_version`. The filters run on every push and on every event a poll answers. False
-skips the push to that subscription's socket, or leaves the event out of the poll answer; an
-exception counts as True. On a poll, `subscription` is built from the poll call and its `peer` is
-None for a poll over REST. `topic` is the client topic; `subscription.store_topic` and
-`subscription.scope` name the scope of a scoped topic.
+`filter(subscription, topic, rev, event_name, payload, version)`, sync or async, run on every push
+and every polled event; `topic` is the client topic. False skips the push or leaves the event out of
+the poll answer; an exception counts as True.
 """
 
 EventListener = Callable[[str, int, int, str, Any, int], "None | Awaitable[None]"]
 """
-`listener(topic, rev, prev, event_name, payload, version)`, sync or async; `topic` is the store
-topic. `deliver()` calls the listeners with every event, in every process whose store is started,
-whether or not the process holds a subscription of the topic, before it pushes the event; a listener
-that removes subscriptions (`drop_subscriptions`) removes them before the push.
+`listener(topic, rev, prev, event_name, payload, version)`, sync or async; `topic` is the store topic.
+Called with every event in every started process, before the push, so `drop_subscriptions` in a
+listener takes effect for that event.
 """
 
 # store topic -> (id(peer), client topic) -> Subscription
@@ -98,8 +86,7 @@ def _store_topic_of(subscription: Subscription) -> str:
 
 
 def _remove(key: int, topic: str, expected: Subscription | None = None) -> Subscription | None:
-    """Removes the socket's subscription to the client topic `topic`; with `expected`, only while the
-    table holds that very subscription."""
+    """Removes the socket's subscription to `topic`; with `expected`, only if it is that very subscription."""
     held = _by_peer.get(key)
     subscription = held.get(topic) if held is not None else None
     if subscription is None or (expected is not None and subscription is not expected):
@@ -130,18 +117,10 @@ async def subscribe(
     reauthorize: Callable[[], Awaitable[str]] | None = None,
 ) -> Subscription:
     """
-    Subscribes the socket `peer` to the client topic `topic` and returns the subscription. From then
-    on `deliver()` pushes the events of `store_topic` (None: `topic`) to the socket. A topic the
-    socket already holds is subscribed again with the new arguments, replacing the old subscription,
-    and counts once. `scope` is the scope key of a scoped topic; `reauthorize` is the function a
-    push calls once `settings.viewsets_event_reauthorize_after` has passed (see `Subscription`).
-
-    Raises `EventSubscriptionsExceededError` (409) when the socket already holds
-    `settings.viewsets_event_max_subscriptions` other topics. The first subscription of a socket
-    installs one `peer.on_close` handler, which drops every subscription of the socket.
-
-    A socket whose `is_open` is false is closed, and its `on_close` handlers have run: the
-    subscription is returned without entering the table.
+    Subscribes `peer` to the client topic `topic`, delivering the events of `store_topic` (None:
+    `topic`); a topic already held is replaced. Raises `EventSubscriptionsExceededError` (409) at
+    `settings.viewsets_event_max_subscriptions`. The first subscription installs a `peer.on_close`
+    handler dropping all of them; a closed peer's subscription is returned but not stored.
     """
     subscription = Subscription(
         peer,
@@ -177,9 +156,8 @@ async def unsubscribe(peer: Any, topic: str) -> None:
 
 def drop_subscriptions(where: Callable[[Subscription], bool]) -> int:
     """
-    Removes every subscription of this process for which `where(subscription)` is true, and returns
-    how many it removed. For a membership revoked at once:
-    `drop_subscriptions(lambda s: s.scope == "7" and s.context.raw().get("user_id") == 12)`.
+    Removes every subscription of this process for which `where(subscription)` is true; returns the count.
+    E.g. `drop_subscriptions(lambda s: s.scope == "7" and s.context.raw().get("user_id") == 12)`.
     """
     dropped = 0
     for key, held in list(_by_peer.items()):
@@ -214,10 +192,7 @@ def _is_connection_lost(error: BaseException) -> bool:
 async def passes_filters(
     subscription: Subscription, topic: str, rev: int, name: str, payload: Any, version: int
 ) -> bool:
-    """
-    Runs `settings.viewsets_event_delivery_filters` in order and answers False when one of them
-    answers False. A filter that raises counts as True; the exception is logged at debug level.
-    """
+    """False when one of `settings.viewsets_event_delivery_filters` answers False; one that raises counts as True."""
     for delivery_filter in settings.viewsets_event_delivery_filters:
         try:
             result = delivery_filter(subscription, topic, rev, name, payload, version)
@@ -234,18 +209,15 @@ async def passes_filters(
 
 
 def _is_refusal(error: BaseException) -> bool:
-    """Whether `error` refuses a topic for good: an `HTTPException` of a status from 400 to 499 other
-    than 429. A 429 and a status of 500 or above are transient, as the frontend's event client
-    counts them."""
+    """Whether `error` refuses a topic for good: a 4xx `HTTPException` other than 429 (as the frontend counts it)."""
     return isinstance(error, HTTPException) and 400 <= error.status_code < 500 and error.status_code != 429
 
 
 async def _reauthorized(subscription: Subscription) -> bool:
     """
-    Runs `subscription.reauthorize()` once for every push that needs it at the same time. True when
-    it answers the subscription's store topic; the subscription's `authorized_at` is renewed. A
-    refusal (`_is_refusal`) or another store topic removes the subscription; any other failure,
-    a 429 or 5xx `HTTPException` included, keeps it as it is and skips the push.
+    Runs `subscription.reauthorize()` once for all concurrent pushes. True (and `authorized_at` renewed)
+    when it answers the same store topic; a refusal or another store topic removes the subscription;
+    any other failure keeps it and skips the push.
     """
     key = (id(subscription.peer), subscription.topic, id(subscription))
     task = _reauth_tasks.get(key)
@@ -324,16 +296,10 @@ async def _push(
 
 async def deliver(topic: str, rev: int, prev: int, name: str, payload: Any, version: int) -> None:
     """
-    Calls `settings.viewsets_event_listeners` in list order with the event, awaiting each; a listener
-    that raises is logged and the next one runs. Then pushes the event of the store topic `topic` to
-    every subscription delivered under it in this process, each push in a task of its own, and
-    returns without waiting for them. A push runs the
-    subscription's reauthorization when it is due (see `settings.viewsets_event_reauthorize_after`),
-    the delivery filters with the client topic, and then `peer.notify(payload, headers={":event":
-    name, ":version": version, ":topic": subscription.topic, ":rev": rev, ":prev": prev})`, with
-    `":scope": subscription.scope` added for a scoped topic, together bounded by
-    `settings.viewsets_event_push_timeout` seconds. A push that raises a `ConnectionLost` drops
-    every subscription of its socket; any other failure is logged at debug level.
+    Awaits each of `settings.viewsets_event_listeners` (a raising one is logged), then pushes the event
+    to every subscription of store topic `topic` in this process, in background tasks. A push
+    reauthorizes when due, runs the delivery filters and calls `peer.notify()`, all within
+    `settings.viewsets_event_push_timeout` seconds; `ConnectionLost` drops the socket's subscriptions.
     """
     for listener in settings.viewsets_event_listeners:
         try:

@@ -1,16 +1,6 @@
 /**
- * muxws proxy for ViewSets — the same ViewSet surface as route_rest, sent over one WebSocket.
- *
- *   import { connect } from 'muxws';
- *
- *   const peer = await connect('ws://localhost:8000/ws');
- *   const items = route_muxws<BulkViewSetMixin<number, Item> & LookupMixin>(
- *     ItemViewSet, { basePath: '/items', pkFieldName: 'id', peer },
- *   );
- *   await items.list();
- *
- * A proxy speaks one transport. Creating a REST proxy and a muxws proxy for the same ViewSet is
- * the supported way to have both — they share nothing but the ViewSet's own type.
+ * muxws proxy for ViewSets: the route_rest surface over one WebSocket. A proxy speaks one transport;
+ * for both, create a REST and a muxws proxy for the same ViewSet.
  */
 
 import {
@@ -38,11 +28,7 @@ import {
   ViewSetRequestError,
 } from './proxy-base';
 
-/**
- * The bits of a muxws Peer this proxy uses. Typed structurally rather than by importing the muxws
- * types, so that `muxws` stays an optional dependency: an application that only uses route_rest
- * should not have to install it.
- */
+/** The parts of a muxws Stream this proxy uses, typed structurally so `muxws` stays an optional dependency. */
 export interface MuxwsStreamLike {
   result(options?: { timeoutMs?: number }): Promise<unknown>;
   readonly replyHeadersArrived: Promise<void>;
@@ -54,8 +40,8 @@ export interface MuxwsStreamLike {
 }
 
 /**
- * `isOpen`, `onReconnect` and `onClose` are what a repeat waits on for the peer to reconnect. A peer
- * without them is not waited for: the repeat is opened when its delay has passed.
+ * The parts of a muxws Peer this proxy uses. A repeat waits for a reconnect through `isOpen`, `onReconnect`
+ * and `onClose`; without them it opens once its delay has passed.
  */
 export interface MuxwsPeerLike {
   open(payload?: unknown, options?: { headers?: Record<string, unknown>; end?: boolean }): MuxwsStreamLike;
@@ -67,30 +53,18 @@ export interface MuxwsPeerLike {
 }
 
 /**
- * Where the peer comes from. A bare peer is the simple case; a function is for the common shape
- * where the proxy is constructed at module scope but `connect()` has not resolved yet, and for an
- * application that replaces its peer (a new `connect()` after logout and login). The function's
- * result is kept while the peer lives — a muxws Peer survives its own reconnects — and the function
- * is called again by the first call after the peer has closed for good (`onClose` with
- * `willRetry: false`, or `isClosed`), and after it threw or its promise rejected. A call in progress
- * keeps the peer it started on. Once the peer has resolved, `request()` opens its stream synchronously.
+ * A peer, or a function returning one (for a proxy built before `connect()` resolves, or a peer replaced
+ * after re-login). The function's result is kept until that peer closes for good, or the function threw
+ * or rejected; the next call then calls it again. A call in progress keeps the peer it started on.
  */
 export type MuxwsPeerSource = MuxwsPeerLike | (() => MuxwsPeerLike | Promise<MuxwsPeerLike>);
 
-/**
- * The mixin interface `M` with every method returning a `ViewSetCall`, `watch()`, and `defaultSort()`
- * when `M` has a list action; see
- * route_muxws.
- */
+/** `M` with every method returning a `ViewSetCall`, plus `watch()`, and `defaultSort()` when `M` lists. */
 export type MuxwsProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>> & DefaultSortOf<keyof M>;
 
 type ViewSetClass = abstract new (...args: any[]) => any;
 
-/**
- * The shape a factory-built class's constructor has, purely to give `route_muxws` an overload that
- * rejects it - see rest-proxy.ts's `FactoryBuiltClass` for why this has to be a plain overload
- * parameter rather than a type parameter conditioned on the argument.
- */
+/** A factory-built class, for the `route_muxws` overload that rejects it (see rest-proxy.ts). */
 type FactoryBuiltClass = (abstract new (...args: any[]) => any) & {
   declares: { readonly [FACTORY_BUILT]: any };
 };
@@ -102,15 +76,13 @@ declare const FACTORY_BUILT_REJECTION: 'route_muxws cannot take a factory-built 
 export interface MuxwsProxyOptions extends ProxyBaseOptions {
   peer: MuxwsPeerSource;
   /**
-   * Per-attempt timeout in milliseconds, the wait for the reply headers included. muxws resets the
-   * stream with TIMEOUT when it expires, and the call is repeated at once (see
-   * `ProxyBaseOptions.repeat`). Unset, an attempt has no timeout.
+   * Per-attempt timeout in milliseconds, reply headers included. On expiry muxws resets the stream and
+   * the call is repeated (`ProxyBaseOptions.repeat`). Unset: no timeout.
    */
   timeoutMs?: number;
   /**
-   * Headers added to every request this proxy makes. The WebSocket handshake already carries
-   * whatever identified the session and the server treats that as the baseline; these override it
-   * for this proxy's calls; `RequestOptions.headers` override these for a single call.
+   * Headers on every request; they override the WebSocket handshake's headers, and
+   * `RequestOptions.headers` override them for one call.
    */
   headers?: Record<string, string>;
 }
@@ -135,10 +107,7 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
     this.initSchemaValidation();
   }
 
-  /**
-   * The peer: the source's result, kept until a function source's peer has closed for good; the
-   * source is called again then, and after it threw or rejected. A bare peer is never replaced.
-   */
+  /** The source's peer, re-resolved after a function source's peer closed for good or it threw/rejected. */
   private peer(): Promise<MuxwsPeerLike> {
     const source = this.peerSource;
     const held = this.resolvedPeer;
@@ -185,22 +154,16 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
   }
 
   /**
-   * Opens a stream for the call, with its `Idempotency-Key`, and repeats the call with the same key
-   * while an attempt ends with ConnectionLost, StreamTimeout or StreamRefused, or `open()` throws
-   * ConnectionClosed or ConnectionGoingAway while the peer has not closed for good. A repeat after a
-   * lost connection waits for the peer to reconnect; a repeated attempt's stream is cancelled. A
-   * repeat is opened with the headers of the call's first stream.
-   *
-   * The first attempt's stream is opened synchronously once the peer has resolved, so whatever the
-   * caller binds for the synchronous part of the call (a muxws open interceptor reading it) reaches
-   * that stream. Before the peer has resolved, and on a repeat, the stream is opened later.
+   * Opens a stream with an `Idempotency-Key` and repeats it with the same key and first-stream headers
+   * after a timeout, a refusal or a lost connection (waiting for the reconnect), not once the peer has
+   * closed for good. With a resolved peer the first stream opens synchronously, so open interceptors
+   * see state the caller bound synchronously.
    */
   protected request<R>(method: HttpMethod, path: string, options: RequestOptions = {}): ViewSetCall<R> {
     const key = options.key ?? newCallKey();
     let call: Promise<R>;
     try {
-      // Addressing mirrors HTTP/2: :-prefixed pseudo-headers for the request line, plain keys for
-      // real HTTP headers. muxws itself never reads any of them (SPEC WSM-AUT-002).
+      // HTTP/2-style: `:`-prefixed pseudo-headers for the request line, plain keys for HTTP headers.
       const headers: Record<string, unknown> = {
         ...withKeyHeader({ ...this.headers, ...options.headers }, key),
         ':method': method,
@@ -208,9 +171,8 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
       };
       if (options.query && Object.keys(options.query).length > 0) headers[':query'] = cleanQuery(options.query);
 
-      // Every attempt is opened with the headers the first stream went out with, those that open
-      // interceptors added included: an interceptor that reads state bound only for the caller's
-      // synchronous part does not see it when a repeat is opened.
+      // Repeats reuse the first stream's headers (interceptor-added ones included): an interceptor
+      // cannot see the caller's synchronously bound state when a repeat opens.
       let sent: Record<string, unknown> | undefined;
       const run = (peer: MuxwsPeerLike): Promise<R> =>
         runCall(
@@ -238,7 +200,7 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
     body: unknown,
     headers: Record<string, unknown>,
   ): CallAttempt<R> & { readonly headers?: Record<string, unknown> } {
-    // end: true — this is a unary call, so the request is complete with its opening frame.
+    // A unary call: the opening frame is the whole request.
     const stream = peer.open(body, { headers, end: true });
     return {
       headers: stream.headers,
@@ -254,9 +216,7 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
   }
 
   private async answer<R>(stream: MuxwsStreamLike): Promise<R> {
-    // The status is in the answering side's leading headers. `result()` is started first so that
-    // `timeoutMs` bounds the whole attempt, the wait for those headers included: a stream that never
-    // answers rejects with muxws' StreamTimeout instead of waiting for headers that do not come.
+    // `result()` starts first so `timeoutMs` also bounds the wait for the reply headers (the status).
     const result = stream.result(this.timeoutMs === undefined ? undefined : { timeoutMs: this.timeoutMs });
     await Promise.race([stream.replyHeadersArrived, result]);
     const status = readStatus(stream.replyHeaders);
@@ -282,11 +242,8 @@ function isPeer(value: MuxwsPeerLike | Promise<MuxwsPeerLike>): value is MuxwsPe
 }
 
 /**
- * The muxws errors after which no answer reached the client, by their `name` (muxws sets `name` on
- * every error class, and the package is not imported here). StreamTimeout is the attempt's own
- * timeout. ConnectionClosed is what `open()` throws while the peer is between sockets, and
- * ConnectionGoingAway while its connection drains after a goaway; a peer closed for good throws
- * either, and that is not repeated.
+ * Classifies muxws errors (by `name`; muxws is not imported) after which no answer arrived.
+ * ConnectionClosed / ConnectionGoingAway are repeated only while the peer has not closed for good.
  */
 function muxwsAttemptFailure(peer: MuxwsPeerLike, error: unknown): AttemptFailure {
   switch ((error as { name?: unknown } | null)?.name) {
@@ -356,24 +313,19 @@ function cleanQuery(query: QueryParams): Record<string, unknown> {
   return out;
 }
 
-// Exists only to reject a factory-built class with a message at the call site; nothing implements
-// or calls it - see rest-proxy.ts's route_rest for why.
+// Rejects a factory-built class with a message at the call site (see rest-proxy.ts's route_rest).
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- M keeps the call syntax identical to the real overload
 function route_muxws<M = never>(
   viewSetClass: FactoryBuiltClass,
   options: MuxwsProxyOptions,
 ): typeof FACTORY_BUILT_REJECTION;
-/**
- * Registers a muxws proxy for the given ViewSet class. The mirror of route_rest, and it takes the
- * same generic parameter for the same reason: TypeScript cannot inspect the Python class.
- */
+/** Creates a muxws proxy for the ViewSet class; `M` declares its mixins, as with route_rest. */
 function route_muxws<M>(viewSetClass: ViewSetClass, options: MuxwsProxyOptions): MuxwsProxy<M>;
 function route_muxws<M>(
   viewSetClass: ViewSetClass,
   options: MuxwsProxyOptions,
 ): MuxwsProxy<M> | typeof FACTORY_BUILT_REJECTION {
-  // The class is otherwise used only for its type. Its `declares` is the one thing on it the proxy
-  // needs at runtime, so it is carried across rather than lost.
+  // `declares` is the only part of the class used at runtime.
   return new MuxwsProxyImpl({
     declares: (viewSetClass as { declares?: ViewSetMixinDeclaration[] }).declares,
     ...options,

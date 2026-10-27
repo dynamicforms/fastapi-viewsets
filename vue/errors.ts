@@ -1,10 +1,8 @@
 import { namespaced } from './error-namespace';
 
 /**
- * One failure of one value of a request that failed validation: pydantic's error type in the
- * namespace `ERROR_NAMESPACE_PYDANTIC` as `code` (`pydantic.string_too_short`), the values pydantic
- * built its message from as `params`, and pydantic's English message as `detail`. A type pydantic
- * does not declare is `pydantic.custom_error` with `params` `{ type, ctx }`.
+ * One validation failure: `code` is `pydantic.<type>` (unknown types `pydantic.custom_error` with
+ * `params` `{ type, ctx }`), `params` pydantic's `ctx`, `detail` its English message.
  */
 export interface ApiFieldError {
   code: string;
@@ -13,11 +11,8 @@ export interface ApiFieldError {
 }
 
 /**
- * The body of every error response of the BE. `detail` is English text, `detail_code` the full code
- * (`<namespace>.<code>`: `fastapi-viewsets.<code>` for the errors the package raises, the
- * application's own code as given for its own errors), `detail_params` the values `detail` was
- * interpolated with. `field_errors` holds the failures of a request that failed validation
- * (`fastapi-viewsets.validation_failed`) by field name, and is `{}` for every other error.
+ * The body of every BE error response: English `detail`, `detail_code` as `<namespace>.<code>`, its
+ * `detail_params`, and `field_errors` by field name (`{}` unless `fastapi-viewsets.validation_failed`).
  */
 export interface ApiErrorBody {
   detail: string;
@@ -26,12 +21,7 @@ export interface ApiErrorBody {
   field_errors: Record<string, ApiFieldError[]>;
 }
 
-/**
- * An error a server returned: what failed, the values it failed with, its English text and its
- * origin, which is always `'server'`. It is assignable to `ErrorDescription` of
- * `@dynamicforms/vue-forms`, so an application renders and translates it with the same function as
- * its validators' errors.
- */
+/** A server error, assignable to `@dynamicforms/vue-forms`' `ErrorDescription` so it renders like validator errors. */
 export interface ErrorDescription {
   readonly code: string;
   readonly params: Readonly<Record<string, unknown>>;
@@ -43,10 +33,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/**
- * Whether `data` is an `ApiErrorBody`: `detail` and `detail_code` strings, `detail_params` and
- * `field_errors` objects.
- */
+/** Whether `data` has the shape of an `ApiErrorBody`. */
 export function isApiErrorBody(data: unknown): data is ApiErrorBody {
   return (
     isRecord(data) &&
@@ -58,14 +45,9 @@ export function isApiErrorBody(data: unknown): data is ApiErrorBody {
 }
 
 /**
- * The `ApiErrorBody` of what a call threw: the body of its response (`error.response.data`, as both
- * `AxiosError` and `ViewSetRequestError` carry it) when that is an `ApiErrorBody`. A call the BE did
- * not answer has none, and the client builds it here:
- *
- * - `fastapi-viewsets.no_response`: the error carries no `response` (a network failure, a timeout, a
- *   cancelled request, a muxws stream that was reset or lost its connection, any other exception);
- * - `fastapi-viewsets.unexpected_response`, `detail_params` `{ status }`: the response's body is not an
- *   `ApiErrorBody` (a proxy's HTML 502, a route of the application without `install_error_handlers`).
+ * The `ApiErrorBody` in `error.response.data` (axios or `ViewSetRequestError`). Otherwise builds
+ * `fastapi-viewsets.no_response` when there is no response, or `fastapi-viewsets.unexpected_response`
+ * (`{ status }`) when the body is not an `ApiErrorBody`.
  */
 export function errorBodyOf(error: unknown): ApiErrorBody {
   const response = (error as { response?: unknown } | null | undefined)?.response;
@@ -87,10 +69,7 @@ export function errorBodyOf(error: unknown): ApiErrorBody {
   };
 }
 
-/**
- * The error an `ApiErrorBody` describes: `detail_code` as `code`, `detail_params` as `params` and
- * `detail` unchanged.
- */
+/** The `ErrorDescription` of an `ApiErrorBody`. */
 export function toErrorDescription(body: ApiErrorBody): ErrorDescription {
   return {
     code: body.detail_code,
@@ -100,11 +79,7 @@ export function toErrorDescription(body: ApiErrorBody): ErrorDescription {
   };
 }
 
-/**
- * The `field_errors` of an `ApiErrorBody` as errors keyed by field name: `loc` of pydantic's error
- * without its first element, joined with `.` (`address.city`); a failure of the body as a whole is
- * keyed `''`. `{}` for a body without field errors.
- */
+/** `field_errors` as `ErrorDescription`s keyed by dotted field name (`address.city`; `''` for the whole body). */
 export function toFieldErrors(body: ApiErrorBody): Record<string, ErrorDescription[]> {
   const errors: Record<string, ErrorDescription[]> = {};
   for (const [field, entries] of Object.entries(body.field_errors)) {
@@ -119,15 +94,8 @@ export function toFieldErrors(body: ApiErrorBody): Record<string, ErrorDescripti
 }
 
 /**
- * What a failed call throws over muxws, where there is no axios to raise anything.
- *
- * The shape mirrors `AxiosError` — `error.response.status`, `error.response.data` and
- * `error.response.headers` — so a caller reads the same fields whichever transport the ViewSet
- * speaks. Over HTTP axios raises its own error, already in that shape, and it is passed through
- * untouched.
- *
- * `response` is always set here, unlike `AxiosError.response`, which is absent when the request
- * never reached a reply.
+ * What a failed muxws call throws. Mirrors `AxiosError`'s `response.status/data/headers`, so callers
+ * read errors the same on both transports; `response` is always set.
  */
 export class ViewSetRequestError extends Error {
   readonly response: { status: number; data: unknown; headers: Record<string, string> };

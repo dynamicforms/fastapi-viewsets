@@ -1,34 +1,9 @@
 """
-The request/response envelope carried over a muxws stream.
+The HTTP/2-style request/response envelope carried over a muxws stream.
 
-muxws does no routing (SPEC WSM-AUT-004: it does not look at the opening payload to pick a
-handler), so the open frame carries the address. The envelope follows HTTP/2: an `open` frame
-carries `headers` plus a `payload`, as HTTP/2 carries a HEADERS frame followed by DATA.
-
-Method, path and query string travel as HTTP/2-style pseudo-headers, `:`-prefixed. They cannot
-collide with HTTP headers, because a header field name may not contain a colon. Every header of
-the open frame that is not `:`-prefixed is passed through as an ordinary HTTP header.
-
-    peer.open(
-        payload={"title": "Kind of Blue"},          # the request body
-        headers={
-            ":method": "POST",
-            ":path": "/music",
-            "authorization": "Bearer ...",
-        },
-    )
-
-The response direction is symmetric: muxws (0.3.1 and later) carries `headers` on the first `data`
-frame a peer sends as well as on `open` (SPEC §2.2, WSM-FRM-016). So the status is announced ahead
-of the body, exactly as HTTP/2 puts `:status` in HEADERS before DATA:
-
-    await stream.reply(body, headers={":status": 200})
-
-and the caller reads it from `stream.reply_headers` (`replyHeaders` in TypeScript), which is final
-once `reply_headers_arrived` is set.
-
-The status is not sent in `trailers`: those attach only to a frame with `end: true`, so a
-streaming reply's caller would consume the whole body before learning whether it was an error.
+The open frame's headers carry `:method`, `:path` and `:query` pseudo-headers (other headers pass through
+as HTTP headers) and its payload is the body. The reply announces `:status` in the headers of its first
+data frame, ahead of the body; trailers would arrive only after a streamed body.
 """
 
 from typing import Any
@@ -42,9 +17,8 @@ STATUS_KEY = ":status"
 
 class EnvelopeError(ValueError):
     """
-    The open frame's headers are not a well-formed viewset command. `reason` names the failure:
-    `address_missing`, `address_type`, `path_relative` or `query_type` (see
-    `fastapi_viewsets.exceptions.CommandInvalidError`).
+    The open frame's headers are not a well-formed viewset command. `reason`: `address_missing`,
+    `address_type`, `path_relative` or `query_type`.
     """
 
     def __init__(self, message: str, reason: str):
@@ -53,22 +27,14 @@ class EnvelopeError(ValueError):
 
 
 def is_command(headers: dict[str, Any] | None) -> bool:
-    """
-    Whether this stream addresses a viewset at all. Streams that carry neither pseudo-header are
-    somebody else's protocol sharing the same peer, and must be left alone - see
-    `process_command`'s return value.
-    """
+    """Whether the stream addresses a viewset; other streams belong to another protocol on the same peer."""
     return bool(headers) and METHOD_KEY in headers and PATH_KEY in headers
 
 
 def parse_request(headers: dict[str, Any] | None) -> tuple[str, str, bytes, dict[str, str]]:
     """
-    Splits an open frame's headers into (method, path, query_string, http_headers).
-
-    `:query` accepts either a pre-encoded string or a mapping. A mapping is the friendlier thing
-    to write by hand, but it cannot express a repeated key (`?genre=jazz&genre=blues`), which
-    FastAPI happily binds to a `list[str]` parameter - so a list value is expanded into repeats
-    rather than being encoded as one comma-joined value.
+    Splits an open frame's headers into (method, path, query_string, http_headers). `:query` is an
+    encoded string or a mapping, where a list value becomes a repeated key. Raises EnvelopeError.
     """
     if not is_command(headers):
         raise EnvelopeError(
@@ -103,14 +69,7 @@ def parse_request(headers: dict[str, Any] | None) -> tuple[str, str, bytes, dict
 
 
 def merge_headers(base: dict[str, str] | None, override: dict[str, str]) -> dict[str, str]:
-    """
-    Per-call headers win over the connection's own.
-
-    The WebSocket handshake usually already carries whatever identifies the session, and for most
-    calls that is the whole story. But a single connection can outlive a token, and a caller may
-    legitimately want to act under different credentials for one call without tearing the socket
-    down - so anything the open frame states replaces the handshake's value for that key.
-    """
+    """Per-call headers override the handshake's (e.g. other credentials for one call); keys lower-cased."""
     merged = {key.lower(): value for key, value in (base or {}).items()}
     merged.update(override)
     return merged

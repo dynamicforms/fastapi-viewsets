@@ -26,10 +26,8 @@ LifecycleType = Literal["singleton", "per-request", "instance-key"]
 
 DEFERRED_ACTIONS_ATTRIBUTE = "__viewset_deferred_actions__"
 """
-The class attribute holding the names of the actions whose method on that class hands the call to
-an executor instead of executing it (`celery_viewset_client` sets it). `lifecycle_runner` runs no
-`Middleware.execute()` around such a method, its override in a subclass included; the executor's
-`lifecycle_runner` runs it around the real execution.
+Class attribute naming the actions whose method hands the call to an executor (set by `celery_viewset_client`).
+`lifecycle_runner` runs no `Middleware.execute()` around them; the executor's run does.
 """
 
 
@@ -44,8 +42,7 @@ class CurrentCall:
     parent: ExecutionRef | None
 
     def parent_of_dispatch(self) -> ExecutionRef | None:
-        """The `parent` of an action handed to an executor now: this execution when one runs, else
-        this call's own parent (the deferred method handing its own call on)."""
+        """The `parent` of an action dispatched now: this execution when one runs, else this call's parent."""
         return self.execution.ref() if self.execution is not None else self.parent
 
 
@@ -55,10 +52,7 @@ _current_call: ContextVar[CurrentCall | None] = ContextVar("viewsets_current_cal
 execution_translator: ContextVar[Callable[[BaseException], BaseException] | None] = ContextVar(
     "viewsets_execution_translator", default=None
 )
-"""
-Set by an executor around the executions it runs: maps an exception out of each `call_next()` of
-`Middleware.execute()` to the exception raised in its place. None for an in-process execution.
-"""
+"""Set by an executor: maps an exception out of each `execute()` step to the one raised instead; None in-process."""
 
 
 def current_call() -> CurrentCall | None:
@@ -87,22 +81,11 @@ async def lifecycle_runner(
     **kwargs,
 ):
     """
-    `response` is reserved for the command middleware chain (see below) - callers that have no
-    live Response object (e.g. `celery_viewset_server`, running in a worker process) simply omit
-    it, and the chain is never invoked - the worker just executes the action and returns the plain
-    result; command middleware only ever runs once that result is back in the FastAPI process.
+    Runs one action call on the instance `lifecycle` selects, inside the middleware chains.
 
-    `context` is the call's data when the caller already has it (`celery_viewset_server`, from the
-    task payload); without it a Context is built via settings.viewsets_context_processors against
-    whichever instance ends up handling this lifecycle. Either way it is bound to this action's
-    configuration and is the context the middleware chains read. `needs_context` injects it into
-    kwargs as `context`, for a method declaring that parameter. `forwards_request` passes `request`
-    on to a method that declares a `request` parameter. `parent` is the execution in which the call
-    was dispatched.
-
-    `Middleware.execute()` of the effective middlewares runs around the method call itself, unless
-    the action is deferred on `cls` (`DEFERRED_ACTIONS_ATTRIBUTE`). While the method runs, the call
-    is readable through `current_call()`.
+    Without `response` (an executor's process) the command chain is skipped and the plain result returned.
+    `context` is used when given (from a task payload), else built by the context processors; `needs_context`
+    and `forwards_request` inject `context` / `request` into the method. `current_call()` exposes the call.
     """
 
     if forwards_request:
@@ -145,16 +128,12 @@ async def lifecycle_runner(
 
     async def execute(req_instance: Any) -> Any:
         if response is None:
-            # Worker-only (celery_viewset_server) invocation - no live Response to shape, so the
-            # command middleware chain (whose whole job is producing/mutating response-level side
-            # effects) never runs here; just execute and return the plain result.
+            # Executor process: no Response to shape, so no command chain.
             return await call_bound(req_instance)
 
         async def final_handler() -> ViewSetResult:
             raw = await call_bound(req_instance)
-            # An endpoint may return a ViewSetResult directly (see ViewSetResult in
-            # fastapi_viewsets/middleware) to reach status_code/headers/cookies itself - passed
-            # through as-is.
+            # An endpoint returning a ViewSetResult itself is passed through.
             return raw if isinstance(raw, ViewSetResult) else ViewSetResult(body=raw)
 
         result = await run_command_chain(

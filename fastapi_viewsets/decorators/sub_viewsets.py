@@ -1,18 +1,8 @@
 """
-Viewsets mounted under another viewset's base path.
+Viewsets mounted under another viewset's base path with `ViewSetRouter.sub_viewset`.
 
-    class MembersViewSet(DjangoORMViewSet[int, MemberRow], PaginatedListMixin[MemberRow, MemberFilter]):
-        model = Account
-        schema = MemberRow
-
-    @route_viewset(router, base_path="/accounts", pk_field_name="id")
-    class AccountViewSet(DjangoORMViewSet[int, Account], ...):
-        __router = ViewSetRouter()
-        __router.sub_viewset("members", MembersViewSet)
-
-`route_viewset` routes `MembersViewSet` at `/accounts/members` as a viewset of its own: its own
-endpoints, `/schema`, muxws registration, lifecycle and `__viewset_metadata__`. A request to one of
-its endpoints passes the parent's checks for the action `members` first, then the child's own.
+`route_viewset` routes each mount at `{base_path}/{path}` as a viewset of its own; a request to it passes the
+parent's checks for the action `path` first, then the child's own.
 """
 
 import re
@@ -36,8 +26,7 @@ class SubViewSet:
     """A viewset mounted by `ViewSetRouter.sub_viewset`."""
 
     path: str
-    """The sub-path under the parent's base path, one path segment (`"members"`). It is also the name
-    of the parent's action whose checks a request to the sub-viewset passes first."""
+    """One path segment under the parent's base path, also the parent's action name for its checks."""
     viewset: type
     """The class of the mounted viewset."""
     instance: Any | None
@@ -49,16 +38,11 @@ class SubViewSet:
     register_rest: bool | None
     """None takes the value the parent is routed with."""
     action_configuration: dict[Any, Any] = field(default_factory=dict)
-    """Configuration of the parent's action `path`, merged over what `@action_configuration` on the
-    parent class configures for every action."""
+    """Configuration of the parent's action `path`, merged over the parent's class-level `@action_configuration`."""
 
 
 class ViewSetRouter(APIRouter):
-    """
-    An `APIRouter` that also mounts viewsets under its viewset's base path. A viewset declares it as
-    its own `__router`, in place of an `APIRouter`, and its custom endpoints are declared on it as on
-    any `APIRouter`.
-    """
+    """An `APIRouter`, declared as a viewset's `__router`, that can also mount viewsets under its base path."""
 
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
@@ -77,20 +61,13 @@ class ViewSetRouter(APIRouter):
         action_configuration: dict[Any, Any] | None = None,
     ) -> SubViewSet:
         """
-        Mounts `viewset` at `{base_path}/{path}` of the viewset that declares this router, and returns
-        the mount. `route_viewset` routes it when it routes that viewset, as it routes a viewset of its
-        own, with `lifecycle`, `pk_field_name`, `register_muxws` and `register_rest` as for
-        `route_viewset`; `register_muxws` and `register_rest` of None take the parent's values.
+        Mounts `viewset` (a class, or an instance used as the singleton) at `{base_path}/{path}`. Arguments are
+        as for `route_viewset`; None transport flags take the parent's. `action_configuration` configures the
+        parent's action `path`.
 
-        `viewset` is a viewset class, or an instance of one, which is then the singleton.
-        `action_configuration` configures the parent's action named `path`, as `@action_configuration`
-        on a method configures that method's action.
-
-        Raises `ValueError` for a `path` that is not one path segment of letters, digits, `_`, `-`,
-        `.` and `~` (leading and trailing `/` are dropped), for `schema`, for a path this router
-        already mounts, for an unknown `lifecycle`, and for an instance with a lifecycle other than
-        `"singleton"`; `TypeError` for a `viewset` that is neither a class nor an instance of one
-        with a `__dict__`.
+        Raises `ValueError` for a `path` that is not one segment of `[A-Za-z0-9_.~-]`, for `schema`, for a path
+        already mounted, an unknown `lifecycle`, or an instance with a non-singleton lifecycle; `TypeError` for
+        a `viewset` that is neither a class nor an instance.
         """
         segment = path.strip("/")
         if not _PATH.fullmatch(segment):
@@ -126,10 +103,7 @@ class ViewSetRouter(APIRouter):
 
 
 def sub_viewsets_of(cls: type) -> dict[str, SubViewSet]:
-    """
-    The viewsets `cls` mounts, by sub-path: those of the `ViewSetRouter` each class in its MRO
-    declares as its `__router`, a mount of a more derived class replacing one of the same sub-path.
-    """
+    """The viewsets `cls` mounts across its MRO, by sub-path; a more derived class's mount wins."""
     mounts: dict[str, SubViewSet] = {}
     for base in reversed(cls.__mro__):
         router = getattr(base, f"_{base.__name__}__router", None)

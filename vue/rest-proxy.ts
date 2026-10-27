@@ -1,18 +1,7 @@
 /**
- * REST proxy for ViewSets — FE counterpart of the BE route_viewset decorator.
- *
- * Usage:
- *   const restItems = route_rest<BulkViewSetMixin<number, Item> & LookupMixin>(
- *     ItemViewSet, '/items', 'id',
- *   );
- *   const items = await restItems.list();
- *   const item  = await restItems.retrieve(1);
- *
- * Every call carries an `Idempotency-Key` and is repeated with it after a network error, an attempt
- * timeout or a gateway status; see call.ts.
- *
- * Everything except the sending lives in ViewSetProxyBase, which MuxwsProxyImpl shares — see
- * proxy-base.ts.
+ * REST proxy for ViewSets: the FE counterpart of the BE `route_viewset` decorator. Only the sending
+ * lives here; the rest is in ViewSetProxyBase (proxy-base.ts). Every call carries an `Idempotency-Key`
+ * and is repeated with it after a network error, an attempt timeout or a gateway status (call.ts).
  */
 
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
@@ -44,24 +33,13 @@ import {
 // ---------------------------------------------------------------------------
 
 /** ViewSet class constructor (for type-level introspection only). */
-
 type ViewSetClass = abstract new (...args: any[]) => any;
 
 /**
- * The shape a factory-built class's constructor has, purely to give `route_rest` an overload that
- * rejects it - a type parameter conditioned on the argument (`C extends FactoryBuiltClass ? ... :
- * C`) cannot be inferred from that position at all, so an overload with this as a plain parameter
- * type is the only form that actually sees the real argument.
- *
- * `route_rest` uses its `viewSetClass` argument only for the `declares` on it (see the function
- * body - the class itself is never `new`'d), then builds a bare `RestProxyImpl` and hands it back
- * cast to `M`. Pass a factory-built class and this still type-checks without the overload below -
- * `M` is usually inferred as `InstanceType<typeof ItemApi>` - but the object it returns is not an
- * `ItemApi`, so any custom method the factory-built class added is `undefined` at runtime despite
- * compiling. `declares` is required here, not optional: a hand-written class
- * (`class ItemViewSet extends RestProxyImpl<...> {}`) may have no `declares` at all, or one that is
- * a plain array rather than carrying `FACTORY_BUILT`, and either must fall through to the real
- * overload below rather than match this one.
+ * A factory-built class's constructor, matched by the `route_rest` overloads that reject it:
+ * `route_rest` never instantiates the class, so the factory-built class's own methods would be
+ * `undefined` on the proxy it returns. `declares` is required so that a hand-written class falls
+ * through to the real overloads.
  */
 type FactoryBuiltClass = (abstract new (...args: any[]) => any) & {
   declares: { readonly [FACTORY_BUILT]: any };
@@ -72,10 +50,8 @@ type FactoryBuiltClass = (abstract new (...args: any[]) => any) & {
 declare const FACTORY_BUILT_REJECTION: 'route_rest cannot take a factory-built class - extend it directly instead';
 
 /**
- * The REST proxy type is the mixin interface `M` the caller declares, with every method returning a
- * `ViewSetCall`, `watch()`, and `defaultSort()` when `M` has a list action. Because TypeScript cannot
- * inspect Python class hierarchies at runtime, the caller provides the explicit type via the generic
- * parameter `M` (see route_rest).
+ * The mixin interface `M` the caller declares, with every method returning a `ViewSetCall`, plus
+ * `watch()`, and `defaultSort()` when `M` has a list action.
  */
 export type RestProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>> & DefaultSortOf<keyof M>;
 
@@ -83,9 +59,8 @@ export interface RestProxyOptions extends ProxyBaseOptions {
   /** Optional: existing axios instance. Defaults to the global axios. */
   axiosInstance?: AxiosInstance;
   /**
-   * The timeout of one attempt, in milliseconds, passed to axios as `timeout`. An attempt that
-   * reaches it is repeated at once (see `ProxyBaseOptions.repeat`). `0` means no timeout. Default
-   * 30000.
+   * The timeout of one attempt in milliseconds (axios `timeout`); an attempt that reaches it is
+   * repeated at once. `0` means no timeout. Default 30000.
    */
   attemptTimeoutMs?: number;
 }
@@ -108,11 +83,7 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
 
   /**
    * Sends the call with its `Idempotency-Key` and repeats it with the same key while an attempt ends
-   * without an answer: an axios error without `response`, or a 502, 503 or 504 from a gateway (see
-   * `restAttemptFailure`). A repeated attempt is aborted through its `AbortSignal`.
-   *
-   * axios throws its own AxiosError on a non-2xx, which already carries `response.status` — the
-   * shape ViewSetRequestError mirrors for the muxws side. Nothing to translate here.
+   * without an answer (see `restAttemptFailure`). A non-2xx rejects with axios' own AxiosError.
    */
   protected request<R>(method: HttpMethod, path: string, options: RequestOptions = {}): ViewSetCall<R> {
     const key = options.key ?? newCallKey();
@@ -120,9 +91,8 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
     try {
       const url = `${this.basePath}${path}`;
       const headers = withKeyHeader({ ...options.headers }, key);
-      // Every attempt is sent with the headers the first one went out with, those that request
-      // interceptors added included: an interceptor that reads state bound only for the caller's
-      // synchronous part does not see it when a repeat is sent.
+      // A repeat is sent with the first attempt's headers, interceptor-added ones included: an
+      // interceptor reading state bound only for the caller's synchronous part does not see it later.
       let sent: Record<string, string> | undefined;
       call = runCall(
         () =>
@@ -138,11 +108,7 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
     return issueCall(call, key, options.background);
   }
 
-  /**
-   * One attempt. Dispatches to axios' per-verb methods rather than to `http.request()`: those are what
-   * application interceptors and test doubles are written against — routing everything through
-   * `request()` would be invisible on the wire but would break every one of them.
-   */
+  /** One attempt, through axios' per-verb methods: application test doubles stub those, not `request()`. */
   private attempt<R>(
     method: HttpMethod,
     url: string,
@@ -200,11 +166,7 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
  */
 const TRANSPORT_HEADERS = new Set(['accept', 'accept-encoding', 'content-length', 'content-type', 'user-agent']);
 
-/**
- * The headers an attempt was sent with, after the request interceptors, as its `config` holds them:
- * `headers` over every string header of `config` other than `TRANSPORT_HEADERS`. `headers` without a
- * `config`.
- */
+/** The headers an attempt went out with after the request interceptors, less `TRANSPORT_HEADERS`. */
 function sentHeaders(config: AxiosRequestConfig | undefined, headers: Record<string, string>): Record<string, string> {
   const raw = config?.headers as { toJSON?: () => Record<string, unknown> } | Record<string, unknown> | undefined;
   if (!raw) return headers;
@@ -225,11 +187,9 @@ const DEFAULT_ATTEMPT_TIMEOUT_MS = 30_000;
 const GATEWAY_STATUSES = new Set([502, 503, 504]);
 
 /**
- * An axios error without `response` is an attempt that got no answer: `'timeout'` for the attempt's
- * own timeout (`ECONNABORTED`, `ETIMEDOUT`), `'lost'` otherwise. A cancellation the application
- * requested is an answer. A gateway status is `'lost'` unless its body is an `ApiErrorBody`: that status
- * is the application's answer (e.g. the BE's `fastapi-viewsets.result_timeout`), which `Idempotency`
- * stores and a repeat would only receive again.
+ * An axios error without `response` got no answer: `'timeout'` for the attempt's own timeout, `'lost'`
+ * otherwise. A gateway status (502-504) is `'lost'` unless its body is an `ApiErrorBody`: then it is
+ * the application's answer, which a repeat would only receive again.
  */
 function restAttemptFailure(error: unknown): AttemptFailure {
   if (!axios.isAxiosError(error) || axios.isCancel(error)) return null;
@@ -245,34 +205,13 @@ function restAttemptFailure(error: unknown): AttemptFailure {
 // ---------------------------------------------------------------------------
 
 /**
- * Registers a REST proxy for the given ViewSet class.
- *
- * The generic parameter `M` determines which mixin interfaces are available —
- * typically the ViewSet type (or a union of mixin interfaces).
+ * Builds a REST proxy for a ViewSet; `M` names the mixin interfaces it exposes.
  *
  * @example
- * ```ts
- * import type { BulkViewSetMixin, LookupMixin } from './mixins';
- *
- * interface Item { id: number; name: string }
- *
- * // with separate arguments (recommended)
- * const restItems = route_rest<BulkViewSetMixin<number, Item> & LookupMixin>(
- *   ItemViewSet, '/items', 'id',
- * );
- *
- * // or with an options object
- * const restItems2 = route_rest<BulkViewSetMixin<number, Item> & LookupMixin>(
- *   ItemViewSet, { basePath: '/items', pkFieldName: 'id' },
- * );
- *
- * const items = await restItems.list();
- * const item  = await restItems.retrieve(1);
- * ```
+ * const items = route_rest<BulkViewSetMixin<number, Item>>(ItemViewSet, '/items', 'id');
+ * const item = await items.retrieve(1);
  */
-// These two overloads exist only to reject a factory-built class with a message at the call site;
-// nothing implements or calls them - overload resolution tries them first, and a factory-built
-// class's constructor matches FactoryBuiltClass before it ever reaches the real overloads below.
+// The first two overloads reject a factory-built class with a message at the call site.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- M keeps the call syntax identical to the real overload
 function route_rest<M = never>(
   viewSetClass: FactoryBuiltClass,
@@ -307,8 +246,7 @@ function route_rest<M>(
           axiosInstance,
         }
       : basePathOrOptions;
-  // The class is otherwise used only for its type. Its `declares` is the one thing on it the proxy
-  // needs at runtime, so it is carried across rather than lost.
+  // The class is used only for its type and its `declares`.
   return new RestProxyImpl({
     declares: (viewSetClass as { declares?: ViewSetMixinDeclaration[] }).declares,
     ...options,

@@ -1,9 +1,6 @@
 """
-Response shapes: what a viewset declares, what reaches the schema, and what a client can ask for.
-
-The property worth pinning is the narrowing. A mixin has to declare every shape it could ever
-produce, because it cannot know which viewset it will end up on; what reaches OpenAPI has to be
-only the ones this viewset actually offers, or the schema documents an endpoint nobody wrote.
+List response shapes: what a viewset declares, what a client can ask for, and that the schema documents
+only the shapes the viewset offers, although the mixin declares all of them.
 """
 
 import types
@@ -74,12 +71,11 @@ def test_no_declaration_falls_through_to_the_setting():
 
 
 def test_declaring_one_shape_allows_only_that_one():
-    """The common case, and the one that keeps a schema down to a single model."""
+    """One shape keeps the schema to a single model."""
     assert resolve_shapes("paginated", None, "plain") == ("paginated", ("paginated",))
 
 
 def test_the_default_is_always_first_and_always_allowed():
-    """An endpoint that refused its own default would be a contradiction."""
     _, allowed = resolve_shapes("cursor", ("plain", "paginated"), "plain")
     assert allowed[0] == "cursor"
     assert set(allowed) == {"cursor", "plain", "paginated"}
@@ -118,7 +114,6 @@ def test_a_paginated_viewset_advertises_offset_and_no_cursor():
 
 
 def test_one_shape_means_no_header_at_all():
-    """Offering a choice that does not exist is worse documentation than offering none."""
     assert "X-List-Shape" not in parameters(client_for(list_shape="cursor"))
 
 
@@ -184,5 +179,5 @@ def test_the_named_mixins_are_shorthand_for_a_shape():
 
 
 def test_list_of_serialises_to_a_bare_array():
-    """The wrapper exists for the schema; nothing about the wire format changes."""
+    """`ListOf` only affects the schema, not the wire format."""
     assert ListOf[Track]([Track(id=1, title="x")]).model_dump(mode="json") == [{"id": 1, "title": "x"}]

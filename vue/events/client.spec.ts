@@ -1,8 +1,6 @@
 /**
- * Unit tests for events.ts: the event client against a fake peer and a fake axios, with fake timers.
- *
- * Every call the client sends is recorded with its transport, path and body, and stays pending until
- * the test answers it, so each rule is driven one arrival at a time.
+ * Unit tests for the event client against a fake peer, a fake axios and fake timers. Every call stays
+ * pending until the test answers it, so each rule is driven one arrival at a time.
  */
 
 import axios from 'axios';

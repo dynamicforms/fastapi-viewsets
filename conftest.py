@@ -1,13 +1,7 @@
 """
-Django configuration for the whole test session.
-
-Django settings can be configured exactly once per process, so two test modules that each configure
-what they alone need will fight: whichever imports first wins, and the other runs against an
-INSTALLED_APPS that is missing its models. This does it once, up front, with the union of what
-every Django-touching test needs - conftest is imported before any test module, so the modules'
-own `if configured: return` guards see it is already done and stay out of the way.
-
-Skipped entirely when Django is not installed; it is an optional extra.
+Django configuration for the whole test session. Django settings can be configured once per process,
+so this configures the union of what every Django test needs before any test module is imported.
+Skipped when Django is not installed.
 """
 
 import atexit
@@ -26,9 +20,8 @@ def _configure_django() -> None:
     if django_settings.configured:  # pragma: no cover - only if something configured even earlier
         return
 
-    # A file rather than ":memory:". Django keeps one connection per thread, and the async ORM
-    # calls in backends/django_orm.py run on worker threads - against an in-memory database each
-    # would open its own, empty one and every query would fail on a missing table.
+    # A file, not ":memory:": the async ORM runs on worker threads, each with its own connection,
+    # and an in-memory database would be empty for each of them.
     handle, path = tempfile.mkstemp(suffix=".sqlite3")
     os.close(handle)
     atexit.register(lambda: os.path.exists(path) and os.unlink(path))

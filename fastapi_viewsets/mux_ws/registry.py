@@ -1,8 +1,6 @@
 """
-Which viewset endpoints are published on muxws.
-
-A command is served by the application's own router (see `fastapi_viewsets.routing`); this registry
-records each viewset's muxws endpoint set, for diagnostics and `schema_for`.
+Records each viewset's muxws endpoint set, for diagnostics and `schema_for`; commands are served by
+the application's own router (`fastapi_viewsets.routing`).
 """
 
 import warnings
@@ -28,21 +26,12 @@ _registrations: dict[str, _Registration] = {}
 
 
 def _key(cls: type) -> str:
-    """
-    Identifies a viewset by where it is defined rather than by object identity, so that reloading
-    a module - which produces a brand new class object for the same viewset - replaces its
-    registration instead of adding a shadowed duplicate.
-    """
+    """Identifies a viewset by where it is defined, so a reloaded module replaces its registration."""
     return f"{cls.__module__}.{cls.__qualname__}"
 
 
 def resolve_register_muxws(endpoint: Any, viewset_level: bool | None) -> bool:
-    """
-    Endpoint decision beats viewset decision beats the global default.
-
-    Each level may abstain by leaving the answer None, in which case the question falls through to
-    the next one out; only the global setting has to actually decide.
-    """
+    """The endpoint's decision, else the viewset's, else the global default; None abstains."""
     for value in (
         getattr(endpoint, "__register_muxws__", None),
         viewset_level,
@@ -54,12 +43,7 @@ def resolve_register_muxws(endpoint: Any, viewset_level: bool | None) -> bool:
 
 
 def resolve_register_rest(endpoint: Any, viewset_level: bool | None = None) -> bool:
-    """
-    Endpoint decision beats viewset decision beats "yes" - the same ladder muxws uses.
-
-    Symmetric with muxws: `route_viewset` registers a viewset on *both* transports, so a viewset that
-    is muxws-only says so with `register_rest=False` rather than by annotating every endpoint.
-    """
+    """The endpoint's decision, else the viewset's, else True; None abstains."""
     for value in (getattr(endpoint, "__register_rest__", None), viewset_level):
         if value is not None:
             return bool(value)
@@ -73,13 +57,9 @@ def register_viewset(
     tags: list[str] | None = None,
 ) -> None:
     """
-    Records a viewset's muxws-reachable endpoints. Re-registering the same class replaces its
-    previous entry rather than adding a second copy, so re-importing a module (or a test that
-    decorates the same viewset twice) cannot produce shadowed duplicate routes.
-
-    Two different viewsets sharing one base path are warned about: routing picks the first match,
-    so the later one's endpoints are simply unreachable, and neither FastAPI nor this library would
-    otherwise say so. It is a warning: an application that registers such a pair still starts.
+    Records a viewset's muxws-reachable endpoints; re-registering a class replaces its entry. Two
+    viewsets sharing one base path emit a warning: routing picks the first, so the later one's
+    endpoints are unreachable.
     """
     key = _key(cls)
     for other_key, registration in _registrations.items():
@@ -98,7 +78,7 @@ def is_registered(cls: type) -> bool:
 
 
 def registered_viewsets() -> dict[type, str]:
-    """Registered viewset classes mapped to their base paths - handy for diagnostics."""
+    """Registered viewset classes mapped to their base paths."""
     return {registration.cls: registration.base_path for registration in _registrations.values()}
 
 
@@ -110,5 +90,5 @@ def schema_for(base_path: str) -> dict[str, Any] | None:
 
 
 def reset_registry() -> None:
-    """Drops every registration. Exists for tests; calling it in an application is a mistake."""
+    """Drops every registration; for tests."""
     _registrations.clear()

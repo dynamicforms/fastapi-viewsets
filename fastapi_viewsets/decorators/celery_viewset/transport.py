@@ -1,34 +1,10 @@
 """
-The encoding of a `celery_viewset` call's arguments and result between the FastAPI process and the
-worker. Both ends build an `ActionCodec` for each action from the action's type hints (TypeVars
-resolved against the viewset class), so the worker receives each argument, and the caller the
-result, as the type the hint names.
-
-An argument crosses one of three ways, decided by its parameter's hint:
-
-- model: a hint that is a pydantic model, an optional model, or a list or tuple of models, and every
-  body of a partial update. The model is dumped by field name and validated as its model in the
-  worker; a create body without its primary key and a partial update body are validated as the
-  FastAPI process validated them.
-- typed: any other annotation except `Any`. The value is dumped in pydantic's JSON mode by a
-  `TypeAdapter` of the annotation and validated from JSON with the same adapter: a `date` arrives as
-  `date`, an enum member as that member, a `set` as a `set`, a `UUID`, `Decimal` or `datetime` as
-  itself. `bytes`, `UploadFile` and `Request` are encoded by this module (see `transport_hint`), and
-  an `Any` inside the annotation is encoded untyped.
-- untyped: no annotation or `Any`, a None value, and a `SerializableObject` value. The value crosses
-  as `fastapi_viewsets.context.to_jsonable` encodes it, and a `SerializableObject` in it is rebuilt
-  by `__deserialize__` at any depth of lists and dicts.
-
-A typed value raises `TypeError` naming the value, its declared type and its own type when pydantic
-cannot build an adapter for the annotation, and when the adapter does not encode the value (its dump
-reports an unexpected value: a `datetime` declared `date`, a dict declared as a model).
-
-The result crosses by its value: a `Response` (see `response_to_jsonable`), a `ViewSetResult` (its
-body by the `X` of a `ViewSetResult[X]` annotation), and any other value as an argument does, by
-the return annotation with `ViewSetResult[X]` read as `X`.
-
-A value that exists only in the process holding it raises `TypeError` naming the reason (see
-`UNTRANSPORTABLE`).
+Encoding of a `celery_viewset` call's arguments and result between the FastAPI process and the worker.
+`ActionCodec` reads the action's type hints (TypeVars resolved against the viewset), and each value
+crosses as one of: `model` (pydantic model hints, partial-update bodies), `typed` (a `TypeAdapter` of
+any other annotation, JSON mode) or `untyped` (no annotation or `Any`, None, a `SerializableObject`:
+`to_jsonable`). A value that does not encode as its declared type, or exists only in its own process
+(`UNTRANSPORTABLE`), raises `TypeError`. See docs/guide/routers.md.
 """
 
 import base64
@@ -57,8 +33,7 @@ from ..route_viewset import build_type_map, resolve_typevars
 from .payload import request_from_jsonable, request_to_jsonable
 
 UPLOAD_SPOOL_SIZE = 1024 * 1024
-"""Bytes of an `UploadFile` the worker keeps in memory; a larger file is spooled to a temporary file,
-as Starlette spools a multipart upload."""
+"""Bytes of an `UploadFile` the worker keeps in memory before spooling it to a temporary file."""
 
 UNTRANSPORTABLE: dict[type, str] = {
     WebSocket: "a WebSocket is a connection held open by the FastAPI process",
@@ -66,8 +41,7 @@ UNTRANSPORTABLE: dict[type, str] = {
     StreamingResponse: "its body is produced by an iterator in the process that returned it",
     FileResponse: "its body is a file read from the file system of the process that returned it",
 }
-"""The types that cannot cross between the processes, with the reason. A subclass is refused as its
-base. A `Response` with a `background` task is refused as well."""
+"""Types (and their subclasses) that cannot cross between the processes, with the reason."""
 
 
 def _refusal(cls: type) -> str | None:
@@ -78,8 +52,7 @@ def _refusal(cls: type) -> str | None:
 
 
 def check_transportable(value: Any) -> None:
-    """Raises `TypeError` for a value of a type in `UNTRANSPORTABLE` and for a `Response` with a
-    `background` task."""
+    """Raise `TypeError` for an `UNTRANSPORTABLE` value or a `Response` with a `background` task."""
     reason = _refusal(type(value))
     if reason is not None:
         raise TypeError(reason)
@@ -94,8 +67,7 @@ def check_transportable(value: Any) -> None:
 
 
 class _Codec:
-    """Annotated metadata replacing a type's schema: `encode` in JSON mode, `decode` for anything
-    that is not already an instance of `cls`."""
+    """Annotated metadata replacing a type's schema: `encode` in JSON mode, `decode` for non-instances."""
 
     def __init__(self, cls: type, encode, decode):
         self.cls = cls
@@ -133,8 +105,7 @@ def _raw_headers_from_jsonable(data: list[list[str]]) -> list[tuple[bytes, bytes
 
 
 def upload_to_jsonable(upload: UploadFile) -> dict[str, Any]:
-    """`upload` with its whole content, read from its start; the file position is left unchanged.
-    Reads synchronously from `upload.file`."""
+    """`upload` with its whole content; reads `upload.file` synchronously and restores its position."""
     position = upload.file.tell()
     try:
         upload.file.seek(0)
@@ -150,8 +121,7 @@ def upload_to_jsonable(upload: UploadFile) -> dict[str, Any]:
 
 
 def upload_from_jsonable(data: dict[str, Any]) -> UploadFile:
-    """A Starlette `UploadFile` over the content `upload_to_jsonable` encoded, positioned at its
-    start. Content above `UPLOAD_SPOOL_SIZE` bytes is held in a temporary file."""
+    """An `UploadFile` over the encoded content, positioned at its start."""
     file = tempfile.SpooledTemporaryFile(max_size=UPLOAD_SPOOL_SIZE)  # noqa: SIM115 - the UploadFile owns it
     file.write(_b64decode(data["content"]))
     file.seek(0)
@@ -164,8 +134,7 @@ def upload_from_jsonable(data: dict[str, Any]) -> UploadFile:
 
 
 class _Untyped(_Codec):
-    """An `Any` position inside a typed hint: encoded by `to_jsonable`, decoded by `from_jsonable`, so
-    a `SerializableObject` in it is rebuilt."""
+    """An `Any` inside a typed hint: `to_jsonable` / `from_jsonable`, rebuilding a `SerializableObject`."""
 
     def __init__(self):
         super().__init__(object, lambda value: _encode_untyped(value), from_jsonable)
@@ -181,15 +150,13 @@ _REQUEST = _Codec(HTTPConnection, request_to_jsonable, request_from_jsonable)
 
 
 def _is_class(hint: Any) -> bool:
-    """A plain class, not a parameterised generic (which `inspect.isclass` reports as a class on
-    Python 3.10)."""
+    """A plain class; `inspect.isclass` also accepts a parameterised generic on Python 3.10."""
     return get_origin(hint) is None and inspect.isclass(hint)
 
 
 def transport_hint(hint: Any) -> Any:
-    """`hint` with each type this module encodes itself replaced by that type annotated with its
-    codec, inside unions, `Annotated` and parameterised collections. A pydantic model's fields keep
-    their own schema."""
+    """`hint` with `Any`, `bytes`, `UploadFile` and `Request` annotated with their codecs, at any depth
+    outside pydantic models."""
     if hint is Any:
         return Annotated[Any, _UNTYPED]
     if _is_class(hint):
@@ -220,8 +187,7 @@ _adapters: dict[Any, Any] = {}
 
 
 def adapter_for(hint: Any) -> TypeAdapter | None:
-    """The `TypeAdapter` of `hint` as `transport_hint` rewrites it, built once per hint; None for a
-    hint pydantic cannot build one for, and for `Any`."""
+    """The cached `TypeAdapter` of `transport_hint(hint)`; None for `Any` or a hint pydantic cannot adapt."""
     if hint is Any or hint is inspect.Parameter.empty or hint is None:
         return None
     try:
@@ -258,9 +224,8 @@ def _importable_class(cls: type) -> type:
 
 
 def response_to_jsonable(response: Response) -> dict[str, Any]:
-    """A `Response` whose body is in memory: its class, status code, raw headers (`Set-Cookie`,
-    `Content-Length` and `Content-Type` included), body and media type. A class in `UNTRANSPORTABLE`
-    and a response with a `background` task raise `TypeError`."""
+    """A buffered `Response` as JSON: class, status code, raw headers, body, media type. Raises as
+    `check_transportable`."""
     check_transportable(response)
     cls = _importable_class(type(response))
     data = {
@@ -295,8 +260,7 @@ def _response_class(dotted_path: str) -> type[Response]:
 
 
 def response_from_jsonable(data: dict[str, Any]) -> Response:
-    """The `Response` `response_to_jsonable` encoded, of the same class, built without its
-    `__init__`: the status code, raw headers and body are the encoded ones, unchanged."""
+    """Rebuild the encoded `Response` of the same class, bypassing `__init__` so headers stay unchanged."""
     cls = _response_class(data["class"])
     response = cls.__new__(cls)
     response.status_code = data["status_code"]
@@ -313,8 +277,7 @@ def response_from_jsonable(data: dict[str, Any]) -> Response:
 
 @dataclass(frozen=True)
 class EncodedResult:
-    """A result as the worker pushed it, with the way it was encoded; `ActionCodec.decode_result`
-    decodes it."""
+    """A result as the worker pushed it, with its encoding."""
 
     data: Any
     encoding: str
@@ -345,10 +308,8 @@ def _type_name(hint: Any) -> str:
 
 
 def encode_value(hint: Any, value: Any, what: str = "the value") -> tuple[Any, bool]:
-    """`value` encoded by `hint`'s adapter, and True; or encoded untyped, and False, for a `hint`
-    that types nothing (see `declares_type`), a None value and a `SerializableObject`. `what` names
-    the value in the `TypeError` raised for a declared type pydantic cannot validate and for a value
-    that does not encode as its declared type."""
+    """(encoded value, typed). Untyped for no declared type, None and a `SerializableObject`. Raises
+    `TypeError`, naming `what`, when the declared type cannot be adapted or the value does not encode."""
     check_transportable(value)
     if not declares_type(hint) or value is None or isinstance(value, SerializableObject):
         return _encode_untyped(value), False
@@ -396,7 +357,7 @@ class ParamCodec:
     name: str
     hint: Any
     kind: str
-    """`model`, `partial`, `typed` or `untyped` (see the module docstring)."""
+    """`model`, `partial`, `typed` or `untyped`."""
 
 
 def _resolved_hints(cls: type | None, endpoint, include_extras: bool = False) -> dict[str, Any]:
@@ -409,14 +370,12 @@ def _resolved_hints(cls: type | None, endpoint, include_extras: bool = False) ->
 
 
 class ActionCodec:
-    """The encoding of one action's arguments and result, from `endpoint`'s type hints resolved
-    against `cls`. `context` and `request` are not arguments: they cross as the call's data."""
+    """The encoding of one action's arguments and result; `context` and `request` cross separately."""
 
     def __init__(self, cls: type | None, endpoint):
         self.task_name = endpoint.__name__
         self.signature = inspect.signature(endpoint)
-        # the model paths read the bare annotation; a typed value is encoded by the annotation with
-        # its `Annotated` metadata, which may carry its validator and serializer
+        # typed values keep their `Annotated` metadata, which may carry a validator and serializer
         hints = _resolved_hints(cls, endpoint)
         annotated = _resolved_hints(cls, endpoint, include_extras=True)
         partial = endpoint.__name__ in PARTIAL_UPDATE_ACTIONS
@@ -441,8 +400,7 @@ class ActionCodec:
         self.result_hint = annotated.get("return")
 
     def bind(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
-        """`args` and `kwargs` of a call as keyword arguments by parameter name, beside the values
-        of a `*args` parameter. Raises `TypeError` for arguments the signature does not accept."""
+        """(`*args` values, keyword arguments by name). Raises `TypeError` for arguments not accepted."""
         bound = self.signature.bind_partial(None, *args, **kwargs)
         positional: tuple = ()
         named: dict = {}
@@ -457,9 +415,8 @@ class ActionCodec:
         return positional, named
 
     def encode_argument(self, name: str, value: Any) -> tuple[Any, bool]:
-        """`value` of parameter `name` encoded typed, and True, or untyped, and False. A model
-        argument (`model`, `partial`) is encoded by the caller and reported typed. Raises `TypeError`
-        naming the action for a value that does not cross (see `encode_value`)."""
+        """(encoded value, typed) of parameter `name`; raises as `encode_value`, naming the action.
+        Model arguments (`model`, `partial`) are encoded by the caller."""
         codec = self.params.get(name)
         try:
             return encode_value(codec.hint if codec is not None else None, value, f"argument {name!r}")
@@ -471,8 +428,7 @@ class ActionCodec:
         return decode_value(adapter_for(codec.hint) if codec is not None else None, data, typed)
 
     def encode_result(self, value: Any) -> tuple[Any, str]:
-        """The result as the worker pushes it, and its encoding: `response`, `viewset_result`,
-        `typed` or `untyped`."""
+        """(encoded result, encoding): `response`, `viewset_result`, `typed` or `untyped`."""
         try:
             return _encode_result(value, self.result_hint)
         except TypeError as error:

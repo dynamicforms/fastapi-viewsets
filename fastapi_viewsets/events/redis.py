@@ -1,10 +1,6 @@
 """
-`RedisEventStore`: the event store shared by every process that reaches one Redis.
-
-The only module of `fastapi_viewsets.events` that uses `redis`. `RedisEventStore` takes a
-`redis.asyncio.Redis` client the application constructs, or builds one client per event loop from a
-URL (`RedisEventStore.from_url`, `PerLoopRedis`); the `redis` package is imported by `PerLoopRedis`
-only.
+`RedisEventStore`: the event store shared by every process that reaches one Redis. The only module
+of `fastapi_viewsets.events` that uses `redis`, imported lazily by `PerLoopRedis`.
 """
 
 import asyncio
@@ -24,11 +20,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# KEYS[1] the topic's rev counter, KEYS[2] the topic's log. ARGV[1] now in milliseconds, ARGV[2] the
-# event as the JSON object {"name": ..., "payload": ..., "version": ...}, ARGV[3] the log size,
-# ARGV[4] the log's expiry in milliseconds. Sets the counter, without expiry, to max(counter + 1, now)
-# and pushes {"rev": ..., "prev": ..., "event": ARGV[2]} to the head of the log, which keeps ARGV[3]
-# entries. Returns {rev, prev} as decimal strings, or nil, changing nothing, when rev would reach 2^53.
+# KEYS: rev counter, log. ARGV: now (ms), event JSON {name, payload, version}, log size, log expiry (ms).
+# Sets rev = max(counter + 1, now) and pushes {rev, prev, event} to the head of the trimmed log.
+# Returns {rev, prev} as decimal strings, or nil without changes when rev would reach 2^53.
 _APPEND_SCRIPT = """
 local prev = tonumber(redis.call('GET', KEYS[1]) or '0')
 local rev = math.max(prev + 1, tonumber(ARGV[1]))
@@ -55,26 +49,16 @@ DEFAULT_READ_TIMEOUT = 1.0
 # Seconds `start` waits for Redis to confirm the SUBSCRIBE of the events channel.
 DEFAULT_SUBSCRIBE_TIMEOUT = 5.0
 
-# The `redis.asyncio.Redis.from_url` options `PerLoopRedis` sets unless given: seconds a connect and
-# a single command may take.
+# `Redis.from_url` options `PerLoopRedis` sets unless given (seconds).
 DEFAULT_CLIENT_OPTIONS: dict[str, Any] = {"socket_connect_timeout": 2.0, "socket_timeout": 5.0}
 
 
 class PerLoopRedis:
     """
-    Stands in for a `redis.asyncio.Redis`: every attribute whose name does not start with `_` is
-    read off the client of the running event loop, created with
-    `Redis.from_url(url, **(DEFAULT_CLIENT_OPTIONS | options))` on its first use in that loop. A
-    `redis.asyncio` connection belongs to the loop it was opened on, and one process runs the store
-    on several loops: the server's, the loops of a Celery worker's executions, and the loop
-    `asgiref`'s `async_to_sync()` opens for a call without a running loop to hand it to (WSGI,
-    management commands, plain threads).
-
-    A loop's client is closed and forgotten when the loop's tasks are cancelled at its end, as
-    `asyncio.run()` does. A client used on that loop by another task's cancellation cleanup may be
-    closed already. The client of a loop closed without that, and of a loop alive at process exit, is
-    not closed: it is forgotten by the next call that creates a client, and its connections close
-    when it is garbage-collected.
+    Proxies a `redis.asyncio.Redis`, with one client per running event loop (a connection belongs to
+    its loop; Celery executions and `async_to_sync()` each run their own). A loop's client is closed when
+    the loop cancels its tasks at the end (`asyncio.run()`); otherwise it is dropped by the next client
+    creation and closed on garbage collection.
     """
 
     def __init__(self, url: str, **options: Any):
@@ -102,9 +86,8 @@ class PerLoopRedis:
         return client
 
     async def _close_with_loop(self, loop: asyncio.AbstractEventLoop, client: "Redis") -> None:
-        # A task destroyed with its closed loop is finalised by the garbage collector, which can run
-        # inside `client()` while it holds `_lock`: taking the lock there deadlocks, so that loop's
-        # client is left to the next `client()` call.
+        # Not on GC finalisation: that can run inside `client()` while it holds `_lock` and would
+        # deadlock; such a loop's client is dropped by the next `client()` call.
         try:
             await loop.create_future()
         except asyncio.CancelledError:
@@ -125,28 +108,10 @@ class PerLoopRedis:
 
 class RedisEventStore:
     """
-    An event store in Redis, under `key_prefix`:
-
-    - `{prefix}rev:{topic}`, the topic's rev, a string without expiry;
-    - `{prefix}log:{topic}`, the topic's log, a list of JSON entries, newest first, of at most
-      `settings.viewsets_event_log_size` entries, expiring `settings.viewsets_event_log_ttl` seconds
-      after the topic's last event;
-    - `{prefix}events`, the one channel `publish` publishes every event on, as the JSON object
-      `{"topic", "rev", "prev", "name", "payload", "version"}`.
-
-    `append` is one Lua script. `start()` SUBSCRIBEs the events channel on one pub/sub connection,
-    returns once Redis has confirmed it, and runs the reader, a task that calls `deliver()` for each
-    message; `deliver()` pushes the event to the subscriptions of its topic in this process and
-    leaves out a topic without one. `stop()` closes the connection. `start()` and `stop()` run on
-    one loop, the loop the reader runs on.
-
-    `subscribe_timeout` is the seconds `start()` waits for Redis to confirm the SUBSCRIBE;
-    `read_timeout` the seconds the reader waits for a message before it checks again, and waits after
-    a failed read.
-
-    When redis-py reconnects the pub/sub connection it SUBSCRIBEs the channel again. An event
-    published while the connection is down does not reach this process; the event client finds it
-    by poll, on the topic's next push or its check poll.
+    An event store in Redis under `key_prefix`: `rev:{topic}`, `log:{topic}` and the `events` channel.
+    `start()` subscribes the channel and runs a reader delivering each event to this process's
+    subscriptions; `start()` and `stop()` run on the reader's loop. Events published while the pub/sub
+    connection is down are missed here; clients recover them by polling.
     """
 
     def __init__(
@@ -174,8 +139,7 @@ class RedisEventStore:
         read_timeout: float = DEFAULT_READ_TIMEOUT,
         **options: Any,
     ) -> "RedisEventStore":
-        """A store on `PerLoopRedis(url, **options)`: one client per event loop. `options` are
-        `redis.asyncio.Redis.from_url` options over `DEFAULT_CLIENT_OPTIONS`."""
+        """A store on `PerLoopRedis(url, **options)`, one client per event loop."""
         return cls(
             PerLoopRedis(url, **options),
             key_prefix,
@@ -201,9 +165,8 @@ class RedisEventStore:
 
     async def start(self) -> None:
         """
-        SUBSCRIBEs the events channel and starts the reader once Redis has confirmed the SUBSCRIBE.
-        Raises `asyncio.TimeoutError` when the confirmation does not arrive within `subscribe_timeout`
-        seconds, and the error of the connection when it fails; the store is then not started.
+        Subscribes the events channel and starts the reader once Redis confirms. Raises
+        `asyncio.TimeoutError` after `subscribe_timeout` seconds, or the connection's error.
         """
         if self.reader_running:
             return

@@ -1,11 +1,4 @@
-/**
- * Unit tests for rest-proxy.ts
- *
- * Tests cover:
- * 1. How to declare a ViewSet class and pass it to route_rest
- * 2. How to instantiate a REST proxy with route_rest
- * 3. That the proxy calls the correct HTTP methods on the correct URLs
- */
+/** Unit tests for rest-proxy.ts: declaring ViewSets, route_rest, and the HTTP calls the proxy makes. */
 
 import axios, { AxiosError, AxiosHeaders, CanceledError, type InternalAxiosRequestConfig } from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -310,13 +303,8 @@ describe('route_rest — factory with separate arguments', () => {
   });
 
   it('rejects a factory-built ViewSet class', () => {
-    // A factory-built class's own methods (added past what route_rest can type through M) would be
-    // undefined at runtime if this compiled: route_rest builds a bare RestProxyImpl and discards
-    // the class itself. See viewset.spec.ts for the equivalent muxwsViewSet-side coverage note.
-    //
-    // The reject overload's return type - a string literal, not RestProxy<M> - is what makes the
-    // call itself an error; a call whose result is never used produces no diagnostic either way, so
-    // the @ts-expect-error has to sit on the line that tries to use it, not on the call.
+    // route_rest discards the class, so its own methods would be undefined at runtime. The reject
+    // overload returns a string literal, so the @ts-expect-error sits on the line using the result.
     class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin]) {}
     const proxy = route_rest<ReadOnlyViewSetMixin<number, Item>>(ItemApi, '/items', 'id');
     // @ts-expect-error route_rest cannot take a factory-built ViewSet class - property access
@@ -587,9 +575,7 @@ describe('schema validation — validateAgainstSchema()', () => {
   }
 
   it('runs from the constructor, not only when called by hand', async () => {
-    // The check lives on the shared base class but reads `this.http`, which the subclass
-    // constructor assigns after super() returns, so it runs from the subclass constructor.
-    // It swallows its own errors: started from the base constructor it would do nothing.
+    // The check reads `this.http`, assigned after super() returns, so the subclass constructor starts it.
     mockSchema(FULL_SCHEMA);
     new (viewSetDeclaring([BulkViewSetMixin, LookupMixin]))({
       basePath: '/items',
@@ -749,7 +735,7 @@ describe('schema validation — validateAgainstSchema()', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. Idempotency-Key and repeats
+// 8. defaultSort(), Idempotency-Key and repeats
 // ---------------------------------------------------------------------------
 
 describe('defaultSort()', () => {

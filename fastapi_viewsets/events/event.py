@@ -5,32 +5,10 @@ from pydantic import BaseModel
 
 class Event(BaseModel):
     """
-    The base of every event. A subclass sets the class-level `event_name`, which the frontend
-    dispatches on together with the topic, and declares the payload as pydantic fields:
-
-        class ImportFinished(Event):
-            event_name = "import_finished"
-
-            file: str
-            rows: int
-
-    The class-level `event_version`, 1 unless the subclass sets a larger int, is the version of the
-    payload's shape. It travels with every event, so a consumer tells the shapes of an event's
-    payload apart and handles several versions side by side:
-
-        class ImportFinished(Event):
-            event_name = "import_finished"
-            event_version = 2
-
-            file: str
-            rows: int
-            skipped: int
-
-    Both are class attributes: a plain assignment, as above, or a `ClassVar` annotation. A subclass
-    that annotates either one as a field (`event_version: int = 2`), lacks a non-empty string
-    `event_name`, or has an `event_version` that is not an int of at least 1 (a `bool` is not),
-    raises `TypeError` when the class is created. The payload on the wire is
-    `model_dump(mode="json")`.
+    Base of every event; the pydantic fields are the payload (`model_dump(mode="json")` on the wire).
+    A subclass sets the class attributes `event_name` (what the frontend dispatches on) and optionally
+    `event_version` (payload shape version, default 1). Declaring either as a field, an empty name or a
+    version that is not an int >= 1 raises TypeError at class creation.
     """
 
     event_name: ClassVar[str]
