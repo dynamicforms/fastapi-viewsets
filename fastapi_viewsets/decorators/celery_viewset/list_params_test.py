@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from pydantic import BaseModel, Field
 
 from fastapi_viewsets.decorators import celery_viewset_server
+from fastapi_viewsets.decorators.celery_viewset.transport import ActionCodec
 from fastapi_viewsets.list_query import ListQuery, ListRecords
 from fastapi_viewsets.mixins import make_all_optional, PaginatedListMixin
 
@@ -106,3 +107,29 @@ def test_a_stage_the_backend_handled_is_not_redone_in_the_worker():
     task = worker_tasks_for(pushdown_viewset)["tracks.list_items"]
     page = task(sort="id:asc", limit=3)
     assert [track.id for track in page.results] == [30, 29, 28]
+
+
+def _encoded_result(shape: str, **kwargs):
+    viewsets = []
+
+    def factory(decorate):
+        viewset = paged_viewset(lambda cls: cls)
+        viewset.list_shapes = (shape,)
+        viewsets.append(decorate(viewset))
+        return viewsets[0]
+
+    task = worker_tasks_for(factory)["tracks.list_items"]
+    viewset = viewsets[0]
+    return ActionCodec(viewset, viewset.list_items).encode_result(task(**kwargs))
+
+
+def test_a_page_encodes_as_the_declared_result():
+    data, encoding = _encoded_result("paginated", offset=5, limit=3)
+    assert encoding == "typed"
+    assert [track["id"] for track in data["results"]] == [6, 7, 8]
+
+
+def test_a_cursor_page_encodes_as_the_declared_result():
+    data, encoding = _encoded_result("cursor", limit=3)
+    assert encoding == "typed"
+    assert [track["id"] for track in data["results"]] == [1, 2, 3]

@@ -6,6 +6,15 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.2] - 2026-10-27
+
+### Fixed
+
+- `PaginatedListMixin` and `CursorListMixin` return a page parameterised with the viewset's item type,
+  `PaginatedList[T]` / `CursorPage[T]`, in place of `PaginatedList[Any]` / `CursorPage[Any]`. A
+  `celery_viewset` worker encodes such a page as the declared result of `list_items`; a page of `Any`
+  does not encode as it and the list answered 500 `fastapi-viewsets.action_failed` (`reason: result`).
+
 ## [0.14.1] - 2026-10-27
 
 ### Added

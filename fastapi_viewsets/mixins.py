@@ -1,3 +1,5 @@
+import functools
+
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Annotated, Any, final, Generic, get_args, get_origin, Union
@@ -37,6 +39,15 @@ from fastapi_viewsets.response_classes import NOT_FOUND_RESPONSE
 T = TypeVar("T")
 K = TypeVar("K")
 TFilter = TypeVar("TFilter", default=None)
+
+
+@functools.cache
+def _item_type(cls: type) -> Any:
+    """The viewset's list item type `T`; `Any` when unbound. A page of it encodes as the declared result."""
+    from fastapi_viewsets.decorators.route_viewset import build_type_map
+
+    item = build_type_map(cls).get(T, Any)
+    return Any if isinstance(item, TypeVar) else item
 
 
 class ImplMixin(Generic[K, T], ABC):
@@ -456,7 +467,7 @@ class ListMixin(Generic[T, TFilter], ABC):
         has_more_forward = has_more if not backwards else bool(query.cursor)
         has_previous = bool(query.cursor) if not backwards else has_more
 
-        return CursorPage[Any](
+        return CursorPage[_item_type(type(self))](
             results=results,
             limit=query.limit,
             has_more=has_more_forward,
@@ -487,7 +498,7 @@ class ListMixin(Generic[T, TFilter], ABC):
         page, has_more = await self.take_page(query, records)
         # Already converted if an in-memory stage had to land the source earlier; see land().
         results = page if not query.needs("conversion") else self._to_records(page)
-        return PaginatedList[Any](
+        return PaginatedList[_item_type(type(self))](
             results=results,
             offset=query.offset,
             limit=query.limit,
@@ -540,7 +551,6 @@ class ListMixin(Generic[T, TFilter], ABC):
         In-memory sort hook. The default is a stable multi-key sort using the cursor's comparison
         (`compare_in_order`), so NULL placement matches the cursor's.
         """
-        import functools
 
         def compare(a: T, b: T) -> int:
             for col in sort:
