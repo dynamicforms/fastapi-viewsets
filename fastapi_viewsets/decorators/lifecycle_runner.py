@@ -8,7 +8,14 @@ from typing import Any, Literal, TYPE_CHECKING, TypeVar
 from ..action_configuration import extra_middlewares_for, resolve_action_configuration
 from ..conf import settings
 from ..context import Context, get_shared_context
-from ..middleware import ActionExecution, ExecutionRef, run_command_chain, run_execution_chain, ViewSetResult
+from ..middleware import (
+    ActionExecution,
+    apply_cookies,
+    ExecutionRef,
+    run_command_chain,
+    run_execution_chain,
+    ViewSetResult,
+)
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -155,8 +162,7 @@ async def lifecycle_runner(
         )
         for key, value in result.headers.items():
             response.headers[key] = str(value)
-        for key, value in result.cookies.items():
-            response.set_cookie(key, str(value))
+        apply_cookies(response, result.cookies)
         if result.status_code is not None:
             response.status_code = result.status_code
         return result.body

@@ -515,7 +515,7 @@ def _decode_result(data: Any, encoding: str, hint: Any) -> Any:
         return ViewSetResult(
             body=_decode_result(data["body"], data["body_encoding"], _body_hint(hint)),
             headers=data["headers"],
-            cookies=data["cookies"],
+            cookies=from_jsonable(data["cookies"]),
             status_code=data["status_code"],
         )
     if encoding == "typed":

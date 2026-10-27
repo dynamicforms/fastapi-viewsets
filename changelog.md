@@ -6,6 +6,20 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-10-27
+
+### Added
+
+- `ViewSetResult.set_cookie(key, value, max_age=, expires=, path=, domain=, secure=, httponly=, samesite=,
+  partitioned=)` and `ViewSetResult.delete_cookie(key, path=, domain=, secure=, httponly=, samesite=)`, with the
+  parameters and defaults of Starlette's `Response` methods of the same name. They store a `Cookie` / `DeleteCookie`
+  (`fastapi_viewsets.middleware`) in `ViewSetResult.cookies`, which the HTTP transport applies with Starlette's
+  `set_cookie()` / `delete_cookie()`. Any other value in `cookies` is set as before, `str(value)` with Starlette's
+  default options. An action or a command middleware sets an `HttpOnly`, `Secure`, `SameSite` session cookie with a
+  `Max-Age`, and deletes it, without putting it in the body and without `modifies_response_shape`.
+- `Cookie` and `DeleteCookie` cross the Celery/Redis boundary with all of their options, in a `ViewSetResult` a
+  `celery_viewset` action returns and in `ViewSetResult`'s own serialization.
+
 ## [0.14.0] - 2026-10-27
 
 ### Added

@@ -444,8 +444,8 @@ def _route(
     # Command middleware (see fastapi_viewsets/middleware) can reshape the response body via
     # ViewSetResult - only middleware that actually declares modifies_response_shape=True
     # untrusts the endpoint's declared return type as the response_model; typical middleware
-    # (auth, rate limiting, sessions) only adds
-    # headers/cookies and leaves the declared model - and therefore the OpenAPI docs - in place.
+    # (auth, rate limiting, sessions) only adds headers/cookies/status_code, which are not part of
+    # the body, and leaves the declared model - and therefore the OpenAPI docs - in place.
     build_schema(
         cls,
         base_path,

@@ -25,21 +25,20 @@ Command middleware is configured on `settings.viewsets_command_middleware`:
 
 ```python
 from fastapi_viewsets.conf import settings
-from fastapi_viewsets.middleware import ViewSetResult
 
-async def session_cookie_middleware(request, viewset, context, call_next):
+SESSION_AGE = 14 * 24 * 3600
+
+async def sliding_session(request, viewset, context, call_next):
     result = await call_next()
-    if isinstance(result.body, LoginResult):
-        data = result.body.model_dump()
-        session_key = data.pop("session_key", None)
-        if session_key is not None:
-            result.cookies["sessionid"] = session_key
-        result.body = data           # becomes the actual JSON body
+    session_key = request.cookies.get("sessionid") if request is not None else None
+    if session_key is not None and "sessionid" not in result.cookies:
+        # every answered call extends the browser's session cookie by SESSION_AGE
+        result.set_cookie(
+            "sessionid", session_key, max_age=SESSION_AGE, secure=True, httponly=True, samesite="lax"
+        )
     return result
 
-session_cookie_middleware.modifies_response_shape = True  # strips a field - see below
-
-settings.viewsets_command_middleware = [session_cookie_middleware]
+settings.viewsets_command_middleware = [sliding_session]
 ```
 
 Each middleware is `async def middleware(request, viewset, context, call_next) -> ViewSetResult`.
@@ -59,15 +58,17 @@ ABC for exactly that - implement `__call__` with the same signature a function w
 ```python
 from fastapi_viewsets.middleware import Middleware, ViewSetResult
 
-class SessionCookieMiddleware(Middleware):
-    modifies_response_shape = True   # strips a field - see below
+class SlidingSession(Middleware):
+    def __init__(self, cookie_name: str = "sessionid", max_age: int = 14 * 24 * 3600):
+        self.cookie_name = cookie_name
+        self.max_age = max_age
 
     async def __call__(self, request, viewset, context, call_next):
         result = await call_next()
         ...
         return result
 
-settings.viewsets_command_middleware = [SessionCookieMiddleware()]
+settings.viewsets_command_middleware = [SlidingSession()]
 ```
 
 `run_command_chain` doesn't need to know or care whether an entry in
@@ -186,13 +187,18 @@ class ViewSetResult(SerializableObject, Generic[T]):
     headers: dict[str, Any] = field(default_factory=dict)
     cookies: dict[str, Any] = field(default_factory=dict)
     status_code: int | None = None
+
+    def set_cookie(self, key, value="", max_age=None, expires=None, path="/", domain=None,
+                   secure=False, httponly=False, samesite="lax", partitioned=False) -> None: ...
+    def delete_cookie(self, key, path="/", domain=None, secure=False, httponly=False,
+                      samesite="lax") -> None: ...
 ```
 
 Transport-agnostic: `body` is the actual domain value (whatever `perform_*` returned), `headers`/
 `cookies` are side-channel metadata - not necessarily real HTTP headers/cookies, since the same
 mechanism is meant to work over other transports too (see [Architecture](./architecture#a-note-on-transports)).
 `route_viewset` (the HTTP transport adapter) applies `headers` onto the real `Response`'s headers
-and `cookies` via `response.set_cookie(...)` once the chain finishes - regardless of whether the
+and `cookies` onto its `Set-Cookie` headers once the chain finishes - regardless of whether the
 action ran in-process or was `celery_viewset`-dispatched to a worker.
 
 `status_code`, when set, lets a middleware short-circuit the *onion chain* with a non-200 result
@@ -204,6 +210,82 @@ no "after" phase (e.g. `Session`'s `401`), prefer raising `HTTPException` from `
 
 With no middleware configured (the default), the endpoint's return value becomes the response
 body as-is, and no headers/cookies are touched.
+
+### Cookies
+
+`cookies` maps a cookie name to one of:
+
+| Value | Applied as |
+|-------|------------|
+| `Cookie(value, max_age=, expires=, path=, domain=, secure=, httponly=, samesite=, partitioned=)` | `response.set_cookie(name, value, ...)` with these options |
+| `DeleteCookie(path=, domain=, secure=, httponly=, samesite=)` | `response.delete_cookie(name, ...)` with these options |
+| any other value | `response.set_cookie(name, str(value))` with Starlette's default options |
+
+`Cookie` and `DeleteCookie` (in `fastapi_viewsets.middleware`) are dataclasses with the parameters
+and defaults of Starlette's `Response.set_cookie()` and `Response.delete_cookie()`: `path="/"`,
+`samesite="lax"`, `secure`/`httponly`/`partitioned` `False`, the rest `None`. `max_age` is in
+seconds; `expires` is a `datetime` (sent as an HTTP date), a number of seconds from now, or a string
+sent as it is. `partitioned=True` is passed on to Starlette, which refuses it with `ValueError`
+where the running Python does not support the attribute (before Python 3.14). A deletion is a
+`Set-Cookie` with an empty value, `Max-Age=0` and an expiry in the past; its `path` and `domain`
+must be those the cookie was set with.
+
+`result.set_cookie(name, ...)` and `result.delete_cookie(name, ...)` take the arguments of the
+Starlette methods of the same name and store a `Cookie` / `DeleteCookie` under `name`, replacing
+what `cookies` held for it. One name holds one entry, so a result sets or deletes a cookie of a
+given name for one `path`/`domain`.
+
+A session cookie set by the login action and deleted by the logout action:
+
+```python
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from fastapi_viewsets.context import Context
+from fastapi_viewsets.middleware import ViewSetResult
+
+SESSION_AGE = 14 * 24 * 3600
+
+
+class Credentials(BaseModel):
+    username: str
+    password: str
+
+
+class Account(BaseModel):
+    username: str
+
+
+class AuthViewSet:
+    __router = APIRouter()
+
+    @__router.post("login")
+    async def login(self, credentials: Credentials) -> ViewSetResult[Account]:
+        session_key = await open_session(credentials.username, credentials.password)
+        if session_key is None:
+            raise HTTPException(401, "Invalid credentials")
+        result = ViewSetResult(body=Account(username=credentials.username))
+        result.set_cookie(
+            "sessionid", session_key, max_age=SESSION_AGE, secure=True, httponly=True, samesite="lax"
+        )
+        return result
+
+    @__router.post("logout")
+    async def logout(self, context: Context) -> ViewSetResult[None]:
+        await close_session(await context.user)
+        result = ViewSetResult(body=None)
+        result.delete_cookie("sessionid", secure=True, httponly=True, samesite="lax")
+        return result
+```
+
+The response of `login` is the `Account` JSON with
+`Set-Cookie: sessionid=...; HttpOnly; Max-Age=1209600; Path=/; SameSite=lax; Secure`; the
+response of `logout` has `Set-Cookie: sessionid=""; expires=...; HttpOnly; Max-Age=0; Path=/; SameSite=lax; Secure`.
+The session key never appears in the body, both routes keep their typed response schema (see
+[OpenAPI response schema](#openapi-response-schema-modifies-response-shape)), and a
+`celery_viewset` dispatch of either action sets the same headers: a `Cookie` and a `DeleteCookie`
+cross the Celery/Redis boundary with all of their options. Over [muxws](./muxws#what-the-transport-does)
+each `Set-Cookie` is a reply header, which a browser does not store.
 
 ### Returning `ViewSetResult` directly from an endpoint
 
@@ -250,21 +332,42 @@ action runs in-process or in a worker.
 
 ## OpenAPI response schema: `modifies_response_shape`
 
-Most middleware only attaches `headers`/`cookies` or a `status_code` - it never touches `result.body`
-at all, so the endpoint's declared return type is still exactly what gets served. For that common
-case, `route_viewset` keeps using it as the route's `response_model`: the OpenAPI docs stay typed,
-and FastAPI still validates/serializes the response against it, same as with no middleware
-configured at all.
+`status_code`, `headers` and `cookies` (`set_cookie()`, `delete_cookie()`) are not part of the body:
+a middleware or an endpoint that sets them does not change the response shape and needs no
+`modifies_response_shape`. Most middleware only attaches `headers`/`cookies` or a `status_code` - it
+never touches `result.body` at all, so the endpoint's declared return type is still exactly what
+gets served. For that common case, `route_viewset` keeps using it as the route's `response_model`:
+the OpenAPI docs stay typed, and FastAPI still validates/serializes the response against it, same
+as with no middleware configured at all. A value that has to reach the client outside the body,
+such as a session key, goes into `cookies` or `headers` rather than into a body field a middleware
+strips.
 
 A middleware whose `__call__` reassigns `result.body` to something that no longer matches the
-original return annotation (like `session_cookie_middleware`/`SessionCookieMiddleware` above,
-stripping `session_key`) must declare `modifies_response_shape = True` - as a class attribute on a
-`Middleware` subclass, or set on the function object for a plain-function middleware
-(`my_middleware.modifies_response_shape = True`). This tells `route_viewset` the declared return
-type can no longer be trusted, so it registers the route with `response_model=None` instead: FastAPI
-serves whatever `result.body` actually is, without re-validating/coercing it back towards the
-original model (which would silently undo the reshaping - e.g. reintroducing a stripped field with
-its default value) - at the cost of an untyped response schema in the OpenAPI docs for that route.
+original return annotation must declare `modifies_response_shape = True` - as a class attribute on a
+`Middleware` subclass, or set on the function object for a plain-function middleware:
+
+```python
+async def strip_internal_notes(request, viewset, context, call_next):
+    result = await call_next()
+    if isinstance(result.body, BaseModel):
+        result.body = result.body.model_dump(mode="json", exclude={"internal_notes"})
+    return result
+
+strip_internal_notes.modifies_response_shape = True
+```
+
+This tells `route_viewset` the declared return type can no longer be trusted, so it registers the
+route with `response_model=None` instead: FastAPI serves whatever `result.body` actually is, without
+re-validating/coercing it back towards the original model (which would silently undo the
+reshaping - e.g. reintroducing a stripped field with its default value) - at the cost of an untyped
+response schema in the OpenAPI docs.
+
+`route_viewset` reads the flag from the entries of `settings.viewsets_command_middleware` when it
+decorates a class. One entry declaring it drops the `response_model` of every route of every viewset
+decorated while it is in the list, since a global middleware runs around every action. A middleware
+instance that [`@action_configuration`](./action-configuration) injects for one viewset or action is
+not consulted: its routes keep their `response_model`, and FastAPI validates the reshaped body
+against it.
 
 Default is `False` on both `Middleware` and plain functions - a middleware that doesn't set it is
 assumed to leave `result.body` matching the endpoint's declared model exactly. This includes adding

@@ -2,8 +2,8 @@
 `celery_viewset` against a real Celery worker (prefork, and gevent where gevent is installed) and
 the Redis named by FASTAPI_VIEWSETS_TEST_REDIS_URL (skipped without it), called over HTTP: what a
 caller receives, and what `execute()`, `executor_started()` and `on_transition()` observe, when the
-executor interrupts an execution or never runs it; and the events a standard and a custom write of
-a scoped class publish from the worker.
+executor interrupts an execution or never runs it; the events a standard and a custom write of
+a scoped class publish from the worker; and the cookies an action sets and deletes in the worker.
 """
 
 import asyncio
@@ -26,6 +26,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from ...action_configuration import action_configuration, TimeLimits
+from ...middleware import ViewSetResult
 from .. import route_viewset
 from . import celery_viewset_client, get_result_queue_key, start_result_reader, stop_result_reader
 
@@ -51,7 +52,7 @@ WORKER_MODULE = textwrap.dedent(
     from fastapi_viewsets.decorators import celery_viewset_server
     from fastapi_viewsets.events import Change, ChangeEvents, event_scope, publish, RecordsChanged, write_topic
     from fastapi_viewsets.events.redis import RedisEventStore
-    from fastapi_viewsets.middleware import Middleware
+    from fastapi_viewsets.middleware import Middleware, ViewSetResult
 
     URL = os.environ["E2E_REDIS_URL"]
     KEY = os.environ["E2E_KEY"]
@@ -130,6 +131,18 @@ WORKER_MODULE = textwrap.dedent(
         @__router.post("/quick")
         async def quick(self) -> str:
             return "quick"
+
+        @__router.post("/login")
+        async def login(self) -> ViewSetResult[str]:
+            result = ViewSetResult(body="ana")
+            result.set_cookie("sessionid", "s3cr3t", max_age=1209600, secure=True, httponly=True, samesite="lax")
+            return result
+
+        @__router.post("/logout")
+        async def logout(self) -> ViewSetResult[None]:
+            result = ViewSetResult(body=None)
+            result.delete_cookie("sessionid", secure=True, httponly=True, samesite="lax")
+            return result
 
 
     celery_viewset_server(app, KEY, redis_client=redis.Redis.from_url(URL))(Jobs)
@@ -293,6 +306,12 @@ def client(worker, redis_url, key, celery_app):
         @__router.post("/missing")
         async def missing(self) -> str: ...
 
+        @__router.post("/login")
+        async def login(self) -> ViewSetResult[str]: ...
+
+        @__router.post("/logout")
+        async def logout(self) -> ViewSetResult[None]: ...
+
     reader_client = redis.asyncio.Redis.from_url(redis_url)
 
     @asynccontextmanager
@@ -340,6 +359,23 @@ def _in_background(call):
 def _task_ids(celery_app, key, which: str, name: str) -> list[str]:
     tasks = getattr(celery_app.control.inspect(timeout=1, destination=[_node(key)]), which)() or {}
     return [task["id"] for node_tasks in tasks.values() for task in node_tasks if task["name"] == name]
+
+
+def test_cookies_an_action_sets_and_deletes_in_the_worker_reach_the_response(client):
+    from starlette.responses import Response
+
+    expected = Response()
+    expected.set_cookie("sessionid", "s3cr3t", max_age=1209600, secure=True, httponly=True, samesite="lax")
+    login = client.post("/jobs/login")
+    assert login.status_code == 200, login.text
+    assert login.json() == "ana"
+    assert login.headers.get_list("set-cookie") == expected.headers.getlist("set-cookie")
+
+    expected = Response()
+    expected.delete_cookie("sessionid", secure=True, httponly=True, samesite="lax")
+    logout = client.post("/jobs/logout")
+    assert logout.status_code == 200, logout.text
+    assert logout.headers.get_list("set-cookie") == expected.headers.getlist("set-cookie")
 
 
 def test_a_soft_time_limit_while_suspended(client, probe, key):
