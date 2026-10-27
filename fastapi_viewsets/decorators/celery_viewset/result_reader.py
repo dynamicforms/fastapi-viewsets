@@ -47,21 +47,16 @@ def get_result_queue_key(task_prefix: str) -> str:
 
 def get_process_queue_key(queue_key: str) -> str:
     """
-    The Redis list this process receives queue_key's results on.
-
-    A pending Future exists only in the process that dispatched the call, so each process reads its
-    own list, named by host and process id. The key is computed at call time: a process forked after
-    import gets its own.
+    The Redis list this process receives queue_key's results on: a pending Future exists only in the
+    dispatching process. Computed at call time, so a process forked after import gets its own.
     """
     return f"{queue_key}:{socket.gethostname()}:{os.getpid()}"
 
 
 async def result_reader_loop(redis_client: "redis.Redis", queue_key: str, poll_interval: float = 0.05) -> None:
     """
-    Background coroutine that reads this process's results for queue_key and resolves pending Futures.
-
-    On exit it fails every Future still pending for queue_key with ResultReaderStoppedError: no other
-    reader pops their results.
+    Reads this process's results for queue_key and resolves pending Futures. On exit it fails every
+    Future still pending for queue_key with ResultReaderStoppedError.
     """
     try:
         await _read_results(redis_client, queue_key, poll_interval)
@@ -82,7 +77,6 @@ async def _read_results(redis_client: "redis.Redis", queue_key: str, poll_interv
     process_queue_key = get_process_queue_key(queue_key)
     while True:
         try:
-            # Non-blocking pop from Redis list
             item = await redis_client.lpop(process_queue_key)
             if item is None:
                 await asyncio.sleep(poll_interval)
@@ -138,10 +132,9 @@ def _payload_error(data: dict) -> Exception:
 
 def error_payload(correlation_id: str, task: str | None, error: BaseException) -> dict:
     """
-    The payload that fails one call with `error`: an `HTTPException` (a `DfViewSetError` with its
-    class), a `RequestValidationError` as a 422 with its errors as `detail` and `class`
-    `"RequestValidationError"`, any other error as `ActionFailedError`. `http_status_code` and
-    `http_detail` repeat the status and detail for a reader that does not decode `error`.
+    The payload that fails one call with `error`; an error other than `HTTPException` or
+    `RequestValidationError` becomes `ActionFailedError`. `http_status_code` and `http_detail` serve a
+    reader that does not decode `error`.
     """
     if not isinstance(error, (HTTPException, RequestValidationError)):
         error = ActionFailedError(task)
@@ -170,13 +163,10 @@ def push_result(
     task: str | None = None,
 ) -> None:
     """
-    Push a result or an error for one call. queue_key is the `_result_queue_key` the client sent with
-    the task. An `error` that is an `HTTPException` reaches the caller as it is (a `DfViewSetError`
-    of a class `fastapi_viewsets.exceptions` defines keeps its class), and so does a
-    `RequestValidationError`; any other error reaches it as `ActionFailedError`. `task` names the
-    call's task in that error. The FastAPI process answers each as `fastapi_viewsets.error_responses`
-    answers it. A `result` reaches the caller in its JSON form, with every `SerializableObject` in it
-    rebuilt; it is not decoded by the action's return annotation.
+    Pushes a result or an error for one call to queue_key, the `_result_queue_key` sent with the task.
+    An `HTTPException` or `RequestValidationError` reaches the caller as it is, any other error as
+    `ActionFailedError`. `result` arrives in JSON form with every `SerializableObject` rebuilt, not
+    decoded by the action's return annotation.
     """
     if error is not None:
         data = error_payload(correlation_id, task, error)
@@ -192,11 +182,8 @@ def get_running_queue_keys() -> frozenset[str]:
 
 async def start_result_reader(redis_client: "redis.Redis", queue_key: str, poll_interval: float = 0.05) -> asyncio.Task:
     """
-    Start the background result reader task for the given queue_key.
-
-    Should be called once per queue_key (i.e. once per celery_viewset task_prefix) on FastAPI
-    startup. Calling it again with the same queue_key while its reader is still running returns
-    the existing task; a different queue_key gets its own independent reader task.
+    Starts the result reader for queue_key (one per celery_viewset task_prefix) on FastAPI startup.
+    While that reader runs, a second call returns the existing task.
     """
     existing = _reader_tasks.get(queue_key)
     if existing is not None and not existing.done():
@@ -208,10 +195,8 @@ async def start_result_reader(redis_client: "redis.Redis", queue_key: str, poll_
 
 async def stop_result_reader(queue_key: str | None = None) -> None:
     """
-    Stop background result reader task(s). Should be called on FastAPI shutdown.
-
-    If queue_key is given, stop only that reader; otherwise stop all running readers. Calls still
-    pending for a stopped reader's queue_key fail with ResultReaderStoppedError (503).
+    Stops the reader of queue_key, or every reader, on FastAPI shutdown. Calls still pending for a
+    stopped reader fail with ResultReaderStoppedError (503).
     """
     keys = [queue_key] if queue_key is not None else list(_reader_tasks.keys())
     for key in keys:

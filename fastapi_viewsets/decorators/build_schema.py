@@ -21,11 +21,8 @@ def _generic_args(annotation) -> tuple:
 
 def has_typevars(annotation) -> bool:
     """
-    Whether anything anywhere inside this annotation is still an unbound TypeVar.
-
-    Recursive and source-agnostic, because a response model can nest either kind of generic in the
-    other: `Union[ListOf[T], PaginatedList[T]]` is a typing alias holding two pydantic models, and
-    neither `get_args` alone nor pydantic's metadata alone sees all the way down.
+    Whether an unbound TypeVar remains anywhere inside this annotation, through typing aliases and pydantic
+    generics nested in each other (`Union[ListOf[T], PaginatedList[T]]`).
     """
     if isinstance(annotation, TypeVar):
         return True
@@ -36,13 +33,8 @@ def _pydantic_generic_args(annotation) -> tuple[type, tuple] | None:
     """
     (origin, args) for a parameterised pydantic generic that still has TypeVars in it, else None.
 
-    Pydantic builds `PaginatedList[T]` as a real class rather than a typing alias, so
-    get_origin/get_args report nothing about it and every TypeVar inside is invisible to the usual
-    machinery. The origin and args are on the class instead, and re-subscripting the origin is how
-    a resolved model gets built.
-
-    An unparameterised generic reports empty args, and a fully concrete one has no TypeVars left
-    to substitute; neither needs rebuilding.
+    `PaginatedList[T]` is a class, not a typing alias, so get_origin/get_args report nothing; pydantic keeps
+    origin and args on the class, and re-subscripting the origin builds the resolved model.
     """
     metadata = getattr(annotation, "__pydantic_generic_metadata__", None)
     if not metadata:
@@ -92,10 +84,10 @@ def route_to_add_api_route_kwargs(route: APIRoute, **kwargs) -> dict:
 
 
 ACTION_EXTENSION = "x-viewset-action"
-"""The OpenAPI extension naming the viewset method that serves an operation, e.g. `top_rated` for
-`GET /tracks/top-rated`. A client matches a custom endpoint to its own method by this name; the path
-does not carry it, since a path segment can be a parameter (`{pk}/approve`) or differ from the
-method name (`top-rated`)."""
+"""
+The OpenAPI extension naming the viewset method serving an operation (`top_rated` for `GET /tracks/top-rated`),
+by which a client matches a custom endpoint; the path may hold parameters or differ from the method name.
+"""
 
 
 def action_openapi_extra(action_name: str, openapi_extra: dict | None) -> dict:
@@ -105,30 +97,18 @@ def action_openapi_extra(action_name: str, openapi_extra: dict | None) -> dict:
 
 def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, disable_response_model=False):
     """
-    Builds __router (APIRouter with all routes from mixins) and __app (FastAPI instance),
-    and attaches them to the class. If get_wrapper is None, only __router is built (no FastAPI app,
-    no endpoint wrapping), and only when `cls` itself has none yet. With get_wrapper the routes are
-    built on every call, so each routing of a class wraps its endpoints for its own base path and
-    instance; a subclass of a class it was called for gets routes of its own.
+    Builds `__router` (all mixin routes) and `__app` (the FastAPI app serving `/schema`) on the class.
 
-    disable_response_model: pass True when a configured command middleware declares
-    modifies_response_shape=True (see Middleware.modifies_response_shape and
-    any_modifies_response_shape() in fastapi_viewsets/middleware/__init__.py, and route_viewset.py) -
-    such a middleware can change the shape of what's actually served (e.g. strip an internal-only
-    field via ViewSetResult.body), so FastAPI must not coerce/re-validate the endpoint's return value
-    against the ORIGINAL method's declared return type, which would silently undo those changes
-    (missing fields reappear with their model defaults). Middleware that doesn't declare this (the
-    default) leaves the endpoint's declared return type in place, both in the OpenAPI docs and for
-    FastAPI's own response validation.
+    Without `get_wrapper` only `__router` is built, unwrapped, and only once per class; with it the routes are
+    rebuilt per routing. `disable_response_model`: set when a middleware declares `modifies_response_shape`,
+    so FastAPI does not coerce the reshaped body back to the declared return type.
     """
     own = vars(cls)
     if "__router" in own and get_wrapper is None:
         return
 
     celery_mode = get_wrapper is None
-    # Use a dict so that more-specific classes (visited later in reversed MRO) override
-    # routes from less-specific base classes.  This allows e.g. FilterableMixin to
-    # replace ListMixin's plain GET "" route with one that carries filter query params.
+    # Keyed by (methods, path): a more specific class, visited later in reversed MRO, replaces a base's route.
     route_registry: dict[tuple, APIRoute] = {}
 
     for base in reversed(cls.__mro__):
@@ -156,8 +136,7 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
         def schema():
             return app.openapi()
 
-        # Marks this route as the framework's own /schema endpoint. route_viewset replaces it with
-        # one /schema route per transport, each reporting the endpoints published on that transport.
+        # route_viewset replaces this /schema route with one per transport.
         schema.__viewset_schema_endpoint__ = True
 
         schema_route_kwargs = dict(
@@ -179,23 +158,16 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
             if disable_response_model:
                 response_model = None
             else:
-                # Anything still holding a TypeVar is the mixin's generic declaration, not an
-                # answer: only route_viewset knows what this viewset bound it to.
+                # A model still holding a TypeVar is the mixin's generic one; use what route_viewset resolved.
                 use_resolved = route.response_model is None or has_typevars(route.response_model)
                 response_model = resolved_response_model if use_resolved else route.response_model
-                # route.response_model is FastAPI's own inference from the ORIGINAL declared return
-                # type (e.g. -> ViewSetResult[Item]), untouched by get_wrapper's own unwrap - must be
-                # unwrapped here too, or an endpoint declared this way would document/validate as the
-                # wrapper instead of the wire body whenever use_resolved is False.
+                # route.response_model is inferred from the original annotation, so unwrap ViewSetResult[X] too.
                 response_model = unwrap_viewset_result_type(response_model)
-                # an endpoint returning a Response answers with it as it is, as FastAPI does for an
-                # endpoint annotated with a Response class
+                # A Response return type is served as is, as FastAPI does.
                 if inspect.isclass(response_model) and issubclass(response_model, Response):
                     response_model = None
 
-            # Per-viewset wording, applied here because this is where the schema-serving app is
-            # built; patching the caller's router afterwards would leave /schema showing the
-            # mixin's generic docstring. See endpoint_docs.py.
+            # Per-viewset wording applied here, so that /schema shows it too.
             class_router.add_api_route(
                 **route_to_add_api_route_kwargs(
                     route,
@@ -238,11 +210,6 @@ def route_sort_key(route: APIRoute):
 
     path_idx = tuple(segment_key(s) for s in path.split("/"))
 
-    # NOT flattened via `*path_idx, method_idx` - paths of different depths (e.g.
-    # "account/register" vs "account/register/verify/resend", a real case for custom,
-    # non-CRUD viewset actions) would then put `method_idx` (a bare int) at the same tuple
-    # position where a LONGER path still has a (int, str) segment tuple, and `sorted()` would
-    # raise `TypeError: '<' not supported between instances of 'int' and 'tuple'`. Keeping
-    # `path_idx` nested means every element at every depth is uniformly a 2-tuple - a shorter
-    # path_idx that is a prefix of a longer one compares as "less than" it with no type clash.
+    # Not flattened into `(*path_idx, method_idx)`: paths of different depth would then compare an int
+    # against a segment tuple and raise TypeError.
     return path_idx, method_idx

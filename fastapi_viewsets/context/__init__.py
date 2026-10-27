@@ -20,13 +20,9 @@ _VALUE_KEY = "__fpv_value__"
 
 class ByAction:
     """
-    Per-action variation for an @action_configuration value (see fastapi_viewsets/action_configuration.py) -
-    e.g. ByAction(list_items="read", update="write", default="read") lets one config entry mean
-    different things depending on which action (list_items, update, ...) is currently running. Resolved at
-    read-time (see Context.configuration_for), against whichever action name the Context currently
-    represents - not baked in once when the configuration was merged - so a Context that later
-    serves a different action (e.g. via clone_for_command with a new action_name) resolves fresh
-    rather than reusing a stale value.
+    Per-action variation of an @action_configuration value, e.g.
+    `ByAction(list_items="read", update="write", default="read")`. Resolved at read time against the
+    action the Context currently represents, so a clone for another action resolves afresh.
     """
 
     def __init__(self, default: Any = None, **by_action: Any):
@@ -43,23 +39,11 @@ def _resolve_config_value(value: Any, action_name: "str | None") -> Any:
 
 class SerializableObject(ABC):
     """
-    Base class for context values, and `celery_viewset` action arguments and results, that need
-    custom (de)serialization across the Celery/Redis boundary - e.g. because reconstructing them
-    requires domain-specific logic, not just decoding a JSON literal (see
-    settings.viewsets_context_json_encoder/decoder for the simpler case of normalising a plain
-    value type like datetime in context). An action argument or result crosses as its tagged
-    payload at any depth of lists and dicts, whatever its annotation (see
-    decorators/celery_viewset/transport.py).
+    A context value, or a `celery_viewset` argument or result, with custom (de)serialization across
+    the Celery/Redis boundary. Subclasses implement __serialize__/__deserialize__; the payload is tagged
+    with the subclass's dotted import path, so the class must be importable at module level.
 
-    `value` holds the actual wrapped value. Subclasses implement the "magic" __serialize__/
-    __deserialize__ methods; serialize_context()/deserialize_context() detect instances of this
-    class within a context dict via isinstance and swap them for a tagged, JSON-safe payload
-    carrying the dotted import path to the concrete subclass (module.QualName) - so deserialization
-    can import that exact class and rebuild the right type without a separate registry.
-
-    Awaitable even though it's eager/already-known - `Context` field access is always awaitable
-    uniformly (see `Context` below), regardless of whether the underlying value is a plain eager
-    SerializableObject or a lazily-resolved `LazyObject`; callers never need to branch on which.
+    Awaiting it returns `value`, so Context field access is awaitable whether the value is eager or lazy.
     """
 
     value: Any
@@ -87,42 +71,19 @@ class SerializableObject(ABC):
 
 class LazyObject(SerializableObject, ABC):
     """
-    A SerializableObject whose actual value is computed lazily via `resolve()`, supporting two
-    modes without the caller needing to know which one a given subclass uses:
+    A SerializableObject whose value `resolve()` computes on first `await` (sync value or awaitable),
+    once; concurrent awaiters share the result. Subclasses implement `resolve()`, `serialize_recipe()`
+    and `deserialize_recipe()`: the recipe (e.g. a session id) travels instead of the value, plus the
+    value when already resolved, which the deserialized copy reuses.
 
-    - Sync: `resolve()` returns the value directly - resolved (and memoized) on first `await`.
-    - Async: `resolve()` returns an awaitable (typically `return self._fetch()` where `_fetch` is
-      `async def`, or a Future/Task) - `await`-ed, once, on first access.
-
-    Either way, the computation only runs once (memoized) and only if something actually awaits
-    the object - a value nobody needs (e.g. because a `perform_*` override doesn't touch it) never
-    pays for its computation. Concurrent `await obj` calls before resolution share the same
-    underlying Future/Task rather than each independently triggering `resolve()`.
-
-    Construction (`__init__`, and `__deserialize__` below) is deliberately loop-independent - no
-    `asyncio.Future` is created until the first actual `await`/`_ensure_future()` call, which is
-    only ever reachable from inside running async code. This matters because instances get
-    reconstructed synchronously in `celery_viewset_server`'s `_reconstruct_kwargs`, before the
-    worker's event loop starts.
-
-    Crucially, __serialize__ carries whatever a subclass needs to resolve itself again later - the
-    "recipe" (e.g. a session_id) - not just the resolved value, so resolution can happen
-    wherever/whenever it's actually needed (the FastAPI process, a Celery worker, a per-command
-    Context clone on a long-lived connection, or never at all). If already resolved at serialize
-    time, the resolved value is included too, as a cheap shortcut - deserialize pre-seeds the new
-    instance with it so it doesn't need to re-run resolution for something already known, while
-    still building a fully independent instance (no shared mutable state).
-
-    Subclasses implement __serialize_recipe__ inputs via `serialize_recipe()`/`deserialize_recipe()`
-    (not __serialize__/__deserialize__ directly - those are provided, concrete, by this class) and
-    the actual computation via `resolve()`.
+    Construction creates no Future: instances are rebuilt in a Celery worker before its event loop runs.
     """
 
     _UNSET = object()
 
     def __init__(self):
-        self._future = None  # created lazily in _ensure_future() - never at construction time
-        self._preseeded = self._UNSET  # plain marker for a deserialize-time resolved shortcut
+        self._future = None  # created in _ensure_future(), never at construction time
+        self._preseeded = self._UNSET  # resolved value carried by the serialized payload
 
     def _ensure_future(self):
         if self._future is None:
@@ -168,11 +129,7 @@ class LazyObject(SerializableObject, ABC):
 
     @abstractmethod
     def resolve(self) -> Any:
-        """
-        Subclasses implement the actual computation (e.g. a session/DB lookup). Return the value
-        directly for sync resolution, or an awaitable (typically just `return self._fetch()` where
-        `_fetch` is `async def`) for async resolution - see the class docstring.
-        """
+        """Compute the value: return it directly, or return an awaitable that yields it."""
         raise NotImplementedError
 
     @abstractmethod
@@ -189,10 +146,8 @@ class LazyObject(SerializableObject, ABC):
 
 class _Deferred:
     """
-    A context value computed once, on its first `await`, by `compute()`. `serialize_context()`
-    awaits it like any bare awaitable; `celery_viewset_client` awaits every `_Deferred` of the
-    call's context before it serializes the arguments, so an exception of `compute()` propagates
-    from the call unchanged.
+    A context value computed once, on its first `await`, by `compute()`. `celery_viewset_client` awaits
+    every `_Deferred` before serializing arguments, so an exception of `compute()` propagates unchanged.
     """
 
     def __init__(self, compute: Any) -> None:
@@ -207,16 +162,11 @@ class _Deferred:
 
 class Context:
     """
-    Wraps the per-request context dict produced by running settings.viewsets_context_processors.
-    Field access - both context.foo and context["foo"] - always returns something awaitable,
-    uniformly, whether the underlying value is a plain eager value or a LazyObject: callers never
-    need to know or branch on which. `await context.user` always works.
+    The per-request dict built by settings.viewsets_context_processors. `context.foo` and
+    `context["foo"]` always return an awaitable, whether the value is eager or a LazyObject.
 
-    Declares __get_pydantic_core_schema__ (isinstance-only validation) purely so FastAPI's eager
-    route registration on the per-mixin `__router` instances in mixins.py doesn't choke on
-    `context: Context` as a param type - those routes are never actually served (route_viewset
-    strips the param out and builds context itself; celery mode never runs the FastAPI/pydantic
-    validation path at all), so no real request ever needs to validate into a Context.
+    __get_pydantic_core_schema__ (isinstance only) lets FastAPI register mixin routes that declare
+    `context: Context`; route_viewset strips that parameter, so no request validates into a Context.
     """
 
     def __init__(
@@ -264,10 +214,8 @@ class Context:
 
     @property
     def action_name(self) -> "str | None":
-        """The name of the action this context represents, the name `configuration_for` resolves
-        `ByAction` values against; None for a context built without one. Read-only. As an attribute
-        it takes precedence over a context value named `action_name`, which `context["action_name"]`
-        reads."""
+        """The action this context represents (None if built without one). It shadows a context value
+        named `action_name`, which `context["action_name"]` still reads."""
         return self._action_name
 
     def raw(self) -> dict[str, Any]:
@@ -275,39 +223,21 @@ class Context:
         return self._data
 
     def set(self, key: str, value: Any) -> None:
-        """
-        Adds/replaces a context value after construction - e.g. a command middleware (which runs
-        after context is already built) enriching context with something a later perform_* can
-        read (see fastapi_viewsets.middleware.auth.Authorization's `context.authorization`).
-        `value` is stored as-is; field access (`context.foo`/`context["foo"]`) wraps it awaitable
-        exactly like any context-processor-contributed value, per the usual rules.
-        """
+        """Add or replace a context value after construction, e.g. from a command middleware."""
         self._data[key] = value
 
     def configuration_for(self, identifier: Any) -> Any:
         """
-        The @action_configuration value registered for `identifier` (typically a context processor
-        callable or a Middleware (sub)class - see fastapi_viewsets/action_configuration.py),
-        resolved against whichever action this Context currently represents. Returns None if
-        nothing was configured for `identifier`. Command middleware normally reaches this via
-        Middleware.config_from(context) rather than calling it directly.
+        The @action_configuration value for `identifier` (a context processor or Middleware class),
+        resolved against the current action; None if nothing is configured for it.
         """
         return _resolve_config_value(self._action_configuration.get(identifier), self._action_name)
 
     async def clone_for_command(self, action_name: "str | None" = None) -> "Context":
         """
-        An isolated copy of this context for one command on a long-lived connection (e.g. a WS
-        message) - reuses serialize_context()/deserialize_context() rather than a generic
-        copy.deepcopy(), so SerializableObject/LazyObject values are correctly reconstructed (and,
-        via the recipe+resolved_value shortcut, an already-resolved LazyObject stays cheap to reuse
-        across commands on the same connection) while every command still gets its own, fully
-        independent Context instance - context and the ViewSet instance are the only mutable
-        structures in the pipeline, and mutations from one command must never leak into another.
-
-        The (unresolved) action_configuration dict is carried over unchanged - only `action_name`
-        may differ, since a later command on the same connection can be a different action than the
-        one that originally built this context; `configuration_for`/ByAction resolve fresh against
-        whichever action_name the clone actually carries, rather than reusing a stale resolution.
+        An independent copy for one command on a long-lived connection, so mutations never leak between
+        commands. Goes through serialize_context()/deserialize_context() (not deepcopy) so SerializableObject
+        values are rebuilt and resolved LazyObjects keep their value. A given `action_name` replaces the original's.
         """
         return Context(
             deserialize_context(await serialize_context(self._data)),
@@ -333,13 +263,7 @@ def _resolve_class(dotted_path: str) -> type[SerializableObject]:
 
 
 def serialize_value(value: Any) -> Any:
-    """
-    Tag a single SerializableObject for JSON transport, the same convention serialize_context()
-    applies per context key (see _TYPE_KEY/_VALUE_KEY above); anything else passes through
-    unchanged. For a value crossing the Celery/Redis boundary outside a Context dict - e.g. a
-    command-middleware ViewSetResult returned by a celery_viewset-dispatched action (see
-    fastapi_viewsets.middleware.ViewSetResult).
-    """
+    """Tag a single SerializableObject for JSON transport as serialize_context() does; other values pass."""
     if isinstance(value, SerializableObject):
         return {_TYPE_KEY: _class_tag(type(value)), _VALUE_KEY: value.__serialize__()}
     return value
@@ -347,13 +271,8 @@ def serialize_value(value: Any) -> Any:
 
 def to_jsonable(value: Any) -> Any:
     """
-    Recursively convert a value into a JSON-safe structure: a SerializableObject is tagged (see
-    serialize_value()), a Pydantic model is dumped, a dict is recursed into value-wise, a
-    list/tuple element-wise, and any other value goes through pydantic_core.to_jsonable_python()
-    (datetime, Decimal, UUID, Enum, set, dataclass, ...) - the encoding FastAPI's response
-    serialization applies to the same value on REST/muxws. Shared by ViewSetResult's own
-    serialization and celery_viewset's encoding of a value its type hint does not type (see
-    decorators/celery_viewset/transport.py). from_jsonable() is its inverse for tagged objects.
+    Recursively convert a value to JSON-safe form: SerializableObjects are tagged, Pydantic models dumped,
+    everything else goes through pydantic_core.to_jsonable_python() (FastAPI's response encoding).
     """
     if isinstance(value, SerializableObject):
         return serialize_value(value)
@@ -374,11 +293,7 @@ def deserialize_value(value: Any) -> Any:
 
 
 def from_jsonable(value: Any) -> Any:
-    """
-    Inverse of to_jsonable() for tagged objects: reconstructs every tagged SerializableObject,
-    at any depth of dicts and lists. A Pydantic model and any other value to_jsonable() encoded
-    stay in their JSON form.
-    """
+    """Rebuild every tagged SerializableObject at any depth; all other values stay in JSON form."""
     if isinstance(value, dict):
         if _TYPE_KEY in value and _VALUE_KEY in value:
             return deserialize_value(value)
@@ -390,12 +305,8 @@ def from_jsonable(value: Any) -> Any:
 
 async def serialize_context(data: dict[str, Any]) -> dict[str, Any]:
     """
-    Returns a JSON-safe dict: SerializableObject values are swapped for a tagged payload (see
-    SerializableObject), everything else is passed through as-is - except a bare awaitable (e.g. a
-    processor put a raw Future/coroutine directly into context without wrapping it in
-    SerializableObject), which is awaited first to get its plain value. Finally, everything is
-    round-tripped through settings.viewsets_context_json_encoder (if set) to normalise plain
-    non-JSON-native types (e.g. datetime).
+    A JSON-safe copy of a context dict: SerializableObjects are tagged, bare awaitables awaited, and the
+    result round-tripped through settings.viewsets_context_json_encoder.
     """
     tagged: dict[str, Any] = {}
     for key, val in data.items():
@@ -409,12 +320,7 @@ async def serialize_context(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def deserialize_context(data: dict[str, Any]) -> dict[str, Any]:
-    """
-    Inverse of serialize_context(). Stays synchronous and loop-independent - reconstructing a
-    SerializableObject/LazyObject here never needs a running event loop (see LazyObject's
-    docstring), which matters because this runs in celery_viewset_server's _reconstruct_kwargs,
-    before the worker's event loop starts.
-    """
+    """Inverse of serialize_context(). Synchronous: a Celery worker calls it before its event loop runs."""
     if settings.viewsets_context_json_decoder is not None:
         data = json.loads(json.dumps(data), cls=settings.viewsets_context_json_decoder)
 
@@ -435,15 +341,8 @@ async def build_context(
     action_name: "str | None" = None,
 ) -> Context:
     """
-    Runs every processor in settings.viewsets_context_processors (in order, merging results -
-    later processors win on key collisions) and returns the resulting Context.
-
-    `action_configuration`/`action_name` (see fastapi_viewsets/action_configuration.py) are the
-    per-call @action_configuration merge and the current action, respectively - both optional. A
-    processor that wants its own configuration slice declares a parameter literally named `config`
-    (detected by name, same convention as `context` in route_viewset.py); it's then called with
-    that keyword set to its own resolved entry from `action_configuration` (or None if nothing was
-    configured for it). A processor that doesn't declare `config` is called without it.
+    Run settings.viewsets_context_processors in order (later keys win) and return the Context.
+    A processor declaring a parameter named `config` receives its resolved @action_configuration entry.
     """
     action_configuration = action_configuration or {}
     merged: dict[str, Any] = {}
@@ -460,17 +359,9 @@ async def get_shared_context(
     request: "Request | None", viewset: Any, action_configuration: dict[Any, Any], action_name: str
 ) -> Context:
     """
-    Builds Context at most once per request - cached on request.state - so it can be shared between
-    an early Middleware.depends() call (see route_viewset.py) and the later real perform_*
-    execution (see decorators/lifecycle_runner.py) without re-running context processors twice (e.g.
-    avoiding a second DjangoSessionAuthBackend DB hit). Whichever of the two runs first for a given
-    request decides what "viewset" context processors actually see (the class, if depends() ran
-    first for a per-request/instance-key lifecycle; the real instance otherwise) - the second
-    caller's own `viewset` argument is simply ignored once a Context is already cached.
-
-    `request` may be None (e.g. a test calling a wrapped endpoint directly, bypassing FastAPI's own
-    request injection) - there's no request.state to cache on in that case, so a fresh Context is
-    just built every time, same as calling build_context() directly.
+    build_context() at most once per request (cached on request.state), shared by Middleware.depends()
+    and the perform_* run. The first caller's `viewset` is what processors see. With `request` None
+    nothing is cached.
     """
     if request is None:
         return await build_context(request, viewset, action_configuration, action_name)

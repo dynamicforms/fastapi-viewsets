@@ -384,12 +384,8 @@ def random_duration(rng=random) -> str:
 
 def generate_music_library(count: int = 100, seed: int | None = 20240101) -> list[dict]:
     """
-    Seeded by default, so every process generates the identical library.
-
-    That matters because the demo serves the same records from two backends - a dict and SQLite -
-    and claims they are the same records. With an unseeded generator the SQLite copy, written once
-    on first run, silently drifts away from whatever the next process invents, and the two
-    backends start disagreeing about how many rows match a filter.
+    Seeded by default, so every process generates the identical library and the in-memory and
+    SQLite backends serve the same records.
     """
     rng = random.Random(seed) if seed is not None else random  # noqa: S311 - demo data, never a key or a token
     library = []

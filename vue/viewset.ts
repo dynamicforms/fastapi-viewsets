@@ -1,21 +1,11 @@
 /**
- * The ViewSet class factory — FE counterpart of listing mixins in a BE viewset's bases.
+ * The ViewSet class factory — FE counterpart of listing mixins in a BE viewset's bases:
  *
- *   class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin, LookupMixin]) {
- *     async count(): Promise<number> {
- *       return this.request<number>('GET', '/count');
- *     }
- *   }
+ *   class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin, LookupMixin]) { ... }
  *
- * The mixin list is written once, as values, and does three jobs: it decides which actions the
- * class exposes to callers, it types them, and it is handed to the proxy so the startup schema
- * check can compare it against the BE. Calling an action the ViewSet did not declare is a compile
- * error rather than a 404 at runtime.
- *
- * This is what `route_rest` cannot do. That returns an instance cast to a mixin interface, so the
- * type narrows but the object is a bare proxy: a custom endpoint declared in the interface type-
- * checks and is undefined when called. Here the object is the consumer's own class, so its own
- * methods exist.
+ * The mixin list selects and types the exposed actions and feeds the startup schema check; calling
+ * an undeclared action is a compile error. Unlike `route_rest`, the object is the consumer's own
+ * class, so its custom methods exist.
  */
 
 import type { ViewSetWatch } from './events/changes';
@@ -28,11 +18,8 @@ import { RestProxyImpl, type RestProxyOptions } from './rest-proxy';
 export type ViewSetMixinClass = ViewSetMixinDeclaration & (abstract new (...args: any[]) => object);
 
 /**
- * The actions a mixin class names, read off its instance type.
- *
- * The instance type rather than the `actions` tuple, because a tuple would have to be `as const` on
- * every mixin, and a `readonly ['create']` static cannot then be inherited by a composite whose own
- * static is a different tuple (TS2417). `D` is naked so that a union of mixins distributes.
+ * The actions a mixin class names, read off its instance type (an `as const` actions tuple would
+ * break inheritance between mixins, TS2417). `D` is naked so that a union of mixins distributes.
  */
 type ActionsOf<D> = D extends abstract new (...args: any[]) => infer I ? Extract<keyof I, ActionName> : never;
 
@@ -45,37 +32,17 @@ export type PkFieldName<T> = Extract<
 type PkType<T, PK extends keyof T> = NonNullable<T[PK]> & KeyType;
 
 /**
- * Brands a factory-built class's `declares` so a subclass restating it fails on one flat "missing
- * property" line naming `declares` itself, rather than TypeScript recursing into which method each
- * mixin in the plain, unbranded replacement array is missing relative to the original. A record
- * type wrapping `D` behind the phantom key, not `D & {brand}`: an intersection would still expose
- * `D`'s own array shape to the comparison and recurse into it; a plain array
- * literal has no property at all under this key, so the mismatch stops at the top. Erased at
- * runtime - `bindViewSet` casts through `unknown`, so the actual `static declares` stays a plain
- * array, and every internal reader (rest-proxy.ts, muxws-proxy.ts, proxy-base.ts's
- * `declaredActions`) already reads it through its own cast rather than this type.
- *
- * `FACTORY_BUILT` lives in proxy-base.ts, not here, so `route_rest`/`route_muxws` can check for the
- * same brand without importing from this module - see proxy-base.ts's doc comment on the symbol.
+ * Brands a factory-built class's `declares`, so a subclass restating it fails with one short "missing
+ * property" error. A wrapper record rather than `D & {brand}`, which would make TypeScript recurse
+ * into the array. Type-only: at runtime `static declares` is a plain array.
  */
 type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTORY_BUILT]: D };
 
 /**
- * What the factory hands back: a class to extend.
- *
- * An empty `declares` list, `[]`, builds a ViewSet with no standard actions, for a BE viewset that
- * serves custom endpoints only; its methods are the class body's own. A list annotated
- * `ViewSetMixinClass[]` erases which mixins are in it and would produce a ViewSet with no actions
- * and no complaint; for such a list this type resolves to a string literal stating the fix, and
- * extending it is TS2507, whose message prints that string.
- *
- * `pkFieldName: PK` is added on top of `ViewSetInternals` explicitly: the constructed instance's
- * real runtime type is `ProxyBaseOptions`'s `ViewSetProxyBase`, which already carries the public
- * `pkFieldName`, but `ViewSetInternals` is deliberately narrow (see its own doc comment), so this
- * type would otherwise hide a field that is genuinely there. Typed as the literal `PK` rather than
- * `string`, since the factory already knows exactly which field it is. `watch()` is added the same
- * way: every ViewSet has it, whichever mixins it declares. `defaultSort()` is added to a ViewSet that
- * declares a list action.
+ * What the factory hands back: a class to extend. `[]` builds a ViewSet with custom endpoints only.
+ * A list annotated `ViewSetMixinClass[]` names no action; this type then resolves to a string stating
+ * the fix, which TS2507 prints. `pkFieldName`, `watch()` and, with a list action, `defaultSort()` are
+ * added on top of the narrow `ViewSetInternals`.
  */
 export type ViewSetClass<
   T,
@@ -99,11 +66,7 @@ type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[
   readonly declares: FactoryDeclares<D>;
 };
 
-/**
- * `any` on the constructor because a class expression may only extend a constructor whose members
- * are statically known, and the two transports' options differ. The real type is put back on by the
- * return type of whichever factory calls this.
- */
+/** `any` options, as the transports' options differ; the calling factory's return type restores the real type. */
 type TransportClass = new (options: any) => any;
 
 /** Named `ViewSet` so that a stack trace and the devtools prototype chain say something. */
@@ -116,26 +79,16 @@ function bindViewSet(
     static declares = declares;
 
     constructor(options: ProxyBaseOptions) {
-      // Injected into the argument expression rather than assigned afterwards: under
-      // useDefineForClassFields an assignment would emit a [[Define]] that runs after super() and
-      // would clobber what the base constructor had just set.
-      //
-      // `declares: undefined` so that the static above is what the check reads. A subclass stating
-      // its own `static declares` then shadows it by ordinary static lookup.
+      // Passed in the options, not assigned after super(): useDefineForClassFields would clobber the
+      // base constructor's value. `declares: undefined` makes the check read the static above.
       super({ ...options, pkFieldName, declares: undefined });
     }
   };
 }
 
 /**
- * A REST ViewSet base class.
- *
- * The empty `()` is not decoration: TypeScript has no partial type-argument inference, so the model
- * cannot be given explicitly while the pk field and the mixin list are inferred from arguments in
- * the same call (TS2558). Currying is the only way to have both.
- *
- * `L` is the item type `lookup()` answers with, the BE viewset's TLookupItem; it defaults to
- * `LookupItem`.
+ * A REST ViewSet base class. Curried because TypeScript cannot infer the pk field and mixin list
+ * while `T` is given explicitly (TS2558). `L` is the `lookup()` item type, default `LookupItem`.
  */
 export function restViewSet<T, L = LookupItem>() {
   return <PK extends PkFieldName<T> & keyof T, D extends readonly ViewSetMixinClass[]>(

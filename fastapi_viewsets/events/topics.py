@@ -1,14 +1,7 @@
 """
-The two topic forms.
-
-A viewset topic is the routed base path of a viewset, the `include_router` prefix followed by
-`base_path`, and starts with `/`. A custom topic is a source name, `[a-z0-9_.-]+`, optionally
-followed by `:` and a key. Neither form contains whitespace or a control character. The two forms
-cannot name the same topic.
-
-A scoped topic, `@{name}:{key}`, is a store topic only: the server derives it from the subscriber's
-request for a viewset carrying `@event_scope` (see `fastapi_viewsets.events.scopes`). It has
-neither client form, and `is_valid_topic` and `validate_topic` refuse it.
+Topic forms. Client topics: a viewset topic (routed base path, starts with `/`) or a custom topic
+(source name `[a-z0-9_.-]+`, optionally `:key`), neither with whitespace or control characters.
+A scoped topic `@{name}:{key}` is a store topic only, which `is_valid_topic` and `validate_topic` refuse.
 """
 
 import re
@@ -55,11 +48,7 @@ def split_custom_topic(topic: str) -> tuple[str, str | None] | None:
 
 
 def _scope_key_text(key: Any) -> str:
-    """
-    `key` as the text of a scope key: an `int` (not a `bool`) as `str(key)`, a `str` as it is.
-    Raises `ValueError` for a `str` that is empty or holds whitespace or a control character, and
-    `TypeError` for any other type, `bool` included.
-    """
+    """`key` as text. Raises `ValueError` for an invalid `str`, `TypeError` for a type other than `str`/`int`."""
     if isinstance(key, bool) or not isinstance(key, (int, str)):
         raise TypeError(f"a scope key is a str or an int, not {type(key).__name__}")
     text = str(key)
@@ -69,17 +58,12 @@ def _scope_key_text(key: Any) -> str:
 
 
 def scoped_topic(name: str, key: "str | int") -> str:
-    """
-    The store topic `@{name}:{key}` of the scope `name` and the key `key`. Raises `ValueError` for a
-    name that is empty or holds whitespace, a control character or `:`, and for a key `_scope_key_text`
-    refuses with `ValueError`; `TypeError` for a key of another type.
-    """
+    """The store topic `@{name}:{key}`; raises as `_scope_name` and `_scope_key_text`."""
     return f"@{_scope_name(name)}:{_scope_key_text(key)}"
 
 
 def _scope_name(name: Any) -> str:
-    """Returns `name`; raises `ValueError` when it is not a non-empty string without whitespace,
-    control characters or `:`."""
+    """Returns `name`; raises `ValueError` unless it is non-empty without whitespace, control chars or `:`."""
     if not isinstance(name, str) or _SCOPE_NAME.fullmatch(name) is None:
         raise ValueError(
             f"{name!r} is not a scope name: a non-empty string without whitespace, control characters or ':'"

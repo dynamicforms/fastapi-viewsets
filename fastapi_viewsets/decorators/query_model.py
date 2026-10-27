@@ -1,10 +1,6 @@
 """
-A pydantic model read from the query string, one query parameter per field.
-
-`route_viewset` reads the filter model of a list or lookup endpoint through `query_model_dependency`
-rather than through `Depends(Model)`: FastAPI reads a sequence-typed field (`list[int]`) of a model
-expanded by `Depends(Model)` from the request body, so `?ids=1&ids=2` never reaches the model and the
-schema documents the field as a body.
+A pydantic model read from the query string, one parameter per field. Used instead of `Depends(Model)`,
+under which FastAPI reads a `list[...]` field from the body instead of a repeated query key.
 """
 
 import inspect
@@ -21,8 +17,7 @@ _REQUEST_PARAMETER = "request"
 
 
 def query_name(name: str, field: FieldInfo) -> str:
-    """The query parameter a model field is read from: its validation alias when it is a string, its
-    alias, otherwise its name."""
+    """The query parameter name of a field: its string validation alias, else its alias, else its name."""
     if isinstance(field.validation_alias, str):
         return field.validation_alias
     return field.alias or name
@@ -42,12 +37,8 @@ def _query(field: FieldInfo, alias: str) -> Any:
 
 def _parameter(index: int, name: str, field: FieldInfo) -> inspect.Parameter:
     """
-    The dependency parameter of one model field: `Annotated[<annotation>, *<constraints>, Query()]`.
-
-    The parameter is named by position, so no field name collides with `request`; the field's query
-    name is the `Query()` alias. A required field is a required parameter. An optional field's
-    parameter default is the field's default, or None for a `default_factory` - the model applies its
-    own default to a parameter the request does not send (see `query_model_dependency`).
+    The dependency parameter of one field, named by position so it never collides with `request`.
+    A `default_factory` field defaults to None here; the model applies its own default to an unsent field.
     """
     annotation = Annotated[(field.annotation, *field.metadata, _query(field, query_name(name, field)))]
     if field.is_required():
@@ -62,13 +53,9 @@ def _parameter(index: int, name: str, field: FieldInfo) -> inspect.Parameter:
 @cache
 def query_model_dependency(model: type[BaseModel]):
     """
-    A FastAPI dependency that reads `model` from the query string.
-
-    Every field of the model is a query parameter of the endpoint, documented in the schema with its
-    type, default, description and constraints. A sequence-typed field is read from a repeated key
-    (`?ids=1&ids=2`). The parameters the request sends are validated into `model`; a field the
-    request does not send takes the model's default. A validation error of the model itself (a model
-    validator) is a `RequestValidationError` with `loc` `("query", ...)`, as a parameter's own is.
+    A FastAPI dependency reading `model` from the query string; a sequence field from a repeated key.
+    An unsent field takes the model's default; a model validator's error becomes a
+    `RequestValidationError` at `("query", ...)`.
     """
     fields = list(model.model_fields.items())
     parameters = [inspect.Parameter(_REQUEST_PARAMETER, inspect.Parameter.KEYWORD_ONLY, annotation=Request)]

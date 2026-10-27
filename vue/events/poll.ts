@@ -1,22 +1,8 @@
 /**
- * The polling ladder: the cadence of a client that polls for changes, as a pure function.
- *
- * Nothing here touches a timer, a clock, a socket or `axios`. `nextDelay(state, draw)` takes all the
- * ladder may know (is anything active, is a dialog open, did any `rev` change, the previous ladder
- * interval, the server's advice) and returns a number of milliseconds. A scheduler is a `setTimeout`
- * loop around it, so the cadence is testable without advancing a clock.
- *
- * **The server's advice only slows the ladder down.** `pollAfterMs` (`poll_after_ms` on the wire) is
- * a floor: the delay is `max(pollAfterMs, ladder)`, jittered, and then floored again at `pollAfterMs`
- * and at the base interval, so the lower half of the jitter undercuts neither. Without the second
- * floor a `poll_after_ms` of `0`, or any other too-small value, makes every client polling that
- * server poll it as often as the jitter allows. A client may poll later than advised and never
- * sooner.
- *
- * **`previousDelay` is the previous ladder interval, not the previous emitted delay.** Feeding the
- * jittered delay back in compounds the jitter: a run of low draws climbs the ladder 20 % faster than
- * ×1.5, and a run of high ones holds it below the ceiling. The ladder is deterministic and the jitter
- * is applied once, to the number the caller sleeps for. `PollLadder` carries the un-jittered value.
+ * The polling ladder: the delay between polls as a pure function of the ladder state, free of timers.
+ * The server's `poll_after_ms` is only a floor: a client never polls sooner than advised, nor sooner
+ * than the base interval. `previousDelay` is the un-jittered ladder interval; feeding back the jittered
+ * delay would compound the jitter.
  */
 
 /** The four constants of the cadence. */
@@ -39,15 +25,9 @@ export const DEFAULT_POLL_SETTINGS: PollSettings = {
   jitterFraction: 0.2,
 };
 
-/**
- * All the ladder may know. It carries no wire type, so one ladder serves every kind of poll and
- * cannot tell which one it is answering.
- */
+/** All the ladder may know; independent of the wire type, so it serves every kind of poll. */
 export interface PollLadderState {
-  /**
-   * Anything polled is active and expected to change. `false` polls at the ceiling. A caller that
-   * cannot tell passes `true`: it is waiting for something it expects, and the ceiling would delay it.
-   */
+  /** Anything polled is expected to change; `false` polls at the ceiling. Pass `true` when unsure. */
   anyActive: boolean;
   /** A dialog is open on anything polled; polls at the ceiling. */
   anyDialogOpen: boolean;
@@ -63,15 +43,8 @@ export interface PollLadderState {
 export type Draw = () => number;
 
 /**
- * The ladder interval, with no jitter and no server advice.
- *
- * The branches apply in order. An open dialog answers the ceiling before anything else. Idle answers
- * the ceiling. No branch answers "stop": a client that stopped polling while nothing was active would
- * not learn that something started.
- *
- * Whether the scheduler sleeps this interval at all is not the ladder's decision. A healthy push
- * transport suspends the loop, and losing it resumes the loop on the base rung (`PollLadder.reset()`
- * and `PollLadder.resume()`); the state has no way to express "stopped".
+ * The ladder interval, without jitter or server advice: the ceiling for an open dialog or idle state,
+ * the base after a `rev` change or on the first poll, else the previous interval times the backoff.
  */
 export function ladderInterval(state: PollLadderState, settings: PollSettings = DEFAULT_POLL_SETTINGS): number {
   const { baseIntervalMs, backoffFactor, ceilingMs } = settings;
@@ -79,8 +52,7 @@ export function ladderInterval(state: PollLadderState, settings: PollSettings = 
   if (!state.anyActive) return ceilingMs;
   if (state.revChanged) return baseIntervalMs;
   if (state.previousDelay === null || state.previousDelay === undefined) return baseIntervalMs;
-  // `Math.max(previous, base)` keeps a too-small `previousDelay`, such as a jittered delay, from
-  // restarting the climb below the base interval.
+  // keeps a too-small `previousDelay` from restarting the climb below the base interval
   return Math.min(Math.max(state.previousDelay, baseIntervalMs) * backoffFactor, ceilingMs);
 }
 
@@ -90,11 +62,8 @@ export function jitterMultiplier(draw: Draw = Math.random, settings: PollSetting
 }
 
 /**
- * Milliseconds until the next poll; the one function a scheduler calls.
- *
- * Raises the ladder interval to the server's floor, jitters it, and floors the result again at both
- * the server's floor and the base interval. The second floor is the one that holds against a
- * `pollAfterMs` of `0`, a negative or non-finite one, and the low end of the jitter.
+ * Milliseconds until the next poll: the ladder interval raised to `pollAfterMs`, jittered, then floored
+ * again at `pollAfterMs` and the base interval (which also guards against a `0` or invalid advice).
  */
 export function nextDelay(
   state: PollLadderState,
@@ -104,17 +73,10 @@ export function nextDelay(
   const advised = typeof state.pollAfterMs === 'number' && Number.isFinite(state.pollAfterMs) ? state.pollAfterMs : 0;
   const floor = Math.max(advised, settings.baseIntervalMs);
   const jittered = Math.max(ladderInterval(state, settings), advised) * jitterMultiplier(draw, settings);
-  // Rounded because no timer honours a fractional millisecond; rounding a value at or above an
-  // integer floor cannot drop it below that floor.
   return Math.max(Math.round(jittered), floor);
 }
 
-/**
- * The state a scheduler keeps between polls: the previous **ladder** interval.
- *
- * Held here rather than by the caller, because the caller sees only the jittered delay, and feeding
- * that back in as `previousDelay` compounds the jitter.
- */
+/** The state a scheduler keeps between polls: the previous un-jittered ladder interval. */
 export class PollLadder {
   private previous: number | null = null;
 
@@ -145,12 +107,9 @@ export class PollLadder {
   }
 
   /**
-   * Returns the base interval, jittered and floored at the base, and sets the climb to start from it:
-   * what a loop schedules when it resumes after a suspension, such as a lost push transport.
-   *
-   * It does not consult `ladderInterval`. An open dialog and an idle state both answer the ceiling
-   * there, and both are routinely true of a client that has just lost its socket; the first poll after
-   * the loss would then come a ceiling later rather than one base interval later.
+   * The jittered base interval (floored at the base), restarting the climb from it: the first delay
+   * after a suspension such as a lost push transport. Ignores dialog and idle state, which would
+   * otherwise delay that first poll to the ceiling.
    */
   resume(): number {
     const { baseIntervalMs } = this.settings;

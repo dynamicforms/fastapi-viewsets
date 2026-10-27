@@ -23,45 +23,15 @@ T = TypeVar("T")
 @dataclass
 class ViewSetResult(SerializableObject, Generic[T]):
     """
-    Transport-agnostic result of running the command middleware chain (see run_command_chain()
-    below). `body` is the actual domain value (whatever perform_* returned); `headers`/`cookies`
-    are side-channel metadata a middleware can attach - e.g. a session middleware setting a value
-    the frontend should remember. `status_code`, when set, lets a middleware short-circuit the
-    chain with a non-200 result (e.g. 401 for an expired session) without ever calling `perform_*`.
-    What this all actually becomes on the wire is up to the transport adapter: the HTTP adapter
-    (route_viewset.py/lifecycle_runner.py) maps `headers` onto real response headers, `cookies`
-    onto real Set-Cookie (see `apply_cookies()`), and `status_code` onto the real Response's status
-    code; the muxws transport, which serves each command through the same FastAPI app, carries the
-    resulting status and headers in the reply's leading headers.
+    Transport-agnostic result of the command middleware chain: the body plus headers, cookies and an
+    optional status code, which each transport maps onto its own response.
 
-    `cookies` maps a cookie name to one of:
+    `cookies` maps a name to a `Cookie` (set with all options), a `DeleteCookie` (deleted) or any other
+    value (set to `str(value)` with Starlette's defaults); `set_cookie()` / `delete_cookie()` record
+    the first two with Starlette's signatures. Cookie options survive the `celery_viewset` boundary.
 
-    - a `Cookie`: the cookie with all of its options;
-    - a `DeleteCookie`: the cookie is deleted;
-    - any other value: the cookie is set to `str(value)` with Starlette's default options.
-
-    `set_cookie()` and `delete_cookie()` record a `Cookie` / `DeleteCookie` under the name, with the
-    signatures of Starlette's `Response.set_cookie()` / `Response.delete_cookie()`.
-
-    A registered route endpoint (a mixin-provided one, or a custom `__router` method - never a
-    `perform_*` hook, which is called by the actual route method and never registered as a route
-    itself) may also return a `ViewSetResult` directly instead of a plain body, getting the same
-    `status_code`/`headers`/`cookies` access normally reserved for command middleware (e.g. a
-    redirect: `ViewSetResult(body=None, status_code=302, headers={"Location": url})`) -
-    `lifecycle_runner.final_handler` passes it through unchanged. Declare the return type as
-    `ViewSetResult[X]` (X being whatever the wire body actually is) rather than bare `X` -
-    `route_viewset`/`build_schema` unwrap this to `X` for the OpenAPI response_model and FastAPI's
-    own response validation (see unwrap_viewset_result_type below), so the two forms
-    document/validate identically. `status_code`, `headers` and `cookies` do not change the shape
-    of the body, so setting them needs no `Middleware.modifies_response_shape`.
-
-    Inherits `SerializableObject` so it survives the Celery/Redis boundary wherever it is not
-    typed; a `celery_viewset`-dispatched action's `ViewSetResult` result crosses with its body
-    encoded by the `-> ViewSetResult[X]` annotation (see decorators/celery_viewset/transport.py)
-    and its `Cookie`/`DeleteCookie` values with all of their options. Only
-    `__serialize__`/`__deserialize__` are overridden here - a `ViewSetResult` is never itself placed
-    in a `Context` and never awaited, so `SerializableObject`'s `value`/`__await__`/`__init__` go
-    unused, the same way `LazyObject` replaces those with its own.
+    A route endpoint may return one directly (e.g. a redirect); declare `-> ViewSetResult[X]`, which
+    documents and validates as `X`.
     """
 
     body: T
@@ -122,15 +92,9 @@ CommandMiddleware = Callable[
     Awaitable[ViewSetResult],
 ]
 """
-async def middleware(request, viewset, context, call_next) -> ViewSetResult: ...
-
-An onion-style chain around the actual perform_*/endpoint execution, configured via
-settings.viewsets_command_middleware (see fastapi_viewsets/conf.py). `call_next()` (no arguments -
-context and the viewset instance are the only mutable structures in the pipeline, so a middleware
-that wants to influence what happens next mutates `context` in place rather than threading a new
-one through) invokes the next middleware, or the actual execution at the innermost layer. A
-middleware can inspect/replace the ViewSetResult `call_next()` returns and mutate its
-`headers`/`cookies` before returning it back up the chain.
+`async def middleware(request, viewset, context, call_next) -> ViewSetResult`, one layer of the onion chain
+configured in `settings.viewsets_command_middleware`. `call_next()` takes no arguments: a middleware
+influences later steps by mutating `context`.
 """
 
 
@@ -159,11 +123,7 @@ class ExecutionRef:
 
 @dataclass(frozen=True)
 class ActionExecution:
-    """
-    One execution of a viewset action, as `Middleware.execute()` receives it. The fields are the
-    same wherever the action executes: in the FastAPI process, or in the process of the executor
-    a `celery_viewset` action is handed to.
-    """
+    """One execution of a viewset action, as `Middleware.execute()` receives it in whichever process runs it."""
 
     viewset_class: type
     viewset: Any
@@ -173,18 +133,16 @@ class ActionExecution:
     args: tuple
     """The positional arguments the method is called with."""
     kwargs: dict[str, Any]
-    """The keyword arguments the method is called with: its own parameters, with `context` and
-    `request` among them only where the method declares them."""
+    """The method's keyword arguments; `context` and `request` only where the method declares them."""
     context: Context
-    """The call's `Context`, whether or not the method declares a `context` parameter. Its
-    `configuration_for()` resolves against this action."""
+    """The call's `Context`, bound to this action's configuration."""
     request: "Request | None"
-    """The call's request. In an executor's process it is a `Request` built from the call's ASGI
-    scope (method, path, query string, headers, path parameters, client and server address), which
-    has no body, no `app` and no `state`. None for an action dispatched outside any call."""
+    """
+    The call's request. In an executor's process it is rebuilt from the ASGI scope, without body, `app` or
+    `state`. None for an action dispatched outside any call.
+    """
     parent: ExecutionRef | None
-    """The action in whose execution this action was dispatched; None for an action a request
-    called."""
+    """The action in whose execution this action was dispatched; None for an action a request called."""
 
     def ref(self) -> ExecutionRef:
         """This execution as the `parent` of an action dispatched while it runs."""
@@ -194,17 +152,13 @@ class ActionExecution:
 
 @dataclass(frozen=True)
 class ActionTransition:
-    """
-    A change of state of a call to a deferred action that `Middleware.on_transition()` receives,
-    observed outside the execution itself.
-    """
+    """A change of state of a deferred action's call, observed outside its execution."""
 
     kind: Literal["dispatched", "not_run", "interrupted", "failed"]
     """
     - `dispatched`: the call was handed to the executor (in the calling process)
     - `not_run`: the executor will not run the call (`error` is an `ActionDispatchError`)
-    - `interrupted`: the executor ended the execution from outside it: a hard time limit, a
-      termination, the loss of the executing process (`error` is an `ActionInterruptedError`)
+    - `interrupted`: hard time limit, termination or lost process (`error` is an `ActionInterruptedError`)
     - `failed`: the executor failed outside the action (`error` is an `ActionFailedError`)
     """
     viewset_class: type
@@ -220,114 +174,53 @@ class ActionTransition:
 
 class Middleware(ABC):
     """
-    Class-based alternative to a plain CommandMiddleware function. Implement `__call__` with the
-    exact same signature a function would have - `run_command_chain` below calls
-    `middlewares[index](request, viewset, context, call_next)` either way, so a `Middleware`
-    instance is a drop-in `CommandMiddleware`. Reach for a class instead of a function when the
-    middleware needs to carry its own configuration/state (see `middleware.auth.Session` for a
-    concrete example) - a bare function would need extra indirection (closures, partials) for that.
+    Class-based `CommandMiddleware` that can carry its own configuration, with optional hooks around the chain:
+    `depends()`, `execute()`, `executor_started()`, `on_transition()`.
     """
 
     modifies_response_shape: bool = False
     """
-    Whether this middleware can change the shape of ViewSetResult.body (strip/rename/restructure
-    fields, not just add side-channel headers/cookies or a status code) - see
-    `any_modifies_response_shape()` below. False by default: typical middleware (auth, rate
-    limiting, sessions) only inspects the result or attaches headers/cookies (`set_cookie()`,
-    `delete_cookie()`), which are not part of the body, so the endpoint's declared return type
-    stays a trustworthy response_model. Override to True on a middleware whose
-    __call__ actually reassigns `result.body` to something that no longer matches the original
-    return annotation - otherwise FastAPI's response_model validation will coerce the reshaped body
-    back towards the original model (e.g. reintroducing a stripped field with its default value).
-    A plain function middleware declares this the same way, by setting the attribute on the
-    function object: `my_middleware.modifies_response_shape = True`.
-
-    `route_viewset` reads it from the entries of `settings.viewsets_command_middleware` when it
-    decorates a class, and one entry declaring it drops the response_model of every route of that
-    class. An instance `@action_configuration` injects is not consulted.
+    True when `__call__` reshapes `result.body`, so the endpoint's return type no longer serves as
+    `response_model` (it would coerce the body back). A function middleware sets it as an attribute.
+    `route_viewset` reads it from `settings.viewsets_command_middleware` only, per class.
     """
 
     def config_from(self, context: Context) -> Any:
-        """
-        This middleware's own @action_configuration value for the current call (see
-        fastapi_viewsets/action_configuration.py), or None if nothing was configured for it.
-        Shorthand for `context.configuration_for(type(self))`.
-        """
+        """This middleware's `@action_configuration` value for the current call, or None."""
         return context.configuration_for(type(self))
 
     async def depends(self, _request: "Request", _cls: type, _context: Context) -> None:
         """
-        Optional early-gate hook, bridged onto FastAPI's own native Depends() by route_viewset -
-        runs before FastAPI parses the request body. Raise HTTPException to reject; return
-        normally to allow. Default is a no-op: a middleware that doesn't override this only runs in
-        the onion chain below, exactly as if this method didn't exist.
+        Optional gate run as a FastAPI dependency, before the body is parsed. Raise `HTTPException` to reject.
 
-        `cls` is always the viewset *class*, never an instance - for `per-request`/`instance-key`
-        lifecycles no instance exists yet this early. `context` is real and usable here (see
-        `fastapi_viewsets.context.get_shared_context`) - built as early as this method can possibly
-        run, which for `per-request`/`instance-key` lifecycles is *before* `load_state()`; no shipped
-        context processor reads viewset instance state.
-
-        Put here *only* logic that may reject. Unconditional work (e.g. enriching context with no
-        reject path) belongs in `__call__`; `middleware.auth.authorization.Authorization` splits
-        across both methods this way.
-        For middleware whose entire job is reject-or-allow with nothing unconditional (`Session`,
-        `RateLimiter`), `__call__` is `return await call_next()`: `depends()` makes the only
-        decision, and if it rejects, `__call__`/the onion chain is not reached (the exception
-        propagates out via FastAPI's own `Depends()` resolution, before the wrapper/lifecycle_runner
-        starts) - so nothing runs twice.
+        `cls` is the viewset class (no instance exists yet); `context` is built but `load_state()` has not run.
+        Put only logic that may reject here; unconditional work belongs in `__call__`.
         """
         return None
 
     async def execute(self, _execution: ActionExecution, call_next: Callable[[], Awaitable[Any]]) -> Any:
         """
-        Optional hook around the execution of the action itself. `call_next()` runs the next
-        middleware's `execute()`, or the viewset method at the innermost layer, and returns what the
-        method returned; an exception the method raises propagates out of it. The default passes
-        straight through.
+        Optional hook around the viewset method call; `call_next()` returns its result or raises its exception.
 
-        It runs once per execution, where the action executes: in the FastAPI process for an
-        in-process action, inside the command middleware chain (below every `__call__`), and in the
-        executor's process for a deferred (`celery_viewset`) action, whose FastAPI-side method only
-        hands the call over. The executor's process therefore needs the same
-        `settings.viewsets_command_middleware`.
-
-        In an executor's process `call_next()` raises no exception type of the executor itself. An
-        execution the executor interrupts from inside (a soft time limit) reaches `call_next()` as
-        `ActionInterruptedError`, whether the action was running or suspended at an `await`; the
-        action itself sees `asyncio.CancelledError` in the latter case. An execution the executor
-        ends from outside (a hard time limit, a termination, a lost process) ends its process:
-        `call_next()` raises `SystemExit` where the process is stopped with SIGTERM and has time to
-        unwind, whether the action was running or suspended at an `await`, and nothing at all where it
-        is killed. `on_transition()` reports it either way: the supervisor of a prefork pool child, or
-        the exiting process itself where no supervisor outlives it. In a
-        gevent pool a hard time limit ends the execution only and reaches `call_next()` as
-        `ActionInterruptedError`.
+        Runs once, in the process that executes the action: for a `celery_viewset` action, the executor's,
+        which therefore needs the same `settings.viewsets_command_middleware`. There a soft time limit
+        raises `ActionInterruptedError`; a hard limit or termination raises `SystemExit` or nothing.
         """
         return await call_next()
 
     async def executor_started(self) -> None:
         """
-        Optional hook for setting up an executor's process (`celery_viewset_server`), e.g. the
-        clients a middleware uses there. A process runs `on_transition()` calls on an event loop of
-        their own and executions on the loop of the thread that runs them (one loop per pool thread
-        in a threads pool); the hook is awaited once on each loop the process uses, before the
-        loop's first execution or its first `on_transition()` call. Every entry of
-        `settings.viewsets_command_middleware` that defines it is awaited, in list order. An
-        exception before an execution fails that execution with `ActionFailedError` (reason
-        `executor`) and the hook runs again before the loop's next one; an exception before an
-        `on_transition()` call is logged. The default does nothing.
+        Optional set-up of an executor's process, awaited once on each event loop before its first use.
+
+        An exception fails the pending execution with `ActionFailedError` (reason `executor`) and the hook
+        retries before the next one; before an `on_transition()` call it is only logged.
         """
         return None
 
     async def on_transition(self, _transition: ActionTransition) -> None:
         """
-        Optional hook that receives the changes of state of a call to a deferred action that happen
-        outside its execution (see `ActionTransition.kind`). It runs on the effective middlewares of
-        the call's action: `dispatched` in the calling process once the executor accepted the call,
-        the other kinds in the executor's process after the caller was sent `transition.error`. An
-        exception it raises is logged and changes nothing; in an executor's process each call is
-        bounded to 5 seconds. The default does nothing.
+        Optional listener for `ActionTransition`s: `dispatched` in the calling process, the others in the
+        executor's. An exception is logged; in an executor's process each call is bounded to 5 seconds.
         """
         return None
 
@@ -340,38 +233,20 @@ class Middleware(ABC):
         call_next: Callable[[], Awaitable[ViewSetResult]],
     ) -> ViewSetResult:
         """
-        The middleware's step of the command chain. For a deferred action `call_next()` returns
-        the result the executor sent back, or raises one of: `ActionDispatchError` (the action did
-        not run), `ActionInterruptedError` (the executor ended its execution), `ActionFailedError`
-        (it failed with an error that is not an `HTTPException`), the `HTTPException` the action
-        raised (a `DfViewSetError` of a class `fastapi_viewsets.exceptions` defines keeps its class,
-        `code`, `params` and headers), or an `ActionOutcomeUnknownError` (the caller stopped
-        waiting).
+        The middleware's step of the command chain. For a deferred action `call_next()` may raise
+        `ActionDispatchError`, `ActionInterruptedError`, `ActionFailedError`, `ActionOutcomeUnknownError`
+        or the action's own `HTTPException`.
         """
         raise NotImplementedError
 
 
 def any_modifies_response_shape(middlewares: list) -> bool:
-    """
-    Whether any entry in `middlewares` (a mix of Middleware instances and/or plain functions, as
-    settings.viewsets_command_middleware holds) declares modifies_response_shape=True. A bare
-    function that never set the attribute is treated as False, same default as the Middleware
-    class - see Middleware.modifies_response_shape above. Used by route_viewset/build_schema to
-    decide whether an endpoint's declared response_model can still be trusted for OpenAPI docs and
-    FastAPI's own response validation.
-    """
+    """Whether any middleware (class or function) sets `modifies_response_shape`."""
     return any(getattr(middleware, "modifies_response_shape", False) for middleware in middlewares)
 
 
 def unwrap_viewset_result_type(annotation: Any) -> Any:
-    """
-    An endpoint declared `-> ViewSetResult[X]` (see ViewSetResult above) documents/validates as
-    `X` - the wire body a client actually receives, not the side-channel wrapper the endpoint
-    returns internally to reach `status_code`/`headers`/`cookies`. `route_viewset`/`build_schema`
-    call this wherever a return annotation becomes an OpenAPI response_model, so `-> ViewSetResult[X]`
-    and plain `-> X` document/validate identically. Anything that isn't `ViewSetResult[...]` passes
-    through unchanged.
-    """
+    """`ViewSetResult[X]` to `X`, so it documents and validates like `-> X`; anything else unchanged."""
     if get_origin(annotation) is ViewSetResult:
         args = get_args(annotation)
         return args[0] if args else None
@@ -385,8 +260,7 @@ async def run_command_chain(
     context: Context,
     final_handler: Callable[[], Awaitable[ViewSetResult]],
 ) -> ViewSetResult:
-    """Runs the configured command middleware chain, innermost step being final_handler (the
-    actual perform_*/endpoint call, already wrapped as a ViewSetResult)."""
+    """Runs the command middleware chain with `final_handler` (the endpoint call) innermost."""
 
     async def _step(index: int) -> ViewSetResult:
         if index >= len(middlewares):
@@ -403,9 +277,10 @@ async def run_execution_chain(
     *,
     _translate: Callable[[BaseException], BaseException] | None = None,
 ) -> Any:
-    """Runs `execute()` of every middleware that has one, in list order, the first outermost;
-    final_handler (the viewset method call) is innermost. `_translate`, set by an executor, maps
-    an exception out of every step to the exception raised in its place."""
+    """
+    Runs every middleware's `execute()`, the first outermost, around `final_handler`. `_translate`, set by an
+    executor, maps an exception out of each step to the one raised in its place.
+    """
     executors = [middleware.execute for middleware in middlewares if callable(getattr(middleware, "execute", None))]
 
     async def _step(index: int) -> Any:
@@ -437,8 +312,7 @@ async def run_executor_started(middlewares: list) -> None:
 async def run_transition_listeners(
     middlewares: list, transition: ActionTransition, timeout: float | None = None
 ) -> None:
-    """Awaits `on_transition(transition)` of every entry of `middlewares` that defines it, in list
-    order, each bounded to `timeout` seconds. An exception or a timeout is logged."""
+    """Awaits each middleware's `on_transition()`, each bounded to `timeout` seconds; failures are logged."""
     for middleware in middlewares:
         listener = getattr(middleware, "on_transition", None)
         if not callable(listener):

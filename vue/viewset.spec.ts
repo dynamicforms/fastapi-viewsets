@@ -1,11 +1,7 @@
 /**
- * Unit tests for viewset.ts — the ViewSet class factory.
- *
- * What the factory adds over `route_rest` is that the object is the consumer's own class: its own
- * methods exist at runtime, and its declaration reaches the schema check. Both halves are covered
- * here. The type-level half — that an undeclared action does not compile — cannot be asserted by
- * vitest, which type-checks nothing; those are `@ts-expect-error` lines, which `vue-tsc --noEmit`
- * in `npm run lint` fails on if they ever stop being errors.
+ * Unit tests for viewset.ts, the ViewSet class factory: the consumer's own methods exist at runtime and
+ * its declaration reaches the schema check. Type-level cases are `@ts-expect-error` lines, checked by
+ * `vue-tsc --noEmit` in `npm run lint`.
  */
 
 import axios from 'axios';
@@ -103,9 +99,7 @@ describe('restViewSet', () => {
     const api = build();
     await api.retrieve(2);
     expect(http.get).toHaveBeenCalledWith('/items/2', sent());
-    // No cast: pkFieldName is part of a factory-built class's own type surface (typed as the
-    // literal 'id', not widened to string), not just present at runtime - a generic caller (a grid
-    // or table component) holding the instance can read which field is the pk without one.
+    // No cast: pkFieldName is typed as the literal 'id' on a factory-built class.
     expect(api.pkFieldName).toBe('id');
   });
 
@@ -145,9 +139,7 @@ describe('restViewSet', () => {
   });
 
   it('narrows by calling the factory again, not by subclassing', async () => {
-    // A factory-built class pins `declares` to the exact tuple it was given, so restating it in a
-    // subclass is TS2417 - see the @ts-expect-error in 'the type surface' below. The smaller
-    // ViewSet is its own class, whose type has only the actions it declares.
+    // `declares` is pinned to the factory's tuple, so restating it in a subclass is TS2417.
     class ItemDbApi extends restViewSet<Item>()('id', [CursorListMixin]) {}
     mockSchema({ paths: { '/items': { get: {} }, '/items/schema': { get: {} } } });
     new ItemDbApi({ basePath: '/items', axiosInstance: http as unknown as typeof axios });
@@ -157,9 +149,7 @@ describe('restViewSet', () => {
   });
 
   it('assigns nothing after super(), so the base constructor is not clobbered', () => {
-    // The factory injects pkFieldName into the argument expression. Under useDefineForClassFields
-    // an assignment after super() would emit a [[Define]] that overwrites what the base constructor
-    // set.
+    // Under useDefineForClassFields a field assigned after super() would overwrite the base's value.
     const api = build();
     expect(Object.keys(api).sort()).toEqual(
       [

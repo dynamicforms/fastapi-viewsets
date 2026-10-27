@@ -144,18 +144,11 @@ const following = ref<string | null>(null);
 const benchmarking = ref(false);
 const results = ref<BenchmarkResult[]>([]);
 
-// All four MusicTrack ViewSets share one pk field; read off an instance rather than repeated as a
-// literal, so a model with a differently-named pk would not need this file edited to match.
+// All four MusicTrack ViewSets share one pk field.
 const pkField = viewSetFor(transport.value, backend.value).pkFieldName;
 const pkOf = (track: MusicTrack): number => track[pkField as keyof MusicTrack] as number;
 
-/**
- * Which declared filter parameter each column maps to.
- *
- * The grid hands back a plain column → value map; the backend declares which operator each field
- * accepts, so `title` means `title__icontains` while `year` means an exact match. Anything not
- * listed here has no filter parameter on the backend and is dropped rather than guessed at.
- */
+/** The backend filter parameter of each column; a column not listed here has none and is not sent. */
 const FILTER_PARAM: Record<string, string> = {
   [pkField]: pkField,
   title: 'title__icontains',
@@ -169,8 +162,8 @@ const FILTER_PARAM: Record<string, string> = {
   moods: 'moods__overlaps',
 };
 
-// `as const` keeps `sortExternal`/`filterExternal` as their unique symbol types; in a plain object
-// literal they widen to `symbol` and no longer match the sentinel the column definition expects.
+// `as const` keeps `sortExternal`/`filterExternal` as unique symbol types; widened to `symbol` they
+// do not match the sentinel the column definition expects.
 const external = { sortable: { key: sortExternal }, filterable: { key: filterExternal } } as const;
 
 const columns = [
@@ -187,7 +180,7 @@ const columns = [
   createColumn('language', 'Language', 'plain', external),
 ];
 
-// `rows` is how many grid rows one record takes in that layout; the cells are placed within them in the styles below
+// `rows` is how many grid rows one record takes in that layout; the styles below place the cells
 const columnsResponsive: ResponsiveColumnDefinitions = [
   { cssClass: 'single-line', columns: filterColumns(columns, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) },
   { cssClass: 'three-row', rows: 3, columns: filterColumns(columns, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) },
@@ -208,8 +201,7 @@ function queryParams(): Record<string, any> {
   for (const [column, value] of Object.entries(filterValues.value)) {
     const parameter = FILTER_PARAM[column];
     if (parameter === undefined || value === null || value === undefined || value === '') continue;
-    // `genres__overlaps` and `moods__overlaps` take several values, repeated; the grid's text filter
-    // separates them with commas
+    // `__overlaps` takes repeated values; the grid's text filter separates them with commas
     params[parameter] = parameter.endsWith('__overlaps')
       ? String(value)
           .split(',')
@@ -226,17 +218,12 @@ function queryActive(): boolean {
 }
 
 /**
- * The page load in flight, or a settled promise. Never rejects: both loads report their failure
- * in `error`. A change is applied once it settles, so a page read before the change does not
- * overwrite it.
+ * The page load in flight, or a settled promise; never rejects. A change is applied once it settles,
+ * so a page read before the change does not overwrite it.
  */
 let pageLoad: Promise<void> = Promise.resolve();
 
-/**
- * Incremented each time the grid is emptied for a new first page. A page load drops its answer
- * when the count changed while it was in flight: the answer belongs to another ViewSet or another
- * query, and its cursor is one the shown ViewSet refuses.
- */
+/** Incremented on every new first page; a page load whose generation changed drops its answer. */
 let generation = 0;
 
 /** Empties the grid and shows it loading, until the next first page refills it. */
@@ -250,11 +237,8 @@ function clearRows() {
 }
 
 /**
- * Fetches the first page and throws away whatever was loaded before.
- *
- * Any change to the sort or the filters has to restart here: a cursor is a position in one
- * particular ordering, and the backend refuses one issued for a different query rather than
- * silently returning a page from somewhere else.
+ * Fetches the first page and drops what was loaded before. A sort or filter change restarts here:
+ * the backend refuses a cursor issued for another query.
  */
 function reload(): Promise<void> {
   pageLoad = firstPage();
@@ -282,10 +266,7 @@ async function firstPage() {
   }
 }
 
-/**
- * Appends the next page. The grid fires `@load` when the viewport nears the end and `loading` is
- * false, so setting `loading` for the duration of the fetch is what stops it firing again.
- */
+/** Appends the next page; `loading` stops the grid firing `@load` again meanwhile. */
 function loadMore() {
   if (loading.value || !cursor.value) return;
   pageLoad = nextPage(cursor.value);
@@ -313,10 +294,7 @@ async function nextPage(from: string) {
   }
 }
 
-/**
- * The JSON of each record this tab saved, until the `records_changed` of that save arrives. The
- * grid already shows such a record, so its own event changes nothing.
- */
+/** The JSON of each record this tab saved, until that save's `records_changed` arrives and is skipped. */
 const saved = new Map<number, string>();
 
 /** Whether `item` is the event of this tab's own save, which is forgotten once it is seen. */
@@ -328,15 +306,9 @@ function isOwnSave(item: Change<MusicTrack, number>): boolean {
 }
 
 /**
- * Applies one `records_changed` of the shown ViewSet to the loaded rows.
- *
- * The grid holds a prefix of the server's list. Without a sort or a filter that list is in pk
- * order: a change to a loaded row replaces or removes it, a created record is appended once the
- * last page is loaded and otherwise arrives with the page that holds it, and an updated row outside
- * the prefix is left to its page as well.
- *
- * With a sort or a filter, a created or updated record can belong anywhere in the list, or no
- * longer belong in it. The grid cannot place it, so it reloads the list; a deleted row is removed.
+ * Applies one `records_changed` to the loaded prefix of the list. In pk order a created record is
+ * appended only once the last page is loaded; with a sort or a filter a created or updated record
+ * cannot be placed, so the list reloads.
  */
 function applyChange(change: RecordsChanged<MusicTrack, number>) {
   const changes = change.op === 'deleted' ? change.changes : change.changes.filter((item) => !isOwnSave(item));
@@ -353,12 +325,8 @@ function applyChange(change: RecordsChanged<MusicTrack, number>) {
 let watching: EventSubscription | undefined;
 
 /**
- * Follows the shown ViewSet's topic, then loads its first page. Subscribed first, so a change made
- * between the read and the subscription is not missed.
- *
- * `fetch: true` retrieves each created and updated record before `onChange`: the backend's
- * `ChangeEvents` sends pks only. A resync, after the client missed events it cannot recover from
- * the backend's log, reloads the list.
+ * Follows the shown ViewSet's topic, then loads its first page: subscribed first, so a change between
+ * the read and the subscription is not missed. `fetch: true` reads the rows, as the events carry pks.
  */
 async function followAndReload() {
   watching?.unsubscribe();
@@ -389,12 +357,8 @@ async function followAndReload() {
 }
 
 /**
- * A click on a Favorite cell toggles that track's `favorite` on the shown ViewSet. The
- * `records_changed` the backend publishes for it reaches every tab that follows the topic.
- *
- * In this tab the answer replaces the row at once, or, with a sort or a filter, the list reloads:
- * the toggled row may have moved or left the list. An answer that arrives after a switch to another
- * ViewSet is dropped.
+ * A click on a Favorite cell toggles the track's `favorite`; other tabs see it through the event. Here
+ * the answer replaces the row, or the list reloads under a sort or a filter.
  */
 async function onClick({ columnName, rowData }: GridClickEvent) {
   if (columnName !== 'favorite' || !rowData) return;
@@ -446,8 +410,7 @@ async function runComparison() {
   }
 }
 
-// Switching transport or backend follows the other ViewSet and reloads the same query, so the two
-// are comparable on screen.
+// Switching transport or backend follows the other ViewSet with the same query.
 watch([transport, backend], () => void followAndReload());
 void followAndReload();
 </script>
@@ -486,9 +449,8 @@ void followAndReload();
   background-color: #60606040;
 }
 /*
- * Every record's cells are items of one grid shared by the body, the header and the filter row, so the grid itself is
- * declared on .df-record-grid. .df-grid.card is the row-anchor: a box spanning the record's band that carries its
- * background and border, beside the cells rather than around them.
+ * The body, header and filter row share one grid on .df-record-grid. .df-grid.card spans a record's band and carries
+ * its background and border, beside the cells rather than around them.
  */
 :deep(.df-record-grid) {
   display: grid;
@@ -508,10 +470,7 @@ void followAndReload();
   text-align: center;
 }
 
-/*
- * Cells are placed within their own record's band: --row-base is the first grid row of the record, published by the
- * grid, so every placement is relative to it rather than an absolute row.
- */
+/* --row-base is the record's first grid row, published by the grid; placements are relative to it */
 
 /* single-line: one row, the eleven fields in declaration order */
 :deep(.df-record-grid.single-line) {

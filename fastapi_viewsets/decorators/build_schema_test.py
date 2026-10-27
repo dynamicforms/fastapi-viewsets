@@ -1,7 +1,6 @@
 """
-route_sort_key does not crash when a viewset has custom action paths of
-different depths that share a common prefix (e.g. "account/register" and
-"account/register/verify/resend") - see route_viewset.py docstring in build_schema.py.
+route_sort_key sorts custom action paths of different depths that share a prefix
+("account/register", "account/register/verify/resend").
 """
 
 from fastapi import APIRouter, FastAPI

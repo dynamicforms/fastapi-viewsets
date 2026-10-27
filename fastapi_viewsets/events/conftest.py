@@ -55,9 +55,8 @@ class ConnectionLost(Exception):  # noqa: N818
 
 class FakePeer:
     """
-    The part of a muxws acceptor peer the events package uses, as muxws behaves: `notify()` queues
-    the push without awaiting anything and raises `ConnectionLost` on a closed peer; `close()` sets
-    `is_open` false and runs the `on_close` handlers registered until then, once.
+    The muxws peer surface the events package uses: `notify()` records the push and raises
+    `ConnectionLost` once closed; `close()` runs the `on_close` handlers once.
     """
 
     def __init__(self, *, error: BaseException | None = None):
@@ -86,10 +85,7 @@ class FakePeer:
 
 
 class FakeRedis:
-    """
-    The subset of `redis.asyncio.Redis` `RedisEventStore` uses, without `decode_responses`: strings,
-    lists, key expiry, pub/sub, and `eval` of the append script, emulated.
-    """
+    """The subset of `redis.asyncio.Redis` (bytes replies) `RedisEventStore` uses, append script included."""
 
     def __init__(self):
         self.strings: dict[str, bytes] = {}
@@ -179,12 +175,8 @@ class FakeRedis:
 
 class FakePubSub:
     """
-    A pub/sub connection, as `redis.asyncio.client.PubSub` without `decode_responses`.
-
-    `subscribe` and `unsubscribe` send the command and return, as redis-py's do; Redis applies it
-    and queues its confirmation at once, or, while `held` is set, when `release()` is called, in the
-    order the commands were sent. `channels` holds the channels the client has SUBSCRIBEd and not
-    UNSUBSCRIBEd. `lose_connection()` reconnects as redis-py does.
+    A `redis.asyncio` PubSub. Commands are applied and confirmed at once, or, while `held`, in order on
+    `release()`. `channels` is what the client requested; `subscribed` what Redis applied.
     """
 
     def __init__(self, redis: FakeRedis):
@@ -220,10 +212,7 @@ class FakePubSub:
             apply(channel)
 
     def lose_connection(self) -> None:
-        """
-        Drops the connection with every command Redis has not applied and every reply not read, and
-        reconnects as redis-py does: SUBSCRIBEs every channel in `channels`. Clears `held`.
-        """
+        """Drop unapplied commands and unread replies, then resubscribe `channels` as redis-py does."""
         for channel in self.subscribed:
             self.redis.channels[channel].remove(self)
         self.subscribed.clear()

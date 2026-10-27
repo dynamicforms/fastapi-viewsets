@@ -1,10 +1,4 @@
-/**
- * Unit tests for muxws-proxy.ts
- *
- * The peer is faked rather than connected: what matters here is the envelope the proxy puts on
- * the open frame and what it makes of the reply, not muxws' own behaviour, which has its own
- * conformance suite.
- */
+/** Unit tests for muxws-proxy.ts, against a fake peer: the open frame's envelope and the reply. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -31,9 +25,7 @@ interface OpenedStream {
   end?: boolean;
 }
 
-/**
- * A peer that records what was opened on it and answers with whatever the test queued.
- */
+/** A peer that records what was opened on it and answers with whatever the test queued. */
 function makeMockPeer() {
   const opened: OpenedStream[] = [];
   let nextBody: unknown = null;
@@ -329,8 +321,7 @@ describe('route_muxws', () => {
   });
 
   it('fetches the schema over muxws when validation is left on', async () => {
-    // Declared, because a ViewSet that claims nothing is not checked and so fetches nothing -
-    // what this asserts is that the fetch travels over muxws, not that it happens at all.
+    // Declared: a ViewSet that claims nothing is not checked and fetches nothing.
     class Declared extends ItemViewSet {
       static declares = [BulkViewSetMixin];
     }
@@ -346,8 +337,7 @@ describe('route_muxws', () => {
   });
 
   it('rejects a factory-built ViewSet class', () => {
-    // See rest-proxy.spec.ts's equivalent route_rest test for why this must be a compile error, and
-    // for why the @ts-expect-error sits on the property access below rather than on this call.
+    // The rejection is a compile error; see the equivalent route_rest test in rest-proxy.spec.ts.
     class ItemApi extends muxwsViewSet<Item>()('id', [BulkViewSetMixin]) {}
     const mock = makeMockPeer();
     const proxy = route_muxws<BulkViewSetMixin<number, Item, 'id'>>(ItemApi, {

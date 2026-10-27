@@ -271,7 +271,7 @@ That produces the query parameters `year`, `year__gte`, `year__lte`, `year__in`,
 An unknown field or operator raises at import time.
 
 Built in: `exact`, `iexact`, `contains`, `icontains`, `startswith`, `gt`, `gte`, `lt`, `lte`, `in`,
-`isnull`, `overlaps`.
+`isnull`, `overlaps`. Apart from `isnull`, no operator matches a record whose field is None.
 
 `in` and `overlaps` take several values, one per repeated parameter (`?year__in=1999&year__in=2000`);
 a value may contain a comma. Values are coerced to the field's own type, and one that will not

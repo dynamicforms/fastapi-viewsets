@@ -189,8 +189,7 @@ def test_serialize_value_partial_states_only_the_fields_a_model_has_set():
 
 
 class _TaggedArg(SerializableObject):
-    """Module-level (importable) SerializableObject fixture - see SerializableObject's own
-    docstring on why a locally-defined subclass can't round-trip through the type tag."""
+    """Module-level, so its type tag can be imported back (a local class cannot)."""
 
     def __serialize__(self):
         return self.value
@@ -201,9 +200,7 @@ class _TaggedArg(SerializableObject):
 
 
 def test_serialize_value_tags_a_serializable_object_argument():
-    """A call argument that is itself a SerializableObject (not wrapped in Context) must be
-    tagged too, via the same fastapi_viewsets.context.to_jsonable() server.py's _to_jsonable and
-    ViewSetResult's own (de)serialization already use."""
+    """A SerializableObject call argument is type-tagged, as by `context.to_jsonable()`."""
     from fastapi_viewsets.decorators.celery_viewset.client import _serialize_value
 
     serialized = asyncio.run(_serialize_value(_TaggedArg(7)))
@@ -211,12 +208,9 @@ def test_serialize_value_tags_a_serializable_object_argument():
 
 
 def test_celery_viewset_client_sends_task_with_ignore_result():
-    """send_task must be called with ignore_result=True explicitly.
-
-    Celery's own send_task() defaults ignore_result to False regardless of how the target task
-    was registered (celery_viewset_server sets ignore_result=True) - a request-level value always
-    overrides the task's own, so the client must repeat it here or the worker still tries to
-    JSON-encode the raw return value into its result backend.
+    """
+    send_task passes ignore_result=True: its own default False overrides the task's registration, and
+    the worker would then JSON-encode the raw return value into its result backend.
     """
     from fastapi_viewsets.decorators.celery_viewset import result_reader
 

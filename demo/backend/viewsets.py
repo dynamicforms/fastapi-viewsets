@@ -25,19 +25,14 @@ from fastapi_viewsets.mixins import (
 
 USE_CELERY = os.environ.get("DEMO_CELERY", "").lower() in ("1", "true", "yes")
 """
-Celery is off by default in this demo.
-
-With Celery, every call queues a task through Redis and waits for a worker; that round trip
-dominates the difference between HTTP and WebSocket transport that the benchmark measures.
-Set DEMO_CELERY=1 (and run the worker) to exercise the Celery path.
+DEMO_CELERY=1 (with a running worker) dispatches every call through Celery. Off by default: the Redis round trip
+would dominate the HTTP/WebSocket difference the benchmark measures.
 """
 
-# Every create, update and destroy of a viewset publishes `records_changed` to the viewset's topic,
-# its routed base path (`/music`, `/music-db`). Set here, before any viewset is decorated, and in
-# both processes: with Celery, the worker runs the action and publishes the event.
+# Writes publish `records_changed` to the viewset's base path topic. Set before any viewset is decorated, in
+# both processes: with Celery, the worker publishes.
 settings.viewsets_command_middleware = [ChangeEvents()]
-# A caller may follow a viewset's topic when it may call the viewset. The demo has no
-# authentication, so every caller may follow both.
+# A caller may follow a viewset's topic when it may call the viewset (here: everyone, no authentication).
 settings.viewsets_event_authorizers = [ViewsetTopics()]
 
 if USE_CELERY:
@@ -55,7 +50,7 @@ DB_TASK_PREFIX = "music_db"
 """The Celery task names of `MusicTrackDbViewSet` under DEMO_CELERY: `music_db.<action>`."""
 
 LIBRARY_SIZE = int(os.environ.get("DEMO_LIBRARY_SIZE", "5000"))
-"""Large enough that paging is the only sane way to read it - which is the point of the demo."""
+"""Number of generated tracks; large enough to need paging."""
 
 
 class MusicTrack(BaseModel):
@@ -87,22 +82,15 @@ MusicTrackFilter = make_filter_model(
         "moods": ["overlaps"],
     },
 )
-"""
-Declared filters: the SQLite viewset receives the same filters translated into SQL. `genres`/`moods`
-use `overlaps`, which no backend translates, so a request with them is filtered in memory.
-"""
+"""Declared filters; the SQLite viewset translates them into SQL except `overlaps`, which runs in memory."""
 
 records = generate_music_library(LIBRARY_SIZE)
 database: dict[int, MusicTrack] = {record["id"]: MusicTrack(**record) for record in records}
 """
-The in-memory library. Pure Python, so building it at import time costs nothing but CPU.
+The in-memory library, one copy per process (so `demo.py --celery` runs the worker as one process).
 
-Every process that imports this module holds its own dict, so `demo.py --celery` runs the worker as
-one process. `MusicTrackDbViewSet` keeps its rows in the SQLite file, which every process shares.
-
-The SQLite copy is *not* seeded here: `ensure_database` talks to the database, and uvicorn imports
-the app inside its own event loop when it is given `"module:app"` as a string - where Django
-refuses a synchronous query outright. It is seeded from the lifespan instead, in a worker thread.
+The SQLite copy is seeded from the lifespan in a worker thread: uvicorn imports `"module:app"` inside its event
+loop, where Django refuses a synchronous query.
 """
 
 
@@ -132,17 +120,9 @@ class MusicTrackViewSet(
     """
     The music library, held in memory.
 
-    Everything here is served from a plain Python dict, which is what `CollectionViewSet` is for:
-    no database, no setup, and every stage of the list pipeline running in memory. **Music Track
-    Db** exposes the identical API over SQLite through the Django ORM - same records, same
-    ordering, same cursors - so the two can be compared side by side.
-
-    Listing is **cursor-paged** by default: the demo's grid loads by scrolling rather than by page
-    number, and a table being scrolled while rows arrive is exactly the case offset paging gets
-    wrong. Send `X-List-Shape: plain` or `paginated` to get one of the other two shapes instead.
-
-    Filtering and sorting are declared rather than written - see the `year__gte`, `title__icontains`
-    and `genres__overlaps` parameters, none of which has any code behind it.
+    Served from a Python dict by `CollectionViewSet`; **Music Track Db** exposes the same API over SQLite.
+    Listing is cursor-paged by default; send `X-List-Shape: plain` or `paginated` for the other shapes.
+    Filters such as `year__gte`, `title__icontains` and `genres__overlaps` are declared, not coded.
     """
 
     __router = APIRouter()
@@ -152,11 +132,7 @@ class MusicTrackViewSet(
     default_page_size = 50
 
     list_shapes = ("cursor", "plain", "paginated")
-    """
-    All three, so the demo can show what the choice looks like in Swagger and ReDoc. A real viewset
-    usually declares none of this and answers in one shape - which keeps its schema to one model
-    instead of a union every client has to narrow.
-    """
+    """All three, to show the choice in Swagger and ReDoc; one shape keeps the schema to a single model."""
 
     @__router.get("count", tags=["MusicTrack"], summary="Return the total number of tracks")
     async def count(self, context: Context) -> int:
@@ -178,15 +154,9 @@ class MusicTrackDbViewSet(
     """
     The same music library, over SQLite through the Django ORM.
 
-    Lists, retrieves and updates the same records as **Music Track**, on a backend that can answer
-    part of a list query itself: exact filters become `WHERE` clauses, ascending sorts become
-    `ORDER BY`, and the page becomes `LIMIT`/`OFFSET` - each reported back so the in-memory pipeline
-    does not redo it.
-    Anything it cannot translate falls back rather than failing, which is the contract.
-
-    Worth watching while scrolling: the in-memory one walks the collection to find each page
-    boundary, this one seeks to it - and with `year` in the ordering, the composite index on
-    (year, id) is exactly what the cursor's row-value comparison needs.
+    Filters, sorts and the page are translated into `WHERE`, `ORDER BY` and `LIMIT`; anything it cannot
+    translate falls back to the in-memory pipeline. The cursor seeks with a row-value comparison on the
+    (year, id) index.
     """
 
     model = MusicTrackRow

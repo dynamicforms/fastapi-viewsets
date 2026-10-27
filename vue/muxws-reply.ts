@@ -1,9 +1,5 @@
 /**
- * Reading the status and the headers of a muxws answer, for every call this package sends as a muxws
- * stream: the ViewSet proxy's and the event client's.
- *
- * The answering side states the status in the `:status` pseudo-header of its leading headers; the
- * other keys of those headers are the response's HTTP headers.
+ * Status and headers of a muxws answer: `:status` in its leading headers, the other keys the HTTP headers.
  */
 
 /** The status in `replyHeaders[':status']`, a number or a string of one; 200 without a usable `:status`. */

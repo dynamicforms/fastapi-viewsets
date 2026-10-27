@@ -1,14 +1,7 @@
 """
-The built-in filters.
-
-Each carries only its in-memory implementation. Backends register their own translations for these
-same classes - see `backends/django_orm.py` - so adding an operator here does not require touching
-any backend, and a backend that has not learned an operator yet simply declines the whole stage and
-lets these run.
-
-Comparisons guard against None rather than raising: a nullable column is normal, and a request that
-asks for `year__gte=2000` is asking for records that have a year at least 2000, not for a crash on
-the ones that have no year at all.
+The built-in filters, each with its in-memory implementation only; backends register their own
+translations of these classes (see `backends/django_orm.py`). Apart from `isnull`, no operator
+matches a record whose field is None.
 """
 
 from dataclasses import dataclass
@@ -148,10 +141,7 @@ class IsNull(Filter):
 @register_operator
 @dataclass(frozen=True)
 class Overlaps(Filter):
-    """
-    The record's own list shares at least one member with the requested one - for the
-    `genres`/`moods` shape, where the field holds several values and any of them will do.
-    """
+    """The record's list field shares at least one member with the requested values."""
 
     lookup: ClassVar[str] = "overlaps"
 

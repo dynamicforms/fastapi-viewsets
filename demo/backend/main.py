@@ -27,8 +27,7 @@ from fastapi_viewsets.mux_ws import process_command
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAPI
-    # In a thread: Django refuses a synchronous query inside a running event loop, and the lifespan
-    # runs inside one.
+    # In a thread: Django refuses synchronous queries inside a running event loop.
     await sync_to_async(ensure_database, thread_sensitive=False)(records)
     await start_events()
     check_events()
@@ -63,8 +62,7 @@ install_error_handlers(app)
 
 def custom_openapi():
     if not app.openapi_schema:
-        # tags= is not optional here: replacing app.openapi bypasses FastAPI's own use of
-        # app.openapi_tags, so the viewsets' group descriptions would silently vanish.
+        # Replacing app.openapi bypasses app.openapi_tags; without tags= the group descriptions vanish.
         app.openapi_schema = add_try_links(
             get_openapi(
                 title=app.title,
@@ -94,44 +92,33 @@ async def redoc_page() -> HTMLResponse:
 router = APIRouter()
 
 route_viewset(router, base_path="/music", pk_field_name="id")(MusicTrackViewSet)
-# The same API over SQLite via the Django ORM, so the two backends can be compared
-# side by side on the same data - see MusicTrackDbViewSet.
+# The same API over SQLite via the Django ORM, for comparing the two backends on the same data.
 route_viewset(router, base_path="/music-db", pk_field_name="id")(MusicTrackDbViewSet)
 # subscribe, unsubscribe and poll of the viewsets' topics, under /events
 register_events(router, base_path="/events")
 
 app.include_router(router)
 
-# The viewsets' own docstrings become the description of each group in the schema - the section
-# intro ReDoc shows above the endpoints. Called after they are decorated, which is why it is not
-# something passed to FastAPI() up there.
+# The viewsets' docstrings become the tag group descriptions; must run after they are decorated.
 apply_viewset_tags(app)
 
 
 def _local_origin(origin: str | None) -> bool:
-    """The demo's Origin check: a page served from this machine, on any port, or a client that is not
-    a browser and sends no Origin."""
+    """Admit a page from this machine (any port) or a non-browser client without an Origin."""
     return origin is None or urlsplit(origin).hostname in ("127.0.0.1", "localhost")
 
 
 @app.websocket("/ws")
 async def muxws_endpoint(websocket: WebSocket) -> None:
-    """
-    The same viewsets, over one WebSocket.
-
-    Note that websocket.accept() is never called here: muxws performs the upgrade itself, because
-    only it knows which muxws.v1.<codec> subprotocol to select.
-    """
-    # A cookie-authenticated WebSocket has no CSRF protection: a handshake from a page of another
-    # origin is answered with HTTP 403.
+    """The same viewsets over one WebSocket; muxws accepts it, selecting the codec subprotocol."""
+    # Origin check against cross-site WebSocket hijacking: other origins get HTTP 403.
     peer = await accept(websocket, allowed_origins=_local_origin)
 
     async def on_stream(payload, stream: Stream) -> None:
-        # peer= names the socket a `subscribe` holds its subscription on, and the pushes go to it.
+        # peer= is the socket `subscribe` registers the subscription on.
         if await process_command(payload, stream, connection=websocket, peer=peer):
             return
-        # Not a viewset command. A real application would dispatch its own protocol here; this
-        # demo has none, so saying so is more useful than silence.
+        # Not a viewset command; an application would dispatch its own protocol here.
         await stream.reply({"error": "unknown command", "hint": "viewset commands carry :method and :path"})
 
     peer.on_stream(on_stream)
@@ -148,7 +135,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # Without this `python -m demo.backend.main` imports the module, defines main(), and exits -
-    # leaving nothing listening, which the dev server reports as a 502 and muxws as a socket that
-    # never opened.
     main()

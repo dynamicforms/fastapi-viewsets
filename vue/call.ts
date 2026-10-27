@@ -1,13 +1,8 @@
 /**
- * What every call through a proxy shares, whichever transport sends it: the `Idempotency-Key`, the
- * promise that carries it (`ViewSetCall`), and the repeating of an attempt that ended without an
- * answer.
- *
- * The key follows draft-ietf-httpapi-idempotency-key-header-07: a fresh UUID per call, sent as a
- * Structured Field string, and the same key on every repeat of that call. The BE's `Idempotency`
- * middleware answers a repeat with the stored outcome of the first attempt, or attaches it to the
- * attempt that is still running. Where it has neither (no `Idempotency` on the BE, a `GET` outcome
- * that was not stored, an outcome that set a cookie, an expired record), the repeat runs the action.
+ * Transport-independent call handling: the `Idempotency-Key` (a fresh UUID per call, the same on every
+ * repeat, per draft-ietf-httpapi-idempotency-key-header-07), the `ViewSetCall` promise carrying it, and
+ * repeating an attempt that ended without an answer. Without a stored outcome on the BE, a repeat runs
+ * the action again.
  */
 
 /** The header that carries the key. */
@@ -22,12 +17,8 @@ export const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
 export type ViewSetCall<R> = Promise<R> & { readonly key: string };
 
 /**
- * What a ViewSet's actions return in their declared type: a `ViewSetCall` from the built-in actions,
- * and whatever an override returns.
- *
- * `key` is optional in the type because an override is a method returning `Promise<R>`. At run time
- * the proxy sets `key` on the promise of every method that issues a request before its first
- * `await`, overrides included; see `bindCallKeys`.
+ * The declared return type of a ViewSet action. `key` is optional because an override returns a plain
+ * `Promise<R>`; at run time `bindCallKeys` sets it on any method that issues a request before its first `await`.
  */
 export type ViewSetActionCall<R> = Promise<R> & { readonly key?: string };
 
@@ -125,12 +116,8 @@ export function withKeyHeader<V>(headers: Record<string, V>, key: string): Recor
 let capturing: { key?: string } | null = null;
 
 /**
- * Sets `key` on `promise` and reports it to the method running synchronously around this call, so
- * that its own promise gets the key of the first request it issues. Transports call this from
- * `request()`, synchronously.
- *
- * Reports the call to the `onCallActivity` listeners: `start` at once, `settle` when `promise`
- * settles. `background` is passed on in `start`, true also inside `inBackground`.
+ * Sets `key` on `promise`, hands it to the enclosing keyed method, and emits `start` / `settle` call
+ * events. Transports call this synchronously from `request()`.
  */
 export function issueCall<R>(promise: Promise<R>, key: string, background = false): ViewSetCall<R> {
   if (capturing && capturing.key === undefined) capturing.key = key;
@@ -175,13 +162,8 @@ function isPromise(value: unknown): value is Promise<unknown> {
 const UNBOUND_MEMBERS = new Set(['constructor', 'request']);
 
 /**
- * Replaces every method of `instance`'s class chain, up to and excluding `stopAt`, with an own
- * property that calls it and sets `key` on the promise it returns: the key of the first request the
- * method issues while it runs synchronously, that is, before its first `await`. A method that issues
- * no request in that part returns its promise unchanged.
- *
- * Nested calls report outward: `listPage()` calling the private `requestList()` calling `request()`
- * gives all three promises the same key.
+ * Wraps every method of `instance`'s class chain (up to, excluding, `stopAt`) so its promise gets the
+ * `key` of the first request it issues before its first `await`. Nested calls share that key outward.
  */
 export function bindCallKeys(instance: object, stopAt: object): void {
   const seen = new Set<string>();
@@ -341,16 +323,9 @@ export function retryNow(): void {
 }
 
 /**
- * Runs a call: starts the first attempt synchronously, and starts a new one with `start()` while the
- * previous one ended in a failure `classify` reports and `repeat.withinMs` has not elapsed since the
- * first attempt. The promise settles with the outcome of the last attempt only; every attempt that is
- * repeated is abandoned first.
- *
- * `beforeRepeat` runs after the delay and before the repeat is started, and is given the deadline
- * (`Date.now()` scale) past which no repeat is sent; muxws waits there for the peer to reconnect.
- *
- * A `start()` that throws counts as an attempt that failed with that error. Every repeat is reported
- * to the `onCallActivity` listeners as a `retry` of `key`.
+ * Runs a call, starting the first attempt synchronously and repeating (after abandoning the failed
+ * attempt) while `classify` reports a failure and `repeat.withinMs` has not elapsed. A throwing `start()`
+ * is a failed attempt. `beforeRepeat(deadline)` runs before each repeat; muxws awaits reconnection there.
  */
 export async function runCall<R>(
   start: () => CallAttempt<R>,

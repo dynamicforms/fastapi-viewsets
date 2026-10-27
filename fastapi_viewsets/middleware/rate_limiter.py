@@ -28,33 +28,11 @@ return count
 
 class RateLimiter(Middleware):
     """
-    Fixed-window request-count limiting, per identity key. Configure the requests-per-window limit
-    via `@action_configuration` (see `fastapi_viewsets.action_configuration`), keyed by this class
-    - a resolved value of `None` (unconfigured) falls back to `default_limit`:
-
-        limiter = RateLimiter(default_limit=100, window_seconds=60)
-        settings.viewsets_command_middleware = [limiter]
-
-        @action_configuration({RateLimiter: 10})   # stricter limit just for this viewset
-        class ExpensiveViewSet(...): ...
-
-    The whole check lives in `depends()` - bridged onto FastAPI's own `Depends()` by route_viewset,
-    so an exceeded limit is rejected before FastAPI parses the request body. `__call__` (the
-    onion command-middleware chain) only calls `call_next()`.
-
-    The identity key defaults to `"<ViewSetClassName>:<client IP>"` - override via `key_func` (also
-    receives the built `Context`, so e.g. `await context.user` can rate-limit per authenticated
-    user instead of per IP; `key_func` may itself be sync or async, same as the callable
-    `Authorization` config):
-
-        RateLimiter(default_limit=100, key_func=lambda request, cls, context: context.user)
-
-    Storage defaults to an in-memory dict - correct for a single-process deployment (and tests),
-    but each worker process would track its own counts independently. Entries whose window has
-    passed are removed at most once per window. Pass a `redis_client` (`redis.asyncio.Redis`) for a
-    shared, multi-process-correct counter: one Lua script increments `<key_prefix><key>` and sets
-    its expiry to the window (in milliseconds) when the key has none - the same fixed-window
-    algorithm either way.
+    Fixed-window request-count limiting per identity key; `@action_configuration({RateLimiter: n})`
+    overrides `default_limit`. The check runs in `depends()`, before FastAPI parses the body. The key
+    defaults to `"<ViewSetClassName>:<client IP>"`; `key_func(request, cls, context)`, sync or async,
+    replaces it. Counts are per process unless a `redis_client` (`redis.asyncio.Redis`) is given.
+    See docs/guide/rate-limiter.md.
     """
 
     def __init__(

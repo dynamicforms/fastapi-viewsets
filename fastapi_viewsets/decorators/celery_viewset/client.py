@@ -31,8 +31,7 @@ logger = logging.getLogger(__name__)
 # Seconds a `celery_viewset_client` call waits for its result when `result_timeout` is not given.
 DEFAULT_RESULT_TIMEOUT = 3600.0
 
-# queue_keys registered by celery_viewset_client so far - populated at decoration (import) time,
-# used by check_result_readers() to spot a queue_key with no running result reader.
+# queue_keys registered by celery_viewset_client, for check_result_readers().
 _registered_queue_keys: set[str] = set()
 
 
@@ -48,12 +47,9 @@ def celery_viewset_client(
     result_timeout: float | None = DEFAULT_RESULT_TIMEOUT,
 ):
     """
-    Decorator for FastAPI side. Replaces viewset methods with async wrappers that
-    send Celery tasks and await results via a Redis result queue.
-
-    A call whose result does not arrive within result_timeout seconds raises ResultTimeoutError (504).
-    None waits without a limit. Arguments and results are encoded by the action's type hints (see
-    `transport`).
+    Decorator for the FastAPI side: replaces viewset methods with async wrappers that send Celery tasks
+    and await results via a Redis result queue. A result not arriving within `result_timeout` seconds
+    raises ResultTimeoutError (504); None waits without a limit.
     """
     queue_key = get_result_queue_key(task_prefix)
 
@@ -85,11 +81,8 @@ def celery_viewset_client(
 
 
 async def _serialize_value(value, partial: bool = False):
-    """Convert a Context, dict, or list/tuple value into a JSON-safe structure for Celery/Kombu
-    transport, recursing async since Context serialization needs to await context values. Anything
-    else - a Pydantic model, a SerializableObject, or an already JSON-native value - is handled by
-    the shared, synchronous fastapi_viewsets.context.to_jsonable(). With `partial`, a model is
-    dumped with only the fields it has set: a partial update's body states no others."""
+    """`value` as JSON-safe data for Celery, recursing async because a Context's values are awaited.
+    With `partial`, a model is dumped with only the fields it has set."""
     if isinstance(value, Context):
         return await serialize_context(value.raw())
     if isinstance(value, dict):
@@ -104,9 +97,8 @@ async def _serialize_value(value, partial: bool = False):
 async def _encode_arguments(
     codec: ActionCodec, positional: tuple, named: dict, partial: bool
 ) -> tuple[list, dict, list[str]]:
-    """The Celery args and kwargs of a call's arguments, and the names of the kwargs that crossed
-    untyped (see `transport`). An argument that holds an `UploadFile` is encoded in a worker thread,
-    which reads the file."""
+    """The Celery args and kwargs of a call, and the names of the kwargs that crossed untyped. An
+    `UploadFile` argument is encoded in a worker thread, which reads the file."""
 
     async def encode(name: str, value):
         kind = codec.params[name].kind if name in codec.params else "untyped"
@@ -144,20 +136,12 @@ def _time_limit_options(context: Context) -> dict:
 def _patch_method(
     cls: type, original_endpoint, task_name: str, celery_app, queue_key: str, result_timeout: float | None
 ):
-    """Replace the method on cls with an async version that sends a Celery task and awaits the result.
+    """Replaces the method on cls with one that sends a Celery task and awaits its result.
 
-    The task carries the call's context, request and parent execution (see `payload`) from
-    `current_call()`; a `context` the caller passes replaces the call's. Positional arguments are
-    sent as the keyword arguments of their parameters, each encoded by its parameter's type hint
-    (see `transport`); the names of those that crossed untyped are sent under `UNTYPED_KWARG`, and
-    the result is decoded by the return annotation. The action's `TimeLimits`
-    configuration is sent as the task's time limits. Arguments that cannot be serialized raise
-    `ActionDispatchError` (reason `serialization`), a send that fails raises it with reason `send`,
-    and a result that cannot be decoded raises `ActionFailedError` (reason `result`).
-    A deferred context value (`ChangeEvents`'s scope of a call) is computed before the arguments
-    are serialized; its exception propagates unchanged and nothing is sent.
-    Once the task is sent, `Middleware.on_transition()` of the action's effective middlewares
-    receives `dispatched`. The action's name joins the class's `DEFERRED_ACTIONS_ATTRIBUTE`."""
+    The task carries the context, request and parent execution of `current_call()`; a `context` the
+    caller passes replaces the call's. Deferred context values are awaited first; their exception
+    propagates and nothing is sent. Raises `ActionDispatchError` (`serialization`, `send`) and
+    `ActionFailedError` (`result`)."""
     method_name = original_endpoint.__name__
     declares_request = "request" in inspect.signature(original_endpoint).parameters
     codec = ActionCodec(cls, original_endpoint)
@@ -211,10 +195,8 @@ def _patch_method(
                     task_name,
                     args=encoded_args,
                     kwargs=task_kwargs,
-                    # send_task() defaults ignore_result to False regardless of what the task was
-                    # registered with (celery_viewset_server sets ignore_result=True) - Celery's
-                    # per-request value overrides the task's own, so it must be repeated here or the
-                    # worker still tries to JSON-encode the raw return value into its result backend.
+                    # The per-request value overrides the task's registered ignore_result=True; without
+                    # it the worker would encode the raw return value into its result backend.
                     ignore_result=True,
                     **_time_limit_options(bound_context),
                 )

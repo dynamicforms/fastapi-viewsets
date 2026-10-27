@@ -10,17 +10,10 @@ import { RECORDS_CHANGED, type RecordsChanged } from '../../vue/events';
 import { createEventClient, handleEventStream } from '../../vue/events';
 
 /**
- * The Celery path, which the demo does not exercise by default.
+ * The demo's Celery path end to end; skipped without Redis on localhost.
  *
- * It is off by default because it dominates the latency the benchmark measures. A worker process
- * fails in ways an in-process unit test cannot reproduce, so this test runs it end to end.
- *
- * Skipped rather than failed when Redis is absent: it is the one piece of infrastructure the demo
- * needs that a checkout does not come with.
- *
- * The worker runs with Celery's default pool, one process per CPU, so consecutive calls may be
- * served by different processes. The backend and the worker use their own SQLite file: seeded with
- * 200 tracks, it would otherwise replace the library of the suite's main backend.
+ * The worker uses the default prefork pool, so consecutive calls may hit different processes. Backend and
+ * worker use their own SQLite file, so the 200-track seed does not replace the main suite's library.
  */
 
 const API_PORT = 8124;
@@ -67,8 +60,7 @@ test.describe('the Celery-backed demo', () => {
     backend = spawn('python', ['-m', 'uvicorn', 'demo.backend.main:app', '--host', '127.0.0.1',
       '--port', String(API_PORT)], { cwd, env, stdio: 'ignore' });
 
-    // The worker has to be registered on the queue before the first request, or the API waits for
-    // a result nobody will produce.
+    // Wait until the worker serves a request; before that the API waits for a result nobody produces.
     const deadline = Date.now() + 90_000;
     for (;;) {
       try {
@@ -95,8 +87,7 @@ test.describe('the Celery-backed demo', () => {
   });
 
   test('the cursor still walks the collection when every call is a Celery task', async () => {
-    // The whole list pipeline runs in the worker, so this is the only check that a cursor issued
-    // there is still valid when it comes back through the API.
+    // Cursors are issued by the worker and must stay valid when they come back through the API.
     const seen: number[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < 10; page += 1) {
@@ -112,9 +103,8 @@ test.describe('the Celery-backed demo', () => {
   });
 
   test('a change a worker makes in SQLite is pushed over muxws by the web process and read back', async () => {
-    // The web process reads the events the worker publishes from the Redis channel and pushes them
-    // to the sockets subscribed to the topic. The rows of /music-db are in the SQLite file every
-    // worker process opens, so the read-back sees the write whichever process serves it.
+    // The worker publishes through Redis and the web process pushes to subscribed sockets. /music-db rows live
+    // in the shared SQLite file, so the read-back sees the write in whichever worker process serves it.
     const peer: Peer = await connect(`ws://127.0.0.1:${API_PORT}/ws`);
     const pushed: unknown[] = [];
     peer.onStream((payload, stream) => {
@@ -142,8 +132,7 @@ test.describe('the Celery-backed demo', () => {
       expect(pushed).toContain('records_changed');
       const logBeforeReadBack = workerLog.length;
       expect((await (await fetch(`http://127.0.0.1:${API_PORT}/music-db/1`)).json()).favorite).toBe(!before);
-      // Only the worker logs the tasks it ran: the write and the read-back were made there, not in
-      // the web process.
+      // The worker log proves the write and the read-back ran there.
       expect(workerLog).toMatch(/Task music_db\.partial_update\[[^\]]+\] succeeded/);
       await expect
         .poll(() => workerLog.slice(logBeforeReadBack))

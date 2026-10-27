@@ -1,13 +1,6 @@
 """
-The transport a request arrived over, and routes that answer only on the transports they are
-published on.
-
-Every viewset endpoint is one route on the application's router, whichever transports publish it,
-so a request goes through the application's middleware, exception handlers and router dependencies
-whether an HTTP server or the muxws transport delivered it. A route that is not published on the
-request's transport does not match, and the router carries on to the next route as if it were not
-there. A route answers every error its request raises with the body of
-`fastapi_viewsets.error_responses`.
+Request transports (REST, muxws) and routes that match only on the transports they are published on.
+Both transports go through the same application router, middleware and exception handlers.
 """
 
 from collections.abc import Callable
@@ -27,12 +20,10 @@ TRANSPORT_SCOPE_KEY = "fastapi_viewsets.transport"
 """The ASGI scope key a transport writes its name under. A request without it is a REST request."""
 
 PEER_SCOPE_KEY = "fastapi_viewsets.peer"
-"""The ASGI scope key `mux_ws.process_command` writes its `peer` argument under: the muxws peer of the
-socket the command arrived on, or None when the caller passed none. Absent from a REST request."""
+"""ASGI scope key of the muxws peer a command arrived on (None if not passed); absent on REST."""
 
 GATE_RUN_SCOPE_KEY = "fastapi_viewsets.events.gate"
-"""The ASGI scope key present on the request of an events gate run; its value is the gate action's
-name. Re-exported as `fastapi_viewsets.events.GATE_RUN_SCOPE_KEY`."""
+"""ASGI scope key set on an events gate run's request, holding the gate action's name."""
 
 REST = "rest"
 MUXWS = "muxws"
@@ -45,18 +36,9 @@ def request_transport(scope: Scope) -> str:
 
 class TransportRoute(APIRoute):
     """
-    An `APIRoute` that matches only requests arriving over one of `transports`, and answers every
-    error its endpoint, its dependencies or its request validation raise with an `ApiErrorBody`
-    (`fastapi_viewsets.error_responses.error_body`), without a handler registered by the application:
-
-    - the handlers of `HTTPException` and `RequestValidationError` replace FastAPI's default
-      handlers;
-    - an exception without a handler is answered with 500 `fastapi-viewsets.unhandled_error` and
-      re-raised, so the server logs it as it logs an exception after Starlette's own 500. A handler
-      the application registered for `Exception` or 500 answers it instead.
-
-    A handler the application registered for a class or a status answers as the application wrote
-    it. The exceptions run through the request's dependencies with `yield` before they are answered.
+    An `APIRoute` matching only requests over one of `transports`, answering its errors with an
+    `ApiErrorBody` without registered handlers. An unhandled exception becomes 500 `unhandled_error`
+    and is re-raised for logging; the application's own handlers still take precedence.
     """
 
     transports: frozenset[str] = frozenset({REST, MUXWS})
@@ -89,10 +71,8 @@ class TransportRoute(APIRoute):
 @cache
 def transport_route_class(base: type[APIRoute], transports: frozenset[str]) -> type[APIRoute]:
     """
-    A route class that is `base` (the router's own `route_class`) restricted to `transports`.
-
-    One class per combination, created once: `add_api_route` takes a route class, not arguments
-    for it, so the transports travel as a class attribute.
+    `base` restricted to `transports`, one cached class per combination (`add_api_route` takes a class,
+    so the transports travel as a class attribute).
     """
     name = f"{base.__name__}On{''.join(sorted(transport.capitalize() for transport in transports))}"
     return type(name, (TransportRoute, base), {"transports": transports})
@@ -100,9 +80,8 @@ def transport_route_class(base: type[APIRoute], transports: frozenset[str]) -> t
 
 def openapi_endpoint(route_kwargs: list[dict[str, Any]]) -> Callable[[], dict[str, Any]]:
     """
-    A `/schema` endpoint answering with the OpenAPI document of the routes `route_kwargs` lists, in
-    `add_api_route` form. The document is built on the first call, so the list may still be filled
-    after the endpoint is created.
+    A `/schema` endpoint with the OpenAPI document of `route_kwargs` (`add_api_route` form), built on
+    first call so the list may be filled later.
     """
     app: FastAPI | None = None
 

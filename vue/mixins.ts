@@ -1,37 +1,16 @@
 /**
  * FE counterpart of BE mixins.py — the mixins a ViewSet declaration is composed of.
  *
- * Each mixin is an interface merged into a class of the same name. The interface names the actions
- * and their signatures; the class carries the `actions` list that the schema check reads at
- * runtime. Both halves are needed because neither alone can do the job: a TypeScript `implements`
- * clause is erased before anything runs, and a runtime list of strings says nothing about types.
+ * Each mixin is an interface (action signatures) merged into a class (the runtime `actions` list the schema
+ * check reads). Members are methods, not mapped-type properties, so a subclass can override an action with a
+ * method (TS2425). Implementations live in ViewSetProxyBase.
  *
  *   class ItemViewSet extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin, LookupMixin]) {}
- *
- * The list is written once, as values. `restViewSet` reads the action names off the mixins'
- * instance types to build the ViewSet's public surface, and hands the same list to the proxy so
- * that the schema check can compare it against the BE.
- *
- * The members are methods rather than properties, and are reached through an intersection rather
- * than a `Pick<>` of a lookup table: a mapped type re-emits a method as a function-valued property,
- * and a subclass may then not override an action with a method (TS2425). A subclass overrides an
- * action to add caching or reshape parameters, on a hand-written proxy and on a factory-built one.
- *
- * A composite mixin restates nothing: its interface extends the leaves its `actions` spread names,
- * so each action's signature exists in exactly one place.
- *
- * The methods have no implementation anywhere in this file. The implementation is one HTTP call in
- * ViewSetProxyBase, and a mixin carrying its own would be a second copy of it.
  */
 
 /*
- * no-unsafe-declaration-merging guards against a class and an interface merging by accident, where
- * the interface promises members the constructor never assigns. Here it is the design: the members
- * are implemented by ViewSetProxyBase, and a mixin that assigned them would be a second copy of the
- * implementation.
- *
- * no-unused-vars fires on the class half's type parameters, which only the interface half uses. They
- * cannot be dropped: declaration merging requires both halves to declare identical type parameters.
+ * Declaration merging is intended: ViewSetProxyBase implements the members. The class halves' type parameters
+ * are unused but must match their interfaces'.
  */
 /* eslint-disable @typescript-eslint/no-unsafe-declaration-merging, @typescript-eslint/no-unused-vars */
 
@@ -87,17 +66,11 @@ export interface ListParams {
   [key: string]: string | number | boolean | null | undefined | Array<string | number>;
 }
 
-/**
- * What a ViewSet declaring `list`, `listPage` or `listCursor` has besides those actions. Not an
- * action: it reads the BE viewset's schema rather than calling an endpoint of its own.
- */
+/** Extra member of a ViewSet declaring a list action; it reads the BE schema rather than an endpoint. */
 export interface ListDefaultSort {
   /**
-   * The BE viewset's `default_sort`: the ordering its list endpoint applies when a call sends no
-   * `sort`, e.g. a grid's initial `sortState`. `[]` when it declares none. Read from the `sort`
-   * parameter's default in the viewset's `/schema`, which the ViewSet fetches once and shares with
-   * the startup schema check. When the shared request fails, it issues one of its own, repeated as
-   * any other call is; when that fails too, it rejects, and the next call fetches again.
+   * The BE viewset's `default_sort` (`[]` when none), read from the `sort` parameter default in its `/schema`.
+   * Rejects when the schema cannot be fetched; the next call fetches again.
    */
   defaultSort(): Promise<SortState>;
 }
@@ -108,12 +81,7 @@ export type ListAction = 'list' | 'listPage' | 'listCursor';
 /** `ListDefaultSort` when the member names `A` include a list action, `unknown` otherwise. */
 export type DefaultSortOf<A> = [Extract<A, ListAction>] extends [never] ? unknown : ListDefaultSort;
 
-/**
- * One page, mirroring the BE PaginatedList.
- *
- * `count` is null when the backend could not know it without draining a lazy source. `hasMore` and
- * `hasPrevious` are sent by the backend; a null `count` does not determine them.
- */
+/** One page, mirroring the BE PaginatedList. `count` is null when the backend cannot know it cheaply. */
 export interface PaginatedList<T> {
   results: T[];
   offset: number;
@@ -129,15 +97,10 @@ export interface PageParams extends ListParams {
 }
 
 /**
- * One cursor page.
+ * One cursor page; no total count.
  *
- * `next`/`previous` are exclusive, so following them never repeats a row. `first`/`last` are the
- * same two edges read inclusively: they return their own row again — one duplicate to drop — and
- * in exchange they survive rows being inserted at that edge, which is what polling a live list
- * needs. They are present whenever the page is non-empty, even when `next` is null.
- *
- * There is no total count: producing one costs a second full pass per request and is stale by the
- * time it is read.
+ * `next`/`previous` are exclusive. `first`/`last` are the same edges read inclusively: they repeat their own
+ * row but survive inserts at that edge (for polling a live list); present whenever the page is non-empty.
  */
 export interface CursorPage<T> {
   results: T[];
@@ -271,12 +234,8 @@ export class BulkViewSetMixin<K extends KeyType, T, PK extends keyof T> extends 
 // ---------------------------------------------------------------------------
 
 /**
- * The actions named by `A`, each with the signature the mixin that contributes it declares. One
- * conditional per single-action mixin; the composites are absent on purpose, so that any action's
- * signature is written in exactly one place.
- *
- * An intersection rather than `Pick<>` of a table: a mapped type turns a method into a property,
- * and a subclass cannot then override an action with a method (TS2425).
+ * The actions named by `A`, each with its mixin's signature. Composites are absent so each signature exists
+ * once; an intersection rather than `Pick<>` keeps the members overridable methods (TS2425).
  */
 export type ActionSurface<K extends KeyType, T, PK extends keyof T, A, L = LookupItem> = ('create' extends A
   ? CreateMixin<T, PK>

@@ -1,12 +1,7 @@
 """
-The namespaces of the error codes this package's errors carry.
-
-An error code is `<namespace>.<code>`: `code` is snake_case without `.`, `namespace` one or more
-segments of `[a-z0-9]+(-[a-z0-9]+)*` joined by `.`, and a full code splits at its last `.`. The
-codes this package declares are in `ERROR_NAMESPACE`. `ERROR_NAMESPACE_PYDANTIC` is the namespace
-of pydantic's error types, which the field errors of a `fastapi-viewsets.validation_failed` body carry
-as `pydantic.<type>`, and of `pydantic.custom_error`, the field error of a type pydantic does not
-declare. A code the application gives an error is used as given.
+The namespaces of the error codes this package's errors carry. A code is `<namespace>.<code>`, split
+at its last `.`; `code` is snake_case. Field errors of `validation_failed` carry `pydantic.<type>`. A
+code the application gives an error is used as given.
 """
 
 ERROR_NAMESPACE = "fastapi-viewsets"

@@ -69,11 +69,10 @@ async def test_viewset_execution():
         async def perform_retrieve(self, _context, pk: int) -> Item:
             return Item(id=pk, name="found")
 
-    # Find routes for list and retrieve
     list_route = next(r for r in router.routes if r.path == "/complex" and "GET" in r.methods)
     retrieve_route = next(r for r in router.routes if r.path == "/complex/{pk}" and "GET" in r.methods)
 
-    # In real FastAPI this would go through the app, here we check if endpoints are correctly bound
+    # Calls the bound endpoints directly, without the app.
     res_list = await list_route.endpoint()
     assert res_list == [Item(id=1, name="first")]
 
@@ -130,15 +129,13 @@ async def test_viewset_instance_key():
 
     list_route = next(r for r in router.routes if r.path == "/state" and "GET" in r.methods)
 
-    # First request
     res1 = await list_route.endpoint()
     assert res1 == ["loaded"]
     assert StateStore.data["val"] == "modified_saved"
 
-    # Second request
     res2 = await list_route.endpoint()
     assert res2 == ["modified_saved"]
-    assert StateStore.data["val"] == "modified_saved"  # stays same because we always set it to modified_saved
+    assert StateStore.data["val"] == "modified_saved"
 
 
 def test_viewset_endpoint_signature():
@@ -149,10 +146,8 @@ def test_viewset_endpoint_signature():
         async def perform_list(self, _context) -> list[Item]:
             return []
 
-    # Find the list route
     list_route = next(r for r in router.routes if r.path == "/items" and "GET" in r.methods)
 
-    # Check endpoint signature
     sig = inspect.signature(list_route.endpoint)
     params = list(sig.parameters.keys())
 
@@ -160,8 +155,6 @@ def test_viewset_endpoint_signature():
 
     # 'self' must not be in the signature because FastAPI tries to fill it from query/path parameters
     assert "self" not in params, f"Endpoint should not have 'self' parameter: {params}"
-    # Also we don't want *args and **kwargs if they weren't in the original method
-    # (unless FastAPI necessarily needs them, but usually we don't want to expose them in OpenAPI)
 
 
 def test_viewset_endpoint_signature_with_params():
@@ -172,10 +165,8 @@ def test_viewset_endpoint_signature_with_params():
         async def perform_retrieve(self, _context, pk: int) -> Item:
             return Item(id=pk, name="test")
 
-    # Find the retrieve route
     retrieve_route = next(r for r in router.routes if r.path == "/items/{pk}" and "GET" in r.methods)
 
-    # Check endpoint signature
     sig = inspect.signature(retrieve_route.endpoint)
     params = list(sig.parameters.keys())
 
@@ -183,8 +174,6 @@ def test_viewset_endpoint_signature_with_params():
 
     assert "self" not in params
     assert "pk" in params
-    # Annotation might be Generic (TypeVar) because RetrieveMixin is Generic
-    # but we just want to ensure it is there.
 
 
 @pytest.mark.asyncio
@@ -203,16 +192,13 @@ async def test_viewset_autoinc_and_pk_hiding():
     router = APIRouter()
     route_viewset(router, base_path="/items", pk_field_name="id")(AutoIncViewSet)
 
-    # 1. Check that POST /items does not have 'id' in the endpoint signature
     post_route = next(r for r in router.routes if r.path == "/items" and "POST" in r.methods)
     sig = inspect.signature(post_route.endpoint)
     data_param = sig.parameters["data"]
 
-    # Check that 'id' is not in the schema of the model used for POST
     assert "id" not in data_param.annotation.model_json_schema()["properties"], "PK field should be hidden in POST"
 
-    # 2. Check that the endpoint call actually works and uses autoinc
-    # Create data without ID (as the client would send it)
+    # A body without the pk gets an autoincremented one.
     item_no_pk = data_param.annotation
     item_in = item_no_pk(name="Item 2")
 
@@ -245,17 +231,14 @@ async def test_viewset_pk_not_hidden_in_update():
     router = APIRouter()
     route_viewset(router, base_path="/items", pk_field_name="id")(SimpleViewSet)
 
-    # Check PUT /items/{pk}
     put_route = next(r for r in router.routes if r.path == "/items/{pk}" and "PUT" in r.methods)
     sig = inspect.signature(put_route.endpoint)
 
     assert "pk" in sig.parameters
     data_param = sig.parameters["data"]
 
-    # Check that 'id' field IS in the model for PUT (revert change)
     assert "id" in data_param.annotation.model_fields, "PK field should NOT be hidden in PUT"
 
-    # Check call
     result = await put_route.endpoint(pk=10, data=SimpleItem(id=10, name="Updated Name"))
 
     assert result.id == 10
@@ -283,7 +266,6 @@ async def test_viewset_generic_resolution():
 
     list_route = next(r for r in router.routes if r.path == "/generic" and "GET" in r.methods)
 
-    # Check signature and return type
     sig = inspect.signature(list_route.endpoint)
     return_type = sig.return_annotation
 
@@ -293,28 +275,21 @@ async def test_viewset_generic_resolution():
 
     item_origin = get_origin(item_type)
     if item_origin is None:
-        # Pydantic models with generics sometimes behave differently or are already resolved
-        # but let's check what it actually is
-        pass
+        pass  # an already-resolved generic model has no origin
     else:
         assert item_origin is GenericItem
         item_args = get_args(item_type)
         assert item_args[0] is MyItem
 
-    # Check fields in the model
-    # If the model is already resolved (which happens with Pydantic), check model_fields directly
     fields = item_type.model_fields
-    # items: List[MyItem]
     items_field = fields["items"].annotation
     assert get_origin(items_field) is list
     assert get_args(items_field)[0] is MyItem
 
-    # mapping: Dict[str, MyItem]
     mapping_field = fields["mapping"].annotation
     assert get_origin(mapping_field) is dict
     assert get_args(mapping_field)[1] is MyItem
 
-    # Endpoint call
     result = await list_route.endpoint()
     assert len(result) == 1
     assert result[0].items[0].name == "test"
@@ -322,22 +297,7 @@ async def test_viewset_generic_resolution():
 
 
 def test_viewset_route_order():
-    """
-    Routes must be registered (and appear in OpenAPI schema) in a specific order:
-      1. GET    /items          (list)
-      2. POST   /items          (create)
-      3. GET    /items/schema   (viewset schema)
-      4. GET    /items/{pk}     (retrieve)
-      5. PUT    /items/{pk}     (update)
-      6. PATCH  /items/{pk}     (partial_update)
-      7. DELETE /items/{pk}     (destroy)
-      8. GET    /items/bulk     (bulk operations)
-      9. POST   /items/bulk
-      10. PUT    /items/bulk
-      11. PATCH  /items/bulk
-      12. DELETE /items/bulk
-      13. GET    /items/lookup
-    """
+    """Routes are registered, and listed in the OpenAPI schema, literal paths before `{pk}` and `""`."""
 
     class OrderItem(BaseModel):
         id: int
@@ -357,11 +317,8 @@ def test_viewset_route_order():
     router = APIRouter()
     route_viewset(router, base_path="/items", pk_field_name="id")(FullViewSet)
 
-    # Build (path, method) list in registration order, of the routes REST requests reach
     registered = [(r.path, sorted(r.methods)[0]) for r in router.routes if REST in r.transports]
 
-    # Expected order: first by path group ("" < "{pk}" < "bulk" < "lookup"),
-    # then by HTTP method (GET < POST < PUT < PATCH < DELETE)
     expected = [
         ("/items/schema", "GET"),
         ("/items/lookup", "GET"),
@@ -379,14 +336,12 @@ def test_viewset_route_order():
 
     assert registered == expected, f"Route order mismatch:\n  got:      {registered}\n  expected: {expected}"
 
-    # Also verify that the OpenAPI schema paths appear in the same order
     app = FastAPI()
     app.include_router(router)
     schema = app.openapi()
     schema_paths = list(schema["paths"].keys())
 
     expected_paths_order = ["/items/schema", "/items/lookup", "/items/bulk", "/items/{pk}", "/items"]
-    # Filter only our paths and check order
     our_paths = [p for p in schema_paths if p in expected_paths_order]
     assert our_paths == expected_paths_order, (
         f"OpenAPI path order mismatch:\n  got:      {our_paths}\n  expected: {expected_paths_order}"

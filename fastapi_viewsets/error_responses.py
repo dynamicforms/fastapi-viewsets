@@ -1,26 +1,8 @@
 """
-The body of every error response: `ApiErrorBody`.
+`ApiErrorBody`, the body of every error response, and its construction from exceptions (`error_body()`).
 
-    {
-        "detail": "Item with pk 42 not found",
-        "detail_code": "fastapi-viewsets.not_found",
-        "detail_params": {"pk": 42},
-        "field_errors": {}
-    }
-
-`error_body()` builds it from an exception:
-
-- a `DfViewSetError`: its `detail`, `code` and `params`;
-- a `RequestValidationError`: `fastapi-viewsets.validation_failed`, with its errors in
-  `field_errors`;
-- any other `HTTPException` (FastAPI's, Starlette's, one an application raises, Starlette's own
-  404 and 405 of the router): `fastapi-viewsets.http_error` with `params.status`;
-- any other exception: `fastapi-viewsets.unhandled_error` (`UnhandledError`), status 500, with no
-  part of the exception in the body.
-
-The routes of a viewset answer every error with this body without any registration (see
-`routing.TransportRoute`). `install_error_handlers(app)` answers the errors of the application's
-other routes, and of a request no route matches, with it too.
+Viewset routes answer with it without registration (`routing.TransportRoute`);
+`install_error_handlers(app)` extends it to the application's other routes and unmatched requests.
 """
 
 from http import HTTPStatus
@@ -129,18 +111,10 @@ def _field_error(error: Any) -> dict[str, Any]:
 
 def field_errors(errors: Any) -> dict[str, list[dict[str, Any]]]:
     """
-    pydantic's errors (`RequestValidationError.errors()`) as `ApiErrorBody.field_errors`: keyed by
-    `loc` without its first element, joined with `.` (`("body", "address", "city")` is
-    `address.city`, `("body",)` is `''`), each `{code, params, detail}` with `msg` as `detail`.
-    `input` is left out.
-
-    - A `type` pydantic declares (`PYDANTIC_ERROR_TYPES`) is `code` in the namespace
-      `ERROR_NAMESPACE_PYDANTIC` (`pydantic.string_too_short`), with `ctx` as `params`.
-    - `pk_assigned_by_server`, the type this package raises, is `fastapi-viewsets.pk_assigned_by_server`,
-      with `ctx` as `params`.
-    - Any other `type` (a `PydanticCustomError` of the application) is `pydantic.custom_error`, with
-      `params` `{"type": <type>, "ctx": <ctx>}`: `ctx` is nested, so none of its keys collides with
-      `type`.
+    pydantic's errors as `ApiErrorBody.field_errors`, keyed by `loc` without its first element joined
+    with `.` (`("body", "address", "city")` -> `address.city`). Declared pydantic types become
+    `pydantic.<type>` with `ctx` as params, `pk_assigned_by_server` `fastapi-viewsets.pk_assigned_by_server`,
+    unknown types `pydantic.custom_error` with `{type, ctx}`. `input` is left out.
     """
     grouped: dict[str, list[dict[str, Any]]] = {}
     for error in errors or ():
@@ -155,8 +129,7 @@ def _body(detail: str, code: str, params: dict[str, Any], fields: dict | None = 
 
 
 def error_status(error: BaseException) -> int:
-    """The status `error` is answered with: an `HTTPException`'s own, 422 for a
-    `RequestValidationError`, 500 for any other exception."""
+    """An `HTTPException`'s own status, 422 for a `RequestValidationError`, otherwise 500."""
     if isinstance(error, HTTPException):
         return error.status_code
     if isinstance(error, RequestValidationError):
@@ -166,15 +139,9 @@ def error_status(error: BaseException) -> int:
 
 def error_body(error: BaseException) -> dict[str, Any]:
     """
-    `error` as an `ApiErrorBody`, in JSON form.
-
-    - `DfViewSetError`: `detail`, `code` as `detail_code`, `params` as `detail_params`.
-    - `RequestValidationError`: `fastapi-viewsets.validation_failed`, `detail_params` `{}`, its errors
-      in `field_errors` (see `field_errors()`).
-    - another `HTTPException`: `fastapi-viewsets.http_error`, `detail_params` `{"status": <status>}`.
-      A string `detail` is the body's `detail`; any other `detail` is `detail_params.detail` and the
-      body's `detail` is the status phrase (`Bad Request`).
-    - any other exception: the body of `UnhandledError`.
+    `error` as a JSON `ApiErrorBody`: `DfViewSetError` as is, `RequestValidationError` as
+    `validation_failed`, other `HTTPException` as `http_error` (`{status}`, a non-string detail in
+    `detail_params.detail`), anything else as `UnhandledError`.
     """
     if isinstance(error, RequestValidationError):
         return _body(VALIDATION_FAILED_DETAIL, _namespaced("validation_failed"), {}, field_errors(error.errors()))
@@ -194,10 +161,7 @@ def error_body(error: BaseException) -> dict[str, Any]:
 
 
 def error_response(error: BaseException) -> Response:
-    """
-    The response that answers `error`: `error_status(error)`, `error_body(error)` as JSON, and an
-    `HTTPException`'s `headers`. A status that allows no body (204, 304) is answered without one.
-    """
+    """The JSON error response for `error`, with an `HTTPException`'s headers; no body for 204/304."""
     status = error_status(error)
     headers = getattr(error, "headers", None) if isinstance(error, HTTPException) else None
     if not is_body_allowed_for_status_code(status):
@@ -206,26 +170,16 @@ def error_response(error: BaseException) -> Response:
 
 
 async def _handle_error(_request: Request, error: Exception) -> Response:
-    """The handler `install_error_handlers` registers, and the one a viewset route answers
-    `HTTPException` and `RequestValidationError` with. For `Exception` Starlette's
-    `ServerErrorMiddleware` re-raises the exception after the response, and the server logs it."""
+    """Handler used by `install_error_handlers` and viewset routes. Starlette re-raises an `Exception`
+    after the response, so the server logs it."""
     return error_response(error)
 
 
 def install_error_handlers(app: FastAPI) -> None:
     """
-    Registers the handlers that answer the errors of every route of `app` with an `ApiErrorBody`
-    (see `error_body()`), for `DfViewSetError`, `HTTPException` (Starlette's, which FastAPI's
-    subclasses), `RequestValidationError` and `Exception`. Starlette's own 404 of a path no route
-    matches and 405 of a method a route does not serve are `fastapi-viewsets.http_error` with
-    `params.status` 404 and 405. An exception without a handler of its own is answered with 500
-    `fastapi-viewsets.unhandled_error` and re-raised by Starlette, so the server logs it.
-
-    A handler the application registers for one of these classes afterwards replaces this one; a
-    handler for a more specific class, or for a status, takes precedence as Starlette's lookup
-    gives it.
-
-    The routes of a viewset answer with an `ApiErrorBody` whether or not this is called.
+    Answers every error of `app`'s routes, and Starlette's 404/405, with an `ApiErrorBody`. Unhandled
+    exceptions become 500 `unhandled_error` and are re-raised for logging. Handlers registered later,
+    or for a more specific class or a status, take precedence.
     """
     app.add_exception_handler(DfViewSetError, _handle_error)
     app.add_exception_handler(HTTPException, _handle_error)
@@ -242,9 +196,8 @@ EXCEPTION_HANDLERS_SCOPE_KEY = "starlette.exception_handlers"
 
 def uniform_exception_handlers(scope: dict[str, Any]) -> None:
     """
-    Replaces, for the request of `scope`, FastAPI's default handlers of `HTTPException` and
-    `RequestValidationError` with one that answers an `ApiErrorBody`. Handlers the application
-    registered for a class or a status are kept.
+    For this request, replaces FastAPI's default `HTTPException` / `RequestValidationError` handlers
+    with the `ApiErrorBody` one; the application's own handlers are kept.
     """
     exception_handlers, status_handlers = scope.get(EXCEPTION_HANDLERS_SCOPE_KEY) or ({}, {})
     handlers = {

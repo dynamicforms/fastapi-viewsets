@@ -1,10 +1,6 @@
 """
-The Django ORM backend, against a real SQLite database.
-
-The point of these tests is not that Django works - it does - but that the pipeline's push-down
-contract survives contact with a backend that actually has a query language: that a stage the
-backend absorbed is not redone in memory, that a stage it declined still produces the right answer,
-and that paging a queryset reads a page rather than a table.
+The Django ORM backend against SQLite: an absorbed stage is not redone in memory, a declined stage still
+answers correctly, and paging a queryset reads a page rather than the table.
 """
 
 import asyncio
@@ -15,8 +11,7 @@ from typing import ClassVar
 import pytest
 
 
-# Django itself is configured once for the whole session in the repo-root conftest.py - see the
-# note there on why it cannot be done per module.
+# Django is configured once per session in the repo-root conftest.py.
 from django.db import connection, models
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, model_validator
@@ -107,9 +102,8 @@ async def test_perform_list_returns_an_unevaluated_queryset(viewset):
 @pytest.mark.asyncio
 async def test_paging_reads_a_page_not_a_table(viewset):
     """
-    Asserted against the compiled SQL rather than against captured queries: the async ORM calls run
-    on a worker thread, and Django's connections - queries_log included - are per-thread, so
-    nothing they log is visible from here.
+    Asserted on the compiled SQL: the async ORM runs on a worker thread, whose per-thread
+    connection's query log is not visible here.
     """
     query = ListQuery(offset=5, limit=3)
     page = await viewset.get_list(None, query)
@@ -152,10 +146,7 @@ async def test_an_ascending_sort_is_pushed_into_sql(viewset):
 
 @pytest.mark.asyncio
 async def test_a_descending_sort_is_pushed_into_sql_too(viewset):
-    """
-    `F(col).desc(nulls_first=True)` states the NULL placement outright, which is what `nulls`
-    means, so both directions reach SQL and agree with the in-memory comparison.
-    """
+    """Both `nulls` directions reach SQL and agree with the in-memory comparison."""
     query = ListQuery(sort=[SortStateColumn(column_name="year", direction="desc")], limit=5)
     page = await viewset.get_list(None, query)
     assert "sort" in query.applied
@@ -164,10 +155,7 @@ async def test_a_descending_sort_is_pushed_into_sql_too(viewset):
 
 @dataclass(frozen=True)
 class EndsWith(Filter):
-    """
-    A filter defined outside the library, with no compiler registered for any backend - which is
-    all it takes to add an operator: one `matches()`, and it works everywhere immediately.
-    """
+    """An operator defined outside the library with only `matches()` and no backend compiler."""
 
     lookup: ClassVar[str] = "endswith_demo"
 
@@ -181,11 +169,7 @@ register_operator(EndsWith)
 
 @pytest.mark.asyncio
 async def test_an_operator_with_no_compiler_leaves_the_whole_stage_alone(viewset):  # noqa: ARG001
-    """
-    All or nothing: pushing the filters it understands and forgetting the rest would return too
-    many rows while looking like it worked. One untranslatable operator sends the whole set to the
-    in-memory pass - which still gives the right answer, because every filter can always do that.
-    """
+    """One untranslatable operator sends the whole filter set to the in-memory pass."""
     extended = make_filter_model(Track, {"title": ["icontains", "endswith_demo"]})
     query = ListQuery(fltr=extended(title__icontains="track", title__endswith_demo="007"), limit=50)
     page = await viewset.get_list(None, query)
@@ -458,9 +442,8 @@ def tagged_rows():
 @pytest.mark.asyncio
 async def test_the_in_memory_fallback_sees_response_models_not_raw_rows(tagged_rows):  # noqa: ARG001
     """
-    A filter declaration names the *response* model's fields, while the source yields what the
-    backend stores. This viewset stores a list as a comma-joined string; the in-memory fallback
-    filters on the response-model value (a list of words), not on the stored string.
+    The in-memory fallback filters on the response-model value (a list of words), not on the stored
+    comma-joined string.
     """
     query = ListQuery(fltr=TaggedFilter(tags__overlaps=["jazz"]), limit=10)
     page = await TaggedViewSet().get_list(None, query)
@@ -482,10 +465,8 @@ class CursorTrackViewSet(DjangoORMViewSet[int, Track], CursorListMixin[Track, Tr
 
 async def _walk(viewset, sort):
     """
-    Follows `next` to the end, returning every page's titles.
-
-    Async rather than wrapping asyncio.run(): that closes the loop it created and leaves the thread
-    with none, which breaks every later test that expects one.
+    Follows `next` to the end, returning every page's titles. Async: asyncio.run() would close its loop
+    and leave later tests without one.
     """
     pages, cursor = [], None
     while True:
@@ -499,10 +480,7 @@ async def _walk(viewset, sort):
 
 
 def test_a_uniform_ascending_cursor_uses_a_row_value_comparison():
-    """
-    The fast path: one predicate a composite index can seek with, rather than a union the planner
-    turns into a scan.
-    """
+    """The fast path: one row-value predicate a composite index can seek with."""
     keys = (("year", False), ("id", False))
     predicate = CursorPredicate(
         field="", value={}, keys=keys, position={"year": 2003, "id": 5}, backwards=False, inclusive=False
@@ -569,9 +547,8 @@ async def test_walking_a_multi_key_ordering_with_ties_visits_every_row_once():
 # ---------------------------------------------------------------------------
 # A primary key that is not called `id`
 # ---------------------------------------------------------------------------
-# The cursor appends the primary key to its ordering and filters on it, and this backend pushes a
-# filter set down only when every name in it is a concrete model field. The viewsets below declare
-# no `pk_field_name`; the backend takes it from the model.
+# The cursor orders and filters by the primary key, and a filter set pushes down only when every name is
+# a concrete model field. These viewsets declare no `pk_field_name`; the backend takes it from the model.
 
 
 class CodedTrackModel(models.Model):
@@ -662,10 +639,8 @@ async def test_the_cursor_carries_the_real_primary_key_value(coded_rows):  # noq
 @pytest.mark.asyncio
 async def test_walking_a_renamed_primary_key_visits_every_row_once(coded_rows):  # noqa: ARG001
     """
-    `year:asc`, not `title:asc`: a unique first key settles every comparison before the appended
-    primary key is read, so a wrong primary key name would still walk the whole table. A tie-heavy
-    key reaches the appended key, and a key the ordering cannot compare drops every row tied with
-    the anchor.
+    Sorted by the tie-heavy `year` so comparisons reach the appended primary key; a unique key would
+    hide a wrong primary key name.
     """
     pages = await _walk(CodedTrackViewSet(), "year:asc")
     titles = [title for page in pages for title in page]
@@ -676,10 +651,8 @@ async def test_walking_a_renamed_primary_key_visits_every_row_once(coded_rows): 
 @pytest.mark.asyncio
 async def test_a_client_filter_survives_the_cursor_on_a_renamed_primary_key(coded_rows):  # noqa: ARG001
     """
-    Push-down is all or nothing, and the cursor's predicate shares the filter set with the client's
-    own filters: an ordering key the model does not have would take `year__gte` out of SQL with it
-    from the second page on. The key comes from the model, so the whole set stays in SQL and page
-    two is filtered, sorted and limited by the database.
+    The cursor predicate shares the filter set with `year__gte`; with the key taken from the model the
+    whole set stays in SQL on page two.
     """
     viewset = CodedTrackViewSet()
     first = build_list_query(CodedTrackFilter(year__gte=2002), "title:asc", limit=4)
@@ -701,11 +674,7 @@ async def test_a_client_filter_survives_the_cursor_on_a_renamed_primary_key(code
 
 @pytest.mark.asyncio
 async def test_a_renamed_primary_key_retrieves_updates_and_destroys(coded_rows):  # noqa: ARG001
-    """
-    `pk_field` answers a different question and needs no derivation: `pk` is Django's alias for
-    whichever field holds the key, so a lookup by key works whatever it is called. The destroy
-    response names it `id` regardless of the field.
-    """
+    """Lookup by key uses Django's `pk` alias; the destroy response names it `id` regardless."""
     viewset = CodedTrackViewSet()
     assert (await viewset.perform_retrieve(None, "T005")).title == "Track 005"
 
@@ -718,9 +687,8 @@ async def test_a_renamed_primary_key_retrieves_updates_and_destroys(coded_rows):
 # ---------------------------------------------------------------------------
 # Primary keys the model and the response schema call different things
 # ---------------------------------------------------------------------------
-# `_meta.pk` is a relation on both of these: the parent link of an inherited model, and a
-# one-to-one field declared as the key. The cursor reads its ordering out of the model and its
-# position out of the schema - so only a name both of them have walks the table.
+# `_meta.pk` is a relation on both: an inherited model's parent link and a one-to-one key. The cursor
+# reads its ordering from the model and its position from the schema, so it needs a name both have.
 
 
 class MediaModel(models.Model):
@@ -813,10 +781,7 @@ def artist_profile_rows():
 
 
 def test_an_inherited_model_keys_on_the_name_its_schema_carries():
-    """
-    `SongModel._meta.pk` is the parent link, `mediamodel_ptr`. Django reports it as concrete, so it
-    would push down and then read a null position off a response model that has no such field.
-    """
+    """`SongModel._meta.pk` is the concrete parent link `mediamodel_ptr`, absent from the response model."""
     assert SongModel._meta.pk.name == "mediamodel_ptr"
     assert SongViewSet().pk_field_name == "id"
 

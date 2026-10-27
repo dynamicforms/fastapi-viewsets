@@ -1,8 +1,6 @@
 """
-End-to-end tests for the Middleware.depends() -> FastAPI Depends() bridge (see route_viewset.py's
-_make_middleware_depends). Uses a generic dummy Middleware (not Session/Authorization/RateLimiter)
-to keep these tests focused on the bridging mechanism itself, decoupled from any specific built-in
-middleware's own behavior (those have their own end-to-end coverage already).
+End-to-end tests of the Middleware.depends() -> FastAPI Depends() bridge (`_make_middleware_depends`),
+with a dummy Middleware rather than a built-in one.
 """
 
 import pytest
@@ -33,9 +31,7 @@ class Item(BaseModel):
 
 
 class _RejectingMiddleware(Middleware):
-    """Rejects every request in depends() - the onion __call__ never gets reached in practice
-    (depends() already raised, aborting the request before lifecycle_runner ever starts), so
-    __call__ - like Session/Authorization/RateLimiter's own - is a trivial passthrough."""
+    """Rejects every request in depends(), so its passthrough __call__ is never reached."""
 
     async def depends(self, _request, _cls, _context) -> None:
         raise HTTPException(status_code=401, detail="Rejected early")
@@ -85,8 +81,7 @@ def test_depends_rejects_before_perform_runs():
 
 
 def test_depends_rejection_precedes_body_validation_422():
-    """A malformed body AND a rejecting middleware on the same request - 401, not 422, since
-    FastAPI resolves route-level dependencies() before parsing the request body."""
+    """A malformed body and a rejecting middleware: 401, not 422, as route dependencies run before body parsing."""
     settings.viewsets_command_middleware = [_RejectingMiddleware()]
     client = TestClient(_make_create_app())
 
@@ -102,8 +97,7 @@ def test_depends_rejection_precedes_body_validation_422():
 
 
 def test_dependency_overrides_can_bypass_the_middleware_bridge():
-    """app.dependency_overrides works on the bridged dependency: overriding it with a no-op lets
-    the (otherwise rejecting) route through, all the way to perform_*."""
+    """Overriding the bridged dependency with a no-op in app.dependency_overrides lets the request through."""
     settings.viewsets_command_middleware = [_RejectingMiddleware()]
 
     router = APIRouter()

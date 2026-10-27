@@ -12,8 +12,7 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 from ..conf import settings
 
 MAX_REV = 2**53
-"""The bound every rev stays below, `Number.MAX_SAFE_INTEGER + 1`. `append` raises `OverflowError`
-instead of issuing it."""
+"""Exclusive bound of every rev, `Number.MAX_SAFE_INTEGER + 1`; `append` raises `OverflowError` at it."""
 
 
 class LoggedEvent(NamedTuple):
@@ -77,13 +76,11 @@ class _Topic:
 
 class MemoryEventStore:
     """
-    The event store of one process. `publish` calls `deliver()` in this process only: an event
-    published in another process, a Celery worker, reaches neither this store nor its sockets.
+    The event store of one process: an event published in another process (a Celery worker) never reaches it.
 
-    A topic's log holds its last `settings.viewsets_event_log_size` events and is emptied when it is
-    read or appended to more than `settings.viewsets_event_log_ttl` seconds after the topic's last
-    event. A topic's rev is kept until `drop`. `append` reads and writes the rev without an `await`
-    in between, so two concurrent appends receive distinct, ordered revs.
+    A topic's log keeps its last `settings.viewsets_event_log_size` events and empties once
+    `settings.viewsets_event_log_ttl` seconds pass after the last event; the rev is kept until `drop`.
+    `append` has no `await` between reading and writing the rev, so concurrent appends get distinct revs.
     """
 
     def __init__(self) -> None:

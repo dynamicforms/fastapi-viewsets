@@ -1,18 +1,7 @@
 """
-The shapes a list endpoint can answer in, and how a request picks one.
-
-Three exist, and they are genuinely different contracts rather than variations on a theme:
-
-* `plain` - a bare JSON array. Everything, every time. Fine for a lookup table, wrong for anything
-  that grows.
-* `paginated` - offset and limit, with a total. Lets a client jump to page 40; re-reads the 39
-  pages in front of it to get there, and drifts when rows are inserted between two requests.
-* `cursor` - a position rather than a count. Cannot jump to an arbitrary page and cannot report a
-  total; in exchange it never re-reads and never drifts.
-
-A viewset declares its default and, optionally, which others a client may ask for by sending
-`X-List-Shape`. Declaring only one is the normal case and keeps the OpenAPI schema down to that
-single shape - a union nothing asked for is worse documentation than no union at all.
+The shapes a list endpoint answers in: `plain` (bare array), `paginated` (offset/limit with a total)
+and `cursor` (position-based, no total). A viewset declares its default and optionally the others a
+client may request with `X-List-Shape`; only the declared shapes appear in the OpenAPI schema.
 """
 
 from typing import Any, Generic, Literal, Union
@@ -34,14 +23,7 @@ class ShapeError(ValueError):
 
 
 def _placeholder(schema: dict, definitions: dict, depth: int = 0) -> Any:
-    """
-    One made-up value matching a JSON schema.
-
-    Swagger UI does this itself for objects and gives up on arrays, rendering `[]` - which reads as
-    "this endpoint returns nothing" rather than "here is a row". Since the array is exactly what a
-    list endpoint returns, the sample has to come from somewhere, and the schema is the only thing
-    available at the time it is needed.
-    """
+    """One made-up value matching a JSON schema; Swagger UI renders an array example as `[]` otherwise."""
     if depth > 6:  # a self-referential model would otherwise recurse forever
         return None
     while "$ref" in schema:
@@ -65,17 +47,8 @@ def _placeholder(schema: dict, definitions: dict, depth: int = 0) -> Any:
 
 class ListOf(RootModel[list[TItem]], Generic[TItem]):
     """
-    A bare JSON array, with a name and a usable example.
-
-    Serialises to exactly the array it wraps - nothing changes on the wire. The wrapper exists for
-    the schema, for two reasons.
-
-    A name: an inline `{"type": "array"}` has no component for a `$ref` to point at, so both doc
-    renderers fall back to the operation's auto-generated title, and a union member ends up
-    labelled "Response List Items Music Get" beside two properly named siblings.
-
-    An example: Swagger UI will not synthesise a sample for an array, so a list endpoint documents
-    itself as returning `[]`. One row of made-up data says far more.
+    A bare JSON array (unchanged on the wire) that gets a named schema component and a one-row example,
+    which an inline array schema lacks in the OpenAPI renderers.
     """
 
     @classmethod
@@ -90,13 +63,7 @@ class ListOf(RootModel[list[TItem]], Generic[TItem]):
 
 
 def resolve_shapes(default: ListShape | None, allowed: tuple[str, ...] | None, settings_default: str) -> tuple:
-    """
-    (default shape, shapes a client may ask for).
-
-    The default is always first in the allowed tuple, and always in it: an endpoint that would
-    refuse its own default is a contradiction, and putting it first is what lets the header's
-    description name it without a second lookup.
-    """
+    """(default shape, shapes a client may ask for), the default always first. Raises `ShapeError`."""
     resolved: ListShape = default or settings_default  # type: ignore[assignment]
     if resolved not in ALL_SHAPES:
         raise ShapeError(f"unknown list shape {resolved!r}; known: {', '.join(ALL_SHAPES)}")
@@ -112,35 +79,18 @@ def resolve_shapes(default: ListShape | None, allowed: tuple[str, ...] | None, s
 
 
 def response_model(shapes: tuple, item_type: Any) -> Any:
-    """
-    The declared response: one model when the viewset offers one shape, a union when it offers
-    several.
-
-    `typing.Union` rather than `X | Y`: the latter builds a `types.UnionType`, which cannot be
-    re-subscripted, so TypeVar resolution has no way to substitute the item type into it and the
-    schema comes out describing a list of anything.
-    """
+    """The declared response model: one model for one shape, a union for several."""
     from .cursor import CursorPage
     from .list_query import PaginatedList
 
     models = {"plain": ListOf, "paginated": PaginatedList, "cursor": CursorPage}
     members = tuple(models[shape][item_type] for shape in shapes)
-    # typing.Union, not `X | Y`: the latter builds a types.UnionType, which cannot be
-    # re-subscripted, so TypeVar resolution could never substitute the item type into it.
+    # typing.Union, not `X | Y`: a types.UnionType cannot be re-subscripted with the item type.
     return members[0] if len(members) == 1 else Union[members]  # noqa: UP007
 
 
 def shape_examples(shapes: tuple, item_type: Any) -> dict | None:
-    """
-    One named response example per shape, keyed by the `X-List-Shape` value that produces it.
-
-    Without this the only thing tying a header value to an envelope is prose. Swagger UI's own
-    schema-variant dropdown is labelled by model name - `CursorPage_MusicTrack_` says nothing about
-    which header gets you it - while a named example dropdown says `cursor`, which is exactly the
-    string you would send.
-
-    None when there is only one shape: a dropdown with one entry is noise.
-    """
+    """One response example per shape, named by its `X-List-Shape` value; None for a single shape."""
     if len(shapes) < 2:
         return None
 

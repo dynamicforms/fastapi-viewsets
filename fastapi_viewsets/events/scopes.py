@@ -1,29 +1,9 @@
 """
-Event scopes: the store topic of a viewset's events, derived by the server from the request.
+Event scopes: a viewset's events are stored under `@{scope.name}:{key}`, the key answered by the scope's
+resolver from the request (in a gate run on subscribe/poll, in the writing call on a write).
 
-    async def org_scope(request, context):
-        # set by a middleware that verified the caller's membership of the organisation
-        return await context.org_id if "org_id" in context else None
-
-    @event_scope(org_scope)
-    @route_viewset(router, "/tags")
-    class TagsViewSet(ViewSetMixin[int, Tag]): ...
-
-A client subscribes to and polls a viewset's routed base path, as for any viewset topic. For a class
-that carries `@event_scope` the server stores and delivers the topic's events under the store topic
-`@{scope.name}:{key}`, where `key` is what the scope's resolver answers: on a subscribe and a poll,
-in a gate run of the subscribing request (everything a `GET` of the viewset's gate action by that
-caller runs before the action executes); on a write, in the call that writes, for a
-`celery_viewset` action a request called in the web process before the dispatch. Every routed path
-of the class, of its subclasses and of the sub-viewsets that declare the same scope name, whose
-resolver answers the same key, shares one store topic, and a subscriber of another key never
-receives its events.
-
-The resolver is the scope's authorization point: it answers a key only for a scope the caller may
-read, and raises `HTTPException` or answers None otherwise. It reads a value a check in the gate run
-established (a middleware's `depends()` or `__call__`, a route dependency, a validating context
-processor), or the result of the viewset's own read check called with the context; never a client
-value no check in the gate run validated.
+The resolver is the scope's authorization point: it answers a key only for a scope the caller may read,
+and must derive it from values a check in the gate run validated, never from raw client input.
 """
 
 import inspect
@@ -48,22 +28,14 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 ScopeKey = str | int
-"""A scope's key as a resolver answers it: a `str` without whitespace or control characters, or an
-`int`."""
+"""A scope key: a `str` without whitespace or control characters, or an `int`."""
 
 ScopeResolver = Callable[["Request | None", Context], "ScopeKey | None | Awaitable[ScopeKey | None]"]
-"""
-`resolver(request, context)`, sync or async: the key of the scope the caller may read, or None for a
-caller without one. An `HTTPException` it raises refuses the caller with that exception.
-"""
+"""`resolver(request, context)`, sync or async: the caller's scope key, or None. An `HTTPException` refuses."""
 
 SCOPE_CONTEXT_KEY = "fastapi_viewsets.events.scope"
-"""The context key under which `ChangeEvents.__call__` stores the scope of a call of a class with
-`@event_scope`, in the web process, for every action but a write action configured `False` or with
-a `topic`: an awaitable resolved after the whole command chain, which answers
-`{"name": str, "key": str}`, or None for a key of None. `celery_viewset_client` resolves it before
-the dispatch; the worker reads the resolved value from the context it is handed and does not call
-the resolver, in `ChangeEvents.execute()` and in `write_topic()` alike."""
+"""Context key where `ChangeEvents.__call__` stores the call's scope: an awaitable answering
+`{"name", "key"}` or None. A `celery_viewset` worker receives the resolved value and never calls the resolver."""
 
 _GATE_CACHE_SCOPE_KEY = "fastapi_viewsets.events.gate_cache"
 
@@ -98,32 +70,18 @@ class EventScope:
 # scope name -> the class that declared it
 _names: dict[str, type] = {}
 
-# scope name -> the classes besides the holder that declared it for a mount relation to a class
-# declaring it
+# scope name -> further classes sharing it through a sub_viewset mount relation
 _sharers: dict[str, list[type]] = {}
 
 
 def event_scope(resolver: ScopeResolver, *, name: str | None = None) -> Callable[[type[T]], type[T]]:
     """
-    Declares the scope of a viewset class's events: sets `cls.__event_scope__` to
-    `EventScope(name, resolver)`, `name` defaulting to `f"{cls.__module__}.{cls.__qualname__}"`.
-    Subclasses inherit the attribute, and with it the name. The decorator may be applied before or
-    after `route_viewset`.
+    Declare the scope of a viewset class's events (`cls.__event_scope__`); `name` defaults to the
+    class's dotted path. Besides the first declaring class, only its subclasses, a reloaded copy of it,
+    and classes mount-related to it via `sub_viewset` may declare the same name.
 
-    A name belongs to the class that declares it first, and may also be declared by:
-
-    - that class again, a subclass of it, or a class of the same module and qualified name whose
-      qualified name has no `<locals>` part (the class of a reloaded module), which takes the name
-      over;
-    - a class mounted under a class that declared the name, or that mounts one, with
-      `ViewSetRouter.sub_viewset`, directly or through further sub-viewsets, and a subclass of such
-      a class. The mount is read from the `ViewSetRouter` the classes declare, so it is known as
-      soon as the mounting class is defined: a sub-viewset decorated before its parent shares the
-      name once the parent, which mounts it, declares it.
-
-    Raises `ValueError` for any other class, and for a name that is empty or holds whitespace, a
-    control character or `:`. Classes a function defines share their module and qualified name, so
-    each needs a `name` of its own.
+    Raises `ValueError` for any other class and for an invalid name (empty, whitespace, control
+    characters, `:`). Classes defined in a function need an explicit `name` each.
     """
 
     def decorator(cls: type[T]) -> type[T]:
@@ -151,8 +109,7 @@ def event_scope(resolver: ScopeResolver, *, name: str | None = None) -> Callable
 
 
 def _mount_related(cls: type, other: type) -> bool:
-    """Whether one of `cls` and `other` is mounted under the other, directly or through further
-    sub-viewsets."""
+    """Whether one of the two is mounted under the other, at any depth."""
     from ..decorators.sub_viewsets import mounted_under
 
     return other in set(mounted_under(cls)) or cls in set(mounted_under(other))
@@ -163,8 +120,7 @@ def _is_local(cls: type) -> bool:
 
 
 def _reloaded(cls: type, holder: type) -> bool:
-    """Whether `cls` replaces `holder` as the class of a reloaded module: another class of the same
-    module and qualified name, declared outside any function."""
+    """Whether `cls` is `holder`'s replacement from a reloaded module (same dotted path, not function-local)."""
     return (
         cls is not holder
         and (cls.__module__, cls.__qualname__) == (holder.__module__, holder.__qualname__)
@@ -186,10 +142,8 @@ def reset_event_scopes() -> None:
 
 async def resolve_scope(scope: EventScope, request: "Request | None", context: Context) -> str | None:
     """
-    Calls the scope's resolver, awaiting an awaitable answer, and returns the key as text: None
-    stays None, an `int` (not a `bool`) becomes `str(key)`. Raises `ValueError` for a `str` that is
-    empty or holds whitespace or a control character, and `TypeError` for an answer of any other
-    type, `bool` included. An exception the resolver raises propagates.
+    Call the resolver and return the key as text (None stays None). Raises `ValueError` for an invalid
+    `str` key, `TypeError` for a type other than `str`/`int` (`bool` included).
     """
     key = scope.resolver(request, context)
     if inspect.isawaitable(key):
@@ -213,18 +167,9 @@ class ResolvedTopic:
 
 async def resolve_topic(request: Request, topic: str) -> ResolvedTopic:
     """
-    The store topic of the client topic `topic` for the caller of `request`.
-
-    A topic that is not a viewset topic, a viewset topic no viewset on `request.app` has, and the
-    topic of a class without `@event_scope` are their own store topic. For a class with a scope the
-    gate run of `request` for that topic answers the key, and the store topic is `@{name}:{key}`.
-    The gate run raises what it refuses with: `EventTopicRefusedError` (403) when a route dependency
-    does not validate or the command chain does not reach the action or answers a status of 400 or
-    above, `EventScopeMissingError` (403) when the resolver answers None, and the exception a
-    check or the resolver raised.
-
-    One gate run answers every topic of one request with the same viewset class, gate action, route
-    and path parameter values; its answer, or its exception, is kept in `request.scope`.
+    The store topic of client topic `topic` for the caller of `request`; unscoped topics map to themselves.
+    For a scoped class the gate run answers the key; it raises `EventTopicRefusedError` or
+    `EventScopeMissingError` (both 403), or what a check raised. Results are cached in `request.scope`.
     """
     from .authorizers import match_viewset
 
@@ -258,8 +203,7 @@ async def _empty_body() -> dict[str, Any]:
 
 
 def _starlette_route(route: Any) -> Any:
-    """The route Starlette puts in `scope["route"]` for a request routed to `route`: the route a
-    `RouteContext` wraps, else `route` itself."""
+    """The route Starlette would put in `scope["route"]`: the one a `RouteContext` wraps, else `route`."""
     try:
         from fastapi.routing import RouteContext
     except ImportError:  # a FastAPI whose include_router copies the routes onto the app
@@ -295,13 +239,9 @@ def _gate_request(request: Request, topic: str, found: "ViewsetMatch") -> Reques
 
 async def _gate_run(request: Request, topic: str, found: "ViewsetMatch", scope: EventScope) -> str:
     """
-    Runs what a `GET` of the gate action by the caller of `request` runs before the action executes:
-    the route's dependencies, then the context processors, `depends()` and `__call__` of every
-    effective middleware with the viewset class as `viewset`, against a request of its own (the
-    caller's headers, cookies, client, transport, peer and lifespan state; the topic's path and path
-    parameters; a context of its own) whose scope carries `GATE_RUN_SCOPE_KEY`. In place of the
-    action the scope's resolver runs and answers the key. The result's headers, cookies and body are
-    discarded.
+    Run everything a `GET` of the gate action runs before the action (route dependencies, context
+    processors, middleware `depends()` and `__call__`) on a copy of the caller's request, with the
+    scope's resolver in place of the action. Returns the key.
     """
     from .authorizers import _route_dependencies_admit
 

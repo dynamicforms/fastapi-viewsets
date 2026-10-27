@@ -1,13 +1,8 @@
 """
 The HTTP exceptions this package raises on its own behalf.
 
-`detail` is the English default, fully interpolated. `code` names what went wrong independently of
-`detail`'s wording, and `params` are the raw values `detail` was interpolated with. A response
-carries all three in the error body of `fastapi_viewsets.error_responses`.
-
-`code` is a full code, `<namespace>.<code>`: the errors this module defines carry codes in the
-namespace `ERROR_NAMESPACE` (`fastapi-viewsets.not_found`). The code of an application's own
-`DfViewSetError` is used as given; the application prefixes it with a namespace of its own.
+`detail` is the interpolated English message, `params` the values interpolated into it, and `code` a full
+`<namespace>.<code>` (`fastapi-viewsets.not_found` here; an application's own codes are used as given).
 """
 
 import sys
@@ -23,10 +18,7 @@ from .error_namespace import _namespaced
 
 
 class DfViewSetError(HTTPException):
-    """
-    Base for every `HTTPException` this package raises on its own behalf. `code` is stored as given;
-    the subclasses this module defines pass a code in the namespace `ERROR_NAMESPACE`.
-    """
+    """Base for every `HTTPException` this package raises; `code` is stored as given."""
 
     def __init__(self, status_code: int, message: str, code: str, params: dict[str, Any] | None = None):
         super().__init__(status_code=status_code, detail=message)
@@ -34,7 +26,7 @@ class DfViewSetError(HTTPException):
         self.params = params or {}
 
     def __reduce__(self):
-        # pickled by its fields, not by its constructor's arguments, which differ per subclass
+        # pickled by its fields: subclass constructors take different arguments
         return _rebuild_error, (type(self), self.status_code, self.detail, self.code, self.params, self.headers)
 
 
@@ -59,8 +51,7 @@ class NotFoundError(DfViewSetError):
 
 
 class ReadOnlyCollectionError(DfViewSetError):
-    """A write to a `CollectionViewSet` whose container is immutable (a tuple, a frozenset, a
-    read-only mapping)."""
+    """A write to a `CollectionViewSet` whose container is immutable."""
 
     def __init__(self):
         super().__init__(405, "This collection is read-only", _namespaced("read_only"))
@@ -82,10 +73,7 @@ class RateLimitedError(DfViewSetError):
 
 
 class ActionOutcomeUnknownError(DfViewSetError):
-    """
-    Base of the errors that end a call to a deferred action whose outcome the caller did not learn:
-    the action may have run, may still run, or may never run. Not raised itself.
-    """
+    """Base (never raised) for a deferred action call whose outcome is unknown: it may have run or still run."""
 
 
 class ResultTimeoutError(ActionOutcomeUnknownError):
@@ -108,15 +96,14 @@ class ActionDispatchError(DfViewSetError):
     """
     A call to a deferred action that did not run. `reason`:
 
-    - `send`: the call could not be handed to the executor (the broker is unreachable, the message
-      cannot be encoded)
+    - `send`: the call could not be handed to the executor (broker unreachable, message not encodable)
     - `serialization`: the call's arguments, context or request cannot be serialized
     - `unknown_task`: the executor has no task registered under the action's name
     - `rejected`: the executor rejected the message
     - `revoked`: the call was revoked before it started
     - `expired`: the call expired before it started
 
-    Raised in the calling process, the error that prevented the dispatch is the `__cause__`.
+    In the calling process the error that prevented the dispatch is the `__cause__`.
     """
 
     def __init__(self, task: str, reason: str | None = None):
@@ -131,10 +118,6 @@ class ActionInterruptedError(DfViewSetError):
     - `time_limit`: the execution exceeded its time limit (504)
     - `terminated`: the execution was terminated (503)
     - `lost`: the process running the execution exited (503)
-
-    Inside the execution, `Middleware.execute()` sees it from `call_next()` and the action itself
-    sees it at the point it was interrupted, or `asyncio.CancelledError` where it was suspended at
-    an `await`.
     """
 
     _MESSAGES = {
@@ -151,14 +134,12 @@ class ActionInterruptedError(DfViewSetError):
 
 class ActionFailedError(DfViewSetError):
     """
-    A deferred action that failed in its executor with an error that is not an `HTTPException`.
-    `detail` names the task only; the original error is logged in the executor's process and is the
-    `__cause__` there. `reason`:
+    A deferred action that failed in its executor with a non-`HTTPException` error, which is logged there;
+    `detail` names the task only. `reason`:
 
     - `error`: the action, or the executor's handling of its call, raised
     - `result`: the action's result cannot be serialized or deserialized
-    - `executor`: the executor failed outside the action (`Middleware.executor_started()` raised,
-      or the executor's own machinery failed)
+    - `executor`: the executor failed outside the action (e.g. `Middleware.executor_started()` raised)
     """
 
     def __init__(self, task: str | None, reason: str = "error"):
@@ -236,8 +217,7 @@ class EventCursorsExceededError(DfViewSetError):
 
 
 class UnhandledError(DfViewSetError):
-    """The error an exception without a handler of its own is answered with. Its `detail` names no
-    part of the exception; the exception is logged."""
+    """The answer to an exception without a handler; the exception is logged, not exposed."""
 
     def __init__(self):
         super().__init__(500, "Internal Server Error", _namespaced("unhandled_error"))
@@ -245,8 +225,7 @@ class UnhandledError(DfViewSetError):
 
 class CommandInvalidError(DfViewSetError):
     """
-    A muxws stream addressed to a viewset (its headers carry `:method` and `:path`) whose headers are
-    not a command a route can be matched against. `reason`:
+    A muxws stream addressed to a viewset whose headers are not a routable command. `reason`:
 
     - `address_missing`: `:method` or `:path` is absent
     - `address_type`: `:method` or `:path` is not a string
@@ -268,13 +247,9 @@ class CommandInvalidError(DfViewSetError):
 
 def _error_to_jsonable(error: BaseException) -> dict[str, Any]:
     """
-    `error` as the JSON fields of an `HTTPException`: `status_code`, `detail` and `headers`, plus
-    `class`, `code` and `params` for a `DfViewSetError`, its `code` the full code as given. A
-    `RequestValidationError` is a 422 with its errors as `detail` and `class`
-    `"RequestValidationError"`; any other error is the fields of an `UnhandledError`.
-
-    The fields are read back by another process (a `celery_viewset` result) or later (an idempotency
-    record) with `_error_from_jsonable`.
+    `error` as JSON fields (`status_code`, `detail`, `headers`, plus `class`, `code`, `params` for a
+    `DfViewSetError`), for `_error_from_jsonable` in another process or later. A non-HTTP error becomes an
+    `UnhandledError`.
     """
     if isinstance(error, RequestValidationError):
         return {
@@ -299,11 +274,8 @@ def _error_to_jsonable(error: BaseException) -> dict[str, Any]:
 
 def _error_from_jsonable(data: dict[str, Any]) -> Exception:
     """
-    The exception `_error_to_jsonable` encoded. Fields with a `code` are a `DfViewSetError`, with
-    `code` as given: of the class `class` names when this module defines a `DfViewSetError` subclass
-    of that name, else of `DfViewSetError` itself, with the same fields either way. Fields without a
-    `code` whose `class` is `"RequestValidationError"` are a `RequestValidationError` of the errors
-    in `detail`. Any other fields are an `HTTPException`.
+    The exception `_error_to_jsonable` encoded: a `DfViewSetError` of the named class (if this module
+    defines it, else the base), a `RequestValidationError`, or a plain `HTTPException`.
     """
     if "code" not in data:
         if data.get("class") == "RequestValidationError":

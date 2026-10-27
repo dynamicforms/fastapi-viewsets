@@ -1,7 +1,6 @@
 """
-The subscribe surface: a viewset with `subscribe`, `unsubscribe` and `poll`, which the application
-mounts with `register_events(router, base_path="/events")`. Being a viewset, it passes through the
-application's command middleware and context processors and has a `/schema`.
+The events viewset (`subscribe`, `unsubscribe`, `poll`), mounted with `register_events()`. It passes
+through the application's command middleware and context processors like any viewset.
 """
 
 from collections.abc import Awaitable, Callable
@@ -71,9 +70,8 @@ class PollRequest(BaseModel):
 
     cursors: dict[str, int | None]
     scopes: dict[str, str] | None = None
-    """The scope key the caller holds per topic, for the topics it holds one for. A cursor of a topic
-    whose scope key differs from the one the server resolves answers `events: null`. None trusts
-    every cursor."""
+    """The scope key the caller holds per topic; a cursor whose scope key differs from the server's answers
+    `events: null`. None trusts every cursor."""
 
 
 class PolledEvent(BaseModel):
@@ -91,10 +89,8 @@ class PolledEvent(BaseModel):
 class TopicAnswer(BaseModel):
     """
     The answer of `poll` for one topic. `events` is None when the log cannot answer the cursor; the
-    caller then re-reads the state it displays. A topic that was refused, or that has neither form,
-    has `rev` and `events` None, `error` set to the `ApiErrorBody` of the refusal, as a call refused
-    with it is answered, and `status` to its HTTP status. `error`, `status` and `scope` are left out
-    of the serialized answer when they are None.
+    caller then re-reads its state. A refused or invalid topic has `rev` and `events` None and `error`
+    and `status` set. `error`, `status` and `scope` are left out when None.
     """
 
     rev: int | None
@@ -121,8 +117,7 @@ class PollAnswer(BaseModel):
     topics: dict[str, TopicAnswer]
     """One answer per cursor of the request, in the request's order."""
     poll_after_ms: int
-    """`settings.viewsets_event_poll_after_ms`: the shortest interval, in milliseconds, at which the
-    caller polls."""
+    """The shortest interval, in milliseconds, at which the caller polls."""
 
 
 def _peer_of(request: Request, action: str) -> Any:
@@ -136,8 +131,7 @@ def _peer_of(request: Request, action: str) -> Any:
 
 
 def _reauthorizer(request: Request, topic: str) -> Callable[[], Awaitable[str]]:
-    """The `reauthorize` of a subscription to the scoped topic `topic`: a gate run of a copy of the
-    subscribing request, each run with a fresh gate cache, answering the store topic."""
+    """Re-runs the gate on a copy of the subscribing request (fresh gate cache) and answers the store topic."""
     snapshot = {name: value for name, value in request.scope.items() if name != _GATE_CACHE_SCOPE_KEY}
     snapshot_state = {name: value for name, value in (request.scope.get("state") or {}).items() if name != "_context"}
 
@@ -149,10 +143,7 @@ def _reauthorizer(request: Request, topic: str) -> Callable[[], Awaitable[str]]:
 
 
 class EventsViewSet:
-    """
-    Subscriptions to event topics over a muxws socket, and polls of event topics over either
-    transport. `register_events()` mounts it.
-    """
+    """Subscriptions to event topics over a muxws socket, and polls over either transport."""
 
     __router = APIRouter()
 
@@ -160,18 +151,14 @@ class EventsViewSet:
     @__router.post("/subscribe")
     async def subscribe(self, request: Request, context: Context, body: TopicRequest) -> SubscribeAnswer:
         """
-        Subscribes the socket the command arrived on to `topic` and answers the current rev of its
-        store topic, with the scope key for a scoped viewset topic (see
-        `fastapi_viewsets.events.scopes`). Every event published to the store topic after it is
-        pushed to the socket until the socket closes or unsubscribes. 422
-        `fastapi-viewsets.event_topic_invalid` for a topic of neither form, 403
-        `fastapi-viewsets.event_topic_refused`, or the status of the authorizer's `HTTPException`, for
-        a topic the authorizers do not admit, 403 `fastapi-viewsets.event_scope_missing` for a scoped
-        topic whose resolver answers None, 409 `fastapi-viewsets.event_subscriptions_exceeded` for a
-        socket that already holds `settings.viewsets_event_max_subscriptions` topics. A subscribe refused
-        with a status from 400 to 499 other than 429 removes the socket's subscription to the topic,
-        if it holds one; any other error, a 429 or 5xx included, leaves it as it is. A command served by
-        `process_command` without `peer=` raises `RuntimeError`.
+        Subscribes the socket to `topic` until it closes or unsubscribes, and answers the topic's current
+        rev (and scope key for a scoped topic). Later events are pushed to the socket.
+
+        Errors: 422 `fastapi-viewsets.event_topic_invalid` (malformed topic); 403
+        `fastapi-viewsets.event_topic_refused` or the authorizer's `HTTPException`; 403
+        `fastapi-viewsets.event_scope_missing` (scope resolver answers None); 409
+        `fastapi-viewsets.event_subscriptions_exceeded` (`settings.viewsets_event_max_subscriptions`
+        reached). A 4xx refusal other than 429 also drops an existing subscription to the topic.
         """
         peer = _peer_of(request, "subscribe")
         topic = body.topic
@@ -194,38 +181,24 @@ class EventsViewSet:
     @transports(rest=False, muxws=True)
     @__router.post("/unsubscribe", status_code=204)
     async def unsubscribe(self, request: Request, body: TopicRequest) -> None:
-        """
-        Removes the socket's subscription to `topic`. Answers 204, also for a topic the socket does
-        not hold. A command served by `process_command` without `peer=` raises `RuntimeError`.
-        """
+        """Removes the socket's subscription to `topic`. Answers 204, also for a topic the socket does not hold."""
         await delivery.unsubscribe(_peer_of(request, "unsubscribe"), body.topic)
 
     @transports(rest=True, muxws=True)
     @__router.post("/poll")
     async def poll(self, request: Request, context: Context, body: PollRequest) -> PollAnswer:
         """
-        Answers every cursor of the request. Per topic the authorizers run, then the store topic is
-        resolved (see `fastapi_viewsets.events.scopes`); a refused topic answers `error` with the
-        `ApiErrorBody` of the refusal (`fastapi-viewsets.event_topic_refused`,
-        `fastapi-viewsets.event_scope_missing`, or the body of the `HTTPException` an authorizer raised,
-        FastAPI's or Starlette's: its own code for a `DfViewSetError`, `fastapi-viewsets.http_error`
-        for any other) and `status` with its HTTP status, and the body of
-        `fastapi-viewsets.event_topic_invalid` with 422 for a topic of neither form, and the other
-        topics are unaffected. A poll over muxws that refuses a topic with a status from 400
-        to 499 other than 429 removes the socket's subscription to it;
-        a 429 or a status of 500 or above keeps it. A None cursor answers the topic's current rev
-        and no events, a cursor equal to it `[]`, and any other cursor the events since it, or
-        `events: null` when the log holds no event whose `prev` is the cursor. When the request
-        carries `scopes`, a cursor of a topic whose entry in `scopes` (absent for none) differs from
-        the scope key the server resolves answers the current rev and `events: null`. Every answer of
-        a scoped topic carries its `scope`. 422 `fastapi-viewsets.event_cursors_exceeded` for more
-        cursors than `settings.viewsets_event_max_subscriptions`.
+        Answers every cursor: a None cursor gets the current rev and no events, any other the events
+        since it, or `events: null` when the log cannot answer it (or its `scopes` entry differs from
+        the server's scope key). Events refused by a delivery filter are left out; `prev` chains the
+        events returned and `rev` covers all of them.
 
-        The delivery filters run on every event since the cursor, with a `Subscription` of the
-        topic whose `peer` is the socket the poll arrived on, None over REST, and whose `context` is
-        the poll call's. An event a filter refuses is left out of `events`, and each event's `prev`
-        is the rev of the event before it in the answer, the cursor for the first. The answer's
-        `rev` covers every event since the cursor, the ones left out included.
+        A refused topic answers `error` (an `ApiErrorBody`) and `status`: 403
+        `fastapi-viewsets.event_topic_refused` or `fastapi-viewsets.event_scope_missing`, 422
+        `fastapi-viewsets.event_topic_invalid`, or the authorizer's `HTTPException`; other topics are
+        unaffected. Over muxws a 4xx refusal other than 429 drops the socket's
+        subscription. 422 `fastapi-viewsets.event_cursors_exceeded` for more cursors than
+        `settings.viewsets_event_max_subscriptions`.
         """
         cursors = body.cursors
         limit = settings.viewsets_event_max_subscriptions
@@ -286,11 +259,8 @@ class EventsViewSet:
 
 def register_events(router: APIRouter, base_path: str = "/events") -> type[EventsViewSet]:
     """
-    Mounts the events viewset on `router` under `base_path`: `POST {base_path}/subscribe` and
-    `POST {base_path}/unsubscribe` on muxws only, `POST {base_path}/poll` on REST and muxws. Each
-    call decorates a subclass of `EventsViewSet` of its own with `route_viewset(router, base_path)`
-    and returns it, so the viewset can be mounted on more than one router and configured with
-    `@action_configuration` like any other viewset.
+    Mounts the events viewset on `router`: `subscribe` and `unsubscribe` on muxws only, `poll` on REST
+    and muxws. Returns a fresh `EventsViewSet` subclass per call, so it can be mounted more than once.
     """
     viewset = type(
         EventsViewSet.__name__,

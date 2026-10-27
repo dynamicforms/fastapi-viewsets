@@ -1,7 +1,6 @@
 /**
- * The list endpoint's `sort` parameter as a value: FE counterpart of the BE `SortState` and
- * `parse_sort_param`. `SortStateColumn` has the shape of the `@dynamicforms/vue-grid` interface of
- * the same name, so a `SortState` is a grid's `sortState` as it is.
+ * The list endpoint's `sort` parameter as a value (BE `SortState`, `parse_sort_param`). A `SortState`
+ * has the shape of a `@dynamicforms/vue-grid` `sortState`.
  */
 
 export interface SortStateColumn {
@@ -13,8 +12,8 @@ export interface SortStateColumn {
 export type SortState = SortStateColumn[];
 
 /**
- * Parses a `sort` parameter value, `'column:asc,other:desc'`, as the BE does: a missing direction is
- * `asc`, and an entry with any other direction or an empty entry is skipped.
+ * Parses `'column:asc,other:desc'` as the BE does: a missing direction is `asc`; an empty entry or one
+ * with another direction is skipped.
  */
 export function parseSort(sort: string | null | undefined): SortState {
   const state: SortState = [];

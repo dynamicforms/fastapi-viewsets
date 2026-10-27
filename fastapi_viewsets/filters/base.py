@@ -1,14 +1,7 @@
 """
-Filters as data.
-
-A filter carries exactly one implementation of its own: `matches()`, which decides whether a single
-record passes, in memory. That one is mandatory, and it is what makes "the backend could not
-translate this" a non-event rather than an error - there is always something able to answer.
-
-Every *other* implementation lives with the backend that provides it, registered rather than
-inherited (see registry.py). That asymmetry is the whole design: if a filter carried an
-implementation per backend, adding a backend would mean editing every filter, and adding a filter
-would mean editing every backend. Registered compilers close neither door.
+Filters as data. A filter implements only `matches()`, the mandatory in-memory test, so a filter no
+backend can translate still works. Backend translations are registered compilers (see registry.py),
+so adding a filter or a backend needs no change to the other.
 """
 
 from abc import ABC, abstractmethod
@@ -22,12 +15,7 @@ class FilterError(ValueError):
 
 @dataclass(frozen=True)
 class Filter(ABC):
-    """
-    One field, one operator, one value.
-
-    Frozen because a filter describes a request and nothing should be editing it halfway through a
-    pipeline - a backend that wants a variant builds a new one.
-    """
+    """One field, one operator, one value. Frozen: a backend that wants a variant builds a new one."""
 
     field: str
     value: Any
@@ -40,20 +28,11 @@ class Filter(ABC):
         """Whether `record` passes. The universal implementation; never optional."""
 
     def fields(self) -> tuple[str, ...]:
-        """
-        Which model fields this filter reads. Usually one; a filter spanning several - the cursor
-        predicate compares a whole key tuple - reports them all, so a backend can check it is able
-        to address every one of them before offering to translate it.
-        """
+        """Which model fields this filter reads, so a backend can check it addresses all of them."""
         return (self.field,)
 
     def read(self, record: Any) -> Any:
-        """
-        The field's value on a record, whatever the record is.
-
-        Pydantic models, ORM instances and plain objects all answer to getattr; a mapping does not,
-        and viewsets backed by dicts of dicts are common enough to be worth the two lines.
-        """
+        """The field's value on a record: a dict key, else an attribute; None when absent."""
         if isinstance(record, dict):
             return record.get(self.field)
         return getattr(record, self.field, None)
@@ -61,11 +40,8 @@ class Filter(ABC):
 
 class FilterSet:
     """
-    The filters one request asked for, and the in-memory fallback for all of them.
-
-    Deliberately all-or-nothing: `matches` applies every filter, and a backend either compiles the
-    whole set or leaves the whole set alone. Partial push-down would mean a filter half-answered in
-    SQL and half-forgotten, which returns too many rows and looks like it worked.
+    The filters one request asked for, and the in-memory fallback for all of them. A backend compiles
+    the whole set or none of it, as a partly compiled set would silently return too many rows.
     """
 
     __slots__ = ("filters",)

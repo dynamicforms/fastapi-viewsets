@@ -1,21 +1,7 @@
 """
-Events: the backend publishes an event to a topic, and every frontend following the topic learns of
-it, as a push over its muxws socket or on its next poll.
-
-    from fastapi_viewsets.events import Event, source
-
-    class ImportFinished(Event):
-        event_name = "import_finished"
-
-        file: str
-        rows: int
-
-    imports = source("imports")
-
-    await imports.publish(ImportFinished(file="members.csv", rows=412), key="7")   # topic "imports:7"
-
-Every event is recorded in the store (`settings.viewsets_event_store`) before it is pushed. The
-application calls `start_events()` and `stop_events()` from its lifespan.
+Events: the backend publishes an event to a topic; every frontend following it receives it as a muxws
+push or on its next poll. Each event is recorded in `settings.viewsets_event_store` before it is pushed.
+The application calls `start_events()` and `stop_events()` from its lifespan. See docs/guide/events.md.
 """
 
 from .authorizers import (

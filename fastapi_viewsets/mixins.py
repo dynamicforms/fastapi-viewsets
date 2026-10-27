@@ -57,15 +57,8 @@ class ImplMixin(Generic[K, T], ABC):
     @abstractmethod
     async def perform_list(self, context: Context) -> ListRecords:
         """
-        Subclasses should implement this method to perform the actual listing.
-
-        A lazy source - a generator, an unevaluated QuerySet - is what an overridden `apply_filter`,
-        `apply_sort` or `take_page` pushes its work into, so returning one is what lets a backend
-        answer part of the query in its own store. The defaults push into nothing: they land the
-        source and work in memory, which is what a materialised list gets either way.
-
-        The return type is bare, which is `ListRecords[Any]`: what a backend yields is its own row
-        type, and records are `T` only once `to_record` has run over them.
+        Returns the list source. A lazy one (generator, unevaluated QuerySet) lets overridden stages push
+        filtering, sorting and paging into the backend. Rows are the backend's own type until `to_record`.
         """
         raise NotImplementedError("Method 'perform_list' must be implemented.")
 
@@ -146,16 +139,7 @@ class BulkCreateMixin(CreateMixin[K, T], BulkOnlyCreateMixin[K, T]):
 # LIST
 ###################################################################################################
 def make_all_optional(model: type[BaseModel]) -> type[BaseModel]:
-    """
-    Adjusts all fields of the provided BaseModel class to be optional, effectively creating
-    a new model where all attributes are nullable and default to None. This can be useful
-    when creating filter models or scenarios where optional attributes are required.
-
-    :param model: The input Pydantic BaseModel class to process.
-    :type model: type[BaseModel]
-    :return: A new Pydantic model with all fields converted to optional.
-    :rtype: type[BaseModel]
-    """
+    """Returns a copy of `model`, named `<Model>Filter`, with every field nullable and defaulting to None."""
     fields = {}
     for field_name, field_info in model.model_fields.items():
         ann = field_info.annotation
@@ -171,8 +155,8 @@ class FilterParam:
 
 def filter_set_for(query: ListQuery) -> FilterSet:
     """
-    Every filter this request implies: what the client declared, plus what the pipeline added -
-    the cursor predicate. One set, so a backend compiles them together or declines them together.
+    The request's declared filters plus the pipeline's own (the cursor predicate), as one set that a
+    backend compiles or declines as a whole.
     """
     declared = filters_from(query.fltr)
     return FilterSet(list(declared or []) + list(query.extra_filters))
@@ -187,10 +171,7 @@ class SortDirection(str, Enum):
 
 
 class SortStateColumn(BaseModel):
-    """
-    Mirrors the FE SortStateColumn interface: one column in the current sort order.
-    Python attribute names use snake_case; JSON serialization uses camelCase (columnName).
-    """
+    """One column of a sort order; mirrors the TS `SortStateColumn` (camelCase in JSON)."""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
@@ -212,12 +193,8 @@ SORT_DESCRIPTION = (
 
 def parse_sort_param(sort_csv: str | None) -> SortState:
     """
-    Parse the 'sort' query parameter (comma-separated) into a SortState.
-
-    The value must be a comma-separated list of 'columnName:direction' or just 'columnName'
-    (direction defaults to asc). Entries with an unrecognised direction are silently skipped.
-
-    Example: 'title:asc,artist:desc' → [SortStateColumn(column_name='title', direction=asc), ...]
+    Parses the `sort` query parameter (`title:asc,artist:desc`; direction defaults to asc) into a
+    SortState. Entries with an unrecognised direction are skipped.
     """
     if not sort_csv:
         return []
@@ -238,11 +215,8 @@ def parse_sort_param(sort_csv: str | None) -> SortState:
 
 def check_declared_sort(sort_csv: str, model: Any = None) -> SortState:
     """
-    Parses a sort a viewset declares (`ListMixin.default_sort`) in the `sort` parameter's syntax.
-
-    Raises ValueError for an empty entry and an unrecognised direction, which `parse_sort_param`
-    skips in a request, and, when `model` is a pydantic model, for a column that is neither one of
-    its fields nor one of its computed fields.
+    Parses `ListMixin.default_sort`. Raises ValueError for an empty entry, an unrecognised direction,
+    and, when `model` is a pydantic model, a column that is neither a field nor a computed field.
     """
     entries = [entry.strip() for entry in sort_csv.split(",")]
     if not all(entries):
@@ -266,16 +240,8 @@ def check_declared_sort(sort_csv: str, model: Any = None) -> SortState:
 ###################################################################################################
 class ListMixin(Generic[T, TFilter], ABC):
     """
-    List a queryset, in whichever shape the viewset declares - see fastapi_viewsets/list_shapes.py.
-
-        class TrackViewSet(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter]):
-            list_shape = "cursor"                 # what this endpoint answers in
-            list_shapes = ("cursor", "plain")     # what a client may ask for instead
-
-    Declaring one shape - the default - keeps the schema down to that single model and the endpoint
-    down to the parameters it actually uses. Listing more adds an `X-List-Shape` header and turns
-    the response into a union of exactly those models; `route_viewset` computes both from these two
-    attributes, so nothing here is written twice.
+    List endpoint in the shape(s) set by `list_shape` / `list_shapes` (see list_shapes.py). More than one
+    shape adds the `X-List-Shape` header and makes the response a union of those models.
     """
 
     __router = APIRouter()
@@ -284,49 +250,32 @@ class ListMixin(Generic[T, TFilter], ABC):
     """This endpoint's shape. None defers to `settings.default_list_shape`."""
 
     list_shapes: tuple[str, ...] | None = None
-    """
-    Shapes a client may request with `X-List-Shape`. None means "only the default", which is the
-    case worth optimising for: a union nothing asked for is worse documentation than no union.
-    """
+    """Shapes a client may request with `X-List-Shape`. None means only the default."""
 
     default_page_size: int = 100
     """Page size when a paged shape is asked for without one."""
 
     max_page_size: int = 1000
-    """Ceiling on `limit`, so paging cannot be turned back into "fetch everything"."""
+    """Ceiling on `limit`."""
 
     pk_field_name: str = "id"
     """
-    Appended to the ordering by the cursor shape, to make every key tuple unique.
-
-    A backend that can read its store's schema supplies the real name instead: `DjangoORMViewSet`
-    takes the model's primary key. This default is what a store the library cannot introspect uses,
-    and what such a backend falls back to when the response model names the key something the store
-    does not.
+    Appended to the cursor ordering to make every key tuple unique. `DjangoORMViewSet` uses the model's
+    primary key instead, unless the response model does not have that field.
     """
 
     nulls: str = "first"
     """
-    Where NULL rows sit **when sorting ascending**: `"first"` or `"last"`.
-
-    Descending reverses it, because NULL is treated as a value below or above every other rather
-    than as a row pinned to an edge - `"last"` means "the largest thing there is", so descending
-    puts it in front. SQL's `NULLS LAST` is the other reading, fixed regardless of direction; a
-    backend translating this flips the placement it emits per key.
-
-    The in-memory sort, the cursor's comparison and the SQL a backend emits all use it, which is
-    what stops a cursor walking straight past the NULL rows.
+    Where NULLs sit when sorting ascending: `"first"` or `"last"`; descending reverses it (unlike SQL
+    `NULLS LAST`). The in-memory sort, the cursor comparison and backend SQL must all agree on it, or a
+    cursor skips the NULL rows.
     """
 
     default_sort: str | None = None
     """
-    The ordering of a list request that sends no `sort` parameter, in that parameter's syntax:
-    `"name:asc"`, `"category:asc,score:desc"`. None leaves such a request unordered; so does an empty
-    `sort=` on a viewset that declares one.
-
-    `route_viewset` publishes it as the `sort` parameter's default in the schema, where the TS
-    client's `defaultSort()` reads it, and raises ValueError for an empty entry, an unrecognised
-    direction or a column the response model has neither a field nor a computed field for.
+    Ordering of a request without `sort`, in its syntax (`"category:asc,score:desc"`); None, or an empty
+    `sort=`, leaves it unordered. Published as the parameter default in the schema; `route_viewset` validates it
+    with `check_declared_sort`.
     """
 
     @property
@@ -350,14 +299,8 @@ class ListMixin(Generic[T, TFilter], ABC):
         x_list_shape: Annotated[str | None, Header()] = None,
     ) -> Union[list[T], PaginatedList[T], CursorPage[T]]:  # noqa: UP007 - see list_shapes.response_model
         """List the collection."""
-        # Declares every parameter and every shape any viewset could ask for; route_viewset narrows
-        # both before FastAPI sees them, dropping the parameters this viewset's shapes cannot use
-        # and shrinking the return type to the models it can actually produce. Spelled out rather
-        # than left as `Any` so that reading the method tells you what it can return.
-        #
-        # The docstring is deliberately one plain line: FastAPI publishes it as the endpoint's
-        # description, identically on every viewset in an application. Anything worth saying about
-        # a particular one belongs in @endpoint_docs.
+        # route_viewset prunes these parameters and the return union to what this viewset's shapes use.
+        # The docstring is the OpenAPI description on every viewset; per-viewset text goes in @endpoint_docs.
         default, allowed = self.resolve_shapes()
         shape = x_list_shape or default
         if shape not in allowed:
@@ -381,13 +324,7 @@ class ListMixin(Generic[T, TFilter], ABC):
     """Tells route_viewset to prune this signature and compute its response model per viewset."""
 
     async def get_list(self: "ImplMixin[Any, T] | ListMixin[T]", context: Context, query: ListQuery) -> Any:
-        """
-        The list pipeline, in one place and overridable as a whole.
-
-        Each stage is a separate method so a subclass can replace just the one it cares about and
-        call `super()` for the rest - a viewset that can sort in its database overrides
-        `apply_sort`, marks the stage applied, and the other stages run as before it.
-        """
+        """The list pipeline: source, filter, sort, pagination. Each stage is overridable on its own."""
         if query.shape is None:
             query.shape = self.resolve_shapes()[0]
         if query.shape == "cursor":
@@ -406,16 +343,9 @@ class ListMixin(Generic[T, TFilter], ABC):
         records: ListRecords,
     ) -> ListRecords:
         """
-        Narrows `records` to those the filter accepts. Override to filter in the backend; mark the
-        stage applied so this default does not redo the work:
-
-            async def apply_filter(self, context, query, records):
-                if query.has_filter:
-                    records = self.db.where(...)
-                    query.mark_applied("filter")
-                return await super().apply_filter(context, query, records)
-
-        The default delegates to the `filter_list` hook.
+        Narrows `records` to those the filter accepts, in memory: by a `make_filter_model` declaration,
+        otherwise through `filter_list`. An override filtering in the backend calls
+        `query.mark_applied("filter")` so this default skips the work.
         """
         if not query.has_filter or not query.needs("filter"):
             return records
@@ -425,14 +355,11 @@ class ListMixin(Generic[T, TFilter], ABC):
         if combined:
             records = combined.apply(await self.land(query, records))
 
-        # A filter model built by make_filter_model says which operators it stands for and needs no
-        # code; a hand-made one does not, and still goes through filter_list.
+        # A hand-made filter model carries no declaration and goes through filter_list.
         if query.fltr is not None and declared is None:
             materialized = await self.land(query, records)
             filtered = await self.filter_list(query.fltr, materialized)
-            # filter_list has no default implementation and so returns None when a viewset declares
-            # a filter type but never implements filtering. Returning that verbatim would answer
-            # the request with null; keeping the unfiltered records is wrong too, but visibly so.
+            # The default filter_list returns None; answering with null would hide the missing override.
             records = materialized if filtered is None else filtered
         return records
 
@@ -452,17 +379,9 @@ class ListMixin(Generic[T, TFilter], ABC):
 
     async def land(self: "ImplMixin[Any, T] | ListMixin[T]", query: ListQuery, records: ListRecords) -> list:
         """
-        Ends the lazy part: materialises the source and converts it to the response model.
-
-        Every in-memory stage goes through this, because a filter declaration is written against
-        the *response* model - `make_filter_model(Track, ...)` names Track's fields - while the
-        source yields whatever the backend stores. Where the two shapes differ an unconverted row
-        holds the stored value: a backend keeping `genres` as a comma-joined string would match
-        nothing on `genres__overlaps`.
-
-        Idempotent, so a later stage does not convert twice, and `apply_pagination` knows from
-        `query.applied` whether the page still needs it. `to_record` implementations must tolerate
-        being handed an already-converted record for the same reason.
+        Materialises the source and converts it to the response model, which in-memory filters are
+        declared against. Idempotent (marks the "conversion" stage); `to_record` must therefore accept
+        an already-converted record.
         """
         materialized = await materialize(records)
         if query.needs("conversion"):
@@ -472,12 +391,8 @@ class ListMixin(Generic[T, TFilter], ABC):
 
     def _prepare_cursor(self, query: ListQuery) -> None:
         """
-        Sets the cursor up before the pipeline runs.
-
-        The ordering is rewritten to the full key list - the client's sort plus the primary key -
-        because the position tuple is read against exactly those keys, and reversed outright when
-        reading backwards so that both the backend and the in-memory sort produce the direction the
-        page is actually read in.
+        Rewrites the ordering to the cursor keys (client sort plus primary key), reversed when reading
+        backwards, and adds the cursor predicate to the query's filters.
         """
         keys = cursor_keys(query.sort, self.pk_field_name)
         fingerprint_value = fingerprint(keys, query.fltr)
@@ -486,8 +401,7 @@ class ListMixin(Generic[T, TFilter], ABC):
             try:
                 state = decode_cursor(query.cursor, keys, fingerprint_value, self._cursor_annotations())
             except CursorError as error:
-                # The client sent something wrong, not the server - a stale cursor after a sort
-                # change is the ordinary case, and it deserves a message rather than a traceback.
+                # A client error (typically a stale cursor after a sort change), not a server one.
                 raise CursorRequestError(error) from None
             query.extra_filters.append(make_predicate(state, keys, self.nulls_first))
 
@@ -504,10 +418,7 @@ class ListMixin(Generic[T, TFilter], ABC):
         query._cursor_backwards = backwards
 
     def _cursor_annotations(self) -> dict[str, Any]:
-        """
-        The response model's field types, used to coerce cursor values back from JSON. Without them
-        a numeric key would be compared as a string and match nothing.
-        """
+        """The response model's field types, to coerce cursor values from JSON (e.g. numbers, not strings)."""
         model = getattr(self, "schema", None)
         if model is None or not hasattr(model, "model_fields"):
             return {}
@@ -515,11 +426,8 @@ class ListMixin(Generic[T, TFilter], ABC):
 
     def _cursor_anchors(self, results: list, keys: CursorKeys, fingerprint_value: str) -> dict[str, str | None]:
         """
-        Four cursors from the page's own two edge rows.
-
-        `next`/`previous` are exclusive so they never repeat a row. `first`/`last` are the same
-        anchors read inclusively - they return their own row again, and in exchange survive rows
-        being inserted at that edge, which is what a client polling a live list needs.
+        Cursors from the page's edge rows: exclusive `next`/`previous`, and inclusive `first`/`last`,
+        which repeat their row but survive inserts at that edge (for polling a live list).
         """
         if not results or not keys:
             return dict.fromkeys(("next", "previous", "first", "last"))
@@ -537,8 +445,7 @@ class ListMixin(Generic[T, TFilter], ABC):
         page, has_more = await self.take_page(query, records)
         backwards = getattr(query, "_cursor_backwards", False)
         if backwards:
-            # The query ran in reversed order to read backwards; the page is handed back the way
-            # the client reads it.
+            # The query ran reversed; return the page in reading order.
             page = list(reversed(page))
         results = page if not query.needs("conversion") else self._to_records(page)
 
@@ -567,20 +474,13 @@ class ListMixin(Generic[T, TFilter], ABC):
         records: ListRecords,
     ) -> "list[T] | PaginatedList[T]":
         """
-        Cuts one page out of `records`, or returns the lot when the client asked for no page.
-
-        Only reads as far as the page needs, so paging a lazy source stays lazy. Conversion to the
-        response model happens here, on the page and nowhere else: the stages before this one carry
-        whatever the backend's own source is - a QuerySet, a cursor - because that is the only
-        thing they can push a filter or an ordering into. Converting earlier would hand them a bag
-        of records with nothing left to push into.
+        Cuts one page out of `records` (or returns all for the plain shape) and converts only that page
+        to the response model, unless an earlier in-memory stage already did.
         """
         if query.shape == "cursor":
             return await self._cursor_page(query, records)
         if not query.is_paginated:
-            # A plain list, not a ListOf: FastAPI validates it into the declared RootModel on the
-            # way out, and everything that calls get_list() directly - tests, other endpoints -
-            # keeps getting something it can index and iterate.
+            # A plain list: FastAPI validates it into the declared RootModel; direct callers get a list.
             return await self.land(query, records)
 
         count = await self.count_records(context, query, records)
@@ -600,12 +500,8 @@ class ListMixin(Generic[T, TFilter], ABC):
         self: "ImplMixin[Any, T] | ListMixin[T]", query: ListQuery, records: ListRecords
     ) -> tuple[list, bool]:
         """
-        Reads one page out of `records`, and whether anything follows it.
-
-        The default walks the source and stops once the page is full, which keeps a generator from
-        being drained but still costs `offset` steps to get there - and, against a database, streams
-        every skipped row across the wire before discarding it. A backend with a real LIMIT/OFFSET
-        should override this and mark the "pagination" stage applied.
+        Reads one page out of `records`, and whether anything follows it. The default walks past `offset`
+        rows; a backend with LIMIT/OFFSET overrides it and marks the "pagination" stage applied.
         """
         return await take_page(records, query.offset, query.limit)
 
@@ -616,52 +512,33 @@ class ListMixin(Generic[T, TFilter], ABC):
         records: ListRecords,
     ) -> int | None:
         """
-        How many records there are in total, or None when finding out would cost too much.
-
-        A list knows its length; a generator does not, and draining it to count would undo the
-        point of paging it. A backend that can answer cheaply should override this - a Django
-        viewset returns `await queryset.acount()`, one extra SELECT COUNT(*) rather than a full
-        read - and a client then gets a real total instead of a null.
+        Total record count, or None when unknown without draining the source (a generator) or for the
+        cursor shape. Override where counting is cheap (e.g. `queryset.acount()`).
         """
         if query.shape == "cursor":
-            # Never counted: a total costs a second full pass on every request and is stale by the
-            # time it is read, which is most of why a cursor exists.
             return None
         return len(records) if isinstance(records, (list, tuple)) else None
 
     def to_record(self, raw: Any) -> T:
         """
-        Converts one row from whatever the backend produced into the response model.
-
-        The default is identity, for viewsets whose source already yields the model. An ORM-backed
-        one overrides it to build the pydantic model from a row. Deliberately synchronous: this is
-        CPU work, not I/O, and it runs once per record - anything needing I/O per row wants
-        prefetching in `perform_list` instead.
+        Converts one backend row into the response model; identity by default. Synchronous: per-row I/O
+        belongs in `perform_list` as prefetching.
         """
         return raw
 
     def _to_records(self, rows: list) -> list:
-        """
-        Skips the conversion pass entirely for viewsets that never override `to_record`, which is
-        most of them - the in-memory ones already hold the response model.
-        """
+        """Applies `to_record` to `rows`, skipping the pass when `to_record` is not overridden."""
         if type(self).to_record is ListMixin.to_record:
             return rows
         return [self.to_record(row) for row in rows]
 
     async def filter_list(self, fltr: TFilter, records: list[T]) -> list[T]:
-        """
-        Post-filter hook called after perform_list when a filter is active.
-        Subclasses implement this to filter records in-memory.
-        """
+        """In-memory filter hook for a hand-made filter model. No default implementation (returns None)."""
 
     async def sort_list(self, sort: SortState, records: list[T]) -> list[T]:
         """
-        Post-sort hook called after perform_list (and filter_list) when a sort order is active.
-        Default implementation performs a stable in-memory multi-key sort, placing NULLs where
-        `nulls` says - through the same comparison the cursor uses. They share it because a cursor
-        walking a nullable column against a differently-ordered sort loses every NULL row without
-        saying so.
+        In-memory sort hook. The default is a stable multi-key sort using the cursor's comparison
+        (`compare_in_order`), so NULL placement matches the cursor's.
         """
         import functools
 
@@ -681,22 +558,13 @@ class ListMixin(Generic[T, TFilter], ABC):
 
 
 class PaginatedListMixin(ListMixin[T, TFilter], ABC):
-    """
-    Shorthand for `ListMixin` with `list_shape = "paginated"`.
-
-    It reads well at the point of use; it adds nothing `list_shape` does not.
-    """
+    """Shorthand for `ListMixin` with `list_shape = "paginated"`."""
 
     list_shape = "paginated"
 
 
 class CursorListMixin(ListMixin[T, TFilter], ABC):
-    """
-    Shorthand for `ListMixin` with `list_shape = "cursor"`.
-
-    Cursor paging neither re-reads the rows it skipped nor drifts when the collection changes
-    under the client; it cannot jump to an arbitrary page or report a total. See list_shapes.py.
-    """
+    """Shorthand for `ListMixin` with `list_shape = "cursor"`."""
 
     list_shape = "cursor"
 
@@ -825,28 +693,9 @@ TLookupItem = TypeVar("TLookupItem", default=LookupItem)
 
 class LookupMixin(Generic[TLookupFilter, TLookupItem], ABC):
     """
-    Lookup endpoint with optional search filtering.
-
-    Adds a GET /lookup endpoint that returns a list of TLookupItem objects (default: LookupItem) -
-    useful for populating select/autocomplete widgets.
-
-    The fields of TLookupFilter (default: LookupFilter, a single `q`) are the endpoint's query
-    parameters. The request runs through the same stages as a list:
-
-    1. `perform_lookup(context)` returns the source, lazily or not.
-    2. `apply_lookup_filter(context, query, records)` narrows it. Override it to filter in the
-       backend and mark the stage applied (`query.mark_applied("filter")`); the default filters in
-       memory: by the declaration of a filter model built with `make_filter_model`, otherwise
-       through `filter_lookup`.
-    3. `to_lookup_item(raw)` converts each remaining row to TLookupItem.
-
-    The filter travels in `query.fltr`, never on the viewset instance, which serves concurrent
-    requests under the default `singleton` lifecycle.
-
-    The endpoint answers in the order of the source; filtering and conversion keep it. The source
-    orders the items by group, then by their text, in its own collation - `order_by` in the
-    database - because a select shows each group's items together and only the source knows which
-    field the text comes from and how its language orders it.
+    `GET /lookup`: TLookupItem rows for select/autocomplete widgets, filtered by TLookupFilter's fields
+    as query parameters. Pipeline: `perform_lookup` -> `apply_lookup_filter` -> `to_lookup_item`. The
+    filter travels in `query.fltr`, never on the (singleton) viewset; answers in source order.
     """
 
     __router = APIRouter()
@@ -854,12 +703,8 @@ class LookupMixin(Generic[TLookupFilter, TLookupItem], ABC):
     @abstractmethod
     async def perform_lookup(self, context: Context) -> ListRecords:
         """
-        Subclasses implement this to return the lookup source, in the order the endpoint answers
-        in: by group, then by text.
-
-        A lazy source - a generator, an unevaluated QuerySet - is what an overridden
-        `apply_lookup_filter` pushes the filter into. Rows are TLookupItem once `to_lookup_item` has
-        run over them.
+        Returns the lookup source ordered by group, then text, in the source's collation. A lazy source
+        lets an overridden `apply_lookup_filter` filter in the backend.
         """
         raise NotImplementedError("Method 'perform_lookup' must be implemented.")
 
@@ -876,17 +721,8 @@ class LookupMixin(Generic[TLookupFilter, TLookupItem], ABC):
         records: ListRecords,
     ) -> ListRecords:
         """
-        Narrows `records` to those the filter accepts. Override to filter in the backend; mark the
-        stage applied so this default does not redo the work:
-
-            async def apply_lookup_filter(self, context, query, records):
-                if query.has_filter:
-                    records = records.filter(pk__in=query.fltr.ids)
-                    query.mark_applied("filter")
-                return await super().apply_lookup_filter(context, query, records)
-
-        The default filters TLookupItem records in memory: by the declaration of a filter model built
-        with `make_filter_model`, otherwise through the `filter_lookup` hook.
+        Narrows `records` in memory: by a `make_filter_model` declaration, otherwise through
+        `filter_lookup`. An override filtering in the backend calls `query.mark_applied("filter")`.
         """
         if not query.has_filter or not query.needs("filter"):
             return records
@@ -910,17 +746,11 @@ class LookupMixin(Generic[TLookupFilter, TLookupItem], ABC):
         return [item for item in items if needle in str(getattr(item, "title", "")).lower()]
 
     def to_lookup_item(self, raw: Any) -> TLookupItem:
-        """
-        Converts one row of the source into TLookupItem. The default is identity, for a source that
-        already yields TLookupItem.
-        """
+        """Converts one source row into TLookupItem; identity by default."""
         return raw
 
     async def land_lookup(self, query: ListQuery, records: ListRecords) -> list[TLookupItem]:
-        """
-        Materialises the source and converts it with `to_lookup_item`. Idempotent: the conversion
-        runs once per request, whichever stage lands the source first.
-        """
+        """Materialises the source and converts it with `to_lookup_item`; idempotent per request."""
         materialized = await materialize(records)
         if query.needs("conversion"):
             query.mark_applied("conversion")

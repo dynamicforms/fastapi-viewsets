@@ -1,11 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * "Does the demo actually work" - end to end, through a real browser, a real dev-server proxy, a
- * real WebSocket and two real backends.
- *
- * Covers the servers starting, the grid's `@load` wiring and the WebSocket path through the
- * dev-server proxy, none of which a unit test exercises.
+ * End-to-end check of the demo: real browser, dev-server proxy, WebSocket and both backends,
+ * covering the server start-up, the grid's `@load` wiring and the proxied WebSocket path.
  */
 
 const PAGE_SIZE = 50;
@@ -15,10 +12,8 @@ async function loadedCount(page: Page): Promise<number> {
 }
 
 /**
- * Waits for rows to land, and fails loudly if the app put an error on screen instead.
- *
- * At least a page rather than exactly one: the grid asks for more the moment the viewport nears
- * the end, so on a tall window a second page can legitimately arrive before this looks.
+ * Waits for at least one page of rows (a tall window may load a second one) and fails if the app
+ * shows an error.
  */
 async function waitForFirstPage(page: Page) {
   await expect
@@ -29,16 +24,9 @@ async function waitForFirstPage(page: Page) {
   await expect(page.locator('.df-grid.body-grid .df-anchored .df-grid.cell.id').first()).toBeVisible();
 }
 
-/**
- * Ids of the first `count` rendered rows, in display order.
- *
- * A prefix rather than everything on screen: the grid virtualises, so how many rows exist in the
- * DOM at any moment depends on scroll position and window size and is not something to assert on.
- * The order of the first handful is.
- */
+/** Ids of the first `count` rendered rows, in display order; the grid virtualises, so only a prefix is stable. */
 async function renderedIds(page: Page, count = 20): Promise<number[]> {
-  // a record's cells sit in the `.df-anchored` wrapper next to its row-anchor; the header and the filter row lay their
-  // cells out in wrappers of their own, so they are not among these
+  // record cells only: the header and filter row use wrappers other than `.df-anchored`
   const cells = await page.locator('.df-grid.body-grid .df-anchored .df-grid.cell.id').allInnerTexts();
   return cells
     .map((text) => text.trim())
@@ -59,8 +47,7 @@ test('the first page arrives over REST', async ({ page }) => {
 });
 
 test('loading more appends rather than replacing', async ({ page }) => {
-  // The distinction that matters for infinite scroll: loadMore() concatenates, and only an
-  // explicit reload - a change of transport, backend, sort or filter - starts the list over.
+  // loadMore() concatenates; only a change of transport, backend, sort or filter starts over.
   const firstRows = await renderedIds(page);
   const before = await loadedCount(page);
 
@@ -77,8 +64,7 @@ test('loading more appends rather than replacing', async ({ page }) => {
 });
 
 test('scrolling to the end loads the next page', async ({ page }) => {
-  // The grid emits @load when the viewport nears the end; nothing else asks for more rows, so this
-  // is the only check that the wiring between the grid and the cursor is live.
+  // Only the grid's @load asks for more rows, so this is the check that its wiring is live.
   const before = await loadedCount(page);
   await page.locator('.df-grid.body-grid').first().hover();
   await expect
@@ -90,8 +76,7 @@ test('scrolling to the end loads the next page', async ({ page }) => {
 });
 
 test('the same data arrives over muxws', async ({ page }) => {
-  // The transport that reports failure as "the socket never opened", which says nothing about
-  // whether the server, the proxy or the codec is at fault. Loading rows says all three are fine.
+  // Loaded rows show that the server, the proxy and the codec all work.
   const overRest = await renderedIds(page);
   const loadedOverRest = await loadedCount(page);
 
@@ -99,8 +84,7 @@ test('the same data arrives over muxws', async ({ page }) => {
   await waitForFirstPage(page);
 
   expect(await renderedIds(page)).toEqual(overRest);
-  // The loaded list, not the DOM window: switching transport restarts paging, so the same number
-  // of pages must have been fetched. Asserted separately so a mismatch says which one it was.
+  // Switching transport restarts paging, so the same number of pages has been fetched.
   expect(await loadedCount(page)).toBe(loadedOverRest);
 });
 
@@ -110,8 +94,7 @@ test('the SQLite backend serves the same records as the in-memory one', async ({
   await page.getByTestId('backend-db').click();
   await waitForFirstPage(page);
 
-  // The two are seeded from the same generator and claim to be interchangeable, so the same
-  // records have to come back in the same order.
+  // Both backends are seeded from the same generator: same records, same order.
   expect(await renderedIds(page)).toEqual(inMemory);
 });
 
@@ -128,15 +111,12 @@ test('sorting happens on the server and restarts the paging', async ({ page }) =
   const ascending = await renderedIds(page);
   const loaded = await loadedCount(page);
 
-  // `year`, not `id`: the default order is by id ascending, so sorting by id changes nothing.
-  // `.card` picks the visible header: the hidden copy the grid measures column widths with carries
-  // `df-grid header` too.
+  // `year`, as the default order is by id. `.card` picks the visible header, not the hidden measuring copy.
   await page.locator('.df-grid.card.header .df-grid.cell.year').click();
   await expect.poll(async () => renderedIds(page), { timeout: 30_000 }).not.toEqual(ascending);
   await expect(page.getByTestId('error')).toHaveCount(0);
 
-  // A sort change invalidates any cursor in flight, so paging has to have restarted rather than
-  // appended to what was already there.
+  // A sort change restarts paging rather than appending.
   expect(await loadedCount(page)).toBeLessThanOrEqual(loaded);
 });
 

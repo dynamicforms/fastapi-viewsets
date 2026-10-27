@@ -1,46 +1,11 @@
 /**
  * The event client: follows topics the BE publishes events to, with pushes over a muxws peer and
- * polls over the peer or over axios.
+ * polls over the peer or over axios. Per topic it holds the rev of the last applied event and applies
+ * an event only when its `prev` is that rev; a gap is answered by one poll, a poll the BE's log cannot
+ * answer is a resync. Without an open peer every followed topic is polled on the ladder (poll.ts).
  *
- *   const peer = await connect('wss://example.test/ws');
- *   attachEvents(peer);
- *   const events = createEventClient({ basePath: '/events', peer, axios });
- *
- *   const ImportFinished = defineEvent<{ file: string; rows: number }>('import_finished');
- *   const subscription = events.subscribe('imports:7', ImportFinished, {
- *     onEvent(payload, { version }) { ... },
- *     onResync() { ... },
- *   });
- *   await subscription.ready;
- *
- * The BE writes every event to its store before it pushes it, and a poll answers from that store.
- * Per topic the client holds the rev of the last event it applied and applies an event only when the
- * event's `prev` is that rev. A larger rev with any other `prev` is a gap, answered by one poll of the
- * topic; a poll the BE's log cannot answer is a resync, on which every subscription of the topic
- * re-reads what it displays.
- *
- * Every event carries a version, the BE event's `event_version`. An event is dispatched by topic
- * and event name, whatever its version, and its handler receives the version in `EventMeta`.
- *
- * While the peer is open every topic holds a subscription on its socket and the polling ladder is
- * held. Without an open peer the client polls every topic it follows in one call per rung of the
- * ladder (poll.ts), over axios.
- *
- * A gap is seen only when a later event of the topic arrives, so a lost push of a topic's last event
- * is seen by a poll only. While the peer is open and the ladder is held, the client polls every
- * subscribed topic over the peer once per `checkIntervalMs`.
- *
- * The client's own calls (`subscribe`, `unsubscribe`, `poll`) carry no `Idempotency-Key` and are
- * never repeated by the proxies' repeat machinery: a repeat of `subscribe` answered from a stored
- * outcome would not subscribe the socket the repeat travelled on.
- *
- * A scoped viewset topic (the BE's `@event_scope`) answers its scope key, which the BE resolves from
- * the calling request: its headers (`EventClientOptions.headers`), its path, its session. The client
- * holds the key per topic, applies only pushes carrying that key in `:scope`, and sends it per topic
- * with every poll in `scopes`. An answer under another key resyncs the topic. `refresh()` subscribes
- * a topic again so that the BE resolves its key anew. The client calls it for a scoped topic when a
- * push arrives after `headers()` changed since the topic was answered, and when the topic's first
- * answer arrives after `headers()` changed since that answer's call was sent.
+ * The client's calls carry no `Idempotency-Key`: a `subscribe` answered from a stored outcome would
+ * not subscribe the socket it travelled on.
  */
 
 import { isApiErrorBody, ViewSetRequestError } from '../errors';
@@ -92,10 +57,8 @@ export interface EventMeta {
 }
 
 /**
- * What a subscription does with what arrives on its topic.
- *
- * The handlers are function-typed properties, so a handler whose parameter type is not the
- * definition's payload type, a wider one included, does not compile.
+ * What a subscription does with what arrives on its topic. The handlers are function-typed properties,
+ * so a handler whose parameter type is not the definition's payload type, even a wider one, does not compile.
  */
 export interface EventHandlers<P> {
   /**
@@ -103,10 +66,7 @@ export interface EventHandlers<P> {
    * event name, whatever its version, in rev order. `meta` is frozen.
    */
   onEvent: (payload: P, meta: EventMeta) => void;
-  /**
-   * Called when the client cannot tell which events of the topic it missed. The subscription re-reads
-   * the state it displays.
-   */
+  /** Called when the client cannot tell which events of the topic it missed: re-read the displayed state. */
   onResync: () => void;
   /** Called with the error of a refused `subscribe` or `poll` of the topic; the subscription is removed. */
   onError?: (error: unknown) => void;
@@ -263,10 +223,8 @@ function statusOf(error: unknown): number | undefined {
 }
 
 /**
- * A status that does not refuse a topic: 429, rate limiting, and every status of 500 or above, a
- * server or gateway failure. A call or a topic answered with one is sent again: a poll on the next
- * rung, a subscribe on the next rung while the peer is open and on the next reconnect, with the
- * topic polled meanwhile.
+ * A status that does not refuse a topic: 429, or 500 and above. The call is sent again on the next rung
+ * (a subscribe also on the next reconnect), with the topic polled meanwhile.
  */
 function isTransientStatus(status: number): boolean {
   return status === 429 || status >= 500;
@@ -408,9 +366,8 @@ class TopicState {
   gapRev: number | null = null;
 
   /**
-   * A gap poll or a check poll of the topic failed without refusing it, or its answer did not answer
-   * the topic: the held rev may be below the BE's. The ladder runs, also over an open peer, until a poll answers
-   * the topic.
+   * A gap or check poll failed without refusing the topic, or did not answer it: the held rev may be
+   * below the BE's. The ladder runs, also over an open peer, until a poll answers the topic.
    */
   behind = false;
 
@@ -676,30 +633,9 @@ class EventClientImpl implements EventClient {
   }
 
   /**
-   * One topic of a poll answer. `cursor` is the rev the poll carried; the held rev may have moved
-   * since, by pushes applied while the poll was in flight.
-   *
-   * - `error` refuses the topic with a `ViewSetRequestError` of `status` whose `response.data` is
-   *   `error`, the BE's `ApiErrorBody`; a transient `status` (`isTransientStatus`), and an `error`
-   *   that is not an `ApiErrorBody` or comes without a `status`, leave the topic as it is.
-   * - The first answer of a topic sets its rev.
-   * - `events: null` is a resync, unless pushes have moved the held rev since the poll was sent and
-   *   the answer's rev is at most the held one: those pushes applied the events the log no longer has.
-   * - An answer's rev below the cursor is a resync.
-   * - Otherwise each event is applied or ignored by the rule of a push, except that an event whose
-   *   `prev` is below the held rev and whose rev is above it is applied: the BE chains the events of
-   *   an answer, so a `prev` below the held rev names an event the held rev already covers. A
-   *   malformed event, one without a usable rev, prev, event name or version, and an event that is
-   *   neither applied nor ignored, a gap inside a poll answer, are a resync. After the events the
-   *   held rev becomes the answer's rev when that is larger: the BE leaves out of an answer the
-   *   events its delivery filters refuse, and the answer's rev covers them.
-   *
-   * - An answer under another scope key than the held one resyncs the topic to the answer's rev (see
-   *   `scopeChange`).
-   *
-   * Returns `'moved'` when the held rev moved, `'answered'` when the answer answered the topic
-   * without moving it, and `'unanswered'` for an error that does not refuse the topic and for an
-   * answer without a rev.
+   * One topic of a poll answer; `cursor` is the rev the poll carried (pushes may have moved the held
+   * rev since). The rules are tabled in docs/api/vue-events.md, "Push, gap, poll and resync". Returns
+   * `'unanswered'` for a non-refusing error and for an answer without a rev.
    */
   private applyTopicAnswer(
     state: TopicState,
@@ -731,7 +667,11 @@ class EventClientImpl implements EventClient {
     return outcome;
   }
 
-  /** The events of a poll answer under the held scope key; see `applyTopicAnswer`. */
+  /**
+   * The events of a poll answer under the held scope key. `events: null` is no resync when pushes
+   * already moved the held rev to the answer's. An event with `prev` below the held rev and rev above
+   * it is applied: the BE chains an answer's events.
+   */
   private applyEvents(
     state: TopicState,
     cursor: number | null,
@@ -843,11 +783,9 @@ class EventClientImpl implements EventClient {
   }
 
   /**
-   * Runs `op`, a `subscribe` or `unsubscribe` of `topic` on the peer's socket, once the socket call
-   * of `topic` before it has settled, whichever client of the peer sent that one. The BE serves the
-   * streams of one socket concurrently: an `unsubscribe` answered after a later `subscribe` of the
-   * same topic ends that subscription. `op` opens its stream synchronously when no call of the topic
-   * is in flight.
+   * Runs `op`, a `subscribe` or `unsubscribe` of `topic`, after the previous socket call of `topic`
+   * (from any client of the peer) settled: the BE serves a socket's streams concurrently, so an
+   * `unsubscribe` answered after a later `subscribe` would end that subscription.
    */
   private onSocket(topic: string, op: () => Promise<void>): void {
     if (!this.peer) return;
@@ -1125,12 +1063,9 @@ class EventClientImpl implements EventClient {
   }
 
   /**
-   * One poll over the open peer of every topic that is subscribed on its socket, has a rev, is not
-   * `behind` and has no gap poll in flight, while the ladder is idle; a tick without such a topic, or
-   * with the ladder running or the peer not open, sends nothing. The answer is applied as a rung's.
-   * A topic the answer does not answer, and every topic of a poll that fails without refusing them,
-   * fall behind to the ladder. The next check is scheduled after the answer, while the client
-   * follows a topic.
+   * The check poll: while the ladder is idle, one poll over the open peer of every subscribed topic
+   * that has a rev, is not `behind` and has no gap poll in flight. It catches a lost push of a topic's
+   * last event. A topic it does not answer falls behind to the ladder.
    */
   private async check(): Promise<void> {
     if (this.closed) return;
@@ -1360,12 +1295,9 @@ export function attachEvents(peer: EventPeerLike, fallback?: EventStreamHandler)
 // ---------------------------------------------------------------------------
 
 /**
- * A subscription made once `client` resolves: what `watch()` returns on a muxws ViewSet whose peer
- * source has not resolved yet. `unsubscribe()` before then subscribes nothing and reports nothing,
- * and `ready` resolves once `client` does.
- *
- * When `client` rejects, or `subscribe` throws, `ready` rejects with that error, and the error is
- * passed to `onError`, or rethrown by `rethrowLater` when the subscription has no `onError`.
+ * A subscription made once `client` resolves (`watch()` on a muxws ViewSet whose peer source has not
+ * resolved yet). `unsubscribe()` before then subscribes nothing. When `client` rejects or `subscribe`
+ * throws, `ready` rejects and the error goes to `onError`, or to `rethrowLater` without one.
  */
 export function deferSubscription(
   client: Promise<EventClient>,

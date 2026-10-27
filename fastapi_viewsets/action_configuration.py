@@ -17,28 +17,18 @@ _PERFORM_METHOD_BY_ACTION = {
     "bulk_destroy": "perform_bulk_destroy",
     "lookup": "perform_lookup",
 }
-"""Mirrors the action-method -> perform_* wiring already in mixins.py, so @action_configuration on
-a perform_* method (where CRUD logic actually lives) is found when resolving its action's config,
-not just on the framework's own @final action methods (update, list_items, ...)."""
+"""The perform_* method of each action (as wired in mixins.py), whose @action_configuration also applies."""
 
 
 def action_configuration(config: dict[Any, Any]):
     """
-    Attaches per-viewset/per-action configuration for context processors and command middleware to
-    consult - works identically whether applied to a viewset class or to an individual method
-    (typically a perform_* method). Keys are identifiers (a context processor callable, a
-    Middleware subclass already registered in settings.viewsets_command_middleware, or a fresh
-    Middleware instance to inject just for this call - see extra_middlewares_for); values are
-    opaque, interpreted only by whichever processor/middleware reads them (see
-    fastapi_viewsets/context/__init__.py's Context.configuration_for and build_context). See
-    docs/guide/action-configuration.md.
+    Attaches configuration for context processors and command middleware to a viewset class or a
+    method (typically perform_*). Keys are a context processor, a globally registered Middleware
+    class, or a Middleware instance to inject for this viewset/action; values are interpreted by
+    whoever reads them. See docs/guide/action-configuration.md.
 
         @action_configuration({Session: False})
         class LoginViewSet(...): ...
-
-        class ItemViewSet(...):
-            @action_configuration({Session: False})
-            async def perform_list(self, context): ...
     """
 
     def decorator(target):
@@ -51,22 +41,10 @@ def action_configuration(config: dict[Any, Any]):
 @dataclass(frozen=True)
 class TimeLimits:
     """
-    The time limits, in seconds, of an execution of a deferred action, configured under the
-    `TimeLimits` key:
-
-        @action_configuration({TimeLimits: TimeLimits(soft=30, hard=60)})
-        class ReportViewSet(...): ...
-
-    `soft` interrupts the execution from inside: `Middleware.execute()` sees `ActionInterruptedError`
-    from `call_next()`, `finally` blocks and `save_state()` run, and the caller receives the error.
-    `hard` ends the execution's process: the execution unwinds as `SystemExit` only as far as it
-    gets before the process is killed, the caller receives `ActionInterruptedError` with reason
-    `time_limit`, and `Middleware.on_transition()` receives `interrupted`. None leaves a limit to
-    the executor's own configuration.
-
-    The executor enforces them (`celery_viewset` sends them with each call); an in-process action
-    has no time limit. A value in `settings.default_action_configuration` applies to every action,
-    and `ByAction` varies it per action.
+    The time limits, in seconds, of a deferred action's execution, configured under the `TimeLimits`
+    key and enforced by the executor (an in-process action has none). `soft` raises
+    `ActionInterruptedError` inside the execution; `hard` kills its process. None leaves a limit to the
+    executor's own configuration. See docs/guide/action-configuration.md.
     """
 
     soft: float | None = None
@@ -83,26 +61,10 @@ def _candidate_method_names(action_name: str) -> list[str]:
 
 def resolve_action_configuration(cls: type, action_name: str) -> dict[Any, Any]:
     """
-    Merges settings.default_action_configuration (lowest priority) -> class-level
-    @action_configuration -> method-level @action_configuration (highest priority), per identifier
-    (a method-level entry for an identifier fully replaces whatever a lower layer had for that same
-    identifier; identifiers a method doesn't mention still fall through from the class/default).
-
-    Returns the raw merged dict - ByAction values are left unresolved (see
-    fastapi_viewsets/context/__init__.py's Context.configuration_for, which resolves them at read
-    time against the current action, so a Context reused across actions - e.g. via
-    clone_for_command - never resolves stale).
-
-    Takes the viewset *class* (not an instance) - method-level lookup via `getattr(cls, candidate)`
-    returns the same underlying function (and thus the same `__action_configuration__` attribute)
-    as `getattr(instance, candidate)` would, so no instance is ever needed; this also lets it be
-    called before a viewset instance exists yet (e.g. from an early Middleware.depends() call - see
-    route_viewset.py - for per-request/instance-key lifecycles).
-
-    Method-level lookup checks both the actual action method name (for hand-written __router
-    endpoints, which have no separate perform_* counterpart) and its mapped perform_* method (where
-    CRUD logic actually lives - see _PERFORM_METHOD_BY_ACTION), in that order, so a perform_*-level
-    override wins if both happen to be decorated.
+    Merges settings.default_action_configuration, then the class's, then the method's
+    @action_configuration, each replacing the previous layer's entry per key. The method layer is the
+    action method, then its perform_* method. Takes the class, so it works before an instance exists.
+    `ByAction` values are left for `Context.configuration_for` to resolve at read time.
     """
     merged: dict[Any, Any] = dict(settings.default_action_configuration)
     merged.update(getattr(cls, "__action_configuration__", {}))
@@ -115,13 +77,8 @@ def resolve_action_configuration(cls: type, action_name: str) -> dict[Any, Any]:
 
 def extra_middlewares_for(action_configuration: dict[Any, Any], global_middlewares: list) -> list:
     """
-    Keys in `action_configuration` that are a Middleware *instance* are appended to the chain,
-    just for this call, in dict-iteration order - this is how @action_configuration injects a
-    brand-new middleware for one viewset/method without registering it globally. Keys that are a
-    Middleware *class* configure an already-globally-registered instance of that type (read via
-    Middleware.config_from/Context.configuration_for) - a class with no matching instance in
-    `global_middlewares` raises ValueError, fail-fast, since it's almost certainly a typo or a
-    forgotten global registration rather than an intentional injection (use an instance for that).
+    The Middleware instances among the keys of `action_configuration`, injected for this call in key
+    order. A Middleware class key without an instance in `global_middlewares` raises ValueError.
     """
     global_types = {type(mw) for mw in global_middlewares}
     extras = []

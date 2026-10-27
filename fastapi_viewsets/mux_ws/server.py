@@ -1,10 +1,7 @@
 """
-The server-side entry point: turn an inbound muxws stream into a viewset call.
-
-muxws allows exactly one `on_stream` handler per peer, so this module never touches the peer
-itself. The application keeps ownership of its own handler and calls `process_command` from
-inside it; a stream that is not a viewset command is reported as unhandled rather than rejected,
-so viewset traffic and the application's own protocol can share one socket.
+The server-side entry point: turn an inbound muxws stream into a viewset call. The application keeps
+its own `on_stream` handler and calls `process_command` from it; a stream that is not a viewset
+command is reported as unhandled, so viewset traffic and the application's protocol share one socket.
 """
 
 import asyncio
@@ -26,8 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Requests whose stream ended before the answer: referenced here until they complete, so that the
-# event loop, which keeps only weak references to tasks, does not collect them mid-run.
+# Requests whose stream ended before the answer, held until they complete: the loop keeps tasks weakly.
 _detached: set[asyncio.Task] = set()
 
 
@@ -42,14 +38,8 @@ _CONNECTION_ONLY = frozenset({"connection", "upgrade", "accept-encoding"})
 
 def connection_headers(connection: "WebSocket | None") -> dict[str, str]:
     """
-    The handshake's own headers, used as the baseline every command inherits.
-
-    Cookies are already present in the raw `cookie` header, so they need no separate handling -
-    the auth backends that read `request.cookies` parse them back out of it themselves.
-
-    The headers that describe the WebSocket upgrade (`connection`, `upgrade`, `sec-websocket-*`)
-    are left out, and so is `accept-encoding`: a reply travels as a decoded muxws payload, so a
-    compression middleware must not compress it.
+    The handshake's headers, the baseline every command inherits (cookies included). The upgrade
+    headers are left out, and so is `accept-encoding`, as a reply travels as a decoded muxws payload.
     """
     if connection is None:
         return {}
@@ -70,52 +60,15 @@ async def process_command(
     peer: Any = None,
 ) -> bool:
     """
-    Serves one viewset command through the application and answers on `stream`.
+    Serves one viewset command through the application (`app`, else `connection.scope["app"]`, else
+    `ValueError`) as an HTTP request to `:path` would be served, and answers on `stream`. Returns False,
+    sending nothing, for a stream that is not a viewset command.
 
-    Returns True when the stream was a viewset command and has been answered, False when it was
-    not addressed to a viewset at all - in which case nothing has been sent and the caller is free
-    to dispatch it however it likes:
-
-        @app.websocket("/ws")
-        async def endpoint(websocket: WebSocket) -> None:
-            peer = await accept(websocket, allowed_origins=["https://app.example"])
-
-            async def on_stream(payload, stream):
-                if await process_command(payload, stream, connection=websocket, peer=peer):
-                    return
-                await my_own_dispatch(payload, stream)
-
-            peer.on_stream(on_stream)
-            await peer.serve()
-
-    The command goes through the application that serves the WebSocket endpoint
-    (`connection.scope["app"]`), or through `app` where given: its middleware, its exception
-    handlers, its router and the dependencies on it, as an HTTP request to the same path would.
-    `:path` is the path the application routes, `include_router` prefixes included. Without
-    `connection` or `app` a command raises `ValueError`.
-
-    `connection` supplies the handshake headers as a baseline (see `connection_headers`);
-    `base_headers` overrides or extends them for callers that resolve their session some other
-    way. Headers stated on the stream itself win over both. `connection` also supplies the
-    request's client and server address (`request.client`, which `RateLimiter` keys on by
-    default), without which every call has the client address `("muxws", 0)`, and the lifespan
-    state (`request.state`), copied for each command as an HTTP server copies it for each request.
-
-    `peer` is the muxws peer of the socket the stream arrived on. The request carries it as
-    `request.scope["fastapi_viewsets.peer"]` (`routing.PEER_SCOPE_KEY`), None without it; the events
-    viewset's `subscribe` and `unsubscribe` read the socket from there and need it.
-
-    The request runs as a task of its own. When the stream ends before the answer (the peer cancels
-    it or the socket is lost, and muxws cancels this handler), the request runs to completion and its
-    answer is discarded, as an HTTP server lets a request run after its client disconnected. An
-    exception it raises then is logged.
-
-    The answer's status is the response's, in the `:status` leading header, and its payload the
-    response's decoded body: for an error of a viewset route an `ApiErrorBody`
-    (`fastapi_viewsets.error_responses`), as over HTTP. A command whose headers cannot be parsed is
-    answered with 400 `fastapi-viewsets.command_invalid` (`CommandInvalidError`); an exception the
-    application raises before it starts a response with 500 `fastapi-viewsets.unhandled_error`, and
-    the exception is logged.
+    Headers: the handshake's (`connection`), then `base_headers`, then the stream's own. `connection`
+    also supplies the client address (else `("muxws", 0)`) and the lifespan state; `peer` reaches the
+    request as `scope["fastapi_viewsets.peer"]`, which event subscriptions need. A request whose stream
+    ends early runs to completion and its answer is discarded. Unparsable headers answer 400
+    `command_invalid`; an exception before the response answers 500 `unhandled_error` and is logged.
     """
     headers = getattr(stream, "headers", None) or {}
     if not is_command(headers):
@@ -128,8 +81,7 @@ async def process_command(
     try:
         method, path, query_string, call_headers = parse_request(headers)
     except EnvelopeError as error:
-        # addressed to a viewset, but not in a form any route could be matched against: answered
-        # as HTTP answers a request it cannot parse
+        # addressed to a viewset but unroutable: answered as HTTP answers a request it cannot parse
         await _reply_error(stream, CommandInvalidError(error.reason))
         return True
     effective = merge_headers(
@@ -162,15 +114,12 @@ async def process_command(
         request.add_done_callback(_discard_detached)
         raise
     except Exception:
-        # The app raised before it started a response. Resetting the stream would turn "the
-        # handler crashed" into "the transport failed", which is a different and less useful thing
-        # to report - so a 500 is delivered normally and the traceback goes to the log.
+        # Answered with a 500 rather than a stream reset, which the client would read as a transport failure.
         logger.exception("muxws command %s %s failed", method, path)
         await _reply_error(stream, UnhandledError())
         return True
 
-    # Leading headers rather than trailers: the status is announced before the body, so a caller
-    # never has to read a response to find out it was an error. See protocol.py.
+    # The status travels in leading headers, before the body; see protocol.py.
     await stream.reply(
         response.json(),
         headers=build_response_meta(response.status, _response_headers(response.headers)),
@@ -187,9 +136,5 @@ _HOP_BY_HOP = frozenset({"content-length", "transfer-encoding", "connection", "k
 
 
 def _response_headers(headers: dict[str, str]) -> dict[str, str]:
-    """
-    Framing headers describe an HTTP message that no longer exists once the body is a decoded
-    muxws payload, so they are dropped. `set-cookie` and the rest are kept: command middleware
-    sets them deliberately and the client still wants to see them.
-    """
+    """The response headers without the HTTP framing ones, which do not apply to a decoded muxws payload."""
     return {key: value for key, value in headers.items() if key not in _HOP_BY_HOP}

@@ -42,12 +42,8 @@ def reset_settings():
 
 
 # ---------------------------------------------------------------------------
-# Module-level SerializableObject/LazyObject fixtures.
-#
-# NOTE: SerializableObject subclasses must be importable at module level - the type tag embedded
-# by serialize_context() is "module.QualName", resolved back via importlib.import_module() + a
-# plain getattr(), not a registry. A class defined inside a test function (qualname containing
-# "<locals>") would not be importable this way.
+# Module-level SerializableObject/LazyObject fixtures: deserialization imports a class by its
+# "module.QualName" tag, so a class defined inside a test function cannot be resolved.
 # ---------------------------------------------------------------------------
 
 
@@ -66,12 +62,7 @@ _FAKE_SESSION_STORE = {"sess-1": "jure"}
 
 
 class _SessionUser(LazyObject):
-    """
-    Mimics the auth use case: carries a cheap session_id (not the resolved user) across
-    serialization, resolves the actual user lazily (and only if something actually awaits it).
-
-    resolve() is sync and returns a coroutine (the recommended pattern for async work).
-    """
+    """Auth-like: serializes session_id; the user resolves only when awaited (sync resolve() returns a coroutine)."""
 
     def __init__(self, session_id: str):
         super().__init__()
@@ -281,9 +272,7 @@ async def test_lazy_object_survives_serialize_deserialize_unresolved_and_resolve
 
 @pytest.mark.asyncio
 async def test_lazy_object_already_resolved_survives_with_shortcut_no_reresolution():
-    """If already resolved before serialization, the resolved value travels alongside the recipe
-    (not instead of it) - deserialize pre-seeds the new instance so it doesn't need to re-run
-    resolution for something already known, without sharing the mutable Python object."""
+    """A resolved value travels alongside the recipe and pre-seeds the deserialized copy, without sharing the object."""
     obj = _SessionUser("sess-1")
     await obj  # resolve it once
 
@@ -303,10 +292,7 @@ def test_deserialize_context_unknown_type_tag_raises():
 
 
 # ---------------------------------------------------------------------------
-# serialize_value/deserialize_value - same tagging convention as serialize_context/
-# deserialize_context, for a single SerializableObject value outside a Context dict (e.g. a
-# command-middleware ViewSetResult crossing the Celery/Redis boundary on its own - see
-# fastapi_viewsets.decorators.celery_viewset.server._to_jsonable).
+# serialize_value/deserialize_value - serialize_context's tagging for a single value outside a Context
 # ---------------------------------------------------------------------------
 
 
@@ -334,8 +320,7 @@ def test_deserialize_value_passes_through_untagged_values():
 
 
 # ---------------------------------------------------------------------------
-# to_jsonable - the shared conversion ViewSetResult's own (de)serialization and
-# celery_viewset.server/client each build their JSON-safe payload from.
+# to_jsonable
 # ---------------------------------------------------------------------------
 
 
@@ -697,9 +682,7 @@ def test_route_viewset_resolves_lazy_object_from_context():
 
 
 def test_custom_endpoint_without_context_param_is_called_without_one():
-    """A custom __router endpoint that declares no `context` param is called without one; the
-    Request stays out of its OpenAPI parameters. The built-in mixin routes (list_items, create, ...)
-    always declare context - see mixins.py - so this is only observable on a hand-written route."""
+    """A custom endpoint without a `context` param is called without one, and Request stays out of its OpenAPI."""
     settings.viewsets_context_processors = []
 
     router = APIRouter()
@@ -728,9 +711,7 @@ def test_custom_endpoint_without_context_param_is_called_without_one():
 
 
 def test_celery_context_round_trip_with_lazy_object():
-    """Context built with a live Request (client side, via settings.viewsets_context_processors)
-    is serialized for the Celery task payload and correctly reconstructed on the worker side - a
-    LazyObject value travels as its unresolved recipe, not a precomputed value."""
+    """Context built from a live Request survives the Celery boundary; a LazyObject travels unresolved."""
     from fastapi_viewsets.decorators.celery_viewset import result_reader
 
     async def session_processor(request, _viewset) -> dict:
@@ -757,11 +738,7 @@ def test_celery_context_round_trip_with_lazy_object():
     try:
         router = APIRouter()
 
-        # Mirrors the documented combined-decorator sequence (see docs/guide/routers.md
-        # "Combining both decorators" and demo/backend/viewsets.py + main.py): celery_viewset
-        # first (patches instance methods to dispatch via Celery), route_viewset second, applied
-        # as a plain function call on the *same* class (not stacked decorator syntax, which would
-        # apply them in the wrong order).
+        # The documented combined sequence: celery_viewset first, then route_viewset on the same class.
         @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
         class ItemViewSet(ListMixin[Item]):
             async def perform_list(self, _context: Context) -> list[Item]:

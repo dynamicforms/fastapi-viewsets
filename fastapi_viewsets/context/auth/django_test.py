@@ -1,9 +1,6 @@
 """
-Exercises DjangoSessionAuthBackend against a real (if minimal) Django app: an actual
-django.contrib.sessions session store and django.contrib.auth user, not mocks - so the auth-hash
-invalidation-on-password-change behaviour (a real Django security feature) is genuinely verified.
-
-Requires the `django` extra (`pip install "dynamicforms-fastapi-viewsets[django]"`).
+Exercises the Django session auth backends against a real session store and auth user, including the
+auth-hash invalidation on a password change. Requires the `django` extra.
 """
 
 import os
@@ -135,9 +132,7 @@ async def test_resolves_to_none_for_unknown_session_key():
 
 @pytest.mark.asyncio
 async def test_resolves_to_none_after_password_change_invalidates_session(django_user, session_key):
-    """django.contrib.auth.get_user() validates the session's stored auth hash - changing the
-    password changes that hash, so a previously-valid session stops resolving, exactly like a real
-    Django request would behave."""
+    """A password change changes the session's auth hash, so the session no longer resolves."""
     from asgiref.sync import sync_to_async
 
     def change_password():
@@ -153,11 +148,10 @@ async def test_resolves_to_none_after_password_change_invalidates_session(django
 
 @pytest.mark.asyncio
 async def test_serialize_ships_only_the_recipe_never_the_live_user(session_key):
-    """The resolved value is a live Django ORM User instance - not JSON-safe - so __serialize__
-    must always ship just the recipe (session_key), unlike the default LazyObject shortcut."""
+    """__serialize__ ships only the recipe (session_key), never the resolved User instance."""
     backend = DjangoSessionAuthBackend()
     lazy = backend.try_handle(_make_request(session_key))
-    await lazy  # resolve it
+    await lazy
 
     payload = lazy.__serialize__()
     assert payload == {"recipe": {"session_key": session_key}}
@@ -205,8 +199,7 @@ def test_cookie_backend_ignores_the_header():
 
 
 def test_cookie_backend_defaults_to_djangos_session_cookie_name():
-    """cookie_name=None (the default) means 'whatever django.conf.settings.SESSION_COOKIE_NAME is'
-    - Django's own default is "sessionid", already configured for these tests."""
+    """cookie_name=None reads django.conf.settings.SESSION_COOKIE_NAME ("sessionid" here)."""
     from django.conf import settings as django_settings
 
     assert django_settings.SESSION_COOKIE_NAME == "sessionid"
@@ -224,8 +217,7 @@ def test_cookie_backend_custom_cookie_name():
 
 @pytest.mark.asyncio
 async def test_cookie_backend_resolves_to_real_user_for_valid_session(django_user, session_key):
-    """Same underlying resolution/auth-hash validation as the header backend - proven against a
-    real Django session, not just a mock."""
+    """The cookie backend resolves a real Django session as the header backend does."""
     backend = DjangoSessionCookieAuthBackend()
     lazy = backend.try_handle(_make_cookie_request(session_key))
     user = await lazy
@@ -236,8 +228,7 @@ async def test_cookie_backend_resolves_to_real_user_for_valid_session(django_use
 
 @pytest.mark.asyncio
 async def test_header_and_cookie_backends_compose_via_the_auth_processor_chain(session_key):
-    """The documented pattern: register both, first match wins - a request carrying either
-    credential shape is recognized."""
+    """With both backends registered, a request carrying either credential is recognised."""
     from fastapi_viewsets.conf import settings
     from fastapi_viewsets.context.auth import auth_context_processor
 

@@ -1,9 +1,6 @@
 """
-Cursor pagination in memory: the encoding, the predicate, and walking a list end to end.
-
-The properties worth pinning are the ones offset paging gets wrong - that a page never repeats or
-skips a row when the collection changes underneath it - and the ones a single-key cursor gets
-wrong, which is everything to do with multi-key ordering and ties.
+Cursor pagination in memory: encoding, the predicate, and end-to-end walks, including pages that
+must not repeat or skip rows when the collection changes, and multi-key orderings with ties.
 """
 
 import base64
@@ -78,10 +75,7 @@ def test_a_cursor_round_trips():
 
 
 def test_values_are_coerced_back_to_the_fields_own_type():
-    """
-    JSON does not remember which of these was an int. Comparing the string "2003" to an integer
-    column matches nothing at all and looks exactly like the end of the collection.
-    """
+    """A string "2003" would match no integer row and look like the end of the collection."""
     raw = CursorState({"year": "2003", "id": "42"}, query="q").encode()
     decoded = decode_cursor(raw, KEYS, "q", {"year": int, "id": int})
     assert decoded.position == {"year": 2003, "id": 42}
@@ -149,10 +143,7 @@ def predicate(position, *, keys=KEYS, backwards=False, inclusive=False) -> Curso
 
 
 def test_the_predicate_compares_the_whole_tuple_not_just_the_first_key():
-    """
-    A single-key cursor cannot tell these two apart, which is why it needs tie-counting and this
-    does not.
-    """
+    """Rows sharing the first key are told apart by the rest of the tuple."""
     anchor = {"year": 2000, "id": 5}
     assert predicate(anchor).matches(track(6, 2000)) is True
     assert predicate(anchor).matches(track(4, 2000)) is False
@@ -250,10 +241,7 @@ def test_the_last_page_has_no_next():
 
 
 def test_a_multi_key_ordering_with_many_ties_still_visits_each_record_once():
-    """
-    `year` takes three values across 23 records, so a cursor that stored only the first key would
-    have to count its way through the ties. This one does not store only the first key.
-    """
+    """Ties on `year` (three values across 23 records) are paged through by the full key tuple."""
     client = client_for(library(23))
     seen = [id_ for page in walk(client, sort="year:asc") for id_ in page]
     assert sorted(seen) == list(range(1, 24))
@@ -269,10 +257,7 @@ def test_paging_backwards_returns_the_previous_page():
 
 
 def test_inserting_a_record_does_not_shift_the_next_page():
-    """
-    The thing offset paging gets wrong. With `?offset=5` a record inserted before the page boundary
-    pushes one record from page 1 onto page 2, where it appears twice.
-    """
+    """With offset paging, a record inserted before the boundary would repeat a row on page 2."""
     database = library(20)
     client = client_for(database)
     page_one = client.get("/tracks", params={"sort": "id:asc"}).json()
@@ -284,11 +269,7 @@ def test_inserting_a_record_does_not_shift_the_next_page():
 
 
 def test_the_first_anchor_finds_records_inserted_before_the_page():
-    """
-    Why the anchor is a row inside the page. Reading back from `first` picks up anything that
-    landed in front of it since - and returns `first` itself as well, which is the one duplicate
-    the client drops.
-    """
+    """Reading back from `first` returns rows inserted before the page, plus the anchor row itself."""
     database = {n: Track(id=n, title=f"Track {n}", year=2000) for n in range(10, 20)}
     client = client_for(database)
     page = client.get("/tracks", params={"sort": "id:asc"}).json()
@@ -415,10 +396,7 @@ def test_nulls_sit_at_the_end_the_viewset_names_when_ascending():
 
 @pytest.mark.parametrize("nulls", ["first", "last"])
 def test_the_direction_reverses_which_end_nulls_are_at(nulls):
-    """
-    `nulls` names the end when ascending. NULL is a value below or above every other, not a row
-    pinned to an edge, so descending swaps it - unlike SQL's `NULLS FIRST`, which does not move.
-    """
+    """`nulls` names the end when ascending; descending swaps it, unlike SQL's `NULLS FIRST`."""
     client = nullable_client(nulls=nulls)
     ascending = client.get("/tracks", params={"sort": "year:asc"}).json()
     descending = client.get("/tracks", params={"sort": "year:desc"}).json()

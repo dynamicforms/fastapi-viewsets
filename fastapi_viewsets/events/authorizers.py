@@ -36,11 +36,8 @@ raises refuses the topic with that exception.
 
 async def authorize_topic(request: Request, context: Context, topic: str) -> None:
     """
-    Runs `settings.viewsets_event_authorizers` in list order for `topic` and returns when one
-    admits it. The first True admits the topic; the first False, or no decision at all, raises
-    `EventTopicRefusedError` (403). An exception an authorizer raises, an `HTTPException` included,
-    propagates and the authorizers after it do not run. An authorizer may also return its decision
-    without an awaitable.
+    Runs `settings.viewsets_event_authorizers` in order: the first True admits `topic`; the first False, or
+    no decision, raises `EventTopicRefusedError` (403). An authorizer's exception propagates.
     """
     for authorizer in settings.viewsets_event_authorizers:
         decision = authorizer(request, context, topic)
@@ -60,8 +57,7 @@ async def allow_all(_request: Request, _context: Context, _topic: str) -> bool:
 
 
 async def allow_authenticated(_request: Request, context: Context, _topic: str) -> bool | None:
-    """Admits a topic when `await context.user` is truthy; None otherwise, and for a context without
-    `user`."""
+    """Admits a topic when `await context.user` is truthy; None otherwise or without `user` in the context."""
     if "user" not in context:
         return None
     return True if await context.user else None
@@ -69,9 +65,8 @@ async def allow_authenticated(_request: Request, context: Context, _topic: str) 
 
 class DeclaredSources:
     """
-    Admits a custom topic through the `authorizer` of the source that declared its name: the answer
-    is that authorizer's. A viewset topic, a name no source declared, and a source declared without
-    an authorizer get None.
+    Defers a custom topic to the `authorizer` of the source that declared its name; None for a viewset topic
+    or a source without an authorizer.
     """
 
     async def __call__(self, request: Request, context: Context, topic: str) -> bool | None:
@@ -91,8 +86,7 @@ class DeclaredSources:
 
 
 def _routes(app: Any) -> Iterator[Any]:
-    """Every route of `app` with every `include_router` prefix and dependency applied: its `path`,
-    `endpoint` and `dependencies` are those the application serves the route with."""
+    """Every route of `app` as served: `include_router` prefixes and dependencies applied."""
     try:
         from fastapi.routing import iter_route_contexts
     except ImportError:  # a FastAPI whose include_router copies the routes, prefixed, onto the app
@@ -120,17 +114,14 @@ class ViewsetMatch:
     route: Any
     """The application's route of `action`."""
     path_params: dict[str, Any]
-    """The values of the path parameters of the routed base path, read from the topic and converted
-    as Starlette converts them for a request."""
+    """Path parameters of the routed base path, read from the topic and converted as for a request."""
 
 
 def match_viewset(app: Any, topic: str) -> ViewsetMatch | None:
     """
-    The first route of `app`, in routing order, whose endpoint carries `__viewset_class__` and, as
-    `__viewset_action__`, the class's `list_items`, or `retrieve` for a class without `list_items`,
-    and whose path without that action's path in `__viewset_metadata__["paths"]` matches `topic`
-    as Starlette matches a request path, path parameters included: `/orgs/{org_id}/tracks`
-    matches the topic `/orgs/7/tracks`. None when no route matches.
+    The first route of `app` serving a viewset's gate action (`list_items`, else `retrieve`) whose base path
+    matches `topic` as Starlette matches a request path: `/orgs/{org_id}/tracks` matches `/orgs/7/tracks`.
+    None when no route matches.
     """
     for route in _routes(app):
         endpoint = getattr(route, "endpoint", None)
@@ -168,10 +159,8 @@ def _with_path_params(request: Request, path_params: dict[str, Any]) -> Request:
 
 async def _route_dependencies_admit(request: Request, route: Any) -> bool:
     """
-    Resolves the route's `dependencies` other than the one that runs `Middleware.depends()` (those of
-    the application, of `include_router`, of the `APIRouter` and of the route) against `request`,
-    as FastAPI resolves them before the endpoint, honouring `app.dependency_overrides`. False when a
-    parameter of one does not validate; an exception one raises propagates.
+    Resolves the route's `dependencies` (except the `Middleware.depends()` bridge) as FastAPI would, honouring
+    `dependency_overrides`. False when a parameter does not validate; a raised exception propagates.
     """
     dependencies = [
         depends
@@ -209,34 +198,12 @@ async def _route_dependencies_admit(request: Request, route: Any) -> bool:
 
 class ViewsetTopics:
     """
-    Admits a viewset's topic to a caller the viewset itself admits to its `list_items`, or to its
-    `retrieve` when it has no `list_items`.
+    Admits a viewset's topic to a caller the viewset admits to its `list_items` (else `retrieve`); None for a
+    topic that is not a viewset's.
 
-    A topic that does not start with `/`, and a topic no viewset on `request.app` has, get None (see
-    `match_viewset`).
-
-    For a class without `@event_scope`, the checks a request to that action passes before the
-    command chain run against the calling request, which carries the path parameters read from the
-    topic as `path_params`:
-
-    1. the route's `dependencies` other than `route_viewset`'s own, those of the application, of
-       `include_router`, of the `APIRouter` and of the route itself; a parameter of one that does not
-       validate refuses the topic (False);
-    2. `depends()` of every effective middleware, with the viewset class and the calling context
-       rebound to the action's `@action_configuration`, `Context(context.raw(),
-       action_configuration=..., action_name=...)`: `settings.viewsets_command_middleware` followed
-       by the middleware instances the configuration adds.
-
-    A check in a middleware's `__call__` or in `perform_*` does not run for such a class. For a class
-    with `@event_scope`, the gate run of `resolve_topic` admits the topic: the route's dependencies,
-    the context processors, `depends()` and `__call__` of every effective middleware and the scope's
-    resolver, against a request of its own (see `fastapi_viewsets.events.scopes`). A viewset that is
-    not split by tenant gets the same checks with a constant resolver,
-    `@event_scope(lambda request, context: "all")`.
-
-    An `HTTPException` propagates: `Session` raises 401, `Authorization` 403, `RateLimiter` 429 and
-    counts the call as one call of that action, `EventScopeMissingError` 403 for a resolver that
-    answers None. When none raises, the topic is admitted.
+    Without `@event_scope`: the route's dependencies (False when one does not validate) and every effective
+    middleware's `depends()` run, with path parameters read from the topic. `__call__` and `perform_*` checks
+    do not run. With `@event_scope`, `resolve_topic` runs the full gate. A raised `HTTPException` propagates.
     """
 
     async def __call__(self, request: Request, context: Context, topic: str) -> bool | None:

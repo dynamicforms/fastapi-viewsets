@@ -1,22 +1,9 @@
 """
-Declarative filters.
+Declarative filters: `make_filter_model(Track, {"year": ["exact", "gte"]})` declares which fields
+accept which operators and yields query parameters, an OpenAPI schema and in-memory filtering.
 
-A viewset says which fields accept which operators, and gets query parameters, an OpenAPI schema
-and in-memory filtering for free:
-
-    TrackFilter = make_filter_model(Track, {
-        "year": ["exact", "gte", "lte"],
-        "title": ["icontains"],
-        "genres": ["overlaps"],
-    })
-
-    class TrackViewSet(CollectionViewSet[int, Track], PaginatedListMixin[Track, TrackFilter]):
-        ...
-
-Each filter carries one implementation - `matches()`, in memory, always present. A backend that can
-do better registers a compiler for the filters it understands (see registry.compiles); one it has
-not learned simply leaves the whole stage to `matches()`. Hand-written `filter_list` is the answer
-for anything an operator would express badly.
+Each filter implements `matches()` in memory. A backend registers compilers for the filters it
+understands (`registry.compiles`); a stage holding one it does not understand runs in memory.
 """
 
 from .base import Filter, FilterError, FilterSet

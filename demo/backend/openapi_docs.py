@@ -1,20 +1,8 @@
 """
-A "Try it in Swagger UI" link on every operation, for the ReDoc page.
-
-ReDoc cannot execute requests; Swagger UI can. The schema carries a deep link from each operation
-to its Swagger UI entry, and each page hides what belongs to the other.
-
-Both pages render the *same* schema, so the link cannot be added for one and omitted for the
-other - it is emitted once and hidden with CSS in Swagger UI, where it would only point at itself.
-
-Constraints:
-
-* The class goes on a wrapping `<div>`, never on the `<a>`. Swagger UI's markdown sanitiser strips
-  `class` from anchors specifically, so a `<a class="...">` arrives unstyled and unhideable.
-* The hiding rule also matches by `href` prefix, because that is the one attribute that has to
-  survive - a link without it would not be a link.
-* FastAPI's built-in `docs_url`/`redoc_url` have no hook for extra `<head>` content, so both pages
-  are served by hand.
+A "Try it in Swagger UI" link on every operation, for the ReDoc page. Both pages render the same
+schema, so the link is hidden with CSS in Swagger UI. The class goes on a wrapping `<div>`: Swagger
+UI's sanitiser strips `class` from anchors. Both pages are served by hand, as FastAPI's `docs_url`
+and `redoc_url` take no extra `<head>` content.
 """
 
 import re
@@ -44,19 +32,14 @@ REDOC_HEAD = """
 
 SWAGGER_HEAD = """
 <style>
-  /* Matched by href as well as by class: per-operation descriptions go through a stricter
-     sanitiser than the top-level one, and the wrapping div's class does not always survive it. */
+  /* Matched by href too: the stricter per-operation sanitiser may strip the div's class. */
   .api-try-button, a[href^="/docs#/"] { display: none !important; }
 </style>
 """
 
 
 def _anchor(tag: str, operation_id: str) -> str:
-    """
-    Swagger UI's own deep-link slug rule, as far as it can be mirrored from outside: anything that
-    is not a word character or a hyphen becomes an underscore. If it ever stops matching, the link
-    still opens Swagger UI - just not scrolled to the operation.
-    """
+    """Swagger UI's deep link: a tag character other than a word character or hyphen becomes `_`."""
     slug = re.sub(r"[^\w-]", "_", tag)
     return f"/docs#/{slug}/{operation_id}"
 
