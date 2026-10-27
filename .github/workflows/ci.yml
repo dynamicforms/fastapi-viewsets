@@ -26,19 +26,20 @@ jobs:
     env:
       FASTAPI_VIEWSETS_TEST_REDIS_URL: redis://localhost:6379/0
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e .[dev]
-      - run: ruff check .
-      - run: ruff format --check .
-      - run: pytest
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest
+      - run: uv build
 
   node:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
@@ -57,18 +58,18 @@ jobs:
       pull-requests: write
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: astral-sh/setup-uv@v10.3.2
         with:
           python-version: '3.12'
-      - run: pip install -e .[dev]
+      - run: uv sync --locked
       - name: Python tests with coverage
         run: |
-          coverage run -m pytest
-          coverage json
+          uv run coverage run -m pytest
+          uv run coverage json
 
       - uses: actions/setup-node@v5
         with:
