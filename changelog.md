@@ -6,6 +6,15 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.3] - 2026-10-27
+
+### Added
+
+- The `start` event of `onCallActivity` carries the call's HTTP `method` (`CallEvent.method`); the REST
+  and muxws proxies pass it to `issueCall(promise, key, background, method)`. A busy indicator leaves
+  out what a server does not track by method, e.g. a `GET`, whose `Idempotency-Key` names no
+  operation.
+
 ## [0.14.2] - 2026-10-27
 
 ### Fixed

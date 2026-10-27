@@ -105,7 +105,7 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
     } catch (error) {
       call = Promise.reject(error);
     }
-    return issueCall(call, key, options.background);
+    return issueCall(call, key, options.background, method);
   }
 
   /** One attempt, through axios' per-verb methods: application test doubles stub those, not `request()`. */

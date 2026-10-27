@@ -117,11 +117,11 @@ let capturing: { key?: string } | null = null;
 
 /**
  * Sets `key` on `promise`, hands it to the enclosing keyed method, and emits `start` / `settle` call
- * events. Transports call this synchronously from `request()`.
+ * events. Transports call this synchronously from `request()`; `method` is the call's HTTP method.
  */
-export function issueCall<R>(promise: Promise<R>, key: string, background = false): ViewSetCall<R> {
+export function issueCall<R>(promise: Promise<R>, key: string, background = false, method?: string): ViewSetCall<R> {
   if (capturing && capturing.key === undefined) capturing.key = key;
-  emit({ type: 'start', key, background: background || backgroundDepth > 0 });
+  emit({ type: 'start', key, background: background || backgroundDepth > 0, ...(method ? { method } : {}) });
   promise.then(
     () => emit({ type: 'settle', key, ok: true }),
     (error: unknown) => emit({ type: 'settle', key, ok: false, error }),
@@ -209,7 +209,7 @@ function keyedMethod(method: (...args: unknown[]) => unknown): (...args: unknown
  * What happens to a call issued through a proxy, as `onCallActivity` reports it.
  *
  * - `start`: the call was issued. `background` is `RequestOptions.background`, or true for a call
- *   issued inside `inBackground`.
+ *   issued inside `inBackground`. `method` is the call's HTTP method (`GET`, `POST`, ...).
  * - `retry`: an attempt ended without an answer and is repeated. `failure` is how it ended,
  *   `attempt` the number of the attempt that ended (1 for the first), `delayMs` the wait before the
  *   repeat is sent.
@@ -217,7 +217,7 @@ function keyedMethod(method: (...args: unknown[]) => unknown): (...args: unknown
  *   reason, the same value the call's promise rejects with.
  */
 export type CallEvent =
-  | { readonly type: 'start'; readonly key: string; readonly background: boolean }
+  | { readonly type: 'start'; readonly key: string; readonly background: boolean; readonly method?: string }
   | {
       readonly type: 'retry';
       readonly key: string;

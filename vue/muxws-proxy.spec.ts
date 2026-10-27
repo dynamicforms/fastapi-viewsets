@@ -532,7 +532,7 @@ describe('MuxwsProxyImpl — repeats', () => {
     expect(flaky.opened[0].cancelled).toBe(true);
   });
 
-  it('reports the call and its repeat to onCallActivity under the call key', async () => {
+  it('reports the call with its method and its repeat to onCallActivity under the call key', async () => {
     const events: CallEvent[] = [];
     const stop = onCallActivity((event) => events.push(event));
     try {
@@ -543,7 +543,7 @@ describe('MuxwsProxyImpl — repeats', () => {
       await vi.advanceTimersByTimeAsync(0);
       const { key } = call;
       expect(events).toEqual([
-        { type: 'start', key, background: false },
+        { type: 'start', key, background: false, method: 'POST' },
         { type: 'retry', key, failure: 'timeout', attempt: 1, delayMs: 0 },
         { type: 'settle', key, ok: true },
       ]);

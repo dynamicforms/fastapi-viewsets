@@ -223,7 +223,7 @@ closes for good (`onClose` with `willRetry` false) ends the wait, and the call r
 ### Call activity
 
 `onCallActivity(listener)` reports every call issued through a proxy, over REST and muxws: `start`
-when it is issued, `retry` for each repeat, with how the attempt ended and the delay before the
+when it is issued, with its HTTP `method`, `retry` for each repeat, with how the attempt ended and the delay before the
 repeat, and `settle` when its promise settles, with `error`, the rejection reason, when it rejected.
 Each event carries the call's `key`. A busy indicator, a connectivity notice or a central error
 report builds on it; `RequestOptions.background: true` marks a call such an indicator leaves out, and

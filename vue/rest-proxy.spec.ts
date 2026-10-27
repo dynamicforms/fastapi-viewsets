@@ -963,7 +963,7 @@ describe('RestProxyImpl — Idempotency-Key and repeats', () => {
     expect(signalOf(http.post, 1).aborted).toBe(false);
   });
 
-  it('reports the call and its repeat to onCallActivity under the call key, background as asked', async () => {
+  it('reports the call with its method and its repeat to onCallActivity, background as asked', async () => {
     class Background extends RestProxyImpl<number, Item, 'id'> {
       async quiet(): Promise<Item> {
         return this.request<Item>('POST', '/quiet', { background: true });
@@ -985,7 +985,7 @@ describe('RestProxyImpl — Idempotency-Key and repeats', () => {
       await vi.advanceTimersByTimeAsync(0);
       const { key } = call;
       expect(events).toEqual([
-        { type: 'start', key, background: true },
+        { type: 'start', key, background: true, method: 'POST' },
         { type: 'retry', key, failure: 'lost', attempt: 1, delayMs: 1000 },
         { type: 'settle', key, ok: true },
       ]);

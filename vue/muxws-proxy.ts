@@ -191,7 +191,7 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
     } catch (error) {
       call = Promise.reject(error);
     }
-    return issueCall(call, key, options.background);
+    return issueCall(call, key, options.background, method);
   }
 
   /** One attempt: one stream, opened synchronously. `headers` are those the stream went out with. */

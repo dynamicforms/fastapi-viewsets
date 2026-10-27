@@ -138,14 +138,14 @@ one attempt.
 
 ```ts
 type CallEvent =
-  | { readonly type: 'start'; readonly key: string; readonly background: boolean }
+  | { readonly type: 'start'; readonly key: string; readonly background: boolean; readonly method?: string }
   | { readonly type: 'retry'; readonly key: string; readonly failure: 'timeout' | 'lost'; readonly attempt: number; readonly delayMs: number }
   | { readonly type: 'settle'; readonly key: string; readonly ok: boolean; readonly error?: unknown };
 ```
 
 | Event | When | Fields |
 |-------|------|--------|
-| `start` | The call is issued, synchronously in `request()` | `background`: `RequestOptions.background`, or `true` inside `inBackground` |
+| `start` | The call is issued, synchronously in `request()` | `background`: `RequestOptions.background`, or `true` inside `inBackground`; `method`: the call's HTTP method, as the transport passed it to `issueCall` |
 | `retry` | An attempt ended without an answer and a repeat will be sent | `failure`: how it ended; `attempt`: the number of the attempt that ended, 1 for the first; `delayMs`: the wait before the repeat |
 | `settle` | The call's promise settled | `ok`: false when it rejected; `error`: the rejection reason, the value the call's promise rejects with (an `AxiosError`, a `ViewSetRequestError`, a muxws error), present when `ok` is false |
 
@@ -170,7 +170,7 @@ interface PendingCall {
 | `IDEMPOTENCY_KEY_HEADER` | `'Idempotency-Key'` |
 | `newCallKey(): string` | A version 4 UUID: `crypto.randomUUID()`, or built from `crypto.getRandomValues()` where `randomUUID` is absent (an insecure context) |
 | `idempotencyKeyHeader(key: string): string` | `key` as a Structured Field string: quoted, `"` and `\` escaped. Throws `TypeError` for an empty key or one with a character outside printable ASCII |
-| `issueCall<R>(promise: Promise<R>, key: string, background = false): ViewSetCall<R>` | Sets `key` on `promise` and returns it. Called synchronously from a transport's `request()`, it also gives `key` to the promise of the proxy method running around it. Reports `start` (with `background`, `true` also inside `inBackground`) to the `onCallActivity` listeners at once and `settle` (with the rejection reason as `error`) when `promise` settles |
+| `issueCall<R>(promise: Promise<R>, key: string, background = false, method?: string): ViewSetCall<R>` | Sets `key` on `promise` and returns it. Called synchronously from a transport's `request()`, it also gives `key` to the promise of the proxy method running around it. Reports `start` (with `background`, `true` also inside `inBackground`, and `method` when given) to the `onCallActivity` listeners at once and `settle` (with the rejection reason as `error`) when `promise` settles |
 | `inBackground<R>(fn: () => R): R` | Runs `fn` and returns what it returns. Every call a proxy issues while `fn` runs synchronously reports `background: true`; a call issued after an `await` inside `fn` does not. Calls nest |
 | `onCallActivity(listener: (event: CallEvent) => void): () => void` | Calls `listener` for every `CallEvent` of every call issued through a proxy, REST and muxws alike; returns the function that removes it. A listener that throws is logged with `console.error` and affects neither the call nor the other listeners |
 | `pendingCalls(): readonly PendingCall[]` | Every call issued through a proxy that has not settled, oldest first; a snapshot |
