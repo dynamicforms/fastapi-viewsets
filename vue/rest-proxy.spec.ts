@@ -191,35 +191,6 @@ describe('RestProxyImpl — direct instance', () => {
     expect(page.hasMore).toBe(true);
   });
 
-  it('list(), listPage() and listCursor() send listType as X-List-Type', async () => {
-    const types = { 'X-List-Type': 'compact' };
-    http.get.mockResolvedValueOnce({ data: MOCK_ITEMS });
-    await proxy.list({ sort: 'name:asc' }, { listType: 'compact' });
-    expect(http.get).toHaveBeenLastCalledWith(
-      '/items',
-      sent({ params: { sort: 'name:asc' }, headers: { 'X-List-Shape': 'plain', ...types } }),
-    );
-    http.get.mockResolvedValueOnce({
-      data: { results: MOCK_ITEMS, offset: 0, limit: 2, count: 2, has_more: false, has_previous: false },
-    });
-    await proxy.listPage({ limit: 2 }, { listType: 'compact' });
-    expect(http.get).toHaveBeenLastCalledWith(
-      '/items',
-      sent({ params: { limit: 2 }, headers: { 'X-List-Shape': 'paginated', ...types } }),
-    );
-    http.get.mockResolvedValueOnce({
-      data: { results: [], limit: 2, has_more: false, has_previous: false, next: null, previous: null },
-    });
-    await proxy.listCursor(undefined, { listType: 'compact' });
-    expect(http.get).toHaveBeenLastCalledWith('/items', sent({ headers: { 'X-List-Shape': 'cursor', ...types } }));
-  });
-
-  it('sends no X-List-Type without listType', async () => {
-    http.get.mockResolvedValue({ data: MOCK_ITEMS });
-    await proxy.list(undefined, {});
-    expect(http.get).toHaveBeenCalledWith('/items', sent({ headers: { 'X-List-Shape': 'plain' } }));
-  });
-
   it('listPage() rejects a cursor envelope from a viewset that offers only cursor paging', async () => {
     http.get.mockResolvedValue({
       data: { results: [], limit: 2, has_more: false, has_previous: false, next: null, previous: null },

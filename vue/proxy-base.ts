@@ -30,7 +30,6 @@ import type {
   CursorParams,
   DestroyReturnData,
   KeyType,
-  ListOptions,
   ListParams,
   LookupItem,
   LookupParams,
@@ -67,12 +66,6 @@ export interface RequestOptions {
    */
   background?: boolean;
 }
-
-/** The header that selects the response shape of `GET {basePath}`. */
-const LIST_SHAPE_HEADER = 'X-List-Shape';
-
-/** The header that selects the row type of `GET {basePath}`, by its wire name; see `ListOptions`. */
-const LIST_TYPE_HEADER = 'X-List-Type';
 
 /** The response shapes of `GET {basePath}`, as the BE names them in `X-List-Shape`. */
 export type ListShape = 'plain' | 'paginated' | 'cursor';
@@ -511,8 +504,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    * Subscribes the ViewSet's topic to `records_changed`: `options.topic`, else
    * `ProxyBaseOptions.topic`, else `basePath`; see `WatchOptions`. With `fetch`, a change without
    * `record` is completed with `retrieve(pk)` (`fetch: true`) or by the `fetch` function, issued as
-   * background calls. A factory-built ViewSet types the rows `onChange` receives with the row type
-   * of its list without `listType`, `R` of `restViewSet<T, L, V, R>()`.
+   * background calls.
    */
   watch(options: WatchOptions<T, K>): EventSubscription {
     return watchRecords<T, K>(
@@ -535,25 +527,18 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   }
 
   /**
-   * Requests `shape` with `X-List-Shape`, and the row type `listType` with `X-List-Type` when it is
-   * given, and verifies that the BE answered in `shape`; see ListShapeMismatchError.
+   * Requests `shape` with `X-List-Shape` and verifies that the BE answered in it; see
+   * ListShapeMismatchError.
    */
-  private async requestList<R>(shape: ListShape, query?: QueryParams, listType?: string): Promise<R> {
-    const headers: Record<string, string> = { [LIST_SHAPE_HEADER]: shape };
-    if (listType !== undefined) headers[LIST_TYPE_HEADER] = listType;
-    const body = await this.request<unknown>('GET', '', { query, headers });
+  private async requestList<R>(shape: ListShape, query?: QueryParams): Promise<R> {
+    const body = await this.request<unknown>('GET', '', { query, headers: { 'X-List-Shape': shape } });
     const received = listShapeOf(body);
     if (received !== shape) throw new ListShapeMismatchError(shape, received);
     return body as R;
   }
 
-  /**
-   * `options.listType` selects the BE viewset's row type. The rows are typed `T` here; a
-   * factory-built ViewSet types them from `restViewSet<T, L, V, R>()` (see ListMixin). The same
-   * holds for `listCursor()` and `listPage()`.
-   */
-  list(params?: ListParams, options?: ListOptions): ViewSetActionCall<T[]> {
-    return this.requestList<T[]>('plain', params, options?.listType);
+  list(params?: ListParams): ViewSetActionCall<T[]> {
+    return this.requestList<T[]>('plain', params);
   }
 
   /**
@@ -563,7 +548,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    * Follow `next` to walk forward. Unlike offset paging, a row inserted or removed behind you
    * cannot make the next page repeat or skip anything.
    */
-  listCursor(params?: CursorParams, options?: ListOptions): ViewSetActionCall<CursorPage<T>> {
+  listCursor(params?: CursorParams): ViewSetActionCall<CursorPage<T>> {
     return this.requestList<{
       results: T[];
       limit: number;
@@ -573,7 +558,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
       previous: string | null;
       first: string | null;
       last: string | null;
-    }>('cursor', params, options?.listType).then((page) => ({
+    }>('cursor', params).then((page) => ({
       results: page.results,
       limit: page.limit,
       hasMore: page.has_more,
@@ -593,7 +578,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    * declares, so only the envelope's own fields are renamed here. The records inside are passed
    * through untouched.
    */
-  listPage(params?: PageParams, options?: ListOptions): ViewSetActionCall<PaginatedList<T>> {
+  listPage(params?: PageParams): ViewSetActionCall<PaginatedList<T>> {
     return this.requestList<{
       results: T[];
       offset: number;
@@ -601,7 +586,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
       count: number | null;
       has_more: boolean;
       has_previous: boolean;
-    }>('paginated', params, options?.listType).then((page) => ({
+    }>('paginated', params).then((page) => ({
       results: page.results,
       offset: page.offset,
       limit: page.limit,

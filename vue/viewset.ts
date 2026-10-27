@@ -18,8 +18,8 @@
  * methods exist.
  */
 
-import type { FetchOption, ViewSetWatch } from './events/changes';
-import type { ActionName, ActionSurface, DefaultSortOf, KeyType, ListTypes, LookupItem } from './mixins';
+import type { ViewSetWatch } from './events/changes';
+import type { ActionName, ActionSurface, DefaultSortOf, KeyType, LookupItem } from './mixins';
 import { MuxwsProxyImpl, type MuxwsProxyOptions } from './muxws-proxy';
 import { FACTORY_BUILT, type ProxyBaseOptions, ViewSetInternals, type ViewSetMixinDeclaration } from './proxy-base';
 import { RestProxyImpl, type RestProxyOptions } from './rest-proxy';
@@ -74,9 +74,8 @@ type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTO
  * `pkFieldName`, but `ViewSetInternals` is deliberately narrow (see its own doc comment), so this
  * type would otherwise hide a field that is genuinely there. Typed as the literal `PK` rather than
  * `string`, since the factory already knows exactly which field it is. `watch()` is added the same
- * way: every ViewSet has it, whichever mixins it declares; its changes carry the rows of a list
- * call without `listType`, `R`, and it takes `fetch: true` only when `R` is `T` (`FetchOption`).
- * `defaultSort()` is added to a ViewSet that declares a list action.
+ * way: every ViewSet has it, whichever mixins it declares. `defaultSort()` is added to a ViewSet that
+ * declares a list action.
  */
 export type ViewSetClass<
   T,
@@ -84,29 +83,19 @@ export type ViewSetClass<
   D extends readonly ViewSetMixinClass[],
   O extends ProxyBaseOptions,
   L = LookupItem,
-  V extends ListTypes = {},
-  R = T,
 > = [D[number]] extends [never]
-  ? ViewSetClassOf<T, PK, D, O, L, V, R>
+  ? ViewSetClassOf<T, PK, D, O, L>
   : [ActionsOf<D[number]>] extends [never]
     ? 'declares must name at least one action: pass the mixin classes themselves, unannotated'
-    : ViewSetClassOf<T, PK, D, O, L, V, R>;
+    : ViewSetClassOf<T, PK, D, O, L>;
 
-type ViewSetClassOf<
-  T,
-  PK extends keyof T,
-  D extends readonly ViewSetMixinClass[],
-  O extends ProxyBaseOptions,
-  L,
-  V extends ListTypes,
-  R,
-> = {
+type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions, L> = {
   new (
     options: Omit<O, 'pkFieldName' | 'declares'>,
   ): ViewSetInternals &
-    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>, L, V, R> &
+    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>, L> &
     DefaultSortOf<ActionsOf<D[number]>> &
-    ViewSetWatch<R, PkType<T, PK>, FetchOption<R, T, PkType<T, PK>>> & { readonly pkFieldName: PK };
+    ViewSetWatch<T, PkType<T, PK>> & { readonly pkFieldName: PK };
   readonly declares: FactoryDeclares<D>;
 };
 
@@ -146,27 +135,21 @@ function bindViewSet(
  * the same call (TS2558). Currying is the only way to have both.
  *
  * `L` is the item type `lookup()` answers with, the BE viewset's TLookupItem; it defaults to
- * `LookupItem`. `V` and `R` are the row types of `list()`, `listPage()` and `listCursor()`: `V` maps
- * the wire name of every row type the BE viewset adds with `MultiTypeListMixin` to that type, and a
- * call selects one with `{ listType }`; `R` is the row type of a call without `listType`, `T` by
- * default, and the first added type for a BE viewset without a `ListMixin` of its own.
- *
- *   class MemberApi extends restViewSet<Member, LookupItem, { compact: MemberRow }>()('id', [ViewSetMixin]) {}
- *   const rows = await api.list({}, { listType: 'compact' }); // MemberRow[]
+ * `LookupItem`.
  */
-export function restViewSet<T, L = LookupItem, V extends ListTypes = {}, R = T>() {
+export function restViewSet<T, L = LookupItem>() {
   return <PK extends PkFieldName<T> & keyof T, D extends readonly ViewSetMixinClass[]>(
     pkFieldName: PK,
     declares: D,
-  ): ViewSetClass<T, PK, D, RestProxyOptions, L, V, R> =>
-    bindViewSet(RestProxyImpl, pkFieldName, declares) as unknown as ViewSetClass<T, PK, D, RestProxyOptions, L, V, R>;
+  ): ViewSetClass<T, PK, D, RestProxyOptions, L> =>
+    bindViewSet(RestProxyImpl, pkFieldName, declares) as unknown as ViewSetClass<T, PK, D, RestProxyOptions, L>;
 }
 
-/** A muxws ViewSet base class. See `restViewSet` for why the call is curried and what `L`, `V` and `R` are. */
-export function muxwsViewSet<T, L = LookupItem, V extends ListTypes = {}, R = T>() {
+/** A muxws ViewSet base class. See `restViewSet` for why the call is curried and what `L` is. */
+export function muxwsViewSet<T, L = LookupItem>() {
   return <PK extends PkFieldName<T> & keyof T, D extends readonly ViewSetMixinClass[]>(
     pkFieldName: PK,
     declares: D,
-  ): ViewSetClass<T, PK, D, MuxwsProxyOptions, L, V, R> =>
-    bindViewSet(MuxwsProxyImpl, pkFieldName, declares) as unknown as ViewSetClass<T, PK, D, MuxwsProxyOptions, L, V, R>;
+  ): ViewSetClass<T, PK, D, MuxwsProxyOptions, L> =>
+    bindViewSet(MuxwsProxyImpl, pkFieldName, declares) as unknown as ViewSetClass<T, PK, D, MuxwsProxyOptions, L>;
 }

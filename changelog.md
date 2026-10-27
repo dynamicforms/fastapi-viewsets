@@ -6,52 +6,40 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.14.0] - 2026-10-26
+## [0.14.0] - 2026-10-27
 
 ### Added
 
-- `MultiTypeListMixin[*Ts]` adds row types to a viewset's list endpoint. A type's wire name is the
-  string in its `Annotated` metadata (`Annotated[MemberRow, "compact"]`), else its class name.
-  Composed beside a list mixin, the list's types are the record type `T`, the default, and the added
-  ones; without one, the mixin provides the list endpoint, the first added type is the default and
-  the list has no filter. The order of the bases does not matter, a reusable subclass of the mixin
-  included. `route_viewset` raises `ValueError` for no types, a type that is not a pydantic model and
-  two types with the same wire name.
-- The `X-List-Type` request header selects the row type of a list response
-  (`fastapi_viewsets.list_shapes.TYPE_HEADER`), over REST, muxws and `celery_viewset`. Without it the
-  list answers in its default type. The header is in the schema as a `Literal` of the wire names when
-  the list has more than one type; the response model is the union of every shape of every type,
-  with one example per combination, and a response is validated as the selected shape and type. The
-  response schema carries `x-list-types` (the default and a `$ref` to each wire name's model) in the
-  OpenAPI document and in `/schema`.
-- Filtering, sorting and the cursor work on records, `T`, whichever type is selected; only the page
-  is converted into the selected type, by the new hook `ListMixin.to_list_item(raw, item_type)`, with
-  `validate_list_item()` for an override. `DjangoORMViewSet.to_list_item` builds the selected type
-  straight from the Django row. A cursor page in another type converts only its first and last row
-  to records for its anchors.
-- `ListMixin.resolve_list_types()` returning `ListTypes`, `ListQuery.list_type` (a direct `get_list`
-  without it answers in the list's default type), `ListEndpoint` (the base of `ListMixin` and
-  `MultiTypeListMixin`), and
-  `UnsupportedListTypeError` (422, `fastapi-viewsets.unsupported_list_type`) for a direct
-  `list_items` call naming a type the list does not have.
-- TS: `restViewSet<T, L, V, R>()` and `muxwsViewSet<T, L, V, R>()`. `V` maps each wire name to its
-  row type, `R` is the row type of a list call without a list type (default `T`). `list()`,
-  `listPage()` and `listCursor()` take `options.listType` and send it as `X-List-Type`: a call
-  without it answers with `R`, a call with a `listType` literal with `V[listType]`, and a call whose
-  options are typed `ListOptions` with any of them (`AnyListRow`); a name not in `V` does not
-  compile. The list mixins and the composites take `V` (and `R`) as type parameters. New types
-  `ListTypes`, `ListTypeName`, `ListRow`, `AnyListRow`, `ListOptions`, `ListTypeOptions`,
-  `ListRows`, `ListRowsOf`, `RowOf`.
-- TS: `watch({ fetch })` takes a function `(pks) => Promise<readonly R[]>`, called once per event
-  with the pks of the changes without a record; its rows are matched by `pkFieldName`, and a pk
-  without a row is reported as deleted. With a `fetch` function, `watch()` changes are typed with
-  the rows it returns, so a list type is watched by fetching with its `listType`; otherwise with
-  `R`, and `fetch: true` compiles only when `R` is `T` (`FetchOption`, `FetchRows`).
+- `ViewSetRouter` (`fastapi_viewsets.decorators`), an `APIRouter` a viewset declares as its
+  `__router` to mount other viewsets under sub-paths of its base path:
+  `__router.sub_viewset("members", MembersViewSet)` routes `MembersViewSet` at
+  `{base_path}/members` as a viewset of its own, with its own endpoints, `/schema`, muxws
+  registration and `__viewset_metadata__` (full `base_path`, `parent`). `sub_viewset(path, viewset,
+  *, lifecycle, pk_field_name, register_muxws, register_rest, action_configuration)` takes a class
+  or an instance, used as the singleton, and returns a `SubViewSet`. Sub-viewsets nest. A plain
+  `APIRouter` keeps working for a viewset that mounts nothing.
+- A sub-viewset is routed ahead of the parent's own routes, so `{base_path}/{pk}` never takes its
+  path, over REST and muxws alike. A request to it passes the parent's checks first, with the parent
+  class and the mount's path as the action name (`settings.viewsets_security_scheme`, the context
+  processors and `Middleware.depends()`; configuration: the parent's class-level
+  `@action_configuration` with the mount's `action_configuration` over it), then its own. The
+  parent's checks are route dependencies carrying `SUB_VIEWSET_GATE_ATTRIBUTE`, so they also run in
+  the events gate run of the sub-viewset's topic.
+- A sub-viewset's operations are listed in the OpenAPI tag group of the viewset at the top of its
+  mounts, and its class docstring registers no tag. A route without a summary of its own is
+  summarised with the mount's path in front of FastAPI's default (`Members: List Items`).
+- `event_scope` accepts a scope name another class declared for a class mounted under that class or
+  mounting it, directly or through further sub-viewsets, and for a subclass of such a class, so a
+  sub-viewset declaring its parent's scope name shares its store topics. An unrelated class still
+  raises `ValueError`.
+- `route_viewset` adds `parent` and `sub_viewsets` to `__viewset_metadata__`.
+- TS: `watch({ fetch })` takes a function `(pks) => Promise<readonly Row[]>` (`FetchRows`), called
+  once per event with the pks of the changes without a record; its rows are matched by
+  `pkFieldName`, and a pk without a row is reported as deleted. `onChange` receives the rows it
+  returns, so a ViewSet's events can be completed with the rows of a sub-viewset.
 
 ### Changed
 
-- `ViewSetProxyBase.list()`, `listPage()` and `listCursor()` take `options?: ListOptions` as their
-  second parameter.
 - **Breaking:** the `in` and `overlaps` operators of a filter model built by `make_filter_model`
   read their values from a repeated query parameter (`?year__in=1999&year__in=2000`), the form the
   TS client sends an array in, instead of a comma-separated string. `?year__in=1999,2000` is one
@@ -62,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A class routed a second time, by another `route_viewset` or another mount, serves its new routes
+  with that routing's base path and singleton instead of the first routing's.
 - The filter model of a list or lookup endpoint is read from the query string field by field: a
   sequence-typed field (`ids: list[int]`) is a query parameter read from a repeated key
   (`?ids=1&ids=2`), not a request body field. Every field is documented in the schema as a query

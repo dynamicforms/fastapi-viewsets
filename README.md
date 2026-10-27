@@ -6,6 +6,8 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
 - **Python mixins for FastAPI** — compose CRUD and bulk endpoints from small, focused mixin classes.
 - **`route_viewset` decorator** — register a viewset on a FastAPI router with a single decorator call.
   Handles type resolution, lifecycle management and OpenAPI schema automatically.
+- **Nested viewsets** — mount a viewset under another one's path (`/accounts/members`) with
+  `ViewSetRouter.sub_viewset`; a request to it passes the parent's checks and its own.
 - **`CollectionViewSet`** — zero-boilerplate in-memory viewset backed by any Python list, set or dict.
   Great for prototyping and testing.
 - **`DjangoORMViewSet`** — back a viewset with a Django QuerySet. The filters it can compile, the
@@ -25,9 +27,7 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
   is pushed, so a dropped push costs latency, not an event. On the frontend, `watch()` on a ViewSet
   follows its topic and `applyChanges()` applies each change to a list of rows.
 - **Three list shapes** — a bare array, offset paging, or cursor paging. A viewset declares which,
-  and may let a client pick per request with an `X-List-Shape` header. `MultiTypeListMixin` adds
-  row types to the list, such as a compact row beside the full record, picked with `X-List-Type`;
-  filtering, sorting and the cursor work on the record, and only the page is converted.
+  and may let a client pick per request with an `X-List-Shape` header.
 - **Declarative filters** — declare which fields accept which operators and get query parameters,
   an OpenAPI schema and filtering for free; backends translate what they can into their own query.
 - **Vue / TypeScript counterpart** — mirror mixin classes and the `restViewSet` / `muxwsViewSet` class

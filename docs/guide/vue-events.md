@@ -345,10 +345,16 @@ are in [`watch()`](../api/vue-mixins#watch).
 `updated` event with the pks of the changes that carry no `record`, inside `inBackground`, and
 matches the rows it returns to the changes by the ViewSet's `pkFieldName`; a pk it returns no row for
 is gone and follows in the `deleted` `onChange`, as a 404 does for `fetch: true`. A rejection is
-passed to `onError` and the event ends in `onResync`. Here the BE filter model declares `id` with
-the `in` operator:
+passed to `onError` and the event ends in `onResync`. `onChange` receives the rows the function
+returns. A grid that lists `MemberRow`s from a [sub-viewset](./nested-viewsets) of an `Account`
+viewset watches the shared topic and reads the changed rows from the sub-viewset; here the
+sub-viewset's filter model declares `id` with the `in` operator:
 
 ```ts
+class AccountApi extends restViewSet<Account>()('id', [ViewSetMixin]) {}
+class MemberApi extends restViewSet<MemberRow>()('id', [PaginatedListMixin]) {}
+
+const members = new MemberApi({ basePath: '/accounts/members', events });
 const watching = members.watch({
   fetch: (pks) => members.list({ id__in: pks }),
   onChange(change) { rows.value = applyChanges(rows.value, change, members.pkFieldName); },
@@ -358,21 +364,6 @@ const watching = members.watch({
 
 One list call per event reads the rows the way the list endpoint shows them, under the same
 `get_queryset` scoping; a row the list no longer shows to the reader is removed.
-
-With a `fetch` function, the changes are typed with the rows that function returns, so a grid that
-shows a list type watches by fetching with the same `listType`:
-
-```ts
-members.watch({
-  fetch: (pks) => members.list({ id__in: pks }, { listType: 'compact' }),
-  onChange(change) { compactRows.value = applyChanges(compactRows.value, change, members.pkFieldName); },
-  onResync() { void reload(); },
-});
-```
-
-Without a `fetch` function, the changes are typed with `R`, the row type of a list call without
-`listType` ([`restViewSet<T, L, V, R>()`](./vue-mixins#list-types)). `fetch: true` reads records with
-`retrieve`, so it compiles only when `R` is `T`.
 
 ### A grid that holds every row
 

@@ -54,7 +54,7 @@ from ..filters import (
     StartsWith,
 )
 from ..list_query import ListQuery, ListRecords
-from ..mixins import filter_set_for, ImplMixin, SortDirection, validate_list_item
+from ..mixins import filter_set_for, ImplMixin, SortDirection
 
 try:
     from django.db.models import CompositePrimaryKey
@@ -175,16 +175,6 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         if isinstance(raw, self.model):
             raw = _ColumnView(raw, self._columns())
         return self.schema.model_validate(raw, from_attributes=True)
-
-    def to_list_item(self, raw: Any, item_type: type) -> Any:
-        """
-        Django row, or a record `land()` converted, to the list row type `item_type`. A Django row
-        is validated straight into `item_type`, so the `schema` model is never built for it;
-        relation fields are read from their column, as `to_record` reads them.
-        """
-        if isinstance(raw, self.model):
-            raw = _ColumnView(raw, self._columns())
-        return validate_list_item(item_type, raw)
 
     def _columns(self) -> dict[str, str]:
         """Relation field name to the name of its column: `{"owner": "owner_id"}`."""

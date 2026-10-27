@@ -10,7 +10,7 @@ and that paging a queryset reads a page rather than a table.
 import asyncio
 
 from dataclasses import dataclass
-from typing import Annotated, Any, ClassVar
+from typing import ClassVar
 
 import pytest
 
@@ -24,7 +24,7 @@ from pydantic import BaseModel, model_validator
 from ..cursor import CursorPredicate, decode_cursor
 from ..filters import Filter, make_filter_model, register_operator
 from ..list_query import build_list_query, ListQuery
-from ..mixins import CursorListMixin, make_all_optional, MultiTypeListMixin, PaginatedListMixin, SortStateColumn
+from ..mixins import CursorListMixin, make_all_optional, PaginatedListMixin, SortStateColumn
 from .django_orm import _cursor_condition, DjangoORMViewSet
 
 
@@ -1068,118 +1068,60 @@ def test_a_schema_declaring_a_relation_column_is_refused():
 
 
 # ---------------------------------------------------------------------------
-# List row types
+# A sub-viewset listing annotated rows of its parent's model
 # ---------------------------------------------------------------------------
 
 
-class TrackTitle(BaseModel):
-    title: str
-
-
-class TrackCard(BaseModel):
+class Owner(BaseModel):
     id: int
-    title: str
-    year: int
+    name: str
 
 
-class TypedTrackViewSet(
-    DjangoORMViewSet[int, Track],
-    MultiTypeListMixin[Annotated[TrackTitle, "title"], TrackCard],
-    CursorListMixin[Track, TrackFilter],
-):
-    model = TrackModel
-    schema = Track
-    default_page_size = 4
-    list_shapes = ("cursor", "paginated", "plain")
-
-    def __init__(self):
-        self.converted: list[int] = []
-
-    def to_record(self, raw: Any) -> Track:
-        if isinstance(raw, TrackModel):
-            self.converted.append(raw.pk)
-        return super().to_record(raw)
-
-
-def typed_query(list_type: type, sort: str | None = None, **kwargs) -> ListQuery:
-    query = build_list_query(None, sort, **kwargs)
-    query.list_type = list_type
-    return query
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("shape", ["paginated", "plain"])
-async def test_a_pushed_down_page_is_built_straight_into_the_selected_type(shape):
-    viewset = TypedTrackViewSet()
-    query = typed_query(TrackCard, "year:desc", limit=None if shape == "plain" else 4)
-    query.shape = shape
-    page = await viewset.get_list(None, query)
-    rows = page if shape == "plain" else page.results
-    assert {"sort"} <= query.applied
-    assert {type(row) for row in rows} == {TrackCard}
-    assert rows[0].year == 2004
-    assert viewset.converted == []
-
-
-@pytest.mark.asyncio
-async def test_a_cursor_builds_records_of_the_edge_rows_alone():
-    viewset = TypedTrackViewSet()
-    seen, cursor = [], None
-    while True:
-        query = typed_query(TrackTitle, "year:asc", limit=4)
-        query.cursor = cursor
-        viewset.converted = []
-        page = await viewset.get_list(None, query)
-        assert {type(row) for row in page.results} == {TrackTitle}
-        assert query.applied >= {"sort", "pagination"}
-        assert len(viewset.converted) == min(len(page.results), 2)
-        seen += [row.title for row in page.results]
-        cursor = page.next
-        if not cursor:
-            break
-    every = [title async for title in TrackModel.objects.values_list("title", flat=True)]
-    assert sorted(seen) == sorted(every)
-    assert len(seen) == len(set(seen))
-
-
-@pytest.mark.asyncio
-async def test_the_in_memory_fallback_filters_records_and_converts_the_page():
-    """`artist` is not a field of TrackTitle; the declined filter reads it off the landed records."""
-    viewset = TypedTrackViewSet()
-    by_artist = make_filter_model(Track, {"artist": ["endswith_demo"]})
-    query = typed_query(TrackTitle, "title:desc", limit=3)
-    query.shape = "paginated"
-    query.fltr = by_artist(artist__endswith_demo="2")
-    page = await viewset.get_list(None, query)
-    assert "filter" not in query.applied
-    assert page.results == [TrackTitle(title=title) for title in ("Track 027", "Track 022", "Track 017")]
-
-
-@pytest.mark.asyncio
-async def test_the_header_selects_the_type_through_list_items():
-    page = await TypedTrackViewSet().list_items(None, sort="id:asc", limit=2, x_list_type="title")
-    assert page.results == [TrackTitle(title="Track 001"), TrackTitle(title="Track 002")]
-
-
-def test_the_cursor_key_still_comes_from_the_schema():
-    assert TypedTrackViewSet().pk_field_name == "id"
-
-
-class NoteOwner(BaseModel):
+class OwnerRow(BaseModel):
     id: int
-    owner: int
+    name: str
+    note_count: int
 
 
-class TypedNoteViewSet(DjangoORMViewSet[int, Note], MultiTypeListMixin[NoteOwner]):
-    model = NoteModel
-    schema = Note
+class OwnerRowsViewSet(DjangoORMViewSet[int, OwnerRow], PaginatedListMixin[OwnerRow, make_all_optional(OwnerRow)]):
+    model = OwnerModel
+    schema = OwnerRow
 
-    def to_record(self, raw: Any) -> Note:  # noqa: ARG002 - fails before reading it
-        raise AssertionError("a NoteOwner row is built without the record")
+    async def perform_list(self, context) -> "models.QuerySet":
+        return self.get_queryset(context).annotate(note_count=models.Count("notemodel"))
 
 
-@pytest.mark.asyncio
-async def test_a_relation_field_of_the_selected_type_is_read_from_its_column(note_rows):
-    query = typed_query(NoteOwner, "id:asc")
-    rows = await TypedNoteViewSet().get_list(None, query)
-    assert rows[:3] == [NoteOwner(id=n, owner=note_rows[n % 3].pk) for n in range(1, 4)]
+def owners_app():
+    from fastapi import APIRouter, FastAPI
+
+    from ..decorators import route_viewset, ViewSetRouter
+    from ..mixins import ViewSetMixin
+
+    router = APIRouter()
+
+    @route_viewset(router, "/owners", pk_field_name="id")
+    class OwnerViewSet(DjangoORMViewSet[int, Owner], ViewSetMixin[int, Owner]):
+        model = OwnerModel
+        schema = Owner
+
+        __router = ViewSetRouter()
+        __router.sub_viewset("rows", OwnerRowsViewSet, pk_field_name="id")
+
+    app = FastAPI()
+    app.include_router(router)
+    return app
+
+
+def test_a_sub_viewset_lists_annotated_rows_of_the_parent_s_model(note_rows):
+    from fastapi.testclient import TestClient
+
+    client = TestClient(owners_app())
+    page = client.get("/owners/rows", params={"sort": "name:asc", "limit": 2}).json()
+    assert page["results"] == [
+        {"id": note_rows[0].pk, "name": "Owner 1", "note_count": 3},
+        {"id": note_rows[1].pk, "name": "Owner 2", "note_count": 3},
+    ]
+    assert page["has_more"] is True
+    assert client.get(f"/owners/{note_rows[2].pk}").json() == {"id": note_rows[2].pk, "name": "Owner 3"}
+    by_count = client.get("/owners/rows", params={"sort": "note_count:desc,id:asc", "note_count": 3}).json()
+    assert [row["name"] for row in by_count["results"]] == ["Owner 1", "Owner 2", "Owner 3"]

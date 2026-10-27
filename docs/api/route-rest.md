@@ -60,10 +60,9 @@ interface RestProxyOptions {
 
 The options form returns a `RestProxy<M>`, which is `ViewSetCalls<M>` — `M` with every method
 returning a [`ViewSetCall`](./idempotency#frontend) — and [`watch()`](./vue-mixins#watch), typed as
-`ViewSetWatch<RowOf<M>, KeyOf<M>, FetchOption<RowOf<M>, RecordOf<M>, KeyOf<M>>>`: the row type of
-a list call without `listType`, the record type and the pk type, read off `M`'s actions; `fetch: true`
-compiles only where those rows are records. The positional form takes no `events` and returns
-`ViewSetCalls<M>`, without `watch()`. Either is an instance of `RestProxyImpl` cast to it. The cast is unchecked: `M` is
+`ViewSetWatch<RecordOf<M>, KeyOf<M>>`: the record and pk types read off `M`'s actions. The
+positional form takes no `events` and returns `ViewSetCalls<M>`, without `watch()`. Either is an
+instance of `RestProxyImpl` cast to it. The cast is unchecked: `M` is
 whatever the caller wrote, and nothing compares it with the object. The standard actions listed under [HTTP
 mapping](#http-mapping) are implemented by `RestProxyImpl` and are therefore really there; anything else named in `M` —
 a custom endpoint of your own — type-checks at the call site and is `undefined` when called.
@@ -81,12 +80,12 @@ without that class's own methods. A factory-built ViewSet is constructed directl
 The concrete class behind every proxy. Can be subclassed for custom behaviour:
 
 ```ts
-import { RestProxyImpl, type KeyType, type ListOptions, type ListParams } from '@dynamicforms/fastapi-viewsets';
+import { RestProxyImpl, type KeyType } from '@dynamicforms/fastapi-viewsets';
 
 class AuthenticatedProxy<K extends KeyType, T, PK extends keyof T> extends RestProxyImpl<K, T, PK> {
-  async list(params?: ListParams, options?: ListOptions): Promise<T[]> {
+  async list(): Promise<T[]> {
     // custom pre/post processing
-    return super.list(params, options);
+    return super.list();
   }
 }
 ```
@@ -103,9 +102,9 @@ first attempt's `config` after the request interceptors, other than `Accept`, `A
 
 | Method | HTTP verb | URL |
 |--------|-----------|-----|
-| `list(params, options)` | `GET` | `{basePath}` (header `X-List-Shape: plain`) |
-| `listPage(params, options)` | `GET` | `{basePath}` (query: `offset`, `limit`; header `X-List-Shape: paginated`) |
-| `listCursor(params, options)` | `GET` | `{basePath}` (query: `cursor`, `limit`; header `X-List-Shape: cursor`) |
+| `list()` | `GET` | `{basePath}` (header `X-List-Shape: plain`) |
+| `listPage(params)` | `GET` | `{basePath}` (query: `offset`, `limit`; header `X-List-Shape: paginated`) |
+| `listCursor(params)` | `GET` | `{basePath}` (query: `cursor`, `limit`; header `X-List-Shape: cursor`) |
 | `retrieve(pk)` | `GET` | `{basePath}/{pk}` |
 | `create(data)` | `POST` | `{basePath}` |
 | `update(pk, data)` | `PUT` | `{basePath}/{pk}` |
@@ -116,9 +115,6 @@ first attempt's `config` after the request interceptors, other than `Accept`, `A
 | `bulkPartialUpdate(records)` | `PATCH` | `{basePath}/bulk` |
 | `bulkDestroy(pks[])` | `DELETE` | `{basePath}/bulk` (body: pk array) |
 | `lookup()` | `GET` | `{basePath}/lookup` |
-
-The three list methods also send `X-List-Type: {options.listType}` when `options.listType` is given;
-see [`ListMixin`](./vue-mixins#listmixin-t-v).
 
 `watch(options)` sends no request to `{basePath}`: it subscribes the topic `options.topic`, else
 the `topic` option, else `basePath`, on the ViewSet's event client; see

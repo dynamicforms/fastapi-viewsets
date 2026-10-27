@@ -43,7 +43,6 @@ VIEWSET_ERROR_RESPONSES = {
         "The request failed validation: `fastapi-viewsets.validation_failed`, with each failure in "
         "`field_errors` under the name of its field. A check the package makes of a valid request "
         "answers 422 too: `fastapi-viewsets.idempotency_key_reused`, `fastapi-viewsets.unsupported_list_shape`, "
-        "`fastapi-viewsets.unsupported_list_type`, "
         "`fastapi-viewsets.event_topic_invalid`, `fastapi-viewsets.event_cursors_exceeded`.",
         {
             "validation_failed": (

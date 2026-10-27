@@ -4,7 +4,7 @@
  */
 
 import { inBackground } from '../call';
-import type { CursorPage, KeyType, ListRowsOf, PaginatedList } from '../mixins';
+import type { CursorPage, KeyType, PaginatedList } from '../mixins';
 
 import {
   defineEvent,
@@ -40,20 +40,9 @@ export const RECORDS_CHANGED = defineEvent<RecordsChanged<unknown>>('records_cha
  * `created` or `updated` event, with the pks of the changes that carry no `record`, and matches the
  * rows it returns to them by the ViewSet's `pkFieldName`; a pk without a row is a deleted one.
  *
- *   fetch: (pks) => members.list({ ids: pks })
+ *   fetch: (pks) => members.list({ id__in: pks })
  */
 export type FetchRows<T, K extends KeyType = KeyType> = (pks: K[]) => Promise<readonly T[]>;
-
-/** `true` when `A` and `B` are the same type. */
-type Same<A, B> = (<G>() => G extends A ? 1 : 2) extends <G>() => G extends B ? 1 : 2 ? true : false;
-
-/**
- * The `fetch` option of `watch()` on a ViewSet whose list rows, without `listType`, are `R` and
- * whose records are `T`: `boolean | FetchRows<R, K>` when `R` is `T`, `false | FetchRows<R, K>`
- * otherwise, because `fetch: true` reads records with `retrieve`.
- */
-export type FetchOption<R, T, K extends KeyType = KeyType> =
-  Same<R, T> extends true ? boolean | FetchRows<R, K> : false | FetchRows<R, K>;
 
 /**
  * The options of `watch()`. The callbacks are function-typed properties, so a callback whose
@@ -76,9 +65,9 @@ export interface WatchOptions<T, K extends KeyType = KeyType> {
    *
    * - `true` with `retrieve(pk)`, one call per change; a 404 means the record is gone.
    * - a `FetchRows` function with the rows it returns for the event's pks, one call per event; a pk
-   *   without a row is gone. A ViewSet whose list rows are not its records (`R` of
-   *   `restViewSet<T, L, V, R>()` other than `T`) takes this form, so that `onChange` receives list
-   *   rows.
+   *   without a row is gone. The rows need not be the ViewSet's records: a ViewSet whose events
+   *   another ViewSet's rows describe (a sub-viewset listing `MemberRow`s of the parent's `Account`s)
+   *   fetches them with that ViewSet's `list()`.
    *
    * The changes whose record is gone leave the event and follow it in a second `onChange` with
    * `op: 'deleted'` and the same `meta`, in their order in the event; an event whose every record is
@@ -100,14 +89,12 @@ export interface WatchOptions<T, K extends KeyType = KeyType> {
 }
 
 /**
- * `watch()`, which every ViewSet has. `T` is the type of the rows `onChange` receives without a
- * `fetch` function, the row type of the ViewSet's list without `listType`; `F` the `fetch` option
- * it accepts (`FetchOption`). With a `fetch` function, `onChange` receives the rows that function
- * returns, so a list type selected with `listType` is watched by fetching with the same `listType`:
+ * `watch()`, which every ViewSet has. `onChange` receives the ViewSet's records `T`, or, with a
+ * `fetch` function, the rows that function returns:
  *
- *   api.watch({ fetch: (pks) => api.list({ id__in: pks }, { listType: 'compact' }), onChange, onResync })
+ *   accounts.watch({ fetch: (pks) => members.list({ id__in: pks }), onChange, onResync }) // MemberRow
  */
-export interface ViewSetWatch<T, K extends KeyType = KeyType, F = boolean | FetchRows<T, K>> {
+export interface ViewSetWatch<T, K extends KeyType = KeyType> {
   /**
    * Subscribes the ViewSet's topic (`WatchOptions.topic`, else `ProxyBaseOptions.topic`, else
    * `basePath`) to `records_changed` and returns the subscription. Uses the
@@ -115,38 +102,21 @@ export interface ViewSetWatch<T, K extends KeyType = KeyType, F = boolean | Fetc
    * registered for its peer (`eventsOf`), and a REST ViewSet throws.
    */
   watch<Row>(options: Omit<WatchOptions<NoInfer<Row>, K>, 'fetch'> & { fetch: FetchRows<Row, K> }): EventSubscription;
-  watch(options: WatchOptions<T, K> & { fetch?: F }): EventSubscription;
+  watch(options: WatchOptions<T, K>): EventSubscription;
 }
 
 /** The record type a mixin interface `M` names, read off its actions; `Record<string, unknown>` for none. */
 export type RecordOf<M> = M extends { retrieve(...args: any[]): Promise<infer T> }
   ? T
-  : [ListRowsOf<M>] extends [never]
-    ? RecordFromActions<M>
-    : ListRowsOf<M> extends { row: infer T }
-      ? T
-      : RecordFromActions<M>;
-
-/** `RecordOf` of a mixin interface without `ListRows`, read off the return types of its actions. */
-type RecordFromActions<M> = M extends { list(...args: any[]): Promise<(infer T)[]> }
-  ? T
-  : M extends { create(...args: any[]): Promise<infer T> }
+  : M extends { list(...args: any[]): Promise<(infer T)[]> }
     ? T
-    : M extends { listPage(...args: any[]): Promise<PaginatedList<infer T>> }
+    : M extends { create(...args: any[]): Promise<infer T> }
       ? T
-      : M extends { listCursor(...args: any[]): Promise<CursorPage<infer T>> }
+      : M extends { listPage(...args: any[]): Promise<PaginatedList<infer T>> }
         ? T
-        : Record<string, unknown>;
-
-/**
- * The row type a list call of a mixin interface `M` answers with when it names no `listType`:
- * the row type of its list mixin (`ListRows`), else `RecordOf<M>`.
- */
-export type RowOf<M> = [ListRowsOf<M>] extends [never]
-  ? RecordOf<M>
-  : ListRowsOf<M> extends { row: infer R }
-    ? R
-    : RecordOf<M>;
+        : M extends { listCursor(...args: any[]): Promise<CursorPage<infer T>> }
+          ? T
+          : Record<string, unknown>;
 
 /** The pk type a mixin interface `M` names, read off its actions; `KeyType` for none. */
 export type KeyOf<M> = M extends { retrieve(pk: infer K): any }

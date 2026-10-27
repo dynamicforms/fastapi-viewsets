@@ -31,34 +31,18 @@ it types them, and it is handed to the proxy so the startup schema check can com
 ## Signatures
 
 ```ts
-function restViewSet<T, L = LookupItem, V extends ListTypes = {}, R = T>(): <
+function restViewSet<T, L = LookupItem>(): <
   PK extends PkFieldName<T> & keyof T,
   D extends readonly ViewSetMixinClass[],
->(pkFieldName: PK, declares: D) => ViewSetClass<T, PK, D, RestProxyOptions, L, V, R>
+>(pkFieldName: PK, declares: D) => ViewSetClass<T, PK, D, RestProxyOptions, L>
 
-function muxwsViewSet<T, L = LookupItem, V extends ListTypes = {}, R = T>(): <
+function muxwsViewSet<T, L = LookupItem>(): <
   PK extends PkFieldName<T> & keyof T,
   D extends readonly ViewSetMixinClass[],
->(pkFieldName: PK, declares: D) => ViewSetClass<T, PK, D, MuxwsProxyOptions, L, V, R>
+>(pkFieldName: PK, declares: D) => ViewSetClass<T, PK, D, MuxwsProxyOptions, L>
 ```
 
-`L` is the item type `lookup()` answers with, the BE viewset's `TLookupItem`. `V` and `R` are the
-row types of `list()`, `listPage()` and `listCursor()` ([list types](./vue-mixins#list-types)): `V`
-maps the wire name of every row type the BE viewset adds with
-[`MultiTypeListMixin`](./python-mixins#multitypelistmixin-ts) to that type, and a call selects one with
-`{ listType }`; `R` is the row type of a call without `listType` — `T` when the BE viewset composes a
-`ListMixin`, the first added type when it does not.
-
-```ts
-interface Member { id: number; name: string; email: string; address: string }
-interface MemberRow { id: number; name: string }
-
-class MemberApi extends restViewSet<Member, LookupItem, { compact: MemberRow }>()('id', [ViewSetMixin]) {}
-
-const members = new MemberApi({ basePath: '/members' });
-await members.list(); // Member[]
-await members.list({ sort: 'name:asc' }, { listType: 'compact' }); // MemberRow[]
-```
+`L` is the item type `lookup()` answers with, the BE viewset's `TLookupItem`.
 
 Supporting types:
 
@@ -81,30 +65,19 @@ type ViewSetClass<
   D extends readonly ViewSetMixinClass[],
   O extends ProxyBaseOptions,
   L = LookupItem,
-  V extends ListTypes = {},
-  R = T,
 > =
   // `[]` builds a ViewSet with no standard action; a list whose mixins name no action resolves to
   // its own error message, see TS2507 below.
   [D[number]] extends [never]
-    ? ViewSetClassOf<T, PK, D, O, L, V, R>
+    ? ViewSetClassOf<T, PK, D, O, L>
     : [ActionsOf<D[number]>] extends [never]
       ? 'declares must name at least one action: pass the mixin classes themselves, unannotated'
-      : ViewSetClassOf<T, PK, D, O, L, V, R>;
+      : ViewSetClassOf<T, PK, D, O, L>;
 
-type ViewSetClassOf<
-  T,
-  PK extends keyof T,
-  D extends readonly ViewSetMixinClass[],
-  O extends ProxyBaseOptions,
-  L,
-  V extends ListTypes,
-  R,
-> = {
+type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions, L> = {
   new (options: Omit<O, 'pkFieldName' | 'declares'>): ViewSetInternals &
-    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>, L, V, R> &
-    DefaultSortOf<ActionsOf<D[number]>> &
-    ViewSetWatch<R, PkType<T, PK>, FetchOption<R, T, PkType<T, PK>>> & { readonly pkFieldName: PK };
+    ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>, L> &
+    ViewSetWatch<T, PkType<T, PK>> & { readonly pkFieldName: PK };
   readonly declares: FactoryDeclares<D>;
 };
 
@@ -124,9 +97,6 @@ way to have both.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `T` (type argument) | — | The record model, e.g. `Item`. Explicit, on the first call. |
-| `L` (type argument) | — | The lookup item type. Default `LookupItem`. |
-| `V` (type argument) | — | The list types added by the BE viewset's `MultiTypeListMixin`, `{ wireName: RowType }`. Default `{}`. |
-| `R` (type argument) | — | The row type of a list call without `listType`. Default `T`. |
 | `pkFieldName` | `PkFieldName<T> & keyof T` | Name of the PK field on the model, e.g. `'id'`. An argument, not a type argument: it is checked against the model's fields, and the pk *type* is read off `T[PK]`. |
 | `declares` | `readonly ViewSetMixinClass[]` | The mixin classes themselves, as values. |
 
@@ -179,15 +149,11 @@ interface Options {
 ## watch()
 
 Every class the factory builds has `watch(options)`, whatever `declares` holds, typed as
-`ViewSetWatch<R, PkType<T, PK>, FetchOption<R, T, PkType<T, PK>>>`: `onChange` receives
-`RecordsChanged<R, PkType<T, PK>>`, the rows of a list call without `listType`. It subscribes
-`basePath` to `records_changed` on the `events` client of the options; without one, a
-`muxwsViewSet` class uses the client registered for its peer, and a `restViewSet` class throws.
-With `fetch: true` it calls `retrieve(pk)` of the proxy underneath, whether or not `declares` names
-`RetrieveMixin`; that form compiles only when `R` is `T`.
-With `fetch` as a function `(pks) => Promise<readonly Row[]>`, `onChange` receives the `Row`s that
-function returns, whatever `R` is: a list type is watched by fetching with its `listType`. See
-[`watch()`](./vue-mixins#watch).
+`ViewSetWatch<T, PkType<T, PK>>`: `onChange` receives `RecordsChanged<T, PkType<T, PK>>`. It
+subscribes `basePath` to `records_changed` on the `events` client of the options; without one, a
+`muxwsViewSet` class uses the client registered for its peer, and a `restViewSet` class throws. With
+`fetch: true` it calls `retrieve(pk)` of the proxy underneath, whether or not `declares` names
+`RetrieveMixin`. See [`watch()`](./vue-mixins#watch).
 
 ## Inside the class body
 

@@ -46,7 +46,7 @@ rows alone. Each stage is marked independently: push down the sort, leave the fi
 default, and neither needs to know about the other.
 
 Stage names are `"filter"`, `"sort"` and `"pagination"`, plus `"conversion"`, which `land()` marks once it has converted
-the materialised rows into records, `T`.
+the materialised rows into the response model.
 
 `filter_list` and `sort_list` remain the place to implement in-memory filtering and sorting; the
 default `apply_*` stages call them.
@@ -60,7 +60,6 @@ default `apply_*` stages call them.
 | `offset` / `limit` | the requested page; `limit` is None when not paginated |
 | `cursor` | the opaque cursor, when the shape is `cursor` |
 | `shape` | which envelope the answer goes into |
-| `list_type` | the row type the page is converted into: None for the record type `T`, else the type `X-List-Type` selected; `get_list` fills in the default type of a list without a `T` entry |
 | `applied` | stages a backend has already handled |
 
 A filter model whose every field is None counts as *no filter*: FastAPI builds the model whether or
@@ -118,24 +117,6 @@ Declare one shape unless clients genuinely differ. A union has to be narrowed by
 client, and OpenAPI cannot express that a request header selects between its members — that part is
 prose in the endpoint's description.
 
-### Row types
-
-A viewset with [`MultiTypeListMixin`](./python-mixins#several-list-row-types) answers in the row
-type the `X-List-Type` header names, in any of its shapes. Shape and type are independent: the
-response is the union of every shape of every type, and the examples are named
-`<shape>, <type>` when both vary.
-
-Filtering, sorting and the cursor work on records, `T`, whatever the selected type. The conversion
-into the selected type happens on the page alone, after the page is cut:
-
-- A page no stage has landed goes from the source row straight into the selected type, through
-  `to_list_item(raw, item_type)`.
-- A page an in-memory stage has landed is already records; `to_list_item` converts each record.
-- With `T` selected, the page goes through `to_record`, as on a viewset with one row type.
-
-A cursor page in another type reads its anchors off its first and last row as records, so the
-cursor's keys need not be fields of the selected type.
-
 ### On the client
 
 A ViewSet declares the mixin matching the shape its endpoint answers in - see
@@ -162,10 +143,9 @@ untouched.
 
 ### CORS
 
-`X-List-Shape` and `X-List-Type` are not CORS-safelisted headers. When the page and the API are on
-different origins, the browser sends an `OPTIONS` preflight before every REST list request, and
-sends the `GET` only if the preflight's `Access-Control-Allow-Headers` names the headers the request
-carries. With FastAPI's
+`X-List-Shape` is not a CORS-safelisted header. When the page and the API are on different origins,
+the browser sends an `OPTIONS` preflight before every REST list request, and sends the `GET` only if
+the preflight's `Access-Control-Allow-Headers` names `X-List-Shape`. With FastAPI's
 `CORSMiddleware`:
 
 ```python
@@ -177,7 +157,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://app.example.com"],
     allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type", "X-List-Shape", "X-List-Type"],  # or ["*"]
+    allow_headers=["Authorization", "Content-Type", "X-List-Shape"],  # or ["*"]
 )
 ```
 
@@ -185,7 +165,7 @@ A preflight that does not allow the header blocks the request in the browser: th
 receives the `GET`, and the call rejects with an `AxiosError` that has no `response`.
 
 A same-origin page — including one served through a dev-server proxy — sends no preflight. muxws
-carries the headers inside the WebSocket stream, where CORS does not apply.
+carries the header inside the WebSocket stream, where CORS does not apply.
 
 ## Paging behaviour
 
@@ -242,8 +222,7 @@ null, so a client polling the head of a live list keeps its anchor.
 ### What the cursor carries
 
 The full ordering key tuple, with the primary key appended so every tuple is unique. Values travel
-as real JSON and are coerced back through the field types of the record model, `T`, whichever row
-type the response is in.
+as real JSON and are coerced back through the response model's field types.
 
 A cursor is fingerprinted against the ordering and the active filters; sending one to a differently
 sorted or filtered query is a 400.
@@ -378,11 +357,6 @@ the sort into `.order_by()` in either direction with the NULL placement `nulls` 
 into `LIMIT`/`OFFSET`, marking each stage applied. `count` comes from a `COUNT(*)`. Requires the
 `django` extra; every ORM call uses Django's async API or `sync_to_async`.
 
-With [`MultiTypeListMixin`](./python-mixins#several-list-row-types), a page in a type other than
-`schema` is built straight from the Django rows by `to_list_item`, as long as the filter and the sort
-went to the database: `schema` is not built for those rows, and a relation field of the selected
-type is read from its column, as `to_record` reads it.
-
 A relation field (`ForeignKey`, `OneToOneField`) appears in `schema` under its name and carries the
 related row's key: `owner: int`. The backend reads and writes the `owner_id` column for it, filters
 and sorts on that column, and does not load the related row. A `schema` that declares `owner_id`
@@ -457,8 +431,7 @@ Override the stages your store can answer and chain the rest:
 | `apply_filter` / `apply_sort` | the store can narrow or order |
 | `take_page` | the store has LIMIT/OFFSET or a cursor |
 | `count_records` | the store can count cheaply |
-| `to_record` | your source yields rows rather than the record model, `T` |
-| `to_list_item` | the viewset has [several row types](./python-mixins#several-list-row-types) and your store builds a row of the selected type more cheaply than through `to_record` |
+| `to_record` | your source yields rows rather than the response model |
 
 A stage receives whatever the stage before it passed on — your own lazy object for as long as
 nothing has materialised it — and returns records. Four library calls make up the contract:
@@ -502,8 +475,7 @@ only thing a filter or an ordering goes into; a filter or a sort you decline is 
 default that picks it up. `take_page` and `count_records` never land anything — their defaults walk
 the source only as far as the page.
 
-`to_record` — or `to_list_item`, for a row type other than `T` — runs on the page alone for as long
-as no stage has landed the source, which means the
+`to_record` runs on the page alone for as long as no stage has landed the source, which means the
 filter and the sort each either pushed down or had nothing to do. Pagination is not part of that
 condition: decline it and the default `take_page` still cuts its page out of your lazy object, and
 the conversion still happens on that page. What declining it costs is the walk to the offset — the
@@ -513,7 +485,7 @@ offset, which is why `take_page` is worth overriding wherever the store has a re
 
 Conversion sits at the end of the pipeline so the earlier stages carry your query object, and
 `to_record` must tolerate an already-converted record: an in-memory stage converts when it
-materialises the source, because a filter declaration names the record model's fields while the
+materialises the source, because a filter declaration names the response model's fields while the
 source yields whatever the backend stores. That is what makes a declined filter or sort expensive
 rather than merely slower — `land()` reads and converts everything that reached it, the whole table
 where the filter declined and the filtered set where only the sort did, before the page is cut. The

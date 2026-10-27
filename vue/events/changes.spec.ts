@@ -4,11 +4,11 @@
  */
 
 import type { AxiosInstance } from 'axios';
-import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { type CallEvent, onCallActivity } from '../call';
 import { ViewSetRequestError } from '../errors';
-import { type LookupItem, ReadOnlyViewSetMixin, RetrieveMixin } from '../mixins';
+import { ReadOnlyViewSetMixin, RetrieveMixin } from '../mixins';
 import { type MuxwsPeerLike, MuxwsProxyImpl, route_muxws } from '../muxws-proxy';
 import { RestProxyImpl, route_rest } from '../rest-proxy';
 import { restViewSet } from '../viewset';
@@ -528,21 +528,21 @@ describe('watch() on a REST ViewSet', () => {
       expect(w.onResync).toHaveBeenCalledTimes(1);
     });
 
-    it('issues the calls of the function as background calls', async () => {
+    it('fetches the rows of a sub-viewset as background calls', async () => {
       const events: CallEvent[] = [];
       const stop = onCallActivity((event) => events.push(event));
       try {
         const { client, subscriptions } = fakeClient();
         const http = mockAxios(() => Promise.resolve({ data: [{ id: 4, label: 'listed' }] }));
-        class RowApi extends restViewSet<Item, LookupItem, { compact: ItemRow }, ItemRow>()('id', [
-          ReadOnlyViewSetMixin,
-        ]) {}
-        const api = new RowApi({ basePath: '/items', validateSchema: false, axiosInstance: http, events: client });
+        class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin]) {}
+        class RowApi extends restViewSet<ItemRow>()('id', [ReadOnlyViewSetMixin]) {}
+        const items = new ItemApi({ basePath: '/items', validateSchema: false, axiosInstance: http, events: client });
+        const rows = new RowApi({ basePath: '/items/rows', validateSchema: false, axiosInstance: http });
         const onChange = vi.fn();
-        api.watch({ fetch: (pks) => api.list({ ids: pks }), onChange, onResync() {} });
+        items.watch({ fetch: (pks) => rows.list({ id__in: pks }), onChange, onResync() {} });
         subscriptions[0].handlers.onEvent({ op: 'updated', changes: [{ pk: 4 }] }, meta());
         await flush();
-        expect(http.get).toHaveBeenCalledWith('/items', expect.objectContaining({ params: { ids: [4] } }));
+        expect(http.get).toHaveBeenCalledWith('/items/rows', expect.objectContaining({ params: { id__in: [4] } }));
         expect(onChange.mock.calls[0][0].changes).toEqual([{ pk: 4, record: { id: 4, label: 'listed' } }]);
       } finally {
         stop();
@@ -776,16 +776,18 @@ describe('watch() on the public surface', () => {
     expect(() => rest.watch({ onChange() {}, onResync() {} })).toThrow(/needs an event client/);
   });
 
-  it('types the changes with the row type of a list call without listType', () => {
+  it('types the changes with the rows a fetch function returns', () => {
     interface ItemRow {
       id: number;
       label: string;
     }
     const { client } = fakeClient();
 
-    class TypedApi extends restViewSet<Item, LookupItem, { compact: ItemRow }>()('id', [ReadOnlyViewSetMixin]) {}
-    const typed = new TypedApi({ basePath: '/items', validateSchema: false, events: client });
-    typed.watch({
+    class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin]) {}
+    class RowApi extends restViewSet<ItemRow>()('id', [ReadOnlyViewSetMixin]) {}
+    const items = new ItemApi({ basePath: '/items', validateSchema: false, events: client });
+    const rows = new RowApi({ basePath: '/items/rows', validateSchema: false, events: client });
+    items.watch({
       fetch: true,
       onChange(change) {
         const name: string | undefined = change.changes[0].record?.name;
@@ -793,71 +795,23 @@ describe('watch() on the public surface', () => {
       },
       onResync() {},
     });
-    typed.watch({ fetch: (pks) => typed.list({ ids: pks }), onChange() {}, onResync() {} });
-    typed.watch({
-      fetch: (pks) => typed.list({ ids: pks }, { listType: 'compact' }),
+    items.watch({
+      fetch: (pks) => rows.list({ id__in: pks }),
       onChange(change) {
         const label: string | undefined = change.changes[0].record?.label;
         void label;
       },
       onResync() {},
     });
-    // @ts-expect-error -- onChange receives the compact rows the fetch function returns
-    typed.watch({
-      fetch: (pks) => typed.list({ ids: pks }, { listType: 'compact' }),
+    // @ts-expect-error -- onChange receives the rows the fetch function returns
+    items.watch({
+      fetch: (pks) => rows.list({ id__in: pks }),
       onChange(change: RecordsChanged<Item, number>) {
         void change;
       },
       onResync() {},
     });
-
-    class RowApi extends restViewSet<Item, LookupItem, { compact: ItemRow }, ItemRow>()('id', [ReadOnlyViewSetMixin]) {}
-    const api = new RowApi({ basePath: '/items', validateSchema: false, events: client });
-    api.watch({
-      fetch: (pks) => api.list({ ids: pks }),
-      onChange(change) {
-        const label: string | undefined = change.changes[0].record?.label;
-        void label;
-      },
-      onResync() {},
-    });
-    // @ts-expect-error -- fetch: true retrieves records, which are not list rows
-    api.watch({ fetch: true, onChange() {}, onResync() {} });
-    api.watch({ fetch: false, onChange() {}, onResync() {} });
-
-    type RowMixin = ReadOnlyViewSetMixin<number, Item, { compact: ItemRow }, ItemRow>;
-    abstract class RowViewSet extends ReadOnlyViewSetMixin<number, Item, { compact: ItemRow }, ItemRow> {}
-    const rest = route_rest<RowMixin>(RowViewSet, {
-      basePath: '/items',
-      pkFieldName: 'id',
-      validateSchema: false,
-      events: client,
-    });
-    expectTypeOf(rest.list()).resolves.toEqualTypeOf<ItemRow[]>();
-    expectTypeOf(rest.list({}, { listType: 'compact' })).resolves.toEqualTypeOf<ItemRow[]>();
-    expectTypeOf(rest.list().key).toEqualTypeOf<string>();
-    expectTypeOf(rest.retrieve(1)).resolves.toEqualTypeOf<Item>();
-    // @ts-expect-error -- 'full' is not one of the list types
-    void rest.list({}, { listType: 'full' });
-    rest.watch({
-      fetch: (pks) => rest.list({ ids: pks }),
-      onChange(change) {
-        // @ts-expect-error -- a list row has no name
-        void change.changes[0].record?.name;
-      },
-      onResync() {},
-    });
-    // @ts-expect-error -- fetch: true retrieves records, which are not list rows
-    rest.watch({ fetch: true, onChange() {}, onResync() {} });
-
-    const plain = route_rest<ReadOnlyViewSetMixin<number, Item>>(RowViewSet, {
-      basePath: '/items',
-      pkFieldName: 'id',
-      validateSchema: false,
-      events: client,
-    });
-    expectTypeOf(plain.list()).resolves.toEqualTypeOf<Item[]>();
-    plain.watch({ fetch: true, onChange() {}, onResync() {} });
+    rows.watch({ fetch: true, onChange() {}, onResync() {} });
     expect(true).toBe(true);
   });
 
