@@ -8,11 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.14.2] - 2026-10-27
 
-### Changed
-
-- The Python package is built with `uv_build`. The `dev` extra is gone: development dependencies are
-  the `dev` dependency group (`uv sync`).
-
 ### Fixed
 
 - `PaginatedListMixin` and `CursorListMixin` return a page parameterised with the viewset's item type,
