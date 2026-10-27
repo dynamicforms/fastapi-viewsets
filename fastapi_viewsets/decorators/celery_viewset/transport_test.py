@@ -52,6 +52,7 @@ from fastapi_viewsets.decorators.celery_viewset.transport import (
     upload_to_jsonable,
 )
 from fastapi_viewsets.middleware import Cookie, DeleteCookie, ViewSetResult
+from fastapi_viewsets.middleware.cookies_test import comparable_set_cookies
 from fastapi_viewsets.mux_ws.registry import reset_registry
 from fastapi_viewsets.mux_ws.server import process_command
 from fastapi_viewsets.mux_ws.server_test import FakeStream
@@ -769,8 +770,8 @@ def test_cookies_an_action_sets_and_deletes_in_the_worker_reach_the_http_respons
             response.set_cookie("until", "v", expires=SESSION_EXPIRES),
         )
     )
-    assert logout.headers.get_list("set-cookie") == _set_cookie_headers(
-        lambda response: response.delete_cookie("sessionid", **SESSION_DELETION)
+    assert comparable_set_cookies(logout.headers.get_list("set-cookie")) == comparable_set_cookies(
+        _set_cookie_headers(lambda response: response.delete_cookie("sessionid", **SESSION_DELETION))
     )
 
 
@@ -785,6 +786,6 @@ async def test_a_cookie_an_action_sets_in_the_worker_reaches_the_muxws_reply(fil
     finally:
         await stop_result_reader(queue_key)
     assert logout.status == 200, logout.payload
-    assert [logout.reply_headers["set-cookie"]] == _set_cookie_headers(
-        lambda response: response.delete_cookie("sessionid", **SESSION_DELETION)
+    assert comparable_set_cookies([logout.reply_headers["set-cookie"]]) == comparable_set_cookies(
+        _set_cookie_headers(lambda response: response.delete_cookie("sessionid", **SESSION_DELETION))
     )

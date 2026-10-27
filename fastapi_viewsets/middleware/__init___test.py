@@ -20,6 +20,7 @@ from fastapi_viewsets.middleware import (
     unwrap_viewset_result_type,
     ViewSetResult,
 )
+from fastapi_viewsets.middleware.cookies_test import comparable_set_cookies
 
 
 @pytest.fixture(autouse=True)
@@ -581,8 +582,10 @@ def test_a_middleware_sets_and_deletes_cookies_with_options():
     settings.viewsets_command_middleware = [session_middleware]
     app = _make_login_app()
     response = TestClient(app).post("/session/login")
-    assert response.headers.get_list("set-cookie") == [
-        *_starlette_set_cookie("sessionid", "s3cr3t", **SESSION_OPTIONS),
-        *_starlette_delete_cookie("legacy"),
-    ]
+    assert comparable_set_cookies(response.headers.get_list("set-cookie")) == comparable_set_cookies(
+        [
+            *_starlette_set_cookie("sessionid", "s3cr3t", **SESSION_OPTIONS),
+            *_starlette_delete_cookie("legacy"),
+        ]
+    )
     assert _login_response_schema(app) == {"$ref": "#/components/schemas/LoginResult"}

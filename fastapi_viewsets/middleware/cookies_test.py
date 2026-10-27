@@ -23,6 +23,14 @@ from fastapi_viewsets.middleware import (
 # ---------------------------------------------------------------------------
 
 
+def comparable_set_cookies(headers: list[str]) -> list[str]:
+    """`headers` with the expiry of each deletion (`Max-Age=0`) replaced by a placeholder: Starlette
+    dates it at the moment the header is built, so two deletions built a second apart differ."""
+    return [
+        re.sub(r"expires=[^;]+", "expires=<now>", header) if "Max-Age=0" in header else header for header in headers
+    ]
+
+
 def _starlette_set_cookie(*args, **kwargs) -> list[str]:
     """The Set-Cookie headers Starlette's own Response.set_cookie() produces for these arguments."""
     response = Response()
@@ -95,11 +103,13 @@ def test_set_cookie_and_delete_cookie_record_into_cookies():
 def test_cookie_defaults_are_starlettes():
     response = Response()
     apply_cookies(response, {"a": Cookie("1"), "b": "2", "c": DeleteCookie()})
-    assert response.headers.getlist("set-cookie") == [
-        *_starlette_set_cookie("a", "1"),
-        *_starlette_set_cookie("b", "2"),
-        *_starlette_delete_cookie("c"),
-    ]
+    assert comparable_set_cookies(response.headers.getlist("set-cookie")) == comparable_set_cookies(
+        [
+            *_starlette_set_cookie("a", "1"),
+            *_starlette_set_cookie("b", "2"),
+            *_starlette_delete_cookie("c"),
+        ]
+    )
 
 
 def test_apply_cookies_passes_every_option_to_starlette():
@@ -116,10 +126,12 @@ def test_apply_cookies_passes_every_option_to_starlette():
     deletion = {"path": "/app", "domain": "example.com", "secure": True, "httponly": True, "samesite": "strict"}
     response = Response()
     apply_cookies(response, {"a": Cookie("1", **options), "b": DeleteCookie(**deletion)})
-    assert response.headers.getlist("set-cookie") == [
-        *_starlette_set_cookie("a", "1", **options),
-        *_starlette_delete_cookie("b", **deletion),
-    ]
+    assert comparable_set_cookies(response.headers.getlist("set-cookie")) == comparable_set_cookies(
+        [
+            *_starlette_set_cookie("a", "1", **options),
+            *_starlette_delete_cookie("b", **deletion),
+        ]
+    )
 
 
 def test_apply_cookies_passes_partitioned_to_starlette():
@@ -174,20 +186,22 @@ def test_an_action_sets_a_session_cookie_with_its_options_over_http():
 def test_an_action_deletes_a_cookie_over_http():
     response = TestClient(_make_session_app()).post("/auth/logout")
     assert response.status_code == 200
-    assert response.headers.get_list("set-cookie") == _starlette_delete_cookie(
-        "sessionid", path="/", secure=True, httponly=True, samesite="lax"
+    assert comparable_set_cookies(response.headers.get_list("set-cookie")) == comparable_set_cookies(
+        _starlette_delete_cookie("sessionid", path="/", secure=True, httponly=True, samesite="lax")
     )
     assert "Max-Age=0" in response.headers["set-cookie"]
 
 
 def test_plain_cookies_options_and_deletions_mix_in_one_result():
     response = TestClient(_make_session_app()).post("/auth/mixed")
-    assert response.headers.get_list("set-cookie") == [
-        *_starlette_set_cookie("plain", "42"),
-        *_starlette_set_cookie("scoped", "v", domain="example.com", path="/app", samesite="strict"),
-        *_starlette_set_cookie("expiring", "v", expires=datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc)),
-        *_starlette_delete_cookie("gone", path="/app"),
-    ]
+    assert comparable_set_cookies(response.headers.get_list("set-cookie")) == comparable_set_cookies(
+        [
+            *_starlette_set_cookie("plain", "42"),
+            *_starlette_set_cookie("scoped", "v", domain="example.com", path="/app", samesite="strict"),
+            *_starlette_set_cookie("expiring", "v", expires=datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc)),
+            *_starlette_delete_cookie("gone", path="/app"),
+        ]
+    )
 
 
 def test_cookies_set_through_viewset_result_keep_the_typed_response_schema():
@@ -212,6 +226,6 @@ async def test_an_action_sets_and_deletes_cookies_with_their_options_over_muxws(
 
     stream = FakeStream({":method": "POST", ":path": "/auth/logout"})
     await process_command(ABSENT, stream, app=app)
-    assert [stream.reply_headers["set-cookie"]] == _starlette_delete_cookie(
-        "sessionid", path="/", secure=True, httponly=True, samesite="lax"
+    assert comparable_set_cookies([stream.reply_headers["set-cookie"]]) == comparable_set_cookies(
+        _starlette_delete_cookie("sessionid", path="/", secure=True, httponly=True, samesite="lax")
     )

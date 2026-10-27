@@ -25,6 +25,8 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
+from fastapi_viewsets.middleware.cookies_test import comparable_set_cookies
+
 from ...action_configuration import action_configuration, TimeLimits
 from ...middleware import ViewSetResult
 from .. import route_viewset
@@ -375,7 +377,9 @@ def test_cookies_an_action_sets_and_deletes_in_the_worker_reach_the_response(cli
     expected.delete_cookie("sessionid", secure=True, httponly=True, samesite="lax")
     logout = client.post("/jobs/logout")
     assert logout.status_code == 200, logout.text
-    assert logout.headers.get_list("set-cookie") == expected.headers.getlist("set-cookie")
+    assert comparable_set_cookies(logout.headers.get_list("set-cookie")) == comparable_set_cookies(
+        expected.headers.getlist("set-cookie")
+    )
 
 
 def test_a_soft_time_limit_while_suspended(client, probe, key):
