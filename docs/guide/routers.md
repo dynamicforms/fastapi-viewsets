@@ -289,18 +289,21 @@ line at startup instead of as timed-out requests.
 
 An action receives in the worker, and its caller receives back, values of the types they have when
 the action runs in the FastAPI process. Both processes encode and decode them by the action's type
-hints (TypeVars of a generic viewset resolved against the decorated class), with a pydantic
-`TypeAdapter` built once per hint; the task message is JSON.
+hints (TypeVars of a generic viewset resolved against the decorated class, `Annotated` metadata
+included), with a pydantic `TypeAdapter` built once per hint; the task message is JSON.
 
 | Value | How it crosses |
 |---|---|
 | A model, an optional model, a list or tuple of models | Dumped by field name, validated as its model in the worker. A create body crosses without its primary key and a partial update body with the fields the request stated; the action receives them as it does in the FastAPI process |
-| Any other type pydantic validates (`date`, `datetime`, `time`, `timedelta`, `UUID`, `Decimal`, enums, `Literal`, `set`, `frozenset`, `tuple`, paths, unions, collections of these, a model inside a collection) | Dumped in pydantic's JSON mode, validated from JSON with the same hint |
+| Any other annotation (`date`, `datetime`, `time`, `timedelta`, `UUID`, `Decimal`, enums, `Literal`, `set`, `frozenset`, `tuple`, paths, unions, collections of these, a model inside a collection, a [type of your own](#types-of-your-own)) | Dumped in pydantic's JSON mode, validated from JSON with the same hint. An `Any` inside the annotation crosses as an unannotated value |
 | `bytes` (also inside unions and collections) | Base64. Inside a model, the model's own `ser_json_bytes` / `val_json_bytes` configuration applies |
 | `UploadFile` (also `list[UploadFile]`) | Read whole in the FastAPI process (in a worker thread) and rebuilt in the worker as a Starlette `UploadFile` with the same `filename`, `headers` (and so `content_type`), `size` and content, positioned at its start, readable and seekable. Content above 1 MiB is spooled to a temporary file |
 | `Request` (any parameter annotated with it) | Its ASGI scope without the body, as the `request` parameter (see [Call data in the worker](#call-data-in-the-worker)) |
 | A `SerializableObject`, at any depth of lists and dicts | Its `__serialize__` payload, rebuilt with `__deserialize__` |
-| No annotation, `Any`, a type pydantic cannot validate, or a value its annotation does not describe | `to_jsonable()`: the JSON form, with every `SerializableObject` in it rebuilt |
+| `None` | `null`, whatever the annotation |
+| No annotation, `Any` | `to_jsonable()`: the JSON form, with every `SerializableObject` in it rebuilt |
+| An annotation pydantic cannot validate | Refused: the call fails |
+| A value its annotation does not describe (a `datetime` declared `date`, a dict declared as a model in a collection) | Refused: the call fails |
 
 The result crosses by the value the action returns:
 
@@ -308,12 +311,12 @@ The result crosses by the value the action returns:
 |---|---|
 | A `Response` whose body is in memory (`Response`, `JSONResponse`, `HTMLResponse`, `PlainTextResponse`, `RedirectResponse` and their subclasses) | Its class, status code, raw headers (`Set-Cookie`, `Content-Disposition`, `Content-Length` included), body and media type, unchanged. A subclass defined inside a function crosses as its nearest importable base class |
 | A `ViewSetResult` | Its status code, headers and cookies, and its body by the type argument of the `-> ViewSetResult[X]` annotation |
-| Any other value | By the return annotation, as an argument by its parameter's annotation |
+| Any other value | By the return annotation, `-> ViewSetResult[X]` read as `X`, as an argument by its parameter's annotation: refused when the annotation is one pydantic cannot validate or does not describe the value |
 
 A value annotated by its type validates again in the worker, so its validators run in both
 processes. A pydantic model's fields are encoded by the model itself.
 
-Some values exist only in the process that holds them, and do not cross:
+Some values exist only in the process that holds them, and are refused whatever the annotation:
 
 | Value | Why |
 |---|---|
@@ -322,10 +325,10 @@ Some values exist only in the process that holds them, and do not cross:
 | `StreamingResponse` | Its body is produced by an iterator in the process that returned it |
 | `FileResponse` | Its body is a file read from the file system of the process that returned it |
 
-An argument that does not cross fails the call with `ActionDispatchError` (reason
-`serialization`) and nothing is sent; a result that does not cross fails it with
-`ActionFailedError` (reason `result`). The `TypeError` that names the value and the reason is the
-error's `__cause__` and is logged.
+A refused argument fails the call with `ActionDispatchError` (reason `serialization`) and nothing
+is sent; a refused result fails it with `ActionFailedError` (reason `result`). The error's
+`__cause__`, which is logged, is a `TypeError` naming the action and the parameter or the result,
+and the declared type and the value's type, or the reason the value does not cross.
 
 ::: warning Uploads travel through the broker
 An `UploadFile` argument is base64-encoded into the task message: the broker stores about 4/3 of
@@ -336,6 +339,65 @@ size of a request body at the server or proxy in front of the application (e.g. 
 `client_max_body_size`), and keep actions that accept large files in a viewset that is not
 decorated with `celery_viewset`.
 :::
+
+### Types of your own
+
+A class of the application's own crosses when it declares its pydantic schema with
+`__get_pydantic_core_schema__`, encoding itself in JSON mode and accepting that encoding back:
+
+```python
+from pydantic_core import core_schema
+
+class Money:
+    def __init__(self, cents: int, currency: str):
+        self.cents, self.currency = cents, currency
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source, _handler):
+        return core_schema.no_info_plain_validator_function(
+            lambda value: value if isinstance(value, cls) else cls(value["cents"], value["currency"]),
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                lambda money: {"cents": money.cents, "currency": money.currency}, when_used="json"
+            ),
+        )
+
+@celery_viewset(celery_app, task_prefix="payments", redis_client=redis_client)
+class PaymentViewSet:
+    __router = APIRouter()
+
+    @__router.post("pay")
+    async def pay(self, amount: Annotated[Money, Depends(read_amount)]) -> Money: ...
+```
+
+A class the application does not own crosses when the annotation carries the conversion:
+
+```python
+from pydantic import PlainSerializer, PlainValidator
+
+ColourParam = Annotated[
+    Colour,
+    PlainValidator(lambda value: value if isinstance(value, Colour) else Colour(value)),
+    PlainSerializer(lambda colour: colour.hex, when_used="json"),
+]
+
+    async def paint(self, colour: Annotated[ColourParam, Depends(read_colour)]) -> ColourParam: ...
+```
+
+A value without an annotation, or annotated `Any`, crosses as a
+[`SerializableObject`](./context-processors#serializableobject) subclass, which encodes itself with
+`__serialize__` and is rebuilt with `__deserialize__`:
+
+```python
+class Token(SerializableObject):
+    def __serialize__(self):
+        return {"key": self.value.key}
+
+    @classmethod
+    def __deserialize__(cls, data):
+        return cls(load_token(data["key"]))
+
+    async def revoke(self, token: Any = Depends(read_token)) -> None: ...
+```
 
 ### Low-level decorators
 

@@ -31,7 +31,7 @@ from fastapi_viewsets.list_query import (
     PaginatedList,
     take_page,
 )
-from fastapi_viewsets.list_shapes import ListOf, resolve_shapes
+from fastapi_viewsets.list_shapes import resolve_shapes
 from fastapi_viewsets.response_classes import NOT_FOUND_RESPONSE
 
 T = TypeVar("T")
@@ -348,7 +348,7 @@ class ListMixin(Generic[T, TFilter], ABC):
         limit: Annotated[int | None, Query(ge=1)] = None,
         cursor: str | None = None,
         x_list_shape: Annotated[str | None, Header()] = None,
-    ) -> Union[ListOf[T], PaginatedList[T], CursorPage[T]]:  # noqa: UP007 - see list_shapes.response_model
+    ) -> Union[list[T], PaginatedList[T], CursorPage[T]]:  # noqa: UP007 - see list_shapes.response_model
         """List the collection."""
         # Declares every parameter and every shape any viewset could ask for; route_viewset narrows
         # both before FastAPI sees them, dropping the parameters this viewset's shapes cannot use

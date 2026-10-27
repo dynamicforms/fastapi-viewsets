@@ -51,19 +51,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `celery_viewset`: an action's arguments and result cross between the FastAPI process and the
-  worker as the types its annotations declare, encoded and decoded with a pydantic `TypeAdapter` of
-  each hint. A `date`, `datetime`, `UUID`, `Decimal`, enum member, `set` or any other type pydantic
-  validates arrives as that type, not as its JSON form; `bytes` cross as base64. An `UploadFile`
-  argument (also `list[UploadFile]`) is read in the FastAPI process and arrives in the worker as an
+  worker as the types its annotations declare, `Annotated` metadata included, encoded and decoded
+  with a pydantic `TypeAdapter` of each annotation. A `date`, `datetime`, `UUID`, `Decimal`, enum
+  member, `set`, a class declaring `__get_pydantic_core_schema__` or a type annotated with its own
+  validator and serializer arrives as that type; `bytes` cross as base64. An `UploadFile` argument
+  (also `list[UploadFile]`) is read in the FastAPI process and arrives in the worker as an
   `UploadFile` with its filename, headers, content type, size and content. A returned `Response`,
   `JSONResponse`, `HTMLResponse`, `PlainTextResponse` or `RedirectResponse` arrives with its class,
   status code, raw headers and body; a `ViewSetResult`'s body arrives as the type of its
-  `ViewSetResult[X]` annotation. A `SerializableObject` argument is rebuilt in the worker. A value
-  with no usable annotation crosses in its JSON form, as before.
-- `celery_viewset`: a `WebSocket` or `BackgroundTasks` argument fails the call with
-  `ActionDispatchError` (reason `serialization`), and a `StreamingResponse`, `FileResponse` or a
-  response with a background task as the result fails it with `ActionFailedError` (reason `result`),
-  each with a `TypeError` naming the reason as the `__cause__`.
+  `ViewSetResult[X]` annotation. A value without an annotation or annotated `Any`, a `None` and a
+  `SerializableObject` cross in their JSON form, with every `SerializableObject` in it rebuilt.
+- `celery_viewset`: an argument annotated with a type pydantic cannot validate, or whose value the
+  annotation does not describe (a `datetime` declared `date`), fails the call with
+  `ActionDispatchError` (reason `serialization`), and so does a `WebSocket` or `BackgroundTasks`
+  argument. A result that does not encode by the return annotation, a `StreamingResponse`, a
+  `FileResponse` and a response with a background task fail it with `ActionFailedError` (reason
+  `result`). The `__cause__` is a `TypeError` naming the action, the parameter or the result, the
+  declared type and the value's type, or the reason the value does not cross.
+- `ListMixin.list_items` declares `list[T]` for the plain shape, the value it returns.
 - `route_viewset`: an endpoint annotated to return a `Response` class has no response model and its
   response is sent as it is.
 - A class routed a second time, by another `route_viewset` or another mount, serves its new routes

@@ -10,22 +10,25 @@ An argument crosses one of three ways, decided by its parameter's hint:
   body of a partial update. The model is dumped by field name and validated as its model in the
   worker; a create body without its primary key and a partial update body are validated as the
   FastAPI process validated them.
-- typed: any other hint pydantic can build a `TypeAdapter` for. The value is dumped in pydantic's
-  JSON mode and validated from JSON with the same hint: a `date` arrives as `date`, an enum member as
-  that member, a `set` as a `set`, a `UUID`, `Decimal` or `datetime` as itself. `bytes`,
-  `UploadFile` and `Request` are encoded by this module (see below).
-- untyped: no hint, `Any`, or a hint pydantic cannot build an adapter for. The value crosses as
-  `fastapi_viewsets.context.to_jsonable` encodes it, and a `SerializableObject` in it is rebuilt by
-  `__deserialize__` at any depth of lists and dicts.
+- typed: any other annotation except `Any`. The value is dumped in pydantic's JSON mode by a
+  `TypeAdapter` of the annotation and validated from JSON with the same adapter: a `date` arrives as
+  `date`, an enum member as that member, a `set` as a `set`, a `UUID`, `Decimal` or `datetime` as
+  itself. `bytes`, `UploadFile` and `Request` are encoded by this module (see `transport_hint`), and
+  an `Any` inside the annotation is encoded untyped.
+- untyped: no annotation or `Any`, a None value, and a `SerializableObject` value. The value crosses
+  as `fastapi_viewsets.context.to_jsonable` encodes it, and a `SerializableObject` in it is rebuilt
+  by `__deserialize__` at any depth of lists and dicts.
 
-A typed value that does not match its hint (its dump reports an unexpected value) crosses untyped.
+A typed value raises `TypeError` naming the value, its declared type and its own type when pydantic
+cannot build an adapter for the annotation, and when the adapter does not encode the value (its dump
+reports an unexpected value: a `datetime` declared `date`, a dict declared as a model).
 
 The result crosses by its value: a `Response` (see `response_to_jsonable`), a `ViewSetResult` (its
-body by the hint the `ViewSetResult[X]` annotation states), a `SerializableObject`, and otherwise
-typed by the return annotation, or untyped as above.
+body by the `X` of a `ViewSetResult[X]` annotation), and any other value as an argument does, by
+the return annotation with `ViewSetResult[X]` read as `X`.
 
-A value that exists only in the process holding it is refused with a `TypeError` naming the reason
-(see `UNTRANSPORTABLE`).
+A value that exists only in the process holding it raises `TypeError` naming the reason (see
+`UNTRANSPORTABLE`).
 """
 
 import base64
@@ -160,6 +163,18 @@ def upload_from_jsonable(data: dict[str, Any]) -> UploadFile:
     )
 
 
+class _Untyped(_Codec):
+    """An `Any` position inside a typed hint: encoded by `to_jsonable`, decoded by `from_jsonable`, so
+    a `SerializableObject` in it is rebuilt."""
+
+    def __init__(self):
+        super().__init__(object, lambda value: _encode_untyped(value), from_jsonable)
+
+    def _validate(self, value: Any) -> Any:
+        return from_jsonable(value)
+
+
+_UNTYPED = _Untyped()
 _BYTES = _Codec(bytes, _b64encode, _b64decode)
 _UPLOAD = _Codec(UploadFile, upload_to_jsonable, upload_from_jsonable)
 _REQUEST = _Codec(HTTPConnection, request_to_jsonable, request_from_jsonable)
@@ -175,6 +190,8 @@ def transport_hint(hint: Any) -> Any:
     """`hint` with each type this module encodes itself replaced by that type annotated with its
     codec, inside unions, `Annotated` and parameterised collections. A pydantic model's fields keep
     their own schema."""
+    if hint is Any:
+        return Annotated[Any, _UNTYPED]
     if _is_class(hint):
         if hint is bytes:
             return Annotated[bytes, _BYTES]
@@ -316,16 +333,37 @@ def _encode_untyped(value: Any) -> Any:
     return to_jsonable(value)
 
 
-def encode_value(adapter: TypeAdapter | None, value: Any) -> tuple[Any, bool]:
-    """`value` encoded by `adapter`, and True; or encoded untyped, and False, without an adapter or
-    for a value that does not match it."""
+def declares_type(hint: Any) -> bool:
+    """Whether `hint` is an annotation that types a value: neither absent nor `Any`."""
+    return hint is not None and hint is not Any and hint is not inspect.Parameter.empty
+
+
+def _type_name(hint: Any) -> str:
+    if get_origin(hint) is Annotated:
+        return _type_name(get_args(hint)[0])
+    return hint.__name__ if _is_class(hint) else repr(hint)
+
+
+def encode_value(hint: Any, value: Any, what: str = "the value") -> tuple[Any, bool]:
+    """`value` encoded by `hint`'s adapter, and True; or encoded untyped, and False, for a `hint`
+    that types nothing (see `declares_type`), a None value and a `SerializableObject`. `what` names
+    the value in the `TypeError` raised for a declared type pydantic cannot validate and for a value
+    that does not encode as its declared type."""
     check_transportable(value)
-    if adapter is not None and not isinstance(value, SerializableObject):
-        try:
-            return _encode_typed(adapter, value), True
-        except Exception:  # noqa: S110 - a value its hint does not describe crosses untyped
-            pass
-    return _encode_untyped(value), False
+    if not declares_type(hint) or value is None or isinstance(value, SerializableObject):
+        return _encode_untyped(value), False
+    adapter = adapter_for(hint)
+    if adapter is None:
+        raise TypeError(
+            f"{what} is declared {_type_name(hint)}, which pydantic cannot validate; the value is a "
+            f"{type(value).__name__}. Declare a type pydantic validates, or make the value a SerializableObject"
+        )
+    try:
+        return _encode_typed(adapter, value), True
+    except Exception as error:
+        raise TypeError(
+            f"{what} is declared {_type_name(hint)} and the value, a {type(value).__name__}, does not encode as it"
+        ) from error
 
 
 def decode_value(adapter: TypeAdapter | None, data: Any, typed: bool) -> Any:
@@ -359,12 +397,11 @@ class ParamCodec:
     hint: Any
     kind: str
     """`model`, `partial`, `typed` or `untyped` (see the module docstring)."""
-    adapter: TypeAdapter | None = None
 
 
-def _resolved_hints(cls: type | None, endpoint) -> dict[str, Any]:
+def _resolved_hints(cls: type | None, endpoint, include_extras: bool = False) -> dict[str, Any]:
     try:
-        hints = get_type_hints(endpoint)
+        hints = get_type_hints(endpoint, include_extras=include_extras)
     except Exception:
         return {}
     type_map = build_type_map(cls) if cls is not None else {}
@@ -378,7 +415,10 @@ class ActionCodec:
     def __init__(self, cls: type | None, endpoint):
         self.task_name = endpoint.__name__
         self.signature = inspect.signature(endpoint)
+        # the model paths read the bare annotation; a typed value is encoded by the annotation with
+        # its `Annotated` metadata, which may carry its validator and serializer
         hints = _resolved_hints(cls, endpoint)
+        annotated = _resolved_hints(cls, endpoint, include_extras=True)
         partial = endpoint.__name__ in PARTIAL_UPDATE_ACTIONS
         self.params: dict[str, ParamCodec] = {}
         for name, parameter in self.signature.parameters.items():
@@ -395,10 +435,10 @@ class ActionCodec:
             elif is_model_hint(hint):
                 self.params[name] = ParamCodec(name, hint, "model")
             else:
-                adapter = adapter_for(hint)
-                self.params[name] = ParamCodec(name, hint, "typed" if adapter else "untyped", adapter)
+                hint = annotated.get(name, hint)
+                self.params[name] = ParamCodec(name, hint, "typed" if declares_type(hint) else "untyped")
         self.reads_uploads = any(_contains_upload(codec.hint) for codec in self.params.values() if codec.hint)
-        self.result_hint = hints.get("return")
+        self.result_hint = annotated.get("return")
 
     def bind(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
         """`args` and `kwargs` of a call as keyword arguments by parameter name, beside the values
@@ -418,21 +458,25 @@ class ActionCodec:
 
     def encode_argument(self, name: str, value: Any) -> tuple[Any, bool]:
         """`value` of parameter `name` encoded typed, and True, or untyped, and False. A model
-        argument (`model`, `partial`) is encoded by the caller and reported typed."""
+        argument (`model`, `partial`) is encoded by the caller and reported typed. Raises `TypeError`
+        naming the action for a value that does not cross (see `encode_value`)."""
         codec = self.params.get(name)
         try:
-            return encode_value(codec.adapter if codec is not None else None, value)
+            return encode_value(codec.hint if codec is not None else None, value, f"argument {name!r}")
         except TypeError as error:
-            raise TypeError(f"argument {name!r}: {error}") from error
+            raise TypeError(f"{self.task_name}: {error}") from error
 
     def decode_argument(self, name: str, data: Any, typed: bool) -> Any:
         codec = self.params.get(name)
-        return decode_value(codec.adapter if codec is not None else None, data, typed)
+        return decode_value(adapter_for(codec.hint) if codec is not None else None, data, typed)
 
     def encode_result(self, value: Any) -> tuple[Any, str]:
         """The result as the worker pushes it, and its encoding: `response`, `viewset_result`,
         `typed` or `untyped`."""
-        return _encode_result(value, self.result_hint)
+        try:
+            return _encode_result(value, self.result_hint)
+        except TypeError as error:
+            raise TypeError(f"{self.task_name}: {error}") from error
 
     def decode_result(self, result: EncodedResult) -> Any:
         return _decode_result(result.data, result.encoding, self.result_hint)
@@ -458,7 +502,7 @@ def _encode_result(value: Any, hint: Any) -> tuple[Any, str]:
             "cookies": to_jsonable(value.cookies),
             "status_code": value.status_code,
         }, "viewset_result"
-    data, typed = encode_value(adapter_for(hint) if hint is not None else None, value)
+    data, typed = encode_value(_body_hint(hint), value, "the result")
     return data, "typed" if typed else "untyped"
 
 
@@ -475,5 +519,5 @@ def _decode_result(data: Any, encoding: str, hint: Any) -> Any:
             status_code=data["status_code"],
         )
     if encoding == "typed":
-        return decode_value(adapter_for(hint), data, True)
+        return decode_value(adapter_for(_body_hint(hint)), data, True)
     return from_jsonable(data)

@@ -48,7 +48,8 @@ class SerializableObject(ABC):
     requires domain-specific logic, not just decoding a JSON literal (see
     settings.viewsets_context_json_encoder/decoder for the simpler case of normalising a plain
     value type like datetime in context). An action argument or result crosses as its tagged
-    payload at any depth of lists and dicts (see decorators/celery_viewset/transport.py).
+    payload at any depth of lists and dicts, whatever its annotation (see
+    decorators/celery_viewset/transport.py).
 
     `value` holds the actual wrapped value. Subclasses implement the "magic" __serialize__/
     __deserialize__ methods; serialize_context()/deserialize_context() detect instances of this

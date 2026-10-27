@@ -14,6 +14,7 @@ import contextlib
 import enum
 import io
 import json
+import re
 import uuid
 
 from collections import defaultdict, deque
@@ -26,11 +27,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from fastapi import APIRouter, BackgroundTasks, FastAPI, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.testclient import TestClient
 from muxws.frames import ABSENT
-from pydantic import BaseModel
+from pydantic import BaseModel, PlainSerializer, PlainValidator
 from starlette.datastructures import Headers, UploadFile as StarletteUploadFile
 from starlette.responses import FileResponse, Response, StreamingResponse
 from starlette.websockets import WebSocket
@@ -118,11 +119,68 @@ def test_an_action_whose_hints_do_not_resolve_crosses_untyped():
     assert codec.encode_argument("day", date(2026, 1, 1)) == ("2026-01-01", False)
 
 
+class Money:
+    """A class of the application's own that declares its pydantic schema."""
+
+    def __init__(self, cents: int, currency: str):
+        self.cents = cents
+        self.currency = currency
+
+    def __eq__(self, other):
+        return isinstance(other, Money) and (self.cents, self.currency) == (other.cents, other.currency)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source, _handler):
+        from pydantic_core import core_schema
+
+        return core_schema.no_info_plain_validator_function(
+            lambda value: value if isinstance(value, cls) else cls(value["cents"], value["currency"]),
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                lambda money: {"cents": money.cents, "currency": money.currency}, when_used="json"
+            ),
+        )
+
+
+class Colour:
+    """A class the application does not own: its parameter's annotation carries the conversion."""
+
+    def __init__(self, hex_value: str):
+        self.hex = hex_value
+
+
+ColourParam = Annotated[
+    Colour,
+    PlainValidator(lambda value: value if isinstance(value, Colour) else Colour(value)),
+    PlainSerializer(lambda colour: colour.hex, when_used="json"),
+]
+
+
+def test_a_type_of_its_own_crosses_by_its_pydantic_schema():
+    async def pay(self, amount: Money) -> Money: ...  # noqa: ARG001
+
+    codec = ActionCodec(None, pay)
+    data, typed = codec.encode_argument("amount", Money(150, "EUR"))
+    assert data == {"cents": 150, "currency": "EUR"}
+    assert codec.decode_argument("amount", data, typed) == Money(150, "EUR")
+    result, encoding = codec.encode_result(Money(5, "USD"))
+    assert codec.decode_result(EncodedResult(result, encoding)) == Money(5, "USD")
+
+
+def test_a_foreign_type_crosses_by_its_annotated_validator_and_serializer():
+    async def paint(self, colour: ColourParam) -> ColourParam: ...  # noqa: ARG001
+
+    codec = ActionCodec(None, paint)
+    data, typed = codec.encode_argument("colour", Colour("#ff0000"))
+    assert (data, typed) == ("#ff0000", True)
+    assert codec.decode_argument("colour", data, typed).hex == "#ff0000"
+    result, encoding = codec.encode_result(Colour("#00ff00"))
+    assert codec.decode_result(EncodedResult(result, encoding)).hex == "#00ff00"
+
+
 def _round_trip(hint, value):
     """`value` encoded by `hint`, passed through JSON as Kombu passes it, and decoded."""
-    adapter = adapter_for(hint)
-    data, typed = encode_value(adapter, value)
-    return decode_value(adapter, json.loads(json.dumps(data)), typed)
+    data, typed = encode_value(hint, value)
+    return decode_value(adapter_for(hint), json.loads(json.dumps(data)), typed)
 
 
 # ---------------------------------------------------------------------------
@@ -168,9 +226,31 @@ def test_a_value_crosses_as_its_type(hint, value):
     assert type(result) is type(value)
 
 
-def test_a_value_its_hint_does_not_describe_crosses_as_json():
-    assert _round_trip(date, "not a date") == "not a date"
-    assert _round_trip(int, {"a": 1}) == {"a": 1}
+@pytest.mark.parametrize(
+    ("hint", "value", "declared", "given"),
+    [
+        (date, datetime(2026, 1, 1, 9, 30), "date", "datetime"),
+        (date, "2026-01-01", "date", "str"),
+        (Point, {"x": 1, "at": "2026-01-01"}, "Point", "dict"),
+        (list[int], {1, 2}, "list[int]", "set"),
+    ],
+)
+def test_a_value_its_annotation_does_not_describe_does_not_cross(hint, value, declared, given):
+    with pytest.raises(TypeError, match=f"declared {re.escape(declared)} and the value, a {given}, does not"):
+        encode_value(hint, value, "argument 'x'")
+
+
+def test_a_type_pydantic_cannot_validate_does_not_cross():
+    class Foreign:
+        pass
+
+    with pytest.raises(TypeError, match="declared Foreign, which pydantic cannot validate; the value is a Foreign"):
+        encode_value(Foreign, Foreign())
+
+
+def test_none_and_serializable_objects_cross_untyped_whatever_the_annotation():
+    assert encode_value(date, None) == (None, False)
+    assert encode_value(date, Tagged(1)) == ({"__fpv_type__": f"{__name__}.Tagged", "__fpv_value__": {"v": 1}}, False)
 
 
 def test_an_unannotated_value_crosses_as_json():
@@ -300,7 +380,7 @@ def test_what_exists_only_in_its_process_does_not_cross(value, reason):
     with pytest.raises(TypeError, match=reason):
         encode(value)
     with pytest.raises(TypeError, match=reason):
-        encode_value(adapter_for(Any), value)
+        encode_value(Any, value)
 
 
 async def _anything(self, value: Any) -> Any:  # noqa: ARG001
@@ -363,6 +443,14 @@ class _ResultLists:
 MAX_UPLOAD = 1000
 
 
+class Foreign:
+    """A class pydantic does not validate."""
+
+
+def _a_datetime() -> datetime:
+    return datetime(2026, 1, 1, 9, 30)
+
+
 def make_files_viewset():
     class FilesViewSet:
         __router = APIRouter()
@@ -409,6 +497,22 @@ def make_files_viewset():
         @__router.post("later")
         async def later(self, tasks: BackgroundTasks) -> None:
             tasks.add_task(print)
+
+        @__router.get("stamped")
+        async def stamped(self, day: Annotated[date, Depends(_a_datetime)]) -> str:
+            return str(day)
+
+        @__router.get("foreign")
+        async def foreign(self, value: Annotated[Foreign, Depends(Foreign)]) -> str:
+            return str(value)
+
+        @__router.get("wrong_day")
+        async def wrong_day(self) -> date:
+            return datetime(2026, 1, 1, 9, 30)
+
+        @__router.get("wrong_point")
+        async def wrong_point(self) -> Point:
+            return {"x": 1, "at": "2026-01-01"}
 
     return FilesViewSet
 
@@ -546,6 +650,52 @@ def test_a_result_the_caller_cannot_decode_fails_the_call(monkeypatch):
     with pytest.raises(ActionFailedError) as raised:
         asyncio.run(viewset().today())
     assert raised.value.params == {"task": "days.today", "reason": "result"}
+
+
+@pytest.mark.parametrize(
+    ("path", "cause"),
+    [
+        ("/files/stamped", "stamped: argument 'day' is declared date and the value, a datetime, does not encode as it"),
+        ("/files/foreign", "foreign: argument 'value' is declared Foreign, which pydantic cannot validate"),
+    ],
+)
+def test_an_argument_that_does_not_encode_as_declared_is_not_dispatched(files_app, path, cause, caplog):
+    app, _lists = files_app
+    with TestClient(app) as client:
+        response = client.get(path)
+    assert response.status_code == 503, response.text
+    assert response.json()["detail_params"]["reason"] == "serialization"
+    assert cause in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("path", "cause"),
+    [
+        ("/files/wrong_day", "wrong_day: the result is declared date and the value, a datetime, does not encode"),
+        ("/files/wrong_point", "wrong_point: the result is declared Point and the value, a dict, does not encode"),
+    ],
+)
+def test_a_result_that_does_not_encode_as_declared_fails_the_call(files_app, path, cause, caplog):
+    app, _lists = files_app
+    with TestClient(app) as client:
+        response = client.get(path)
+    assert response.status_code == 500, response.text
+    assert response.json()["detail_params"]["reason"] == "result"
+    assert cause in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_muxws_refuses_an_argument_that_does_not_encode_as_declared(files_app):
+    app, lists = files_app
+    queue_key = get_result_queue_key("files")
+    await start_result_reader(lists.reader(), queue_key, poll_interval=0.005)
+    try:
+        stream = FakeStream({":method": "GET", ":path": "/files/stamped"})
+        await process_command(ABSENT, stream, app=app)
+    finally:
+        await stop_result_reader(queue_key)
+    assert stream.status == 503, stream.payload
+    assert stream.payload["detail_params"]["reason"] == "serialization"
 
 
 @pytest.mark.asyncio
