@@ -1,6 +1,7 @@
 """What a `celery_viewset_server` task pushes and raises when its execution does not return."""
 
 import asyncio
+import contextlib
 import json
 import os
 import signal
@@ -97,6 +98,41 @@ def soft_limit_signal():
     for timer in timers:
         timer.cancel()
     signal.signal(signal.SIGUSR1, previous)
+
+
+@contextlib.contextmanager
+def raised_by_signal(error_type: type[BaseException], delay: float = 0.05):
+    """Raises `error_type()` from a SIGUSR2 handler `delay` seconds into the block, as a pool's
+    signal handler raises into the running execution. A signal that interrupts a callback the
+    interpreter runs itself, such as a weakref callback during garbage collection, ends there as an
+    unraisable exception and never reaches the execution; that delivery is sent again."""
+    timers = []
+
+    def send(after: float) -> None:
+        timer = threading.Timer(after, os.kill, (os.getpid(), signal.SIGUSR2))
+        timers.append(timer)
+        timer.start()
+
+    def raise_error(_signum, _frame):
+        raise error_type(1) if error_type is SystemExit else error_type()
+
+    def resend_swallowed(unraisable) -> None:
+        if isinstance(unraisable.exc_value, error_type):
+            send(0.01)
+        else:
+            previous_hook(unraisable)
+
+    previous_handler = signal.signal(signal.SIGUSR2, raise_error)
+    previous_hook = sys.unraisablehook
+    sys.unraisablehook = resend_swallowed
+    send(delay)
+    try:
+        yield
+    finally:
+        for timer in timers:
+            timer.cancel()
+        sys.unraisablehook = previous_hook
+        signal.signal(signal.SIGUSR2, previous_handler)
 
 
 def _state_recording_viewset(body, saved: list):
@@ -242,11 +278,6 @@ def test_a_process_exit_in_a_prefork_pool_child_is_left_to_its_supervisor(submit
 
 
 def test_a_process_exit_while_suspended_cancels_the_action_and_reaches_execute_as_itself(events, submitted):
-    def exit_process(_signum, _frame):
-        raise SystemExit(1)
-
-    previous = signal.signal(signal.SIGUSR2, exit_process)
-    timer = threading.Timer(0.05, os.kill, (os.getpid(), signal.SIGUSR2))
     seen, saved = [], []
 
     async def body():
@@ -257,13 +288,8 @@ def test_a_process_exit_while_suspended_cancels_the_action_and_reaches_execute_a
             raise
 
     tasks, redis_client = _worker(_state_recording_viewset(body, saved))
-    timer.start()
-    try:
-        with pytest.raises(SystemExit) as raised:
-            tasks["jobs.run"](**CALL)
-    finally:
-        timer.cancel()
-        signal.signal(signal.SIGUSR2, previous)
+    with raised_by_signal(SystemExit), pytest.raises(SystemExit) as raised:
+        tasks["jobs.run"](**CALL)
 
     assert isinstance(seen[0], asyncio.CancelledError)
     assert saved == [True]
@@ -434,11 +460,6 @@ def test_the_gevent_hard_limit_while_running_is_interrupted_and_reaches_the_pool
 
 
 def test_the_gevent_hard_limit_while_suspended_is_interrupted_and_reaches_the_pool(events, gevent_timeout):
-    def raise_timeout(_signum, _frame):
-        raise Timeout
-
-    previous = signal.signal(signal.SIGUSR2, raise_timeout)
-    timer = threading.Timer(0.05, os.kill, (os.getpid(), signal.SIGUSR2))
     seen = []
 
     async def body():
@@ -450,13 +471,8 @@ def test_the_gevent_hard_limit_while_suspended_is_interrupted_and_reaches_the_po
 
     saved = []
     tasks, redis_client = _worker(_state_recording_viewset(body, saved))
-    timer.start()
-    try:
-        with pytest.raises(Timeout):
-            tasks["jobs.run"](**CALL)
-    finally:
-        timer.cancel()
-        signal.signal(signal.SIGUSR2, previous)
+    with raised_by_signal(Timeout), pytest.raises(Timeout):
+        tasks["jobs.run"](**CALL)
 
     assert isinstance(seen[0], asyncio.CancelledError)
     assert saved == [True]

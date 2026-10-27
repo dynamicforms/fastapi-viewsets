@@ -12,12 +12,12 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from ...conf import settings
+from ...context import to_jsonable
 from ...middleware import Middleware
 from ...mixins import ListMixin
 from ...mux_ws.registry import reset_registry
 from .. import route_viewset, ViewSetRouter
 from . import celery_viewset_client, celery_viewset_server, result_reader
-from .server import _to_jsonable
 
 
 class Account(BaseModel):
@@ -92,7 +92,7 @@ def test_a_celery_child_passes_both_gates_and_executes_in_the_worker(monkeypatch
         kwargs.pop("_result_queue_key")
         result = tasks[name](**kwargs)
         future = futures[correlation_id]
-        future.get_loop().call_soon_threadsafe(future.set_result, _to_jsonable(result))
+        future.get_loop().call_soon_threadsafe(future.set_result, to_jsonable(result))
 
     client_app = MagicMock()
     client_app.send_task.side_effect = send_task

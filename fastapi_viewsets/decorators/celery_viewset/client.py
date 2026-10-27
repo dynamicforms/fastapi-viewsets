@@ -10,14 +10,15 @@ from pydantic import BaseModel
 
 from ...action_configuration import resolve_action_configuration, TimeLimits
 from ...context import _Deferred, Context, SerializableObject, serialize_context, to_jsonable
-from ...exceptions import ActionDispatchError, ResultTimeoutError
+from ...exceptions import ActionDispatchError, ActionFailedError, ResultTimeoutError
 from ...middleware import ActionTransition, run_transition_listeners
 from ..build_schema import build_schema
 from ..lifecycle_runner import current_call, DEFERRED_ACTIONS_ATTRIBUTE, effective_middlewares
 from ..primary_key_model_helper import PARTIAL_UPDATE_ACTIONS
 from . import result_reader
-from .payload import CONTEXT_KWARG, PARENT_KWARG, REQUEST_KWARG, request_to_jsonable
+from .payload import CONTEXT_KWARG, PARENT_KWARG, REQUEST_KWARG, request_to_jsonable, UNTYPED_KWARG
 from .result_reader import get_process_queue_key, get_result_queue_key
+from .transport import ActionCodec, EncodedResult
 
 if TYPE_CHECKING:
     import redis
@@ -51,7 +52,8 @@ def celery_viewset_client(
     send Celery tasks and await results via a Redis result queue.
 
     A call whose result does not arrive within result_timeout seconds raises ResultTimeoutError (504).
-    None waits without a limit.
+    None waits without a limit. Arguments and results are encoded by the action's type hints (see
+    `transport`).
     """
     queue_key = get_result_queue_key(task_prefix)
 
@@ -99,6 +101,33 @@ async def _serialize_value(value, partial: bool = False):
     return to_jsonable(value)
 
 
+async def _encode_arguments(
+    codec: ActionCodec, positional: tuple, named: dict, partial: bool
+) -> tuple[list, dict, list[str]]:
+    """The Celery args and kwargs of a call's arguments, and the names of the kwargs that crossed
+    untyped (see `transport`). An argument that holds an `UploadFile` is encoded in a worker thread,
+    which reads the file."""
+
+    async def encode(name: str, value):
+        kind = codec.params[name].kind if name in codec.params else "untyped"
+        if kind in ("model", "partial"):
+            return await _serialize_value(value, partial), True
+        if isinstance(value, Context):
+            return await _serialize_value(value), False
+        if codec.reads_uploads:
+            return await asyncio.to_thread(codec.encode_argument, name, value)
+        return codec.encode_argument(name, value)
+
+    encoded_args = [await _serialize_value(value) for value in positional]
+    encoded_kwargs: dict = {}
+    untyped: list[str] = []
+    for name, value in named.items():
+        encoded_kwargs[name], typed = await encode(name, value)
+        if not typed:
+            untyped.append(name)
+    return encoded_args, encoded_kwargs, untyped
+
+
 def _time_limit_options(context: Context) -> dict:
     """The `send_task` time limit options of the call's `TimeLimits` configuration."""
     limits = context.configuration_for(TimeLimits)
@@ -118,15 +147,21 @@ def _patch_method(
     """Replace the method on cls with an async version that sends a Celery task and awaits the result.
 
     The task carries the call's context, request and parent execution (see `payload`) from
-    `current_call()`; a `context` the caller passes replaces the call's. The action's `TimeLimits`
+    `current_call()`; a `context` the caller passes replaces the call's. Positional arguments are
+    sent as the keyword arguments of their parameters, each encoded by its parameter's type hint
+    (see `transport`); the names of those that crossed untyped are sent under `UNTYPED_KWARG`, and
+    the result is decoded by the return annotation. The action's `TimeLimits`
     configuration is sent as the task's time limits. Arguments that cannot be serialized raise
-    `ActionDispatchError` (reason `serialization`), a send that fails raises it with reason `send`.
+    `ActionDispatchError` (reason `serialization`), a send that fails raises it with reason `send`,
+    and a result that cannot be decoded raises `ActionFailedError` (reason `result`).
     A deferred context value (`ChangeEvents`'s scope of a call) is computed before the arguments
     are serialized; its exception propagates unchanged and nothing is sent.
     Once the task is sent, `Middleware.on_transition()` of the action's effective middlewares
     receives `dispatched`. The action's name joins the class's `DEFERRED_ACTIONS_ATTRIBUTE`."""
     method_name = original_endpoint.__name__
     declares_request = "request" in inspect.signature(original_endpoint).parameters
+    codec = ActionCodec(cls, original_endpoint)
+    partial = method_name in PARTIAL_UPDATE_ACTIONS
 
     @wraps(original_endpoint)
     async def async_client_wrapper(_self, *args, **kwargs):
@@ -148,13 +183,12 @@ def _patch_method(
             for value in list(context.raw().values()):
                 if isinstance(value, _Deferred):
                     await value
+            positional, named = codec.bind(args, kwargs)
             try:
-                serializable_args = [await _serialize_value(v) for v in args]
-                serializable_kwargs = {
-                    k: await _serialize_value(v, method_name in PARTIAL_UPDATE_ACTIONS) for k, v in kwargs.items()
-                }
+                encoded_args, encoded_kwargs, untyped = await _encode_arguments(codec, positional, named, partial)
                 task_kwargs = {
-                    **serializable_kwargs,
+                    **encoded_kwargs,
+                    **({UNTYPED_KWARG: untyped} if untyped else {}),
                     CONTEXT_KWARG: await serialize_context(context.raw()),
                     REQUEST_KWARG: request_to_jsonable(call.request if call is not None else None),
                     PARENT_KWARG: parent.to_jsonable() if parent is not None else None,
@@ -163,7 +197,10 @@ def _patch_method(
                 }
             except Exception as error:
                 logger.error(
-                    "Celery task arguments not serializable: %s (correlation_id=%s)", task_name, correlation_id
+                    "Celery task arguments not serializable: %s (correlation_id=%s): %s",
+                    task_name,
+                    correlation_id,
+                    error,
                 )
                 raise ActionDispatchError(task_name, "serialization") from error
             logger.info("Celery task scheduling: %s (correlation_id=%s)", task_name, correlation_id)
@@ -172,7 +209,7 @@ def _patch_method(
                 await asyncio.to_thread(
                     celery_app.send_task,
                     task_name,
-                    args=serializable_args,
+                    args=encoded_args,
                     kwargs=task_kwargs,
                     # send_task() defaults ignore_result to False regardless of what the task was
                     # registered with (celery_viewset_server sets ignore_result=True) - Celery's
@@ -189,10 +226,17 @@ def _patch_method(
                 ActionTransition("dispatched", cls, method_name, bound_context, parent, None),
             )
             try:
-                return await asyncio.wait_for(future, result_timeout)
+                result = await asyncio.wait_for(future, result_timeout)
             except asyncio.TimeoutError:
                 logger.error("Celery task timed out: %s (correlation_id=%s)", task_name, correlation_id)
                 raise ResultTimeoutError(task_name, result_timeout) from None
+            if not isinstance(result, EncodedResult):
+                return result
+            try:
+                return codec.decode_result(result)
+            except Exception as error:
+                logger.exception("Result of %s (correlation_id=%s) cannot be read", task_name, correlation_id)
+                raise ActionFailedError(task_name, "result") from error
         finally:
             result_reader.unregister_future(correlation_id)
 

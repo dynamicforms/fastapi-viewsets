@@ -248,9 +248,8 @@ cancelled call removes its pending entry; its result, if the worker still sends 
 having no pending call and dropped. `send_task` runs in a worker thread, so a slow broker does not
 block the event loop.
 
-A model argument crosses to the worker dumped by field name and is validated as its model there. A
-create body crosses without its primary key, and the action receives the model as it does in the
-FastAPI process. A model argument that fails validation on the worker fails the call.
+Arguments and results cross as the types the action declares; see
+[Arguments and results](#arguments-and-results).
 
 A result reader background task must be started in the FastAPI lifespan for each `queue_key` (i.e. each distinct
 `task_prefix` used by a `celery_viewset`-decorated class) — `start_result_reader` keeps one reader task per `queue_key`,
@@ -286,6 +285,120 @@ call it once, right after starting your readers in `lifespan`, so a missing read
 line at startup instead of as timed-out requests.
 :::
 
+### Arguments and results
+
+An action receives in the worker, and its caller receives back, values of the types they have when
+the action runs in the FastAPI process. Both processes encode and decode them by the action's type
+hints (TypeVars of a generic viewset resolved against the decorated class, `Annotated` metadata
+included), with a pydantic `TypeAdapter` built once per hint; the task message is JSON.
+
+| Value | How it crosses |
+|---|---|
+| A model, an optional model, a list or tuple of models | Dumped by field name, validated as its model in the worker. A create body crosses without its primary key and a partial update body with the fields the request stated; the action receives them as it does in the FastAPI process |
+| Any other annotation (`date`, `datetime`, `time`, `timedelta`, `UUID`, `Decimal`, enums, `Literal`, `set`, `frozenset`, `tuple`, paths, unions, collections of these, a model inside a collection, a [type of your own](#types-of-your-own)) | Dumped in pydantic's JSON mode, validated from JSON with the same hint. An `Any` inside the annotation crosses as an unannotated value |
+| `bytes` (also inside unions and collections) | Base64. Inside a model, the model's own `ser_json_bytes` / `val_json_bytes` configuration applies |
+| `UploadFile` (also `list[UploadFile]`) | Read whole in the FastAPI process (in a worker thread) and rebuilt in the worker as a Starlette `UploadFile` with the same `filename`, `headers` (and so `content_type`), `size` and content, positioned at its start, readable and seekable. Content above 1 MiB is spooled to a temporary file |
+| `Request` (any parameter annotated with it) | Its ASGI scope without the body, as the `request` parameter (see [Call data in the worker](#call-data-in-the-worker)) |
+| A `SerializableObject`, at any depth of lists and dicts | Its `__serialize__` payload, rebuilt with `__deserialize__` |
+| `None` | `null`, whatever the annotation |
+| No annotation, `Any` | `to_jsonable()`: the JSON form, with every `SerializableObject` in it rebuilt |
+| An annotation pydantic cannot validate | Refused: the call fails |
+| A value its annotation does not describe (a `datetime` declared `date`, a dict declared as a model in a collection) | Refused: the call fails |
+
+The result crosses by the value the action returns:
+
+| Result | How it crosses |
+|---|---|
+| A `Response` whose body is in memory (`Response`, `JSONResponse`, `HTMLResponse`, `PlainTextResponse`, `RedirectResponse` and their subclasses) | Its class, status code, raw headers (`Set-Cookie`, `Content-Disposition`, `Content-Length` included), body and media type, unchanged. A subclass defined inside a function crosses as its nearest importable base class |
+| A `ViewSetResult` | Its status code, headers and cookies, and its body by the type argument of the `-> ViewSetResult[X]` annotation |
+| Any other value | By the return annotation, `-> ViewSetResult[X]` read as `X`, as an argument by its parameter's annotation: refused when the annotation is one pydantic cannot validate or does not describe the value |
+
+A value annotated by its type validates again in the worker, so its validators run in both
+processes. A pydantic model's fields are encoded by the model itself.
+
+Some values exist only in the process that holds them, and are refused whatever the annotation:
+
+| Value | Why |
+|---|---|
+| `WebSocket` | A connection held open by the FastAPI process |
+| `BackgroundTasks`, or a `Response` with a `background` task | Background tasks run in the FastAPI process after the response is sent |
+| `StreamingResponse` | Its body is produced by an iterator in the process that returned it |
+| `FileResponse` | Its body is a file read from the file system of the process that returned it |
+
+A refused argument fails the call with `ActionDispatchError` (reason `serialization`) and nothing
+is sent; a refused result fails it with `ActionFailedError` (reason `result`). The error's
+`__cause__`, which is logged, is a `TypeError` naming the action and the parameter or the result,
+and the declared type and the value's type, or the reason the value does not cross.
+
+::: warning Uploads travel through the broker
+An `UploadFile` argument is base64-encoded into the task message: the broker stores about 4/3 of
+the file's size, and the FastAPI process and the worker each hold the encoded content in memory
+while they encode and decode it. FastAPI has received the whole upload before the action is
+called, so a size check in the action runs in the worker, after the content has crossed. Bound the
+size of a request body at the server or proxy in front of the application (e.g. nginx
+`client_max_body_size`), and keep actions that accept large files in a viewset that is not
+decorated with `celery_viewset`.
+:::
+
+### Types of your own
+
+A class of the application's own crosses when it declares its pydantic schema with
+`__get_pydantic_core_schema__`, encoding itself in JSON mode and accepting that encoding back:
+
+```python
+from pydantic_core import core_schema
+
+class Money:
+    def __init__(self, cents: int, currency: str):
+        self.cents, self.currency = cents, currency
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source, _handler):
+        return core_schema.no_info_plain_validator_function(
+            lambda value: value if isinstance(value, cls) else cls(value["cents"], value["currency"]),
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                lambda money: {"cents": money.cents, "currency": money.currency}, when_used="json"
+            ),
+        )
+
+@celery_viewset(celery_app, task_prefix="payments", redis_client=redis_client)
+class PaymentViewSet:
+    __router = APIRouter()
+
+    @__router.post("pay")
+    async def pay(self, amount: Annotated[Money, Depends(read_amount)]) -> Money: ...
+```
+
+A class the application does not own crosses when the annotation carries the conversion:
+
+```python
+from pydantic import PlainSerializer, PlainValidator
+
+ColourParam = Annotated[
+    Colour,
+    PlainValidator(lambda value: value if isinstance(value, Colour) else Colour(value)),
+    PlainSerializer(lambda colour: colour.hex, when_used="json"),
+]
+
+    async def paint(self, colour: Annotated[ColourParam, Depends(read_colour)]) -> ColourParam: ...
+```
+
+A value without an annotation, or annotated `Any`, crosses as a
+[`SerializableObject`](./context-processors#serializableobject) subclass, which encodes itself with
+`__serialize__` and is rebuilt with `__deserialize__`:
+
+```python
+class Token(SerializableObject):
+    def __serialize__(self):
+        return {"key": self.value.key}
+
+    @classmethod
+    def __deserialize__(cls, data):
+        return cls(load_token(data["key"]))
+
+    async def revoke(self, token: Any = Depends(read_token)) -> None: ...
+```
+
 ### Low-level decorators
 
 For explicit control over which mode is applied, use the low-level decorators directly:
@@ -318,6 +431,7 @@ Every task carries, beside the action's own arguments, the call's data under res
 | `_context` | The call's context, serialized whether or not the action declares a `context` parameter. A `LazyObject` crosses as its recipe, resolved only where it is awaited |
 | `_request` | The call's ASGI scope without the body: method, path, query string, headers, path parameters, client and server address |
 | `_parent` | The `ExecutionRef` of the execution in which the call was dispatched |
+| `_untyped` | The names of the arguments that crossed untyped (see [Arguments and results](#arguments-and-results)); absent when there are none |
 | `_correlation_id`, `_result_queue_key` | Where the result goes (see [Result passing](#result-passing)) |
 
 The worker consumes them before the action is called. An action that declares `context` receives
@@ -346,8 +460,8 @@ errors (see [Error Codes](./error-codes#executor-outcomes)):
 | The action returns | its result | `execute()` |
 | The action raises an `HTTPException` | that exception: a `DfViewSetError` of a class `fastapi_viewsets.exceptions` defines keeps its class, `code`, `params` and headers, any other one is rebuilt as `HTTPException` or `DfViewSetError` with the same fields | `execute()` |
 | The worker finds the request invalid (`RequestValidationError`, e.g. a filter value that does not convert) | that `RequestValidationError`, answered 422 `fastapi-viewsets.validation_failed` | `execute()` |
-| The action raises anything else (a Celery `Retry`, `Ignore` or `Reject` included), or a model argument fails validation in the worker | `ActionFailedError` (500, reason `error`); the original error is logged in the worker | `execute()` |
-| The result cannot be serialized, or deserialized by the caller | `ActionFailedError` (500, reason `result`) | — |
+| The action raises anything else (a Celery `Retry`, `Ignore` or `Reject` included), or an argument fails validation in the worker | `ActionFailedError` (500, reason `error`); the original error is logged in the worker | `execute()` |
+| The result cannot be serialized (see [Arguments and results](#arguments-and-results)), or deserialized by the caller | `ActionFailedError` (500, reason `result`) | — |
 | Soft time limit | `ActionInterruptedError` (504, reason `time_limit`) | `execute()` (`ActionInterruptedError` from `call_next()`) |
 | Hard time limit | `ActionInterruptedError` (504, reason `time_limit`) | `on_transition("interrupted")`; in a `gevent` pool also `execute()` (`ActionInterruptedError` from `call_next()`) |
 | `revoke(..., terminate=True)` | `ActionInterruptedError` (503, reason `terminated`) | `on_transition("interrupted")` |

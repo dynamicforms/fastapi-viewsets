@@ -163,16 +163,17 @@ function (its `__qualname__` would contain `<locals>`) can't be re-imported this
 :::
 
 The same tagging is also available for a single `SerializableObject` value outside a context dict,
-via `serialize_value()`/`deserialize_value()` (same module) - used internally so a `celery_viewset`-
-dispatched action's [`ViewSetResult`](./command-middleware#returning-viewsetresult-directly-from-an-endpoint)
-return value survives the worker boundary the same way any other `SerializableObject` does.
-`to_jsonable()` (same module) builds on `serialize_value()` for the general case: a
-`SerializableObject` is tagged, a Pydantic model is dumped, a dict is recursed into value-wise, a
-list/tuple element-wise, and any other value is encoded by `pydantic_core.to_jsonable_python()`, the
-encoding FastAPI's response serialization applies on REST and muxws. `ViewSetResult`'s own
-serialization and `celery_viewset`'s worker/client build their JSON-safe payload with it.
-`from_jsonable()` is its inverse: it reconstructs every tagged `SerializableObject` at any depth of
-dicts and lists and leaves every other value in its JSON form.
+via `serialize_value()`/`deserialize_value()` (same module). `to_jsonable()` (same module) builds on
+`serialize_value()` for the general case: a `SerializableObject` is tagged, a Pydantic model is
+dumped, a dict is recursed into value-wise, a list/tuple element-wise, and any other value is
+encoded by `pydantic_core.to_jsonable_python()`, the encoding FastAPI's response serialization
+applies on REST and muxws. `from_jsonable()` is its inverse: it reconstructs every tagged
+`SerializableObject` at any depth of dicts and lists and leaves every other value in its JSON form.
+
+A `SerializableObject` is also how an action argument or result without an annotation, or
+annotated `Any`, crosses to and from a `celery_viewset` worker: as an argument, a result, or at any
+depth of the lists and dicts in one, it crosses as its tagged payload and is rebuilt on the other
+side (see [Types of your own](./routers#types-of-your-own)).
 
 ### `LazyObject`
 

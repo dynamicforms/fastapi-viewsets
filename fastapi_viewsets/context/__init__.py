@@ -43,10 +43,13 @@ def _resolve_config_value(value: Any, action_name: "str | None") -> Any:
 
 class SerializableObject(ABC):
     """
-    Base class for context values that need custom (de)serialization across the Celery/Redis
-    boundary - e.g. because reconstructing them requires domain-specific logic, not just decoding
-    a JSON literal (see settings.viewsets_context_json_encoder/decoder for the simpler case of
-    normalising a plain value type like datetime).
+    Base class for context values, and `celery_viewset` action arguments and results, that need
+    custom (de)serialization across the Celery/Redis boundary - e.g. because reconstructing them
+    requires domain-specific logic, not just decoding a JSON literal (see
+    settings.viewsets_context_json_encoder/decoder for the simpler case of normalising a plain
+    value type like datetime in context). An action argument or result crosses as its tagged
+    payload at any depth of lists and dicts, whatever its annotation (see
+    decorators/celery_viewset/transport.py).
 
     `value` holds the actual wrapped value. Subclasses implement the "magic" __serialize__/
     __deserialize__ methods; serialize_context()/deserialize_context() detect instances of this
@@ -349,8 +352,8 @@ def to_jsonable(value: Any) -> Any:
     list/tuple element-wise, and any other value goes through pydantic_core.to_jsonable_python()
     (datetime, Decimal, UUID, Enum, set, dataclass, ...) - the encoding FastAPI's response
     serialization applies to the same value on REST/muxws. Shared by ViewSetResult's own
-    serialization and celery_viewset's worker/client payloads. from_jsonable() is its inverse for
-    tagged objects.
+    serialization and celery_viewset's encoding of a value its type hint does not type (see
+    decorators/celery_viewset/transport.py). from_jsonable() is its inverse for tagged objects.
     """
     if isinstance(value, SerializableObject):
         return serialize_value(value)
