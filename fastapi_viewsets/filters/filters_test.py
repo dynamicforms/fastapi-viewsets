@@ -3,8 +3,7 @@ from typing import ClassVar
 
 import pytest
 
-from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from ..list_query import ListQuery
 from ..mixins import ListMixin
@@ -98,30 +97,38 @@ def test_every_parameter_is_optional():
     assert model().year is None
 
 
-def test_in_takes_a_comma_separated_string_and_coerces_it():
-    """
-    FastAPI drops a list-typed field from a Depends()-expanded model, so multi-valued operators
-    travel as one string. The values still have to end up as the field's own type - comparing the
-    string "1957" to an integer column would quietly match nothing.
-    """
+def test_in_takes_a_list_coerced_to_the_fields_type():
+    """The values end up as the field's own type: the string "1957" compared to an integer column
+    would match nothing."""
     model = make_filter_model(Track, {"year": ["in"]})
-    filter_set = filters_from(model(year__in="1957, 1959"))
+    filter_set = filters_from(model(year__in=["1957", "1959"]))
     assert filter_set.filters[0].value == [1957, 1959]
+
+
+def test_in_is_a_list_parameter_with_the_fields_item_type():
+    model = make_filter_model(Track, {"year": ["in"], "genres": ["overlaps"]})
+    assert model.model_fields["year__in"].annotation == list[int] | None
+    assert model.model_fields["genres__overlaps"].annotation == list[str] | None
+
+
+def test_an_empty_list_applies_no_filter():
+    model = make_filter_model(Track, {"year": ["in"]})
+    assert filters_from(model(year__in=[])).filters == []
 
 
 def test_a_list_value_that_will_not_convert_is_refused_not_dropped():
     model = make_filter_model(Track, {"year": ["in"]})
-    with pytest.raises(RequestValidationError) as exc_info:
-        filters_from(model(year__in="1957,not-a-year"))
+    with pytest.raises(ValidationError) as exc_info:
+        model(year__in=["1957", "not-a-year"])
     [error] = exc_info.value.errors()
-    assert error["loc"] == ("query", "year__in", 1)
+    assert error["loc"] == ("year__in", 1)
     assert error["type"] == "int_parsing"
     assert error["input"] == "not-a-year"
 
 
 def test_overlaps_takes_the_list_fields_item_type():
     model = make_filter_model(Track, {"genres": ["overlaps"]})
-    filter_set = filters_from(model(genres__overlaps="jazz,bop"))
+    filter_set = filters_from(model(genres__overlaps=["jazz", "bop"]))
     assert filter_set.filters[0].value == ["jazz", "bop"]
     assert filter_set.apply(LIBRARY) == [LIBRARY[0], LIBRARY[1]]
 

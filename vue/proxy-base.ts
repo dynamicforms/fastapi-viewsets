@@ -503,11 +503,16 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   /**
    * Subscribes the ViewSet's topic to `records_changed`: `options.topic`, else
    * `ProxyBaseOptions.topic`, else `basePath`; see `WatchOptions`. With `fetch`, a change without
-   * `record` is completed with `retrieve(pk)`, issued as a background call.
+   * `record` is completed with `retrieve(pk)` (`fetch: true`) or by the `fetch` function, issued as
+   * background calls.
    */
   watch(options: WatchOptions<T, K>): EventSubscription {
     return watchRecords<T, K>(
-      { topic: options.topic ?? this.topicOption ?? this.basePath, retrieve: (pk) => this.retrieve(pk) },
+      {
+        topic: options.topic ?? this.topicOption ?? this.basePath,
+        pkFieldName: this.pkFieldName,
+        retrieve: (pk) => this.retrieve(pk),
+      },
       this.eventClient(),
       options,
     );

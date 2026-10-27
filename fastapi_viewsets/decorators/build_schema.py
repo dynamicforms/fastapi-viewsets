@@ -106,9 +106,10 @@ def action_openapi_extra(action_name: str, openapi_extra: dict | None) -> dict:
 def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, disable_response_model=False):
     """
     Builds __router (APIRouter with all routes from mixins) and __app (FastAPI instance),
-    and attaches them to the class. Idempotent: if already called for `cls` itself, returns
-    immediately; a subclass of a class it was called for gets routes of its own.
-    If get_wrapper is None, only __router is built (no FastAPI app, no endpoint wrapping).
+    and attaches them to the class. If get_wrapper is None, only __router is built (no FastAPI app,
+    no endpoint wrapping), and only when `cls` itself has none yet. With get_wrapper the routes are
+    built on every call, so each routing of a class wraps its endpoints for its own base path and
+    instance; a subclass of a class it was called for gets routes of its own.
 
     disable_response_model: pass True when a configured command middleware declares
     modifies_response_shape=True (see Middleware.modifies_response_shape and
@@ -121,7 +122,7 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
     FastAPI's own response validation.
     """
     own = vars(cls)
-    if "__router" in own and (get_wrapper is None or own.get("__router_full", False)):
+    if "__router" in own and get_wrapper is None:
         return
 
     celery_mode = get_wrapper is None
@@ -218,8 +219,6 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
             class_router.routes.append(route)
 
     cls.__router = class_router
-    if not celery_mode:
-        cls.__router_full = True
 
 
 def route_sort_key(route: APIRoute):

@@ -63,6 +63,10 @@ A viewset needs no mixin. A class with a `__router` only serves its custom endpo
 `GET {base_path}/schema`; its FE counterpart is in
 [A ViewSet with custom endpoints only](./vue-custom-endpoints#a-viewset-with-custom-endpoints-only).
 
+An endpoint that is a whole viewset of its own, another row type over the same data with its own
+list shapes and filters, is mounted with `ViewSetRouter.sub_viewset` instead; see
+[Nested Viewsets](./nested-viewsets).
+
 ### Custom POST endpoint with a request body
 
 ```python
@@ -91,7 +95,7 @@ class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
 ### Notes
 
 - The `__router` attribute on the ViewSet class **must not** shadow the one inherited from a mixin. Declare it as a
-  fresh `APIRouter()` directly on your class.
+  fresh `APIRouter()`, or a `ViewSetRouter()` to also mount sub-viewsets, directly on your class.
 - Route paths are relative to `base_path`. `"search"` becomes `/items/search`.
 - All standard FastAPI route parameters (`tags`, `summary`, `response_model`, `status_code`, …) are supported.
 - A method annotated to return a `Response` class (`-> Response`, `-> FileResponse`, …) has no response model: the

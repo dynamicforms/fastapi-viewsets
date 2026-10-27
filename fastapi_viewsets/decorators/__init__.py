@@ -5,6 +5,7 @@ from .celery_viewset import (
     set_is_celery_worker,
 )
 from .route_viewset import route_viewset
+from .sub_viewsets import SubViewSet, ViewSetRouter
 
 __all__ = [
     "celery_viewset",
@@ -12,4 +13,6 @@ __all__ = [
     "celery_viewset_server",
     "route_viewset",
     "set_is_celery_worker",
+    "SubViewSet",
+    "ViewSetRouter",
 ]

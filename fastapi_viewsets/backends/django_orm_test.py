@@ -462,7 +462,7 @@ async def test_the_in_memory_fallback_sees_response_models_not_raw_rows(tagged_r
     backend stores. This viewset stores a list as a comma-joined string; the in-memory fallback
     filters on the response-model value (a list of words), not on the stored string.
     """
-    query = ListQuery(fltr=TaggedFilter(tags__overlaps="jazz"), limit=10)
+    query = ListQuery(fltr=TaggedFilter(tags__overlaps=["jazz"]), limit=10)
     page = await TaggedViewSet().get_list(None, query)
     assert "filter" not in query.applied  # overlaps has no compiler, so this is the fallback
     assert [record.title for record in page.results] == ["one"]
@@ -1003,7 +1003,7 @@ async def test_a_partial_update_leaves_an_unstated_relation_alone(note_rows):
 @pytest.mark.asyncio
 async def test_a_filter_on_a_relation_field_is_pushed_into_sql(note_rows):
     viewset = NoteViewSet()
-    query = build_list_query(NoteFilter(owner__in=f"{note_rows[0].pk},{note_rows[2].pk}"), "id:asc", limit=10)
+    query = build_list_query(NoteFilter(owner__in=[note_rows[0].pk, note_rows[2].pk]), "id:asc", limit=10)
     page = await viewset.get_list(None, query)
     assert "filter" in query.applied
     assert [record.id for record in page.results] == [2, 3, 5, 6, 8, 9]
@@ -1065,3 +1065,63 @@ def test_a_schema_declaring_a_relation_column_is_refused():
         class NoteByColumnViewSet(DjangoORMViewSet[int, NoteByColumn]):
             model = NoteModel
             schema = NoteByColumn
+
+
+# ---------------------------------------------------------------------------
+# A sub-viewset listing annotated rows of its parent's model
+# ---------------------------------------------------------------------------
+
+
+class Owner(BaseModel):
+    id: int
+    name: str
+
+
+class OwnerRow(BaseModel):
+    id: int
+    name: str
+    note_count: int
+
+
+class OwnerRowsViewSet(DjangoORMViewSet[int, OwnerRow], PaginatedListMixin[OwnerRow, make_all_optional(OwnerRow)]):
+    model = OwnerModel
+    schema = OwnerRow
+
+    async def perform_list(self, context) -> "models.QuerySet":
+        return self.get_queryset(context).annotate(note_count=models.Count("notemodel"))
+
+
+def owners_app():
+    from fastapi import APIRouter, FastAPI
+
+    from ..decorators import route_viewset, ViewSetRouter
+    from ..mixins import ViewSetMixin
+
+    router = APIRouter()
+
+    @route_viewset(router, "/owners", pk_field_name="id")
+    class OwnerViewSet(DjangoORMViewSet[int, Owner], ViewSetMixin[int, Owner]):
+        model = OwnerModel
+        schema = Owner
+
+        __router = ViewSetRouter()
+        __router.sub_viewset("rows", OwnerRowsViewSet, pk_field_name="id")
+
+    app = FastAPI()
+    app.include_router(router)
+    return app
+
+
+def test_a_sub_viewset_lists_annotated_rows_of_the_parent_s_model(note_rows):
+    from fastapi.testclient import TestClient
+
+    client = TestClient(owners_app())
+    page = client.get("/owners/rows", params={"sort": "name:asc", "limit": 2}).json()
+    assert page["results"] == [
+        {"id": note_rows[0].pk, "name": "Owner 1", "note_count": 3},
+        {"id": note_rows[1].pk, "name": "Owner 2", "note_count": 3},
+    ]
+    assert page["has_more"] is True
+    assert client.get(f"/owners/{note_rows[2].pk}").json() == {"id": note_rows[2].pk, "name": "Owner 3"}
+    by_count = client.get("/owners/rows", params={"sort": "note_count:desc,id:asc", "note_count": 3}).json()
+    assert [row["name"] for row in by_count["results"]] == ["Owner 1", "Owner 2", "Owner 3"]

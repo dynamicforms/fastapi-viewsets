@@ -49,6 +49,7 @@ export default defineConfig({
             { text: 'ViewSet Lifecycle', link: '/guide/lifecycle' },
             { text: 'CollectionViewSet', link: '/guide/collection-viewset' },
             { text: 'Custom Endpoints', link: '/guide/custom-endpoints' },
+            { text: 'Nested Viewsets', link: '/guide/nested-viewsets' },
             { text: 'List Pipeline & Pagination', link: '/guide/list-pipeline' },
             { text: 'Documenting Endpoints', link: '/guide/endpoint-docs' },
             { text: 'muxws Transport', link: '/guide/muxws' },

@@ -15,12 +15,13 @@ import {
   rethrowLater,
 } from './client';
 
-/** One changed record: its pk, and the record `watch({ fetch: true })` retrieved for it. */
+/** One changed record: its pk, and the row `watch()` with `fetch` read for it. */
 export interface Change<T, K extends KeyType = KeyType> {
   pk: K;
   /**
-   * The record `retrieve(pk)` answered after the change, in the endpoint's format. The BE sends the pk
-   * only; `record` is set by `watch({ fetch: true })` and absent otherwise.
+   * The row `fetch` read after the change: what `retrieve(pk)` answered for `fetch: true`, the row a
+   * `fetch` function returned for the pk otherwise. The BE sends the pk only; `record` is absent
+   * without `fetch`.
    */
   record?: T | null;
 }
@@ -35,14 +36,23 @@ export interface RecordsChanged<T, K extends KeyType = KeyType> {
 export const RECORDS_CHANGED = defineEvent<RecordsChanged<unknown>>('records_changed');
 
 /**
+ * `WatchOptions.fetch` as a function: the rows of `pks`, in any order. `watch()` calls it once per
+ * `created` or `updated` event, with the pks of the changes that carry no `record`, and matches the
+ * rows it returns to them by the ViewSet's `pkFieldName`; a pk without a row is a deleted one.
+ *
+ *   fetch: (pks) => members.list({ id__in: pks })
+ */
+export type FetchRows<T, K extends KeyType = KeyType> = (pks: K[]) => Promise<readonly T[]>;
+
+/**
  * The options of `watch()`. The callbacks are function-typed properties, so a callback whose
  * parameter type is not the one below does not compile.
  */
 export interface WatchOptions<T, K extends KeyType = KeyType> {
   /**
    * Called once per `records_changed` event of version 1 of the ViewSet's topic, in rev order, with
-   * the change and the event's `EventMeta`; with `fetch`, twice for an event some of whose retrieves
-   * answer 404. An event of any other version calls `onResync` instead.
+   * the change and the event's `EventMeta`; with `fetch`, twice for an event some of whose records
+   * are gone. An event of any other version calls `onResync` instead.
    */
   onChange: (change: RecordsChanged<T, K>, meta: EventMeta) => void;
   /**
@@ -51,15 +61,23 @@ export interface WatchOptions<T, K extends KeyType = KeyType> {
    */
   onResync: () => void;
   /**
-   * `true` completes every `created` and `updated` change without `record` with `retrieve(pk)`
-   * before `onChange`. The changes whose retrieve answers 404 leave the event and follow it in a
-   * second `onChange` with `op: 'deleted'` and the same `meta`, in their order in the event; an event
-   * whose every retrieve answers 404 calls `onChange` once, with `op: 'deleted'`. Default `false`.
+   * Completes every `created` and `updated` change without `record` before `onChange`:
+   *
+   * - `true` with `retrieve(pk)`, one call per change; a 404 means the record is gone.
+   * - a `FetchRows` function with the rows it returns for the event's pks, one call per event; a pk
+   *   without a row is gone. The rows need not be the ViewSet's records: a ViewSet whose events
+   *   another ViewSet's rows describe (a sub-viewset listing `MemberRow`s of the parent's `Account`s)
+   *   fetches them with that ViewSet's `list()`.
+   *
+   * The changes whose record is gone leave the event and follow it in a second `onChange` with
+   * `op: 'deleted'` and the same `meta`, in their order in the event; an event whose every record is
+   * gone calls `onChange` once, with `op: 'deleted'`. Default `false`.
    */
-  fetch?: boolean;
+  fetch?: boolean | FetchRows<T, K>;
   /**
-   * Called with the error of a refused `subscribe` or `poll` of the topic, and with the error of a
-   * `retrieve` that `fetch` sent and that failed with anything but a 404; `onResync()` follows the latter.
+   * Called with the error of a refused `subscribe` or `poll` of the topic, with the error of a
+   * `retrieve` that `fetch: true` sent and that failed with anything but a 404, and with the error of
+   * a `fetch` function; `onResync()` follows the latter two.
    */
   onError?: (error: unknown) => void;
   /**
@@ -70,7 +88,12 @@ export interface WatchOptions<T, K extends KeyType = KeyType> {
   topic?: string;
 }
 
-/** `watch()`, which every ViewSet has. */
+/**
+ * `watch()`, which every ViewSet has. `onChange` receives the ViewSet's records `T`, or, with a
+ * `fetch` function, the rows that function returns:
+ *
+ *   accounts.watch({ fetch: (pks) => members.list({ id__in: pks }), onChange, onResync }) // MemberRow
+ */
 export interface ViewSetWatch<T, K extends KeyType = KeyType> {
   /**
    * Subscribes the ViewSet's topic (`WatchOptions.topic`, else `ProxyBaseOptions.topic`, else
@@ -78,6 +101,7 @@ export interface ViewSetWatch<T, K extends KeyType = KeyType> {
    * `events` client of the ViewSet's options; without one, a muxws ViewSet uses the client
    * registered for its peer (`eventsOf`), and a REST ViewSet throws.
    */
+  watch<Row>(options: Omit<WatchOptions<NoInfer<Row>, K>, 'fetch'> & { fetch: FetchRows<Row, K> }): EventSubscription;
   watch(options: WatchOptions<T, K>): EventSubscription;
 }
 
@@ -142,12 +166,14 @@ export function applyChanges<T, K extends KeyType = KeyType>(
 /** What `watchRecords` needs of a ViewSet. */
 export interface WatchTarget<T, K extends KeyType> {
   readonly topic: string;
+  /** The field a `FetchRows` row carries its pk in. */
+  readonly pkFieldName: string;
   retrieve(pk: K): Promise<T>;
 }
 
 /**
  * `watch()` of a ViewSet: subscribes `target.topic` to `records_changed` on `client`, or on the
- * client `client` resolves to. The retrieves of `fetch` are issued inside `inBackground`, so call
+ * client `client` resolves to. The calls of `fetch` are issued inside `inBackground`, so call
  * activity reports them as background calls.
  *
  * `onChange` and `onResync` are called in the order their events arrived, also while `fetch` is
@@ -166,14 +192,17 @@ export function watchRecords<T, K extends KeyType>(
     queue = queue.then(() => (stopped ? undefined : step())).catch(rethrowLater);
   };
 
-  /** The events `change` is passed to `onChange` as, or `null` for a failed retrieve. */
-  const complete = async (change: RecordsChanged<T, K>): Promise<RecordsChanged<T, K>[] | null> => {
-    if (!options.fetch || change.op === 'deleted') return [change];
+  const gone = Symbol('gone');
+  const hasRecord = (item: Change<T, K>): boolean => item.record !== undefined && item.record !== null;
+
+  /** `fetch: true`: each change without a record completed with `retrieve`. */
+  const retrieveEach = async (
+    items: Change<T, K>[],
+  ): Promise<{ changes: (Change<T, K> | typeof gone | null)[]; failed: unknown }> => {
     let failed: unknown = undefined;
-    const gone = Symbol('gone');
     const changes = await Promise.all(
-      change.changes.map(async (item): Promise<Change<T, K> | typeof gone | null> => {
-        if (item.record !== undefined && item.record !== null) return item;
+      items.map(async (item): Promise<Change<T, K> | typeof gone | null> => {
+        if (hasRecord(item)) return item;
         try {
           return { pk: item.pk, record: await inBackground(() => target.retrieve(item.pk)) };
         } catch (error) {
@@ -183,6 +212,41 @@ export function watchRecords<T, K extends KeyType>(
         }
       }),
     );
+    return { changes, failed };
+  };
+
+  /** A `FetchRows` function: the changes without a record completed by one call. */
+  const fetchRows = async (
+    items: Change<T, K>[],
+    fetch: FetchRows<T, K>,
+  ): Promise<{ changes: (Change<T, K> | typeof gone | null)[]; failed: unknown }> => {
+    const pks = items.filter((item) => !hasRecord(item)).map((item) => item.pk);
+    if (pks.length === 0) return { changes: items, failed: undefined };
+    let rows: readonly T[];
+    try {
+      rows = await inBackground(() => fetch(pks));
+    } catch (error) {
+      return { changes: [], failed: error ?? new Error('fetch rejected') };
+    }
+    const byPk = new Map<string, T>();
+    for (const row of rows) byPk.set(String((row as Record<string, unknown>)[target.pkFieldName]), row);
+    return {
+      changes: items.map((item) => {
+        if (hasRecord(item)) return item;
+        const record = byPk.get(String(item.pk));
+        return record === undefined ? gone : { pk: item.pk, record };
+      }),
+      failed: undefined,
+    };
+  };
+
+  /** The events `change` is passed to `onChange` as, or `null` for a failed fetch. */
+  const complete = async (change: RecordsChanged<T, K>): Promise<RecordsChanged<T, K>[] | null> => {
+    if (!options.fetch || change.op === 'deleted') return [change];
+    const { changes, failed } =
+      typeof options.fetch === 'function'
+        ? await fetchRows(change.changes, options.fetch)
+        : await retrieveEach(change.changes);
     if (failed !== undefined) {
       const error = failed;
       if (options.onError && !stopped) options.onError(error);

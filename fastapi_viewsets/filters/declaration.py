@@ -16,8 +16,7 @@ parameters as it does for `make_all_optional`, which is the case of "every field
 
 from typing import Any, get_args, get_origin, Union
 
-from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, create_model, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, create_model, Field
 
 from .base import Filter, FilterError, FilterSet
 from .operators import known_operators, operator_for
@@ -28,7 +27,9 @@ SPEC_ATTRIBUTE = "__filter_spec__"
 """Where the (parameter name -> field, operator, item type) map is stashed on a generated model."""
 
 _LIST_LOOKUPS = frozenset({"in", "overlaps"})
-"""Operators whose value is several values, sent comma-separated. See _parameter_annotation."""
+"""Operators whose value is several values, read from a repeated query parameter."""
+
+_LIST_DESCRIPTION = "One or more values; the parameter repeats for each (`?{parameter}=a&{parameter}=b`)."
 
 
 def _optional(annotation: Any) -> Any:
@@ -49,18 +50,14 @@ def _item_annotation(field_annotation: Any, lookup: str) -> Any:
 
 def _parameter_annotation(field_annotation: Any, lookup: str) -> Any:
     """
-    Always a scalar, even for the operators that mean several values.
-
-    FastAPI cannot expose a list-typed field of a `Depends()`-expanded model as a query parameter:
-    it drops the field from the schema and never populates it, with or without an explicit
-    `Query()` annotation. Since that expansion is how `route_viewset` turns a filter model into
-    individual query parameters, `in` and `overlaps` take a comma-separated string instead - the
-    same convention the `sort` parameter already uses.
+    The type of the query parameter: a list of the item type for `in` and `overlaps`, read from a
+    repeated key (`?year__in=1999&year__in=2000`) and validated item by item into the field's own
+    type; a scalar for every other operator.
     """
     if lookup == "isnull":
         return bool | None
     if lookup in _LIST_LOOKUPS:
-        return str | None
+        return list[_item_annotation(field_annotation, lookup)] | None
     return _optional(field_annotation)
 
 
@@ -90,7 +87,11 @@ def make_filter_model(model: type[BaseModel], declaration: FilterDeclaration) ->
                 )
             parameter = field_name if lookup == "exact" else f"{field_name}__{lookup}"
             annotation = _parameter_annotation(field_annotation, lookup)
-            default = Field(None, description="Comma-separated list of values") if lookup in _LIST_LOOKUPS else None
+            default = (
+                Field(None, description=_LIST_DESCRIPTION.format(parameter=parameter))
+                if lookup in _LIST_LOOKUPS
+                else None
+            )
             fields[parameter] = (annotation, default)
             spec[parameter] = (field_name, lookup, _item_annotation(field_annotation, lookup))
 
@@ -110,36 +111,9 @@ def filters_from(fltr: Any) -> FilterSet | None:
         return None
 
     filters: list[Filter] = []
-    for parameter, (field_name, lookup, item_annotation) in spec.items():
+    for parameter, (field_name, lookup, _item) in spec.items():
         value = getattr(fltr, parameter, None)
-        if value is None:
+        if value is None or (lookup in _LIST_LOOKUPS and not value):
             continue
-        if lookup in _LIST_LOOKUPS:
-            value = _split_values(value, item_annotation, parameter)
-            if not value:
-                continue
         filters.append(operator_for(lookup)(field=field_name, value=value))
     return FilterSet(filters)
-
-
-def _split_values(raw: Any, item_annotation: Any, parameter: str) -> list:
-    """
-    Comma-separated string to a validated list of the field's own type.
-
-    Coercion matters: `?year__in=1957,1959` arrives as strings, and comparing those to an integer
-    column would match nothing. An entry that will not convert is refused rather than dropped: a
-    `RequestValidationError`, which FastAPI answers with a 422 whose `loc` is
-    `["query", parameter, index]`, the shape of any other query parameter that fails validation.
-    """
-    if isinstance(raw, (list, tuple)):
-        items = list(raw)
-    else:
-        items = [part.strip() for part in str(raw).split(",") if part.strip()]
-    if not items:
-        return []
-    try:
-        return TypeAdapter(list[item_annotation]).validate_python(items)
-    except ValidationError as error:
-        raise RequestValidationError(
-            [{**entry, "loc": ("query", parameter, *entry["loc"])} for entry in error.errors(include_url=False)]
-        ) from None

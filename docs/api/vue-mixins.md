@@ -139,13 +139,16 @@ Every ViewSet has `watch()`, whichever mixins it declares: a factory-built one, 
 
 ```ts
 interface ViewSetWatch<T, K extends KeyType = KeyType> {
+  watch<Row>(options: Omit<WatchOptions<NoInfer<Row>, K>, 'fetch'> & { fetch: FetchRows<Row, K> }): EventSubscription;
   watch(options: WatchOptions<T, K>): EventSubscription;
 }
+
+type FetchRows<T, K extends KeyType = KeyType> = (pks: K[]) => Promise<readonly T[]>;
 
 interface WatchOptions<T, K extends KeyType = KeyType> {
   onChange: (change: RecordsChanged<T, K>, meta: EventMeta) => void;
   onResync: () => void;
-  fetch?: boolean;
+  fetch?: boolean | FetchRows<T, K>;
   onError?: (error: unknown) => void;
   topic?: string;
 }
@@ -181,10 +184,10 @@ ViewSet's options; without it, a muxws ViewSet uses `eventsOf(peer)`, and a REST
 
 | Option | Meaning |
 |--------|---------|
-| `onChange` | Required. Called once per `records_changed` event of version `1` of the topic (with `fetch`, twice for an event some of whose retrieves answer 404), with its [`RecordsChanged`](./vue-events#records-changed) payload and its [`EventMeta`](./vue-events#eventmeta) |
+| `onChange` | Required. Called once per `records_changed` event of version `1` of the topic (with `fetch`, twice for an event some of whose records are gone), with its [`RecordsChanged`](./vue-events#records-changed) payload and its [`EventMeta`](./vue-events#eventmeta) |
 | `onResync` | Required. Called on a resync of the topic, and for a `records_changed` event whose version is not `1`, with or without `fetch`: the caller re-reads what it displays |
-| `fetch` | `true`: every `created` and `updated` change without `record` is completed with `retrieve(pk)`, issued inside [`inBackground`](./idempotency#frontend) so call activity reports it as a background call, before `onChange`, and the changes whose retrieve answers 404 follow the event in a second `onChange` with `op: 'deleted'` and the same `meta`; when every retrieve answers 404 only that one is called. A retrieve that fails with another error is passed to `onError` and the event ends in `onResync` instead of `onChange`. Default `false` |
-| `onError` | Called with the error of a refused `subscribe` or `poll` of the topic, and of a failed `fetch` retrieve |
+| `fetch` | `true`: every `created` and `updated` change without `record` is completed with `retrieve(pk)`, issued inside [`inBackground`](./idempotency#frontend) so call activity reports it as a background call, before `onChange`, and the changes whose retrieve answers 404 follow the event in a second `onChange` with `op: 'deleted'` and the same `meta`; when every retrieve answers 404 only that one is called. A retrieve that fails with another error is passed to `onError` and the event ends in `onResync` instead of `onChange`. A `FetchRows` function: called once per `created` or `updated` event with the pks of its changes without `record`, inside `inBackground`; its rows are matched to the changes by the ViewSet's `pkFieldName`, and a pk without a row follows in the `deleted` `onChange` as a 404 does; a rejection is passed to `onError` and the event ends in `onResync`. With a function, `onChange` receives the rows it returns, whatever their type. Default `false` |
+| `onError` | Called with the error of a refused `subscribe` or `poll` of the topic, of a failed `fetch` retrieve, and of a rejected `fetch` function |
 | `topic` | The client topic to subscribe: the BE path relative to the application's `root_path`, without a Starlette `Mount` prefix. Default the ViewSet's `topic` option, else its `basePath` |
 
 `onChange` and `onResync` are called in the order their events arrived, also while `fetch` waits for

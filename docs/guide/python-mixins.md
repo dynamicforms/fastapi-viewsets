@@ -51,7 +51,9 @@ primary key unless `Item` gives it a default. See
 
 `ListMixin` is generic over an optional `TFilter` type (default: `None`). The endpoint always
 exposes a `sort` query parameter (comma-separated `column:direction` pairs). When a filter model
-is also provided, its fields appear as individual query parameters.
+is also provided, its fields appear as individual query parameters, with their types,
+descriptions, defaults and constraints in the schema; a sequence-typed field (`list[int]`) is read
+from a repeated key (`?ids=1&ids=2`).
 
 **Filtering** (active when any filter field is set): `filter_list(fltr, records)` filters in
 memory. It has no default implementation, so a viewset that declares a filter type implements it —
@@ -225,7 +227,7 @@ class TagViewSet(..., LookupMixin[TagLookupFilter, TagLookup]):
 
 A filter model built with `make_filter_model(TLookupItem, {...})` is applied without code, in
 memory. Its operators compare values of the field's declared type, so `LookupItem.pk`, declared as
-`object`, takes no typed comparison: `pk__in=1,2` compares strings.
+`object`, takes no typed comparison: `?pk__in=1&pk__in=2` compares strings.
 
 ## Combined viewset mixins
 

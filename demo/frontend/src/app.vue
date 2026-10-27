@@ -207,7 +207,15 @@ function queryParams(): Record<string, any> {
   if (sort) params.sort = sort;
   for (const [column, value] of Object.entries(filterValues.value)) {
     const parameter = FILTER_PARAM[column];
-    if (parameter && value !== null && value !== undefined && value !== '') params[parameter] = value;
+    if (parameter === undefined || value === null || value === undefined || value === '') continue;
+    // `genres__overlaps` and `moods__overlaps` take several values, repeated; the grid's text filter
+    // separates them with commas
+    params[parameter] = parameter.endsWith('__overlaps')
+      ? String(value)
+          .split(',')
+          .map((part) => part.trim())
+          .filter((part) => part !== '')
+      : value;
   }
   return params;
 }

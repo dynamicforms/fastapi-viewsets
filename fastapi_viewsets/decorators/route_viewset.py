@@ -1,9 +1,11 @@
 import inspect
+import re
 
+from dataclasses import dataclass
 from functools import wraps
 from typing import Annotated, get_args, get_origin, Literal, TypeVar
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.params import FieldInfo
 from pydantic import BaseModel
 
@@ -14,7 +16,7 @@ except ImportError:
 
 from fastapi_viewsets.action_configuration import extra_middlewares_for, resolve_action_configuration
 from fastapi_viewsets.conf import settings
-from fastapi_viewsets.context import get_shared_context
+from fastapi_viewsets.context import build_context, Context, get_shared_context
 from fastapi_viewsets.endpoint_docs import (
     DOCS_ATTRIBUTE,
     docs_for,
@@ -36,6 +38,8 @@ from .primary_key_model_helper import (
     PARTIAL_UPDATE_ACTIONS,
     typecast_to_original_model,
 )
+from .query_model import query_model_dependency
+from .sub_viewsets import sub_viewsets_of, SubViewSet
 
 T = TypeVar("T")
 
@@ -44,7 +48,16 @@ MIDDLEWARE_DEPENDS_ATTRIBUTE = "__viewset_middleware_depends__"
 Set to True on the dependency `route_viewset` appends to each route's `dependencies`, which runs
 `Middleware.depends()` of the effective middlewares. The other entries of a route's `dependencies`
 are the application's: those of `FastAPI(dependencies=...)`, of `include_router`, of the
-`APIRouter` and of the route itself.
+`APIRouter` and of the route itself, followed, on a route of a sub-viewset, by the checks of the
+viewsets it is mounted under (`SUB_VIEWSET_GATE_ATTRIBUTE`).
+"""
+
+SUB_VIEWSET_GATE_ATTRIBUTE = "__viewset_sub_viewset_gate__"
+"""
+Set on each dependency `route_viewset` adds to a route of a sub-viewset to run the checks of a
+viewset it is mounted under; its value is `(parent class, action name)`. A route carries one per
+level of nesting, the outermost parent's first, ahead of the route's own `MIDDLEWARE_DEPENDS_ATTRIBUTE`
+dependency.
 """
 
 
@@ -124,29 +137,58 @@ def _make_middleware_depends(cls: type, action_name: str):
 
     async def _run(request: Request) -> None:
         action_configuration = resolve_action_configuration(cls, action_name)
-        effective_middlewares = settings.viewsets_command_middleware + extra_middlewares_for(
-            action_configuration, settings.viewsets_command_middleware
-        )
         context = await get_shared_context(request, cls, action_configuration, action_name)
-        for middleware in effective_middlewares:
-            # Plain-function CommandMiddleware entries have no depends() to bridge - they only
-            # ever run in the onion chain, unchanged.
-            if isinstance(middleware, Middleware):
-                await middleware.depends(request, cls, context)
+        await _run_depends(request, cls, action_configuration, context)
 
+    middleware_depends = _with_security_scheme(_run)
+    setattr(middleware_depends, MIDDLEWARE_DEPENDS_ATTRIBUTE, True)
+    return middleware_depends
+
+
+def _make_sub_viewset_gate(cls: type, mount: SubViewSet):
+    """
+    The dependency that runs the checks of `cls` for the action `mount.path` on a request to an
+    endpoint of the viewset `mount` mounts: `settings.viewsets_security_scheme`, the context
+    processors and `Middleware.depends()` of the effective middlewares, with `cls` as the viewset and
+    the action's configuration, `@action_configuration` of `cls` with `mount.action_configuration`
+    over it. Its context is built for this check alone and is not the context of the request.
+    """
+
+    async def _run(request: Request) -> None:
+        action_configuration = {**resolve_action_configuration(cls, mount.path), **mount.action_configuration}
+        context = await build_context(request, cls, action_configuration, mount.path)
+        await _run_depends(request, cls, action_configuration, context)
+
+    gate = _with_security_scheme(_run)
+    setattr(gate, SUB_VIEWSET_GATE_ATTRIBUTE, (cls, mount.path))
+    return gate
+
+
+async def _run_depends(request: Request, cls: type, action_configuration: dict, context: Context) -> None:
+    effective_middlewares = settings.viewsets_command_middleware + extra_middlewares_for(
+        action_configuration, settings.viewsets_command_middleware
+    )
+    for middleware in effective_middlewares:
+        # Plain-function CommandMiddleware entries have no depends() to bridge - they only
+        # ever run in the onion chain, unchanged.
+        if isinstance(middleware, Middleware):
+            await middleware.depends(request, cls, context)
+
+
+def _with_security_scheme(run):
+    """A dependency calling `run(request)`, behind `settings.viewsets_security_scheme` when one is set."""
     scheme = settings.viewsets_security_scheme
     if scheme is None:
 
-        async def middleware_depends(request: Request) -> None:
-            await _run(request)
+        async def dependency(request: Request) -> None:
+            await run(request)
 
     else:
 
-        async def middleware_depends(request: Request, _credential=Depends(scheme)) -> None:  # noqa: B008
-            await _run(request)
+        async def dependency(request: Request, _credential=Depends(scheme)) -> None:  # noqa: B008
+            await run(request)
 
-    setattr(middleware_depends, MIDDLEWARE_DEPENDS_ATTRIBUTE, True)
-    return middleware_depends
+    return dependency
 
 
 def route_viewset(
@@ -159,26 +201,54 @@ def route_viewset(
 ):
     """
     Sets `cls.__viewset_metadata__`, a dict of `base_path`, `lifecycle`, `router` (the argument),
-    `pk_field_name` (the argument, None without it) and `paths`: each action name, the endpoint
+    `pk_field_name` (the argument, None without it), `paths`: each action name, the endpoint
     method's name, mapped to its route's path relative to `base_path` (`""` for `list_items`,
-    `"/{pk}"` for `retrieve`, `"/bulk"` for `bulk_create`). Every endpoint added to `router` carries
-    `__viewset_class__` (`cls`) and `__viewset_action__` (the action name); the `/schema` endpoints
-    carry the action name `"schema"`.
+    `"/{pk}"` for `retrieve`, `"/bulk"` for `bulk_create`), `parent` (None) and `sub_viewsets`: each
+    sub-path the class mounts a viewset at mapped to that viewset's class. Every endpoint added to
+    `router` carries `__viewset_class__` (`cls`) and `__viewset_action__` (the action name); the
+    `/schema` endpoints carry the action name `"schema"`.
 
     `register_rest` and `register_muxws` decide which transports this viewset is published on.
     True registers, False does not, and None - the default - defers: REST to "yes", muxws to
     `settings.viewsets_register_muxws`. Individual endpoints override either again with
     `@transports(...)`.
+
+    The viewsets the class mounts with `ViewSetRouter.sub_viewset` are routed on `router` ahead of
+    the class's own routes, each as a viewset of its own at `{base_path}/{path}`, and so on for
+    the viewsets they mount (see `fastapi_viewsets.decorators.sub_viewsets`).
     """
 
     if lifecycle not in get_args(LifecycleType):
         raise ValueError(f"unknown lifecycle {lifecycle!r}; one of: {', '.join(get_args(LifecycleType))}")
 
     def decorator(cls: type[T]):
-        instance = cls() if lifecycle == "singleton" else None
+        return _route(router, base_path, cls, None, lifecycle, pk_field_name, register_muxws, register_rest)
 
-        type_map = build_type_map(cls)
+    return decorator
 
+
+def _route(
+    router: APIRouter,
+    base_path: str,
+    cls: type[T],
+    instance: T | None,
+    lifecycle: LifecycleType,
+    pk_field_name: str | None,
+    register_muxws: bool | None,
+    register_rest: bool | None,
+    parent: "_Parent | None" = None,
+) -> type[T]:
+    """
+    Routes `cls` at `base_path` on `router`: its sub-viewsets first, then its own routes. `instance`
+    is the singleton when given. `parent` is set for a sub-viewset: the viewset it is mounted under,
+    with the checks of every viewset above it and the OpenAPI grouping its routes take.
+    """
+    if instance is None and lifecycle == "singleton":
+        instance = cls()
+
+    type_map = build_type_map(cls)
+
+    if parent is None:
         # Derive tag from class name: strip "ViewSet" suffix if present
         cls_name = cls.__name__
         if cls_name.endswith("ViewSet"):
@@ -188,295 +258,363 @@ def route_viewset(
         # under. See endpoint_docs.apply_viewset_tags.
         if cls_name:
             register_tag(cls_name, viewset_description(cls))
+    else:
+        # A sub-viewset's endpoints are listed in the group of the viewset at the top of its mounts.
+        default_tags = parent.tags
 
-        def _is_filter_param(annotation) -> bool:
-            """Return True when annotation is Annotated[T, FilterParam()]."""
-            return hasattr(annotation, "__metadata__") and any(
-                isinstance(m, FilterParam) for m in annotation.__metadata__
-            )
+    def _is_filter_param(annotation) -> bool:
+        """Return True when annotation is Annotated[T, FilterParam()]."""
+        return hasattr(annotation, "__metadata__") and any(isinstance(m, FilterParam) for m in annotation.__metadata__)
 
-        def _is_model_query_param(annotation) -> bool:
-            """Return True for Annotated[PydanticModel, <FieldInfo>] (e.g. Query() or Depends()).
-            These should use Depends() in the wrapper so FastAPI expands model fields as
-            individual query params even when other parameters are present on the same endpoint."""
-            args = getattr(annotation, "__args__", None)
-            metadata = getattr(annotation, "__metadata__", None)
-            if not (args and metadata):
-                return False
-            inner = args[0]
-            if not (inspect.isclass(inner) and issubclass(inner, BaseModel)):
-                return False
-            return any(isinstance(m, FieldInfo) for m in metadata)
+    def _is_model_query_param(annotation) -> bool:
+        """Return True for Annotated[PydanticModel, <FieldInfo>] (e.g. Query()): a model read from
+        the query string, one query parameter per field (see query_model)."""
+        args = getattr(annotation, "__args__", None)
+        metadata = getattr(annotation, "__metadata__", None)
+        if not (args and metadata):
+            return False
+        inner = args[0]
+        if not (inspect.isclass(inner) and issubclass(inner, BaseModel)):
+            return False
+        return any(isinstance(m, FieldInfo) for m in metadata)
 
-        def _shape_signature(sig):
-            """
-            Trims the shape-aware list endpoint down to this viewset's own shapes.
+    def _shape_signature(sig):
+        """
+        Trims the shape-aware list endpoint down to this viewset's own shapes.
 
-            `ListMixin.list_items` declares every parameter any shape could need, because a method
-            on a shared mixin cannot know which viewset it will end up on. Here it can: parameters
-            no allowed shape uses are dropped so they never reach the schema, the `X-List-Shape`
-            header is kept only when there is a choice to make, and the return annotation becomes
-            the union of exactly the models this viewset can produce. A declared `default_sort` becomes
-            the `sort` parameter's default.
-            """
-            from fastapi_viewsets.list_shapes import response_model, shape_examples, SHAPE_HEADER
-            from fastapi_viewsets.mixins import check_declared_sort, T as ItemVar
+        `ListMixin.list_items` declares every parameter any shape could need, because a method
+        on a shared mixin cannot know which viewset it will end up on. Here it can: parameters
+        no allowed shape uses are dropped so they never reach the schema, the `X-List-Shape`
+        header is kept only when there is a choice to make, and the return annotation becomes
+        the union of exactly the models this viewset can produce. A declared `default_sort` becomes
+        the `sort` parameter's default.
+        """
+        from fastapi_viewsets.list_shapes import response_model, shape_examples, SHAPE_HEADER
+        from fastapi_viewsets.mixins import check_declared_sort, T as ItemVar
 
-            default, allowed = cls.resolve_shapes()
-            item_type = type_map.get(ItemVar, ItemVar)
-            uses = {
-                "offset": "paginated" in allowed,
-                "cursor": "cursor" in allowed,
-                "limit": bool({"paginated", "cursor"} & set(allowed)),
-                "x_list_shape": len(allowed) > 1,
-            }
-
-            params = []
-            for name, parameter in sig.parameters.items():
-                if uses.get(name) is False:
-                    continue
-                if name == "x_list_shape":
-                    parameter = parameter.replace(
-                        annotation=Annotated[
-                            Literal[(*allowed, None)],
-                            Header(
-                                alias=SHAPE_HEADER,
-                                description=f"Response shape. Omit for this endpoint's default ({default}).",
-                            ),
-                        ]
-                    )
-                if name == "sort" and cls.default_sort is not None:
-                    check_declared_sort(cls.default_sort, item_type)
-                    parameter = parameter.replace(default=cls.default_sort)
-                params.append(parameter)
-
-            nonlocal shape_openapi_extra
-            shape_openapi_extra = shape_examples(allowed, item_type)
-            return sig.replace(parameters=params, return_annotation=response_model(allowed, item_type))
-
-        shape_openapi_extra = None
-
-        def get_wrapper(original_endpoint, route_path, route_methods):
-            nonlocal shape_openapi_extra
-            shape_openapi_extra = None
-            sig = inspect.signature(original_endpoint)
-            if getattr(original_endpoint, "__list_shape_aware__", False):
-                sig = _shape_signature(sig)
-            new_params = []
-            needs_context = False
-            # the body parameters of a partial update, by name, with the annotation they replace
-            partial_params: dict[str, object] = {}
-
-            for name, p in sig.parameters.items():
-                if name == "self":
-                    continue
-
-                annotation = resolve_typevars(type_map, p.annotation)
-                new_p = p.replace(annotation=annotation)
-
-                # context is built centrally (see fastapi_viewsets/context) from a live Request -
-                # it must never reach FastAPI's own signature/validation, so it's dropped here and
-                # rebuilt by lifecycle_runner right before the endpoint runs. Detected by parameter
-                # name (by convention) rather than type, since its type is just a plain dict.
-                if name == "context":
-                    needs_context = True
-                    continue
-
-                # Transform Annotated[T, FilterParam()] → Annotated[TFilter, Query()]
-                if _is_filter_param(annotation):
-                    inner_type = annotation.__args__[0]
-                    if inspect.isclass(inner_type) and issubclass(inner_type, BaseModel):
-                        new_p = new_p.replace(annotation=Annotated[inner_type, Query()])
-                    new_params.append(new_p)
-                    continue
-
-                # Convert Annotated[PydanticModel, FieldInfo] → Annotated[PydanticModel, Depends()]
-                # so that FastAPI expands model fields as individual query params even when
-                # other parameters (e.g. sort) are present on the same endpoint.
-                if _is_model_query_param(annotation):
-                    inner_type = annotation.__args__[0]
-                    new_p = new_p.replace(annotation=Annotated[inner_type, Depends()])
-                    new_params.append(new_p)
-                    continue
-
-                # A partial update's body states the fields it changes: validated by a model with
-                # every field optional, then handed to perform_* as the original model holding only
-                # those fields (see partial_to_original_model)
-                if original_endpoint.__name__ in PARTIAL_UPDATE_ACTIONS:
-                    partial_annotation = partial_body_annotation(annotation, pk_field_name)
-                    if partial_annotation is not None:
-                        partial_params[name] = annotation
-                        new_params.append(new_p.replace(annotation=partial_annotation))
-                        continue
-
-                # A create's body is the model without its primary key, which the backend assigns
-                if pk_field_name and inspect.isclass(annotation) and issubclass(annotation, BaseModel):
-                    is_create = "POST" in route_methods and "{pk}" not in route_path
-                    if is_create and pk_field_name in annotation.model_fields:
-                        new_p = new_p.replace(annotation=create_model_without_pk(annotation, pk_field_name))
-
-                new_params.append(new_p)
-
-            # Reserved param name - FastAPI injects the REAL Response for this connection here
-            # (never forwarded to the underlying method itself, see wrapper below). Keyword-only
-            # so it can be appended regardless of what defaults precede it. Used by lifecycle_runner
-            # to run the command middleware chain and apply headers/cookies onto the real response.
-            new_params.append(inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response))
-
-            # Reserved param name - FastAPI injects the REAL Request here. lifecycle_runner builds
-            # the context from it (see fastapi_viewsets/context) for the command middleware chain,
-            # and injects that context as `context` into an endpoint declaring the parameter. An
-            # endpoint that declares `request` itself keeps its own parameter and receives it.
-            forwards_request = "request" in sig.parameters
-            if not forwards_request:
-                new_params.append(inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
-
-            # -> ViewSetResult[X] documents/validates as X - see unwrap_viewset_result_type.
-            new_return_annotation = unwrap_viewset_result_type(resolve_typevars(type_map, sig.return_annotation))
-            new_sig = sig.replace(parameters=new_params, return_annotation=new_return_annotation)
-
-            @wraps(original_endpoint)
-            async def wrapper(*args, **kwargs):
-                nonlocal instance
-
-                response_obj = kwargs.pop("response", None)
-                request_obj = kwargs.pop("request", None)
-
-                # Check if any argument needs to be "typecasted" back to the original model
-                # This happens if we replaced the model type with a NoPK version in get_wrapper
-                new_kwargs = {}
-                for param_name, value in kwargs.items():
-                    if param_name in partial_params:
-                        new_kwargs[param_name] = from_partial_body(value, partial_params[param_name])
-                    elif param_name in sig.parameters:
-                        orig_param = sig.parameters[param_name]
-                        orig_annotation = resolve_typevars(type_map, orig_param.annotation)
-                        # Filter params must not be typecast — they arrive as the all-optional model
-                        if _is_filter_param(orig_annotation):
-                            new_kwargs[param_name] = value
-                        else:
-                            new_kwargs[param_name] = typecast_to_original_model(value, orig_annotation)
-                    else:
-                        new_kwargs[param_name] = value
-
-                return await lifecycle_runner(
-                    original_endpoint,
-                    instance,
-                    cls,
-                    lifecycle,
-                    *args,
-                    response=response_obj,
-                    needs_context=needs_context,
-                    request=request_obj,
-                    forwards_request=forwards_request,
-                    **new_kwargs,
-                )
-
-            wrapper.__signature__ = new_sig
-            # Carried on the wrapper because build_schema, which registers the route, has no other
-            # way to learn what get_wrapper worked out about this endpoint's shapes.
-            wrapper.__shape_openapi_extra__ = shape_openapi_extra
-            return wrapper, new_return_annotation
-
-        # Command middleware (see fastapi_viewsets/middleware) can reshape the response body via
-        # ViewSetResult - only middleware that actually declares modifies_response_shape=True
-        # untrusts the endpoint's declared return type as the response_model; typical middleware
-        # (auth, rate limiting, sessions) only adds
-        # headers/cookies and leaves the declared model - and therefore the OpenAPI docs - in place.
-        build_schema(
-            cls,
-            base_path,
-            default_tags,
-            get_wrapper,
-            disable_response_model=any_modifies_response_shape(settings.viewsets_command_middleware),
-        )
-
-        def is_schema_route(route) -> bool:
-            return getattr(route.endpoint, "__viewset_schema_endpoint__", False)
-
-        def add_route(route_kwargs: dict, transports: set[str], action_name: str) -> None:
-            # One route per endpoint on the application's router, whichever transports publish it,
-            # so both transports go through the application's middleware, exception handlers and
-            # router dependencies. The route matches only its own transports (see routing.py), and
-            # only a route published on REST appears in the application's OpenAPI document.
-            route_kwargs["endpoint"].__viewset_class__ = cls
-            route_kwargs["endpoint"].__viewset_action__ = action_name
-            router.add_api_route(
-                **{**route_kwargs, "include_in_schema": route_kwargs["include_in_schema"] and REST in transports},
-                route_class_override=transport_route_class(router.route_class, frozenset(transports)),
-            )
-
-        on_muxws_any = any(
-            resolve_register_muxws(route.endpoint, register_muxws)
-            for route in cls.__router.routes
-            if not is_schema_route(route)
-        )
-        rest_routes = []
-        muxws_routes = []
-        documented = set()
-        # action name -> the route's path after base_path, so that a route's path on the application
-        # is the routed base path (include_router prefix + base_path) followed by it
-        paths: dict[str, str] = {}
-        base = base_path.rstrip("/")
-        for route in cls.__router.routes:
-            action_name = route.endpoint.__name__  # survives @wraps(original_endpoint) in get_wrapper
-            documented.add(action_name)
-            paths.setdefault(action_name, route.path[len(base) :] if route.path.startswith(base) else route.path)
-            dependencies = list(route.dependencies or []) + [Depends(_make_middleware_depends(cls, action_name))]
-            route_kwargs = route_to_add_api_route_kwargs(
-                route, dependencies=dependencies, responses=with_error_responses(route.responses)
-            )
-            # Per-viewset wording for an endpoint the mixin provided - the mixin's own docstring is
-            # the same sentence on every viewset in the application. See endpoint_docs.py.
-            route_kwargs.update(docs_for(cls, action_name))
-            on_rest = resolve_register_rest(route.endpoint, register_rest)
-
-            if is_schema_route(route):
-                # Two /schema routes on one path, one per transport, each answering with the
-                # endpoints published on its own transport, itself included: the TS client takes
-                # the viewset's base path in the document from the /schema path.
-                if on_rest:
-                    rest_schema_kwargs = {**route_kwargs, "endpoint": openapi_endpoint(rest_routes)}
-                    rest_routes.append(rest_schema_kwargs)
-                    add_route(rest_schema_kwargs, {REST}, action_name)
-                if on_muxws_any:
-                    muxws_schema_kwargs = {**route_kwargs, "endpoint": openapi_endpoint(muxws_routes)}
-                    muxws_routes.append(muxws_schema_kwargs)
-                    add_route(muxws_schema_kwargs, {MUXWS}, action_name)
-                continue
-
-            on_muxws = resolve_register_muxws(route.endpoint, register_muxws)
-            transports = set()
-            if on_rest:
-                transports.add(REST)
-                rest_routes.append(route_kwargs)
-            if on_muxws:
-                transports.add(MUXWS)
-                muxws_routes.append(route_kwargs)
-            if transports:
-                add_route(route_kwargs, transports, action_name)
-
-        # Checked here rather than in the decorator, which runs before any route exists. A name
-        # that matches nothing would otherwise leave that endpoint on the mixin's generic
-        # docstring - indistinguishable from never having written the entry.
-        unknown = set(getattr(cls, DOCS_ATTRIBUTE, {})) - documented
-        if unknown:
-            raise ValueError(
-                f"@endpoint_docs on {cls.__name__} names endpoint(s) it does not have: "
-                f"{', '.join(sorted(unknown))}; it has {', '.join(sorted(documented))}"
-            )
-
-        if muxws_routes:
-            register_viewset(cls, base_path, muxws_routes, default_tags)
-
-        cls.__viewset_metadata__ = {
-            "base_path": base_path,
-            "lifecycle": lifecycle,
-            "router": router,
-            "pk_field_name": pk_field_name,
-            "paths": paths,
+        default, allowed = cls.resolve_shapes()
+        item_type = type_map.get(ItemVar, ItemVar)
+        uses = {
+            "offset": "paginated" in allowed,
+            "cursor": "cursor" in allowed,
+            "limit": bool({"paginated", "cursor"} & set(allowed)),
+            "x_list_shape": len(allowed) > 1,
         }
 
-        return cls
+        params = []
+        for name, parameter in sig.parameters.items():
+            if uses.get(name) is False:
+                continue
+            if name == "x_list_shape":
+                parameter = parameter.replace(
+                    annotation=Annotated[
+                        Literal[(*allowed, None)],
+                        Header(
+                            alias=SHAPE_HEADER,
+                            description=f"Response shape. Omit for this endpoint's default ({default}).",
+                        ),
+                    ]
+                )
+            if name == "sort" and cls.default_sort is not None:
+                check_declared_sort(cls.default_sort, item_type)
+                parameter = parameter.replace(default=cls.default_sort)
+            params.append(parameter)
 
-    return decorator
+        nonlocal shape_openapi_extra
+        shape_openapi_extra = shape_examples(allowed, item_type)
+        return sig.replace(parameters=params, return_annotation=response_model(allowed, item_type))
+
+    shape_openapi_extra = None
+
+    def get_wrapper(original_endpoint, route_path, route_methods):
+        nonlocal shape_openapi_extra
+        shape_openapi_extra = None
+        sig = inspect.signature(original_endpoint)
+        if getattr(original_endpoint, "__list_shape_aware__", False):
+            sig = _shape_signature(sig)
+        new_params = []
+        needs_context = False
+        # the body parameters of a partial update, by name, with the annotation they replace
+        partial_params: dict[str, object] = {}
+
+        for name, p in sig.parameters.items():
+            if name == "self":
+                continue
+
+            annotation = resolve_typevars(type_map, p.annotation)
+            new_p = p.replace(annotation=annotation)
+
+            # context is built centrally (see fastapi_viewsets/context) from a live Request -
+            # it must never reach FastAPI's own signature/validation, so it's dropped here and
+            # rebuilt by lifecycle_runner right before the endpoint runs. Detected by parameter
+            # name (by convention) rather than type, since its type is just a plain dict.
+            if name == "context":
+                needs_context = True
+                continue
+
+            # Annotated[PydanticModel, FilterParam() | <FieldInfo>] → a dependency
+            # reading every field of the model as its own query parameter, sequence-typed
+            # fields included (see query_model)
+            if _is_filter_param(annotation) or _is_model_query_param(annotation):
+                inner_type = annotation.__args__[0]
+                if inspect.isclass(inner_type) and issubclass(inner_type, BaseModel):
+                    new_p = new_p.replace(annotation=Annotated[inner_type, Depends(query_model_dependency(inner_type))])
+                new_params.append(new_p)
+                continue
+
+            # A partial update's body states the fields it changes: validated by a model with
+            # every field optional, then handed to perform_* as the original model holding only
+            # those fields (see partial_to_original_model)
+            if original_endpoint.__name__ in PARTIAL_UPDATE_ACTIONS:
+                partial_annotation = partial_body_annotation(annotation, pk_field_name)
+                if partial_annotation is not None:
+                    partial_params[name] = annotation
+                    new_params.append(new_p.replace(annotation=partial_annotation))
+                    continue
+
+            # A create's body is the model without its primary key, which the backend assigns
+            if pk_field_name and inspect.isclass(annotation) and issubclass(annotation, BaseModel):
+                is_create = "POST" in route_methods and "{pk}" not in route_path
+                if is_create and pk_field_name in annotation.model_fields:
+                    new_p = new_p.replace(annotation=create_model_without_pk(annotation, pk_field_name))
+
+            new_params.append(new_p)
+
+        # Reserved param name - FastAPI injects the REAL Response for this connection here
+        # (never forwarded to the underlying method itself, see wrapper below). Keyword-only
+        # so it can be appended regardless of what defaults precede it. Used by lifecycle_runner
+        # to run the command middleware chain and apply headers/cookies onto the real response.
+        new_params.append(inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response))
+
+        # Reserved param name - FastAPI injects the REAL Request here. lifecycle_runner builds
+        # the context from it (see fastapi_viewsets/context) for the command middleware chain,
+        # and injects that context as `context` into an endpoint declaring the parameter. An
+        # endpoint that declares `request` itself keeps its own parameter and receives it.
+        forwards_request = "request" in sig.parameters
+        if not forwards_request:
+            new_params.append(inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
+
+        # -> ViewSetResult[X] documents/validates as X - see unwrap_viewset_result_type.
+        new_return_annotation = unwrap_viewset_result_type(resolve_typevars(type_map, sig.return_annotation))
+        new_sig = sig.replace(parameters=new_params, return_annotation=new_return_annotation)
+
+        @wraps(original_endpoint)
+        async def wrapper(*args, **kwargs):
+            nonlocal instance
+
+            response_obj = kwargs.pop("response", None)
+            request_obj = kwargs.pop("request", None)
+
+            # Check if any argument needs to be "typecasted" back to the original model
+            # This happens if we replaced the model type with a NoPK version in get_wrapper
+            new_kwargs = {}
+            for param_name, value in kwargs.items():
+                if param_name in partial_params:
+                    new_kwargs[param_name] = from_partial_body(value, partial_params[param_name])
+                elif param_name in sig.parameters:
+                    orig_param = sig.parameters[param_name]
+                    orig_annotation = resolve_typevars(type_map, orig_param.annotation)
+                    # Filter params must not be typecast — they arrive as the all-optional model
+                    if _is_filter_param(orig_annotation):
+                        new_kwargs[param_name] = value
+                    else:
+                        new_kwargs[param_name] = typecast_to_original_model(value, orig_annotation)
+                else:
+                    new_kwargs[param_name] = value
+
+            return await lifecycle_runner(
+                original_endpoint,
+                instance,
+                cls,
+                lifecycle,
+                *args,
+                response=response_obj,
+                needs_context=needs_context,
+                request=request_obj,
+                forwards_request=forwards_request,
+                **new_kwargs,
+            )
+
+        wrapper.__signature__ = new_sig
+        # Carried on the wrapper because build_schema, which registers the route, has no other
+        # way to learn what get_wrapper worked out about this endpoint's shapes.
+        wrapper.__shape_openapi_extra__ = shape_openapi_extra
+        return wrapper, new_return_annotation
+
+    # Command middleware (see fastapi_viewsets/middleware) can reshape the response body via
+    # ViewSetResult - only middleware that actually declares modifies_response_shape=True
+    # untrusts the endpoint's declared return type as the response_model; typical middleware
+    # (auth, rate limiting, sessions) only adds
+    # headers/cookies and leaves the declared model - and therefore the OpenAPI docs - in place.
+    build_schema(
+        cls,
+        base_path,
+        default_tags,
+        get_wrapper,
+        disable_response_model=any_modifies_response_shape(settings.viewsets_command_middleware),
+    )
+
+    def is_schema_route(route) -> bool:
+        return getattr(route.endpoint, "__viewset_schema_endpoint__", False)
+
+    def add_route(route_kwargs: dict, transports: set[str], action_name: str) -> None:
+        # One route per endpoint on the application's router, whichever transports publish it,
+        # so both transports go through the application's middleware, exception handlers and
+        # router dependencies. The route matches only its own transports (see routing.py), and
+        # only a route published on REST appears in the application's OpenAPI document.
+        route_kwargs["endpoint"].__viewset_class__ = cls
+        route_kwargs["endpoint"].__viewset_action__ = action_name
+        router.add_api_route(
+            **{**route_kwargs, "include_in_schema": route_kwargs["include_in_schema"] and REST in transports},
+            route_class_override=transport_route_class(router.route_class, frozenset(transports)),
+        )
+
+    on_muxws_any = any(
+        resolve_register_muxws(route.endpoint, register_muxws)
+        for route in cls.__router.routes
+        if not is_schema_route(route)
+    )
+    base = base_path.rstrip("/")
+    gates = parent.gates if parent is not None else ()
+    chain = (*parent.chain, cls) if parent is not None else (cls,)
+    mounts = sub_viewsets_of(cls)
+    _check_mounts(cls, base, mounts, chain)
+    # Routed ahead of this class's own routes: the router matches in registration order, and
+    # `{base_path}/{pk}` would otherwise take `{base_path}/members` and answer 422 for its pk.
+    for mount in mounts.values():
+        _route(
+            router,
+            f"{base}/{mount.path}",
+            mount.viewset,
+            mount.instance,
+            mount.lifecycle,
+            mount.pk_field_name,
+            register_muxws if mount.register_muxws is None else mount.register_muxws,
+            register_rest if mount.register_rest is None else mount.register_rest,
+            _Parent(
+                cls=cls,
+                tags=default_tags,
+                gates=(*gates, Depends(_make_sub_viewset_gate(cls, mount))),
+                summary_prefix=" / ".join(
+                    part for part in (parent.summary_prefix if parent else "", _summary_label(mount.path)) if part
+                ),
+                chain=chain,
+            ),
+        )
+
+    rest_routes = []
+    muxws_routes = []
+    documented = set()
+    # action name -> the route's path after base_path, so that a route's path on the application
+    # is the routed base path (include_router prefix + base_path) followed by it
+    paths: dict[str, str] = {}
+    for route in cls.__router.routes:
+        action_name = route.endpoint.__name__  # survives @wraps(original_endpoint) in get_wrapper
+        documented.add(action_name)
+        paths.setdefault(action_name, route.path[len(base) :] if route.path.startswith(base) else route.path)
+        dependencies = [
+            *(route.dependencies or []),
+            *gates,
+            Depends(_make_middleware_depends(cls, action_name)),
+        ]
+        route_kwargs = route_to_add_api_route_kwargs(
+            route, dependencies=dependencies, responses=with_error_responses(route.responses)
+        )
+        # Per-viewset wording for an endpoint the mixin provided - the mixin's own docstring is
+        # the same sentence on every viewset in the application. See endpoint_docs.py.
+        route_kwargs.update(docs_for(cls, action_name))
+        if parent is not None and not route_kwargs.get("summary"):
+            # FastAPI's default summary is the method's name; in the parent's group a sub-viewset's
+            # `List Items` is told apart from the parent's own by the mount it is under.
+            default_summary = (route_kwargs.get("name") or action_name).replace("_", " ").title()
+            route_kwargs["summary"] = f"{parent.summary_prefix}: {default_summary}"
+        on_rest = resolve_register_rest(route.endpoint, register_rest)
+
+        if is_schema_route(route):
+            # Two /schema routes on one path, one per transport, each answering with the
+            # endpoints published on its own transport, itself included: the TS client takes
+            # the viewset's base path in the document from the /schema path.
+            if on_rest:
+                rest_schema_kwargs = {**route_kwargs, "endpoint": openapi_endpoint(rest_routes)}
+                rest_routes.append(rest_schema_kwargs)
+                add_route(rest_schema_kwargs, {REST}, action_name)
+            if on_muxws_any:
+                muxws_schema_kwargs = {**route_kwargs, "endpoint": openapi_endpoint(muxws_routes)}
+                muxws_routes.append(muxws_schema_kwargs)
+                add_route(muxws_schema_kwargs, {MUXWS}, action_name)
+            continue
+
+        on_muxws = resolve_register_muxws(route.endpoint, register_muxws)
+        transports = set()
+        if on_rest:
+            transports.add(REST)
+            rest_routes.append(route_kwargs)
+        if on_muxws:
+            transports.add(MUXWS)
+            muxws_routes.append(route_kwargs)
+        if transports:
+            add_route(route_kwargs, transports, action_name)
+
+    # Checked here rather than in the decorator, which runs before any route exists. A name
+    # that matches nothing would otherwise leave that endpoint on the mixin's generic
+    # docstring - indistinguishable from never having written the entry.
+    unknown = set(getattr(cls, DOCS_ATTRIBUTE, {})) - documented
+    if unknown:
+        raise ValueError(
+            f"@endpoint_docs on {cls.__name__} names endpoint(s) it does not have: "
+            f"{', '.join(sorted(unknown))}; it has {', '.join(sorted(documented))}"
+        )
+
+    if muxws_routes:
+        register_viewset(cls, base_path, muxws_routes, default_tags)
+
+    cls.__viewset_metadata__ = {
+        "base_path": base_path,
+        "lifecycle": lifecycle,
+        "router": router,
+        "pk_field_name": pk_field_name,
+        "paths": paths,
+        "parent": parent.cls if parent is not None else None,
+        "sub_viewsets": {path: mount.viewset for path, mount in mounts.items()},
+    }
+
+    return cls
+
+
+@dataclass(frozen=True)
+class _Parent:
+    """What routing a sub-viewset takes from the viewset it is mounted under."""
+
+    cls: type
+    """The class that mounts the sub-viewset."""
+    tags: list[str] | None
+    """The OpenAPI tags of the sub-viewset's routes: those of the viewset at the top of its mounts."""
+    gates: tuple
+    """The `Depends` of the checks of every viewset above the sub-viewset, the outermost first."""
+    summary_prefix: str
+    """What a default summary of the sub-viewset's routes starts with: `Members`, `Members / Active`."""
+    chain: tuple[type, ...]
+    """The classes above the sub-viewset, the outermost first."""
+
+
+def _summary_label(path: str) -> str:
+    """`member-rows` -> `Member Rows`."""
+    return re.sub(r"[-_.~]+", " ", path).strip().title() or path
+
+
+def _check_mounts(cls: type, base: str, mounts: dict[str, SubViewSet], chain: tuple[type, ...]) -> None:
+    """Raises `ValueError` for a sub-path one of `cls`'s own routes starts with, and for a mount of a
+    class `cls` is mounted under, itself included."""
+    for route in cls.__router.routes:
+        relative = route.path[len(base) :] if route.path.startswith(base) else route.path
+        first = relative.strip("/").split("/", 1)[0]
+        if first in mounts:
+            raise ValueError(
+                f"{cls.__name__} mounts a sub-viewset at {first!r} and serves {route.path!r} itself; "
+                f"one of them has to move"
+            )
+    for path, mount in mounts.items():
+        if mount.viewset in chain:
+            raise ValueError(
+                f"{cls.__name__} mounts {mount.viewset.__name__} at {path!r}, a viewset it is mounted under"
+            )
