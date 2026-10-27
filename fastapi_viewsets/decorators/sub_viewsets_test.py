@@ -549,3 +549,50 @@ def test_one_class_mounted_twice_serves_each_mount_with_its_own_instance_and_pat
     assert client.get("/orgs/members/1").json() == {"id": 1, "name": "o:Ana"}
     assert set(client.get("/accounts/members/schema").json()["paths"]) >= {"/accounts/members"}
     assert set(client.get("/orgs/members/schema").json()["paths"]) >= {"/orgs/members"}
+
+
+# gates over muxws
+
+
+async def muxws_get(app: FastAPI, path: str, **headers: str) -> FakeStream:
+    stream = FakeStream({":method": "GET", ":path": path, **headers})
+    assert await process_command(ABSENT, stream, app=app) is True
+    return stream
+
+
+@pytest.mark.asyncio
+async def test_both_gates_admit_and_the_parent_s_runs_first_over_muxws():
+    gate = Gate()
+    settings.viewsets_command_middleware = [gate]
+    members = fresh()()
+    app, _account = accounts_app(members=members)
+    stream = await muxws_get(app, "/accounts/members")
+    assert (stream.status, stream.payload) == (200, [{"id": 1, "name": "Ana"}, {"id": 2, "name": "Bor"}])
+    assert gate.seen == [("AccountViewSet", "members", None), ("Members", "list_items", None)]
+    assert len(members.contexts) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_refusing_parent_gate_keeps_the_child_from_running_over_muxws():
+    gate = Gate()
+    settings.viewsets_command_middleware = [gate]
+    members = fresh()()
+    app, _account = accounts_app(members=members)
+    stream = await muxws_get(app, "/accounts/members", **{"x-refuse": "AccountViewSet"})
+    assert stream.status == 403
+    assert stream.payload["detail"] == "AccountViewSet refuses"
+    assert gate.seen == [("AccountViewSet", "members", None)]
+    assert members.contexts == []
+
+
+@pytest.mark.asyncio
+async def test_a_refusing_child_gate_refuses_after_the_parent_admitted_over_muxws():
+    gate = Gate()
+    settings.viewsets_command_middleware = [gate]
+    members = fresh()()
+    app, _account = accounts_app(members=members)
+    stream = await muxws_get(app, "/accounts/members", **{"x-refuse": "Members"})
+    assert stream.status == 403
+    assert stream.payload["detail"] == "Members refuses"
+    assert gate.seen == [("AccountViewSet", "members", None), ("Members", "list_items", None)]
+    assert members.contexts == []
