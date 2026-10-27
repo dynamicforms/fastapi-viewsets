@@ -69,10 +69,11 @@ object at all (and its return value must survive a JSON round trip through Redis
 to be applied separately, once the result is back in the FastAPI process.
 
 **Command middleware** is the mechanism for this: a middleware in `settings.viewsets_command_middleware` can
-inspect/replace the `ViewSetResult` that `call_next()` returns and set `.headers`/`.cookies` on it - `route_viewset`
-applies those onto the real `Response` once the result is back in the FastAPI process, regardless of whether the
-action ran in-process or was `celery_viewset`-dispatched to a worker. See the
-[Command Middleware guide](./command-middleware) for the full picture.
+inspect/replace the `ViewSetResult` that `call_next()` returns and set `.headers`/`.cookies` (`set_cookie()`,
+`delete_cookie()`) on it - `route_viewset` applies those onto the real `Response` once the result is back in the
+FastAPI process, regardless of whether the action ran in-process or was `celery_viewset`-dispatched to a worker. An
+endpoint returns a `ViewSetResult` itself for the same. See the [Command Middleware guide](./command-middleware) for
+the full picture.
 
 ### Automatic OpenAPI tags
 
@@ -310,7 +311,7 @@ The result crosses by the value the action returns:
 | Result | How it crosses |
 |---|---|
 | A `Response` whose body is in memory (`Response`, `JSONResponse`, `HTMLResponse`, `PlainTextResponse`, `RedirectResponse` and their subclasses) | Its class, status code, raw headers (`Set-Cookie`, `Content-Disposition`, `Content-Length` included), body and media type, unchanged. A subclass defined inside a function crosses as its nearest importable base class |
-| A `ViewSetResult` | Its status code, headers and cookies, and its body by the type argument of the `-> ViewSetResult[X]` annotation |
+| A `ViewSetResult` | Its status code, headers and cookies (a `Cookie` or `DeleteCookie` with all of its options), and its body by the type argument of the `-> ViewSetResult[X]` annotation |
 | Any other value | By the return annotation, `-> ViewSetResult[X]` read as `X`, as an argument by its parameter's annotation: refused when the annotation is one pydantic cannot validate or does not describe the value |
 
 A value annotated by its type validates again in the worker, so its validators run in both

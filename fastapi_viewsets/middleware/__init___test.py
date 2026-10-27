@@ -5,6 +5,7 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from starlette.responses import Response
 
 from fastapi_viewsets.conf import settings
 from fastapi_viewsets.context import Context, SerializableObject
@@ -19,6 +20,7 @@ from fastapi_viewsets.middleware import (
     unwrap_viewset_result_type,
     ViewSetResult,
 )
+from fastapi_viewsets.middleware.cookies_test import comparable_set_cookies
 
 
 @pytest.fixture(autouse=True)
@@ -552,3 +554,38 @@ async def test_a_transition_listener_that_fails_or_overruns_is_logged_and_the_re
     )
     assert received == [transition]
     assert caplog.text.count("on_transition(dispatched)") == 2
+
+
+def _starlette_set_cookie(*args, **kwargs) -> list[str]:
+    """The Set-Cookie headers Starlette's own Response.set_cookie() produces for these arguments."""
+    response = Response()
+    response.set_cookie(*args, **kwargs)
+    return response.headers.getlist("set-cookie")
+
+
+def _starlette_delete_cookie(*args, **kwargs) -> list[str]:
+    response = Response()
+    response.delete_cookie(*args, **kwargs)
+    return response.headers.getlist("set-cookie")
+
+
+SESSION_OPTIONS = {"max_age": 1209600, "path": "/", "secure": True, "httponly": True, "samesite": "lax"}
+
+
+def test_a_middleware_sets_and_deletes_cookies_with_options():
+    async def session_middleware(_request, _viewset, _context, call_next):
+        result = await call_next()
+        result.set_cookie("sessionid", "s3cr3t", **SESSION_OPTIONS)
+        result.delete_cookie("legacy")
+        return result
+
+    settings.viewsets_command_middleware = [session_middleware]
+    app = _make_login_app()
+    response = TestClient(app).post("/session/login")
+    assert comparable_set_cookies(response.headers.get_list("set-cookie")) == comparable_set_cookies(
+        [
+            *_starlette_set_cookie("sessionid", "s3cr3t", **SESSION_OPTIONS),
+            *_starlette_delete_cookie("legacy"),
+        ]
+    )
+    assert _login_response_schema(app) == {"$ref": "#/components/schemas/LoginResult"}

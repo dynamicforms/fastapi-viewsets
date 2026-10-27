@@ -51,7 +51,8 @@ from fastapi_viewsets.decorators.celery_viewset.transport import (
     upload_from_jsonable,
     upload_to_jsonable,
 )
-from fastapi_viewsets.middleware import ViewSetResult
+from fastapi_viewsets.middleware import Cookie, DeleteCookie, ViewSetResult
+from fastapi_viewsets.middleware.cookies_test import comparable_set_cookies
 from fastapi_viewsets.mux_ws.registry import reset_registry
 from fastapi_viewsets.mux_ws.server import process_command
 from fastapi_viewsets.mux_ws.server_test import FakeStream
@@ -413,6 +414,23 @@ def test_a_viewset_result_body_crosses_as_its_type_argument():
     assert (crossed.headers, crossed.status_code) == ({"X-A": "1"}, 201)
 
 
+def test_viewset_result_cookies_cross_with_all_their_options():
+    async def login(self) -> ViewSetResult[None]: ...  # noqa: ARG001
+
+    codec = ActionCodec(None, login)
+    value = ViewSetResult(
+        body=None,
+        cookies={
+            "plain": 42,
+            "session": Cookie("s3cr3t", expires=datetime(2030, 1, 2, tzinfo=timezone.utc), **SESSION_COOKIE),
+            "gone": DeleteCookie(**SESSION_DELETION),
+        },
+    )
+    data, encoding = codec.encode_result(value)
+    crossed = codec.decode_result(EncodedResult(json.loads(json.dumps(data)), encoding))
+    assert crossed.cookies == value.cookies
+
+
 # ---------------------------------------------------------------------------
 # in-process worker over HTTP and muxws
 # ---------------------------------------------------------------------------
@@ -514,7 +532,32 @@ def make_files_viewset():
         async def wrong_point(self) -> Point:
             return {"x": 1, "at": "2026-01-01"}
 
+        @__router.post("login")
+        async def login(self) -> ViewSetResult[Point]:
+            result = ViewSetResult(body=Point(x=1, at=date(2026, 1, 1)))
+            result.set_cookie("sessionid", "s3cr3t", **SESSION_COOKIE)
+            result.set_cookie("until", "v", expires=SESSION_EXPIRES)
+            return result
+
+        @__router.post("logout")
+        async def logout(self) -> ViewSetResult[None]:
+            result = ViewSetResult(body=None)
+            result.delete_cookie("sessionid", **SESSION_DELETION)
+            return result
+
     return FilesViewSet
+
+
+SESSION_COOKIE = {"max_age": 1209600, "path": "/", "domain": "example.com", "secure": True, "httponly": True}
+SESSION_EXPIRES = datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+SESSION_DELETION = {"path": "/", "domain": "example.com", "secure": True, "httponly": True, "samesite": "strict"}
+
+
+def _set_cookie_headers(apply) -> list[str]:
+    """The Set-Cookie headers Starlette's own Response produces for `apply(response)`."""
+    response = Response()
+    apply(response)
+    return response.headers.getlist("set-cookie")
 
 
 @pytest.fixture
@@ -712,3 +755,37 @@ async def test_muxws_carries_the_same_types(files_app):
         await stop_result_reader(queue_key)
     assert stream.status == 200, stream.payload
     assert stream.payload == {"kind": "logo", "day_type": "date", "weekday": 2, "levels": ["Level"]}
+
+
+def test_cookies_an_action_sets_and_deletes_in_the_worker_reach_the_http_response(files_app):
+    app, _lists = files_app
+    with TestClient(app) as client:
+        login = client.post("/files/login")
+        logout = client.post("/files/logout")
+    assert login.status_code == 200, login.text
+    assert login.json() == {"x": 1, "at": "2026-01-01"}
+    assert login.headers.get_list("set-cookie") == _set_cookie_headers(
+        lambda response: (
+            response.set_cookie("sessionid", "s3cr3t", **SESSION_COOKIE),
+            response.set_cookie("until", "v", expires=SESSION_EXPIRES),
+        )
+    )
+    assert comparable_set_cookies(logout.headers.get_list("set-cookie")) == comparable_set_cookies(
+        _set_cookie_headers(lambda response: response.delete_cookie("sessionid", **SESSION_DELETION))
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_cookie_an_action_sets_in_the_worker_reaches_the_muxws_reply(files_app):
+    app, lists = files_app
+    queue_key = get_result_queue_key("files")
+    await start_result_reader(lists.reader(), queue_key, poll_interval=0.005)
+    try:
+        logout = FakeStream({":method": "POST", ":path": "/files/logout"})
+        await process_command(ABSENT, logout, app=app)
+    finally:
+        await stop_result_reader(queue_key)
+    assert logout.status == 200, logout.payload
+    assert comparable_set_cookies([logout.reply_headers["set-cookie"]]) == comparable_set_cookies(
+        _set_cookie_headers(lambda response: response.delete_cookie("sessionid", **SESSION_DELETION))
+    )

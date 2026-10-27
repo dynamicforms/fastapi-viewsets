@@ -4,9 +4,11 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Generic, get_args, get_origin, Literal, TYPE_CHECKING, TypeVar
 
 from ..context import Context, from_jsonable, SerializableObject, to_jsonable
+from .cookies import apply_cookies as apply_cookies, Cookie, DeleteCookie, SameSite
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -28,9 +30,18 @@ class ViewSetResult(SerializableObject, Generic[T]):
     chain with a non-200 result (e.g. 401 for an expired session) without ever calling `perform_*`.
     What this all actually becomes on the wire is up to the transport adapter: the HTTP adapter
     (route_viewset.py/lifecycle_runner.py) maps `headers` onto real response headers, `cookies`
-    onto real Set-Cookie, and `status_code` onto the real Response's status code; the muxws
-    transport, which serves each command through the same FastAPI app, carries the resulting status
-    and headers in the reply's leading headers.
+    onto real Set-Cookie (see `apply_cookies()`), and `status_code` onto the real Response's status
+    code; the muxws transport, which serves each command through the same FastAPI app, carries the
+    resulting status and headers in the reply's leading headers.
+
+    `cookies` maps a cookie name to one of:
+
+    - a `Cookie`: the cookie with all of its options;
+    - a `DeleteCookie`: the cookie is deleted;
+    - any other value: the cookie is set to `str(value)` with Starlette's default options.
+
+    `set_cookie()` and `delete_cookie()` record a `Cookie` / `DeleteCookie` under the name, with the
+    signatures of Starlette's `Response.set_cookie()` / `Response.delete_cookie()`.
 
     A registered route endpoint (a mixin-provided one, or a custom `__router` method - never a
     `perform_*` hook, which is called by the actual route method and never registered as a route
@@ -41,11 +52,13 @@ class ViewSetResult(SerializableObject, Generic[T]):
     `ViewSetResult[X]` (X being whatever the wire body actually is) rather than bare `X` -
     `route_viewset`/`build_schema` unwrap this to `X` for the OpenAPI response_model and FastAPI's
     own response validation (see unwrap_viewset_result_type below), so the two forms
-    document/validate identically.
+    document/validate identically. `status_code`, `headers` and `cookies` do not change the shape
+    of the body, so setting them needs no `Middleware.modifies_response_shape`.
 
     Inherits `SerializableObject` so it survives the Celery/Redis boundary wherever it is not
     typed; a `celery_viewset`-dispatched action's `ViewSetResult` result crosses with its body
-    encoded by the `-> ViewSetResult[X]` annotation (see decorators/celery_viewset/transport.py). Only
+    encoded by the `-> ViewSetResult[X]` annotation (see decorators/celery_viewset/transport.py)
+    and its `Cookie`/`DeleteCookie` values with all of their options. Only
     `__serialize__`/`__deserialize__` are overridden here - a `ViewSetResult` is never itself placed
     in a `Context` and never awaited, so `SerializableObject`'s `value`/`__await__`/`__init__` go
     unused, the same way `LazyObject` replaces those with its own.
@@ -56,11 +69,41 @@ class ViewSetResult(SerializableObject, Generic[T]):
     cookies: dict[str, Any] = field(default_factory=dict)
     status_code: int | None = None
 
+    def set_cookie(
+        self,
+        key: str,
+        value: str = "",
+        max_age: int | None = None,
+        expires: datetime | str | int | None = None,
+        path: str | None = "/",
+        domain: str | None = None,
+        secure: bool = False,
+        httponly: bool = False,
+        samesite: SameSite | None = "lax",
+        partitioned: bool = False,
+    ) -> None:
+        """Sets the cookie `key`: records a `Cookie` with these options in `cookies`, replacing
+        whatever `cookies` held for `key`."""
+        self.cookies[key] = Cookie(value, max_age, expires, path, domain, secure, httponly, samesite, partitioned)
+
+    def delete_cookie(
+        self,
+        key: str,
+        path: str = "/",
+        domain: str | None = None,
+        secure: bool = False,
+        httponly: bool = False,
+        samesite: SameSite | None = "lax",
+    ) -> None:
+        """Deletes the cookie `key`: records a `DeleteCookie` with these options in `cookies`,
+        replacing whatever `cookies` held for `key`."""
+        self.cookies[key] = DeleteCookie(path, domain, secure, httponly, samesite)
+
     def __serialize__(self) -> Any:
         return {
             "body": to_jsonable(self.body),
             "headers": self.headers,
-            "cookies": self.cookies,
+            "cookies": to_jsonable(self.cookies),
             "status_code": self.status_code,
         }
 
@@ -69,7 +112,7 @@ class ViewSetResult(SerializableObject, Generic[T]):
         return cls(
             body=from_jsonable(data["body"]),
             headers=data["headers"],
-            cookies=data["cookies"],
+            cookies=from_jsonable(data["cookies"]),
             status_code=data["status_code"],
         )
 
@@ -190,13 +233,18 @@ class Middleware(ABC):
     Whether this middleware can change the shape of ViewSetResult.body (strip/rename/restructure
     fields, not just add side-channel headers/cookies or a status code) - see
     `any_modifies_response_shape()` below. False by default: typical middleware (auth, rate
-    limiting, sessions) only inspects the result or attaches headers/cookies, so the endpoint's
-    declared return type stays a trustworthy response_model. Override to True on a middleware whose
+    limiting, sessions) only inspects the result or attaches headers/cookies (`set_cookie()`,
+    `delete_cookie()`), which are not part of the body, so the endpoint's declared return type
+    stays a trustworthy response_model. Override to True on a middleware whose
     __call__ actually reassigns `result.body` to something that no longer matches the original
     return annotation - otherwise FastAPI's response_model validation will coerce the reshaped body
     back towards the original model (e.g. reintroducing a stripped field with its default value).
     A plain function middleware declares this the same way, by setting the attribute on the
     function object: `my_middleware.modifies_response_shape = True`.
+
+    `route_viewset` reads it from the entries of `settings.viewsets_command_middleware` when it
+    decorates a class, and one entry declaring it drops the response_model of every route of that
+    class. An instance `@action_configuration` injects is not consulted.
     """
 
     def config_from(self, context: Context) -> Any:

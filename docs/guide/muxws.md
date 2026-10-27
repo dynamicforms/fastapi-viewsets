@@ -103,7 +103,9 @@ Two behaviours of HTTP middleware have no counterpart on a WebSocket:
   (`GZipMiddleware`) leaves the reply uncompressed; muxws carries it as a decoded payload. A
   command that states `accept-encoding` itself receives a compressed body.
 - **Cookies.** A `set-cookie` header reaches the client in the reply headers, but a browser does not
-  set a cookie from a WebSocket message. A cookie the browser has to store is set over HTTP.
+  set a cookie from a WebSocket message. A cookie the browser has to store is set over HTTP. The
+  reply headers hold one value per header name, the last one the response sent, so of a response
+  that sets several cookies the reply carries the last `set-cookie`.
 
 ### A stream that ends early
 
