@@ -1,13 +1,14 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.13.6,<0.14"]
+build-backend = "uv_build"
 
 [project]
 name = "dynamicforms-fastapi-viewsets"
-dynamic = ["version"]
+version = "0.14.2"
 description = "Django REST Framework-style viewsets for FastAPI, with optional Celery-backed async execution and a Vue/TypeScript client counterpart."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Jure Erznožnik", email = "jure.erznoznik@velis.si" },
 ]
@@ -16,7 +17,6 @@ keywords = ["fastapi", "viewsets", "rest", "dynamicforms", "celery", "django-res
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -37,6 +37,8 @@ celery = ["celery>=5.3", "redis>=5.0"]
 muxws = ["muxws[starlette]>=0.4.2"]
 django = ["django>=4.2", "asgiref>=3.6"]
 jwt = ["PyJWT>=2.8"]
+
+[dependency-groups]
 dev = [
     "coverage",
     "pytest",
@@ -61,21 +63,11 @@ Repository = "https://github.com/dynamicforms/fastapi-viewsets"
 Issues = "https://github.com/dynamicforms/fastapi-viewsets/issues"
 Documentation = "https://docs.velis.si/dynamicforms/fastapi-viewsets/"
 
-[tool.hatch.version]
-path = "fastapi_viewsets/__init__.py"
-
-[tool.hatch.build.targets.wheel]
-packages = ["fastapi_viewsets"]
-
-[tool.hatch.build.targets.sdist]
-include = [
-    "/fastapi_viewsets",
-    "/README.md",
-    "/LICENSE",
-]
-exclude = [
-    "**/*_test.py",
-]
+[tool.uv.build-backend]
+module-name = "fastapi_viewsets"
+module-root = ""
+source-include = ["LICENSE"]
+source-exclude = ["**/*_test.py"]
 
 [tool.publish]
 tests = "pytest"
@@ -84,7 +76,7 @@ tests = "pytest"
 exclude = ['dockertest',
     'tests', 'docs', 'examples', 'scripts', 'setup.py', 'setup.cfg', 'README.md', 'LICENSE', 'MANIFEST.in',
     'pyproject.toml', 'Pipfile', 'Pipfile.lock', 'ruff.egg-info', 'dist', 'build', '.gitignore', '.git', '.idea',
-    '.vscode', '.pytest_cache', '.coverage', '.ruff', '*/migrations/*']
+    '.vscode', '.pytest_cache', '.coverage', '.ruff', '.venv', '*/migrations/*']
 line-length = 120
 
 [tool.ruff.lint]

@@ -19,3 +19,4 @@ build/
 .ruff_cache/
 .coverage
 coverage.json
+.venv/
