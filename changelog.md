@@ -6,7 +6,37 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.14.0] - 2026-10-26
+## [0.14.0] - 2026-10-27
+
+### Added
+
+- `ViewSetRouter` (`fastapi_viewsets.decorators`), an `APIRouter` a viewset declares as its
+  `__router` to mount other viewsets under sub-paths of its base path:
+  `__router.sub_viewset("members", MembersViewSet)` routes `MembersViewSet` at
+  `{base_path}/members` as a viewset of its own, with its own endpoints, `/schema`, muxws
+  registration and `__viewset_metadata__` (full `base_path`, `parent`). `sub_viewset(path, viewset,
+  *, lifecycle, pk_field_name, register_muxws, register_rest, action_configuration)` takes a class
+  or an instance, used as the singleton, and returns a `SubViewSet`. Sub-viewsets nest. A plain
+  `APIRouter` keeps working for a viewset that mounts nothing.
+- A sub-viewset is routed ahead of the parent's own routes, so `{base_path}/{pk}` never takes its
+  path, over REST and muxws alike. A request to it passes the parent's checks first, with the parent
+  class and the mount's path as the action name (`settings.viewsets_security_scheme`, the context
+  processors and `Middleware.depends()`; configuration: the parent's class-level
+  `@action_configuration` with the mount's `action_configuration` over it), then its own. The
+  parent's checks are route dependencies carrying `SUB_VIEWSET_GATE_ATTRIBUTE`, so they also run in
+  the events gate run of the sub-viewset's topic.
+- A sub-viewset's operations are listed in the OpenAPI tag group of the viewset at the top of its
+  mounts, and its class docstring registers no tag. A route without a summary of its own is
+  summarised with the mount's path in front of FastAPI's default (`Members: List Items`).
+- `event_scope` accepts a scope name another class declared for a class mounted under that class or
+  mounting it, directly or through further sub-viewsets, and for a subclass of such a class, so a
+  sub-viewset declaring its parent's scope name shares its store topics. An unrelated class still
+  raises `ValueError`.
+- `route_viewset` adds `parent` and `sub_viewsets` to `__viewset_metadata__`.
+- TS: `watch({ fetch })` takes a function `(pks) => Promise<readonly Row[]>` (`FetchRows`), called
+  once per event with the pks of the changes without a record; its rows are matched by
+  `pkFieldName`, and a pk without a row is reported as deleted. `onChange` receives the rows it
+  returns, so a ViewSet's events can be completed with the rows of a sub-viewset.
 
 ### Changed
 
@@ -20,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A class routed a second time, by another `route_viewset` or another mount, serves its new routes
+  with that routing's base path and singleton instead of the first routing's.
 - The filter model of a list or lookup endpoint is read from the query string field by field: a
   sequence-typed field (`ids: list[int]`) is a query parameter read from a repeated key
   (`?ids=1&ids=2`), not a request body field. Every field is documented in the schema as a query

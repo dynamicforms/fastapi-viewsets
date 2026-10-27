@@ -75,8 +75,9 @@ A viewset's topic is the path its routes are routed under, `include_router` pref
 which is the `basePath` a frontend ViewSet uses. A path parameter of the prefix or of `base_path`
 has its value in the topic: a viewset at `/orgs/{org_id}/tracks` has the topic `/orgs/7/tracks`
 for organisation 7, a topic per organisation. A viewset mounted on two routers has two topics,
-unless its class carries [`@event_scope`](#scoped-topics), whose routed paths share the store topic
-of each scope key. A Starlette `Mount` path in front of the application is not part of the topic.
+unless its class carries [`@event_scope`](#scoped-topics), whose routed paths share the store
+topic of each scope key, with those of every class that declares the same scope name. A
+Starlette `Mount` path in front of the application is not part of the topic.
 
 The store keeps a third form, `@{name}:{key}`, the store topic of a [scoped](#scoped-topics) viewset
 topic. The server derives it from the subscribing request; a client that sends it receives
@@ -531,8 +532,9 @@ class TagsViewSet(ViewSetMixin[int, Tag]): ...
 `name` defaults to `f"{cls.__module__}.{cls.__qualname__}"` and holds no whitespace, control
 character or `:`. Subclasses inherit the scope and its name. The decorator applies before or after
 `route_viewset`. A name another class declared raises `ValueError`, unless the class is a subclass
-of that class, or has the same module and qualified name without a `<locals>` part (the class of a
-reloaded module). Classes a function defines share their module and qualified name
+of that class, has the same module and qualified name without a `<locals>` part (the class of a
+reloaded module), or is mounted under or mounts a class that declared the name
+([Nested Viewsets](./nested-viewsets#events)). Classes a function defines share their module and qualified name
 (`make.<locals>.TagsViewSet`), so each one passes a `name` of its own:
 
 ```python

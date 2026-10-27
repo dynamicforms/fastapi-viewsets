@@ -445,6 +445,113 @@ describe('watch() on a REST ViewSet', () => {
       expect(w.onChange.mock.calls.map(([change]) => change.op)).toEqual(['updated', 'deleted']);
     });
   });
+
+  describe('fetch: a function', () => {
+    interface ItemRow {
+      id: number;
+      label: string;
+    }
+
+    function build(fetch: (pks: number[]) => Promise<readonly ItemRow[]>) {
+      const { client, subscriptions } = fakeClient();
+      const http = mockAxios(() => Promise.reject(new Error('fetch with a function retrieves nothing')));
+      const proxy = new RestProxyImpl<number, ItemRow, 'id'>({
+        basePath: '/items',
+        pkFieldName: 'id',
+        validateSchema: false,
+        axiosInstance: http,
+        events: client,
+      });
+      const onChange = vi.fn();
+      const onResync = vi.fn();
+      const onError = vi.fn();
+      const fetchRows = vi.fn(fetch);
+      proxy.watch({ fetch: fetchRows, onChange, onResync, onError });
+      const { onEvent } = subscriptions[0].handlers;
+      return { http, fetchRows, onChange, onResync, onError, emit: (payload: unknown) => onEvent(payload, meta()) };
+    }
+
+    it('completes the changes without record with one call, matching the rows by pk', async () => {
+      const w = build((pks) => Promise.resolve(pks.map((pk) => ({ id: Number(pk), label: `row ${pk}` })).reverse()));
+      w.emit({ op: 'updated', changes: [{ pk: 4 }, { pk: 5, record: { id: 5, label: 'sent' } }, { pk: '6' }] });
+      await flush();
+      expect(w.fetchRows.mock.calls).toEqual([[[4, '6']]]);
+      expect(w.http.get).not.toHaveBeenCalled();
+      expect(w.onChange.mock.calls).toEqual([
+        [
+          {
+            op: 'updated',
+            changes: [
+              { pk: 4, record: { id: 4, label: 'row 4' } },
+              { pk: 5, record: { id: 5, label: 'sent' } },
+              { pk: '6', record: { id: 6, label: 'row 6' } },
+            ],
+          },
+          meta(),
+        ],
+      ]);
+    });
+
+    it('passes the pks it returns no row for as deleted, after the others', async () => {
+      const w = build(() => Promise.resolve([{ id: 6, label: 'six' }]));
+      w.emit({ op: 'created', changes: [{ pk: 4 }, { pk: 6 }, { pk: 7 }] });
+      await flush();
+      expect(w.onChange.mock.calls).toEqual([
+        [{ op: 'created', changes: [{ pk: 6, record: { id: 6, label: 'six' } }] }, meta()],
+        [{ op: 'deleted', changes: [{ pk: 4 }, { pk: 7 }] }, meta()],
+      ]);
+    });
+
+    it('calls onChange once, with deleted, when it returns no row', async () => {
+      const w = build(() => Promise.resolve([]));
+      w.emit({ op: 'updated', changes: [{ pk: 4 }] });
+      await flush();
+      expect(w.onChange.mock.calls).toEqual([[{ op: 'deleted', changes: [{ pk: 4 }] }, meta()]]);
+    });
+
+    it('is not called for a deleted change or for one whose every change carries its record', async () => {
+      const w = build(() => Promise.resolve([]));
+      w.emit({ op: 'deleted', changes: [{ pk: 4 }] });
+      w.emit({ op: 'updated', changes: [{ pk: 5, record: { id: 5, label: 'sent' } }] });
+      await flush();
+      expect(w.fetchRows).not.toHaveBeenCalled();
+      expect(w.onChange.mock.calls.map(([change]) => change.op)).toEqual(['deleted', 'updated']);
+    });
+
+    it('reports a rejection to onError, and resyncs', async () => {
+      const failure = Object.assign(new Error('404'), { response: { status: 404 } });
+      const w = build(() => Promise.reject(failure));
+      w.emit({ op: 'updated', changes: [{ pk: 4 }] });
+      await flush();
+      expect(w.onChange).not.toHaveBeenCalled();
+      expect(w.onError).toHaveBeenCalledWith(failure);
+      expect(w.onResync).toHaveBeenCalledTimes(1);
+    });
+
+    it('fetches the rows of a sub-viewset as background calls', async () => {
+      const events: CallEvent[] = [];
+      const stop = onCallActivity((event) => events.push(event));
+      try {
+        const { client, subscriptions } = fakeClient();
+        const http = mockAxios(() => Promise.resolve({ data: [{ id: 4, label: 'listed' }] }));
+        class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin]) {}
+        class RowApi extends restViewSet<ItemRow>()('id', [ReadOnlyViewSetMixin]) {}
+        const items = new ItemApi({ basePath: '/items', validateSchema: false, axiosInstance: http, events: client });
+        const rows = new RowApi({ basePath: '/items/rows', validateSchema: false, axiosInstance: http });
+        const onChange = vi.fn();
+        items.watch({ fetch: (pks) => rows.list({ id__in: pks }), onChange, onResync() {} });
+        subscriptions[0].handlers.onEvent({ op: 'updated', changes: [{ pk: 4 }] }, meta());
+        await flush();
+        expect(http.get).toHaveBeenCalledWith('/items/rows', expect.objectContaining({ params: { id__in: [4] } }));
+        expect(onChange.mock.calls[0][0].changes).toEqual([{ pk: 4, record: { id: 4, label: 'listed' } }]);
+      } finally {
+        stop();
+      }
+      const starts = events.filter((event) => event.type === 'start');
+      expect(starts).toHaveLength(1);
+      expect(starts[0]).toMatchObject({ background: true });
+    });
+  });
 });
 
 /** A peer whose every stream is answered with `{ rev: 1 }`, recording what was opened on it. */
@@ -667,6 +774,45 @@ describe('watch() on the public surface', () => {
     const rest = route_rest<RetrieveMixin<number, Item>>(ItemViewSet, '/items', 'id', http);
     // @ts-expect-error -- the positional form carries no watch()
     expect(() => rest.watch({ onChange() {}, onResync() {} })).toThrow(/needs an event client/);
+  });
+
+  it('types the changes with the rows a fetch function returns', () => {
+    interface ItemRow {
+      id: number;
+      label: string;
+    }
+    const { client } = fakeClient();
+
+    class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin]) {}
+    class RowApi extends restViewSet<ItemRow>()('id', [ReadOnlyViewSetMixin]) {}
+    const items = new ItemApi({ basePath: '/items', validateSchema: false, events: client });
+    const rows = new RowApi({ basePath: '/items/rows', validateSchema: false, events: client });
+    items.watch({
+      fetch: true,
+      onChange(change) {
+        const name: string | undefined = change.changes[0].record?.name;
+        void name;
+      },
+      onResync() {},
+    });
+    items.watch({
+      fetch: (pks) => rows.list({ id__in: pks }),
+      onChange(change) {
+        const label: string | undefined = change.changes[0].record?.label;
+        void label;
+      },
+      onResync() {},
+    });
+    // @ts-expect-error -- onChange receives the rows the fetch function returns
+    items.watch({
+      fetch: (pks) => rows.list({ id__in: pks }),
+      onChange(change: RecordsChanged<Item, number>) {
+        void change;
+      },
+      onResync() {},
+    });
+    rows.watch({ fetch: true, onChange() {}, onResync() {} });
+    expect(true).toBe(true);
   });
 
   it('rejects an onChange whose parameter type is wider than the record type', () => {

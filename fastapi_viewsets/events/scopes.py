@@ -15,8 +15,9 @@ that carries `@event_scope` the server stores and delivers the topic's events un
 in a gate run of the subscribing request (everything a `GET` of the viewset's gate action by that
 caller runs before the action executes); on a write, in the call that writes, for a
 `celery_viewset` action a request called in the web process before the dispatch. Every routed path
-of the class and of its subclasses whose resolver answers the same key shares one store topic, and
-a subscriber of another key never receives its events.
+of the class, of its subclasses and of the sub-viewsets that declare the same scope name, whose
+resolver answers the same key, shares one store topic, and a subscriber of another key never
+receives its events.
 
 The resolver is the scope's authorization point: it answers a key only for a scope the caller may
 read, and raises `HTTPException` or answers None otherwise. It reads a value a check in the gate run
@@ -97,6 +98,10 @@ class EventScope:
 # scope name -> the class that declared it
 _names: dict[str, type] = {}
 
+# scope name -> the classes besides the holder that declared it for a mount relation to a class
+# declaring it
+_sharers: dict[str, list[type]] = {}
+
 
 def event_scope(resolver: ScopeResolver, *, name: str | None = None) -> Callable[[type[T]], type[T]]:
     """
@@ -105,11 +110,20 @@ def event_scope(resolver: ScopeResolver, *, name: str | None = None) -> Callable
     Subclasses inherit the attribute, and with it the name. The decorator may be applied before or
     after `route_viewset`.
 
-    Raises `ValueError` for a name that is empty or holds whitespace, a control character or `:`,
-    and for a name another class already declared, unless the class is that class, a subclass of
-    it, or a class of the same module and qualified name whose qualified name has no `<locals>`
-    part (the class of a reloaded module), which takes the name over. Classes a function defines
-    share their module and qualified name, so each needs a `name` of its own.
+    A name belongs to the class that declares it first, and may also be declared by:
+
+    - that class again, a subclass of it, or a class of the same module and qualified name whose
+      qualified name has no `<locals>` part (the class of a reloaded module), which takes the name
+      over;
+    - a class mounted under a class that declared the name, or that mounts one, with
+      `ViewSetRouter.sub_viewset`, directly or through further sub-viewsets, and a subclass of such
+      a class. The mount is read from the `ViewSetRouter` the classes declare, so it is known as
+      soon as the mounting class is defined: a sub-viewset decorated before its parent shares the
+      name once the parent, which mounts it, declares it.
+
+    Raises `ValueError` for any other class, and for a name that is empty or holds whitespace, a
+    control character or `:`. Classes a function defines share their module and qualified name, so
+    each needs a `name` of its own.
     """
 
     def decorator(cls: type[T]) -> type[T]:
@@ -118,15 +132,30 @@ def event_scope(resolver: ScopeResolver, *, name: str | None = None) -> Callable
         if holder is None or _reloaded(cls, holder):
             _names[scope_name] = cls
         elif cls is not holder and not issubclass(cls, holder):
-            hint = "; a class defined in a function needs event_scope(name=...)" if _is_local(cls) else ""
-            raise ValueError(
-                f"the event scope {scope_name!r} is declared by {holder.__module__}.{holder.__qualname__}; "
-                f"{cls.__module__}.{cls.__qualname__} is not a subclass of it{hint}"
-            )
+            sharers = _sharers.setdefault(scope_name, [])
+            if any(issubclass(cls, other) for other in sharers):
+                pass  # a subclass of a sharer shares the name as the sharer does
+            elif any(_mount_related(cls, other) for other in (holder, *sharers)):
+                sharers.append(cls)
+            else:
+                hint = "; a class defined in a function needs event_scope(name=...)" if _is_local(cls) else ""
+                raise ValueError(
+                    f"the event scope {scope_name!r} is declared by {holder.__module__}.{holder.__qualname__}; "
+                    f"{cls.__module__}.{cls.__qualname__} is not a subclass of it, nor mounted under or "
+                    f"mounting a class that declares it{hint}"
+                )
         cls.__event_scope__ = EventScope(scope_name, resolver)
         return cls
 
     return decorator
+
+
+def _mount_related(cls: type, other: type) -> bool:
+    """Whether one of `cls` and `other` is mounted under the other, directly or through further
+    sub-viewsets."""
+    from ..decorators.sub_viewsets import mounted_under
+
+    return other in set(mounted_under(cls)) or cls in set(mounted_under(other))
 
 
 def _is_local(cls: type) -> bool:
@@ -152,6 +181,7 @@ def scope_of(cls: type) -> EventScope | None:
 def reset_event_scopes() -> None:
     """Forgets the scope names declared in this process; the classes keep their `__event_scope__`."""
     _names.clear()
+    _sharers.clear()
 
 
 async def resolve_scope(scope: EventScope, request: "Request | None", context: Context) -> str | None:

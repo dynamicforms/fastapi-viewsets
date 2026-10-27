@@ -81,6 +81,8 @@ The decorator derives an OpenAPI tag from the class name by stripping the `ViewS
 - `ItemViewSet` → tag `Item`
 - `UserProfileViewSet` → tag `UserProfile`
 
+A [sub-viewset](./nested-viewsets#openapi) takes the tag of the viewset at the top of its mounts.
+
 ### Route ordering
 
 Routes are registered most specific first, so a literal segment is matched before `{pk}` would
@@ -91,6 +93,9 @@ take it:
 3. `/items` — list / create
 
 Within one path the order is `DELETE`, `PATCH`, `PUT`, `POST`, `GET`.
+
+The viewsets a class mounts with `ViewSetRouter.sub_viewset` are registered before all of these, so
+`/items/{pk}` never takes a mounted `/items/archive`; see [Nested Viewsets](./nested-viewsets).
 
 ### pk_field_name and request body
 

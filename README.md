@@ -6,6 +6,8 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
 - **Python mixins for FastAPI** — compose CRUD and bulk endpoints from small, focused mixin classes.
 - **`route_viewset` decorator** — register a viewset on a FastAPI router with a single decorator call.
   Handles type resolution, lifecycle management and OpenAPI schema automatically.
+- **Nested viewsets** — mount a viewset under another one's path (`/accounts/members`) with
+  `ViewSetRouter.sub_viewset`; a request to it passes the parent's checks and its own.
 - **`CollectionViewSet`** — zero-boilerplate in-memory viewset backed by any Python list, set or dict.
   Great for prototyping and testing.
 - **`DjangoORMViewSet`** — back a viewset with a Django QuerySet. The filters it can compile, the

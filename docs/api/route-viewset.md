@@ -46,6 +46,8 @@ own OpenAPI document; and `cls.__viewset_metadata__`, a dict of:
 | `router` | the `APIRouter` passed in as the first argument, not the router the class gained |
 | `pk_field_name` | the `pk_field_name` argument, `None` without it |
 | `paths` | each action name, the name of the method serving the endpoint, mapped to its route's path relative to `base_path`: `""` for `list_items`, `"/{pk}"` for `retrieve`, `"/bulk"` for `bulk_create`, `"/schema"` for `schema` |
+| `parent` | `None`; for a [sub-viewset](#viewsetrouter), the class it is mounted under |
+| `sub_viewsets` | each path the class mounts a sub-viewset at mapped to the mounted class; `{}` for none |
 
 A route's path on the application is the routed base path, the `include_router` prefix followed by
 `base_path`, followed by `paths[action]`. Every endpoint added to `router` carries
@@ -54,14 +56,15 @@ carry `"schema"`.
 
 Applied as `@route_viewset(...)` on the class or called as `route_viewset(...)(SomeViewSet)`.
 
-A class serves one route set. Decorating a class again replaces its `__viewset_metadata__` and its
-muxws registration. To serve one viewset on a second route, decorate a subclass, which gets
-endpoints, a singleton instance and metadata of its own:
+Each routing of a class builds its routes anew, for its own `base_path` and with its own singleton.
+Decorating a class again, or mounting it a second time, replaces its `__viewset_metadata__` and its
+muxws registration; the routes of the earlier routing keep serving. To serve one viewset on a second
+route with metadata of its own, decorate a subclass, which gets endpoints, a singleton instance and
+metadata of its own:
 
 ```python
 class OrgTagsViewSet(TagsViewSet):
     pass
-
 
 route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")(OrgTagsViewSet)
 ```
@@ -69,6 +72,8 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
 ## Behaviour
 
 - Collects the `__router` each class in the MRO declares for itself and rebases its routes onto `base_path`.
+- Routes the viewsets the class mounts with [`ViewSetRouter.sub_viewset`](#viewsetrouter) on `router` before the
+  class's own routes, each at `{base_path}/{path}`, recursively.
 - Resolves all generic `TypeVar` parameters using the concrete types declared on the viewset class.
 - Deduplicates routes by HTTP methods plus full path; the most derived class in the MRO wins, so a mixin can replace a
   route it would otherwise inherit.
@@ -93,8 +98,9 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
   name (`ids.1` for the second `ids` of `?ids=1&ids=x`).
 - Drops the declared `response_model` from every route when a middleware in `settings.viewsets_command_middleware`
   declares `modifies_response_shape`, since that middleware may reshape the body.
-- Raises `ValueError` when `lifecycle` is none of `"singleton"`, `"per-request"`, `"instance-key"`, and when
-  `@endpoint_docs` names an endpoint the class does not have.
+- Raises `ValueError` when `lifecycle` is none of `"singleton"`, `"per-request"`, `"instance-key"`, when
+  `@endpoint_docs` names an endpoint the class does not have, when a route of the class starts with a path it mounts a
+  sub-viewset at, and when it mounts a class it is mounted under, itself included.
 - Adds each endpoint to `router` once, as a route that matches only the transports it is published on (see
   [muxws](../guide/muxws#choosing-which-viewsets-are-published)); a route not published on REST is left out of the
   application's OpenAPI document. Records the endpoints published on muxws in the muxws registry.
@@ -112,3 +118,75 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
 | `"instance-key"` | Once per request | `load_state()` / `save_state()` called on every request. No locking — concurrent requests may race. |
 
 See [ViewSet Lifecycle](../guide/lifecycle) for the full guide, including a worked example.
+
+## ViewSetRouter
+
+```python
+from fastapi_viewsets.decorators import SubViewSet, ViewSetRouter
+```
+
+`ViewSetRouter` is an `APIRouter` that also mounts viewsets under the base path of the viewset that
+declares it as its `__router`. See [Nested Viewsets](../guide/nested-viewsets).
+
+```python
+class ViewSetRouter(APIRouter):
+    sub_viewsets: dict[str, SubViewSet]
+
+    def sub_viewset(
+        self,
+        path: str,
+        viewset: type | object,
+        *,
+        lifecycle: LifecycleType = "singleton",
+        pk_field_name: str | None = None,
+        register_muxws: bool | None = None,
+        register_rest: bool | None = None,
+        action_configuration: dict | None = None,
+    ) -> SubViewSet
+```
+
+`sub_viewset` records the mount in `sub_viewsets` under `path` and returns it. `route_viewset` routes
+the mounted viewset when it routes the declaring class, at `{base_path}/{path}`, with `lifecycle`,
+`pk_field_name`, `register_muxws` and `register_rest` as `route_viewset` takes them; `register_muxws`
+and `register_rest` of `None` take the values the parent is routed with. `viewset` is a viewset class
+or an instance of one, used as the singleton.
+
+| Raises | When |
+|--------|------|
+| `ValueError` | `path`, without leading and trailing `/`, is not one path segment of letters, digits, `_`, `-`, `.` and `~`; is `schema`; is already mounted on this router. `lifecycle` is unknown, or other than `"singleton"` for an instance |
+| `TypeError` | `viewset` is neither a class nor an instance with a `__dict__` |
+
+A route of a sub-viewset carries, after the application's, `include_router`'s, the router's and its
+own dependencies, one dependency per viewset it is mounted under, the outermost first, each with the
+attribute `SUB_VIEWSET_GATE_ATTRIBUTE` (`"__viewset_sub_viewset_gate__"`, in
+`fastapi_viewsets.decorators.route_viewset`) set to `(parent class, path)`, and its own
+`MIDDLEWARE_DEPENDS_ATTRIBUTE` dependency last. A gate dependency runs
+`settings.viewsets_security_scheme` when one is set, the context processors and `depends()` of the
+effective middlewares, with the parent class as the viewset, `path` as the action name and the
+parent's class-level `@action_configuration` with `action_configuration` merged over it as the
+configuration, against a context built for it alone.
+
+A sub-viewset's routes take the OpenAPI tags of the viewset at the top of its mounts, and its class
+docstring registers no tag. A route without a summary of its own is summarised as the mounted paths,
+title-cased and joined by ` / `, a colon and FastAPI's default summary: `Members: List Items`,
+`Members / Active: List Items`.
+
+### SubViewSet
+
+A frozen dataclass, one mount:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `path` | `str` | The sub-path, one segment; the parent's action name for its checks |
+| `viewset` | `type` | The mounted class |
+| `instance` | `object \| None` | The instance passed to `sub_viewset`; `None` for a class |
+| `lifecycle` | `LifecycleType` | As passed |
+| `pk_field_name` | `str \| None` | As passed |
+| `register_muxws` | `bool \| None` | As passed; `None` takes the parent's value |
+| `register_rest` | `bool \| None` | As passed; `None` takes the parent's value |
+| `action_configuration` | `dict` | The configuration of the parent's action `path`, `{}` without one |
+
+`fastapi_viewsets.decorators.sub_viewsets` also has `sub_viewsets_of(cls) -> dict[str, SubViewSet]`,
+the mounts of `cls` and of the classes in its MRO, a more derived class's mount replacing one at the
+same path, and `mounted_under(cls) -> Iterator[type]`, every class mounted under `cls`, directly or
+through further mounts, once each.
