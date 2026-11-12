@@ -66,16 +66,9 @@ class AsyncCollectionViewSet(
             results.append(await self.container_update(pk, data, partial))
         return results
 
-    async def perform_destroy(self, _context: Context, pk: K) -> dict[K, Any]:
+    async def perform_destroy(self, _context: Context, pk: K) -> dict[K, None]:
         await self.container_delete(pk)
         return {pk: None}
-
-    async def perform_bulk_destroy(self, _context: Context, pk: list[K]) -> list[dict[K, Any]]:
-        results = []
-        for p in pk:
-            await self.container_delete(p)
-            results.append({p: None})
-        return results
 
 
 class CollectionViewSet(AsyncCollectionViewSet[K, T]):

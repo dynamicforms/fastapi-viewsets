@@ -156,7 +156,19 @@ async def perform_update(self, context: Context, pk: int, data: Item, partial: b
 | `BulkOnlyDestroyMixin[K, T]` | `DELETE /bulk` | Delete multiple records |
 | `BulkDestroyMixin[K, T]` | both above | Single + bulk delete |
 
-`perform_destroy` should return a dict with the deleted PK as key (and any extra info as value).
+`perform_destroy` deletes one record and returns `{pk: None}`; a missing record raises `NotFoundError` (404).
+
+`bulk_destroy` deletes each key independently of the others and answers 200 with an object keyed by pk:
+`null` for a deleted record, the `ApiErrorBody` of the failure otherwise. A failed key does not stop the rest.
+
+```json
+{"1": null, "9": {"detail": "Item with pk 9 not found", "detail_code": "fastapi-viewsets.not_found",
+       "detail_params": {"pk": 9}, "field_errors": {}}}
+```
+
+`ImplMixin.perform_bulk_destroy` implements this over `perform_destroy`: an `HTTPException` or
+`RequestValidationError` becomes that key's `ApiErrorBody`, any other exception propagates (500), and a
+repeated key is deleted once. Override it to delete in one statement or one transaction.
 
 ### Lookup
 
@@ -252,7 +264,6 @@ class ItemViewSet(BulkViewSetMixin[int, Item, ItemFilter]):
     async def perform_update(self, context, pk, data, partial): ...
     async def perform_bulk_update(self, context, records, partial): ...
     async def perform_destroy(self, context, pk): ...
-    async def perform_bulk_destroy(self, context, pk): ...
     async def filter_list(self, fltr, records): ...  # not context-threaded, see Context Processors
 ```
 

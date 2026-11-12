@@ -12,6 +12,7 @@ import { type ViewSetWatch, watchRecords, type WatchOptions } from './events/cha
 import type { EventClient, EventSubscription } from './events/client';
 import type {
   ActionName,
+  BulkDestroyReturnData,
   BulkViewSetMixin,
   CursorListMixin,
   CursorPage,
@@ -522,12 +523,12 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     return this.request<T[]>('PATCH', '/bulk', { body: records });
   }
 
-  destroy(pk: K): ViewSetActionCall<DestroyReturnData> {
-    return this.request<DestroyReturnData>('DELETE', `/${pk}`);
+  destroy(pk: K): ViewSetActionCall<DestroyReturnData<K>> {
+    return this.request<DestroyReturnData<K>>('DELETE', `/${pk}`);
   }
 
-  bulkDestroy(pks: K[]): ViewSetActionCall<DestroyReturnData[]> {
-    return this.request<DestroyReturnData[]>('DELETE', '/bulk', { body: pks });
+  bulkDestroy(pks: K[]): ViewSetActionCall<BulkDestroyReturnData<K>> {
+    return this.request<BulkDestroyReturnData<K>>('DELETE', '/bulk', { body: pks });
   }
 
   /** `I` is the BE viewset's lookup item type; a factory-built ViewSet takes it from `restViewSet<T, L>()`. */

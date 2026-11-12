@@ -417,7 +417,7 @@ is `False`.
 | `options_for(context) -> dict[str, Any] \| None` | `{}` for `None` and `True`, `None` for `False`, the dict for a dict with no key other than `topic`. Raises `TypeError` for any other value or key |
 | `topic_for(execution) -> str` | The topic of a class without `@event_scope`, and the hook a subclass overrides for any class: the configured `topic` (a callable is called with `execution`); else, when `execution.parent` is `None`, `context["fastapi_viewsets.events.topic"]`; else `__viewset_metadata__["base_path"]`. Raises `TypeError` with none of the three |
 | `pk_field_for(execution) -> str` | `__viewset_metadata__["pk_field_name"]`, else the viewset's `pk_field_name`, else its `pk_field`. Raises `TypeError` naming the viewset with none of the three |
-| `changes_for(execution, op: str, result: Any) -> list[Change]` | For `deleted`, one `Change` per pk of the `pk` argument (keyword or positional); otherwise one per returned record, its pk read from the `pk_field_for` field. A `ViewSetResult` contributes its `body`. A record without the pk field raises `TypeError` |
+| `changes_for(execution, op: str, result: Any) -> list[Change]` | For `deleted`, one `Change` per pk of the `pk` argument (keyword or positional), of a bulk only the pks a mapping result maps to `None`; otherwise one per returned record, its pk read from the `pk_field_for` field. A `ViewSetResult` contributes its `body`. A record without the pk field raises `TypeError` |
 
 | `execution.action` | `op` |
 |--------------------|------|

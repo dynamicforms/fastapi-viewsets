@@ -799,7 +799,7 @@ after each of its write actions:
 | `update`, `partial_update` | `updated` | the pk of the returned record |
 | `bulk_update`, `bulk_partial_update` | `updated` | the pk of each returned record |
 | `destroy` | `deleted` | the `pk` argument |
-| `bulk_destroy` | `deleted` | each pk of the `pk` argument |
+| `bulk_destroy` | `deleted` | each pk of the `pk` argument the result maps to `None` (deleted) |
 
 ```python
 class Change(BaseModel):

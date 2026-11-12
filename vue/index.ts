@@ -24,6 +24,7 @@ export {
 export type {
   ActionName,
   ActionSurface,
+  BulkDestroyReturnData,
   CursorPage,
   DestroyReturnData,
   CursorParams,

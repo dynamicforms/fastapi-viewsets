@@ -5,8 +5,10 @@ from enum import Enum
 from typing import Annotated, Any, final, Generic, get_args, get_origin, Union
 
 from fastapi import APIRouter, Header, Query
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, create_model
 from pydantic.alias_generators import to_camel
+from starlette.exceptions import HTTPException
 from typing_extensions import TypeVar
 
 from fastapi_viewsets.conf import settings
@@ -23,6 +25,7 @@ from fastapi_viewsets.cursor import (
     make_predicate,
     position_of,
 )
+from fastapi_viewsets.error_responses import ApiErrorBody, error_body
 from fastapi_viewsets.exceptions import CursorRequestError, UnsupportedListShapeError
 from fastapi_viewsets.filters import filters_from, FilterSet
 from fastapi_viewsets.list_query import (
@@ -95,18 +98,29 @@ class ImplMixin(Generic[K, T], ABC):
         raise NotImplementedError("Method 'perform_bulk_update' must be implemented.")
 
     @abstractmethod
-    async def perform_destroy(self, context: Context, pk: K) -> dict[K, Any]:
+    async def perform_destroy(self, context: Context, pk: K) -> dict[K, None]:
         """
-        Subclasses should implement this method to perform the actual destruction.
+        Destroys record `pk` and returns `{pk: None}`; raises `NotFoundError` for a missing record.
         """
         raise NotImplementedError("Method 'perform_destroy' must be implemented.")
 
-    @abstractmethod
-    async def perform_bulk_destroy(self, context: Context, pk: list[K]) -> list[dict[K, Any]]:
+    async def perform_bulk_destroy(self, context: Context, pk: list[K]) -> dict[K, ApiErrorBody | None]:
         """
-        Subclasses should implement this method to perform the actual bulk destruction.
+        Destroys each key with `perform_destroy`, independently of the others: None for a destroyed key, the
+        `ApiErrorBody` of an `HTTPException` or `RequestValidationError` its destruction raised. Any other
+        exception propagates. A repeated key is destroyed once.
         """
-        raise NotImplementedError("Method 'perform_bulk_destroy' must be implemented.")
+        results: dict[K, ApiErrorBody | None] = {}
+        for one in pk:
+            if one in results:
+                continue
+            try:
+                await self.perform_destroy(context, one)
+            except (HTTPException, RequestValidationError) as error:
+                results[one] = ApiErrorBody.model_validate(error_body(error))
+            else:
+                results[one] = None
+        return results
 
 
 ###################################################################################################
@@ -649,14 +663,15 @@ class BulkUpdateMixin(UpdateMixin[K, T], BulkOnlyUpdateMixin[K, T]):
 ###################################################################################################
 class DestroyMixin(Generic[K, T], ABC):
     """
-    Destroy a model instance. Return the destroyed key and any additional data about its destruction
+    Destroy a model instance.
     """
 
     __router = APIRouter()
 
     @final
     @__router.delete("/{pk}", responses=NOT_FOUND_RESPONSE)
-    async def destroy(self: "ImplMixin[K, T] | DestroyMixin[K, T]", context: Context, pk: K) -> dict[K, Any]:
+    async def destroy(self: "ImplMixin[K, T] | DestroyMixin[K, T]", context: Context, pk: K) -> dict[K, None]:
+        """Destroy one record. Answers `{pk: null}`; 404 `fastapi-viewsets.not_found` for a missing record."""
         return await self.perform_destroy(context, pk)
 
 
@@ -671,7 +686,12 @@ class BulkOnlyDestroyMixin(Generic[K, T], ABC):
     @__router.delete("bulk")
     async def bulk_destroy(
         self: "ImplMixin[K, T] | BulkOnlyDestroyMixin[K, T]", context: Context, pk: list[K]
-    ) -> list[dict[K, Any]]:
+    ) -> dict[K, ApiErrorBody | None]:
+        """
+        Destroy the records of the keys in the body, each independently of the others. Answers 200 with an
+        object keyed by pk: `null` for a destroyed record, the `ApiErrorBody` of the failure otherwise
+        (`fastapi-viewsets.not_found` for a missing record). A failed key does not stop the others.
+        """
         return await self.perform_bulk_destroy(context, pk)
 
 

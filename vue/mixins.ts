@@ -15,6 +15,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-declaration-merging, @typescript-eslint/no-unused-vars */
 
 import type { ViewSetActionCall } from './call';
+import type { ApiErrorBody } from './errors';
 import type { SortState } from './sort';
 
 export interface LookupItem {
@@ -25,7 +26,10 @@ export interface LookupItem {
 }
 
 export type KeyType = string | number;
-export type DestroyReturnData = Record<KeyType, any>;
+/** `destroy()`'s answer: `{ [pk]: null }`. */
+export type DestroyReturnData<K extends KeyType = KeyType> = Record<K, null>;
+/** `bulkDestroy()`'s answer, keyed by pk: `null` for a destroyed record, the failure's `ApiErrorBody` otherwise. */
+export type BulkDestroyReturnData<K extends KeyType = KeyType> = Record<K, ApiErrorBody | null>;
 // ---------------------------------------------------------------------------
 // Individual operation mixins
 // ---------------------------------------------------------------------------
@@ -167,14 +171,14 @@ export class BulkUpdateMixin<K extends KeyType, T> extends UpdateMixin<K, T> {
 }
 
 export interface DestroyMixin<K extends KeyType> {
-  destroy(pk: K): ViewSetActionCall<DestroyReturnData>;
+  destroy(pk: K): ViewSetActionCall<DestroyReturnData<K>>;
 }
 export class DestroyMixin<K extends KeyType> {
   static readonly actions: readonly string[] = ['destroy'];
 }
 
 export interface BulkOnlyDestroyMixin<K extends KeyType> {
-  bulkDestroy(pks: K[]): ViewSetActionCall<DestroyReturnData[]>;
+  bulkDestroy(pks: K[]): ViewSetActionCall<BulkDestroyReturnData<K>>;
 }
 export class BulkOnlyDestroyMixin<K extends KeyType> {
   static readonly actions: readonly string[] = ['bulkDestroy'];

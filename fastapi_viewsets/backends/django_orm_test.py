@@ -265,8 +265,11 @@ async def test_the_destroy_results_encode_as_declared():
     destroyed = await viewset.perform_destroy(None, first.id)
     ActionCodec(DestroyingTrackViewSet, DestroyingTrackViewSet.destroy).encode_result(destroyed)
 
-    bulk_destroyed = await viewset.perform_bulk_destroy(None, [second.id, third.id])
-    assert bulk_destroyed == [{second.id: None}, {third.id: None}]
+    bulk_destroyed = await viewset.perform_bulk_destroy(None, [second.id, 999_999, third.id])
+    assert bulk_destroyed[second.id] is None
+    assert bulk_destroyed[third.id] is None
+    assert bulk_destroyed[999_999].detail_code == "fastapi-viewsets.not_found"
+    assert not await TrackModel.objects.filter(pk__in=[second.id, third.id]).aexists()
     ActionCodec(DestroyingTrackViewSet, DestroyingTrackViewSet.bulk_destroy).encode_result(bulk_destroyed)
 
 

@@ -286,13 +286,10 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
                 instance.save()
         return [self.to_record(rows[pk]) for pk in records]
 
-    async def perform_destroy(self, context: Context, pk: K) -> dict[K, Any]:
+    async def perform_destroy(self, context: Context, pk: K) -> dict[K, None]:
         instance = await self._get_or_404(context, pk)
         await instance.adelete()
         return {pk: None}
-
-    async def perform_bulk_destroy(self, context: Context, pk: list[K]) -> list[dict[K, Any]]:
-        return [await self.perform_destroy(context, one) for one in pk]
 
     # -----------------------------------------------------------------------
 
