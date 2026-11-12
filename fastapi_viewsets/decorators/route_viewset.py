@@ -4,7 +4,7 @@ import re
 
 from dataclasses import dataclass
 from functools import wraps
-from typing import Annotated, get_args, get_origin, Literal, TypeVar
+from typing import Annotated, Any, get_args, get_origin, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, Header, Path, Request, Response
 from fastapi.params import FieldInfo, Header as HeaderParam, Param, Query as QueryParam
@@ -219,7 +219,8 @@ def _param_in_annotation(annotation, default):
     param.default = PydanticUndefined
     param._attributes_set = {k: v for k, v in getattr(param, "_attributes_set", {}).items() if k != "default"}
     required = value is PydanticUndefined or value is Ellipsis
-    return Annotated[annotation, param], inspect.Parameter.empty if required else value
+    typed = Any if annotation is inspect.Parameter.empty else annotation
+    return Annotated[typed, param], inspect.Parameter.empty if required else value
 
 
 def _with_description(annotation, description: str):
@@ -399,10 +400,9 @@ def _route(
             if name == "self":
                 continue
 
-            annotation = resolve_typevars(type_map, p.annotation)
+            annotation, default = _param_in_annotation(resolve_typevars(type_map, p.annotation), p.default)
             if _is_absent_model_param(annotation):
                 continue
-            annotation, default = _param_in_annotation(annotation, p.default)
             if name == "pk" and "{pk}" in route_path and _published_name(name, annotation) is None:
                 annotation = Annotated[annotation, Path(description=_pk_description(item_model, pk_field_name))]
             # Keyword-only: FastAPI passes every value by name, and a required parameter may follow one with a default.

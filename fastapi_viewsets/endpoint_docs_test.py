@@ -315,8 +315,9 @@ def default_param_client(docs=None) -> TestClient:
             pk: int = Path(description="Track to play."),
             volume: int = Query(5, description="Loudness."),
             speed: float = Query(description="Playback speed."),
+            note=Query("none", description="Free text."),  # noqa: B008 - an untyped parameter
         ) -> dict:
-            return {"pk": pk, "volume": volume, "speed": speed}
+            return {"pk": pk, "volume": volume, "speed": speed, "note": note}
 
     app.include_router(router)
     return TestClient(app)
@@ -329,7 +330,8 @@ def test_parameters_declared_as_defaults_keep_their_description_and_default():
     assert (pk["description"], pk["required"]) == ("Track to play.", True)
     assert (volume["description"], volume["required"], volume["schema"]["default"]) == ("Loudness.", False, 5)
     assert (speed["description"], speed["required"]) == ("Playback speed.", True)
-    assert client.get("/p/1/play?speed=1.5").json() == {"pk": 1, "volume": 5, "speed": 1.5}
+    assert parameter(operation, "note")["description"] == "Free text."
+    assert client.get("/p/1/play?speed=1.5").json() == {"pk": 1, "volume": 5, "speed": 1.5, "note": "none"}
     assert client.get("/p/1/play").status_code == 422
 
 
