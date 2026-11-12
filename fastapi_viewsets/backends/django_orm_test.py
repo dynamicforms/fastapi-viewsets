@@ -17,9 +17,10 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, model_validator
 
 from ..cursor import CursorPredicate, decode_cursor
+from ..decorators.celery_viewset.transport import ActionCodec
 from ..filters import Filter, make_filter_model, register_operator
 from ..list_query import build_list_query, ListQuery
-from ..mixins import CursorListMixin, make_all_optional, PaginatedListMixin, SortStateColumn
+from ..mixins import BulkDestroyMixin, CursorListMixin, make_all_optional, PaginatedListMixin, SortStateColumn
 from .django_orm import _cursor_condition, DjangoORMViewSet
 
 
@@ -245,7 +246,28 @@ async def test_retrieve_create_update_and_destroy(viewset):
     updated = await viewset.perform_update(None, created.id, renamed)
     assert updated.title == "Renamed"
 
-    assert await viewset.perform_destroy(None, created.id) == {"id": created.id}
+    assert await viewset.perform_destroy(None, created.id) == {created.id: None}
+
+
+class DestroyingTrackViewSet(TrackViewSet, BulkDestroyMixin[int, Track]):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_the_destroy_results_encode_as_declared():
+    """A `celery_viewset` worker encodes a result by the action's return annotation; a result that
+    does not encode as it answers 500 `fastapi-viewsets.action_failed`."""
+    viewset = DestroyingTrackViewSet()
+    first = await viewset.perform_create(None, Track(id=0, title="One", artist="A", year=1999))
+    second = await viewset.perform_create(None, Track(id=0, title="Two", artist="A", year=1999))
+    third = await viewset.perform_create(None, Track(id=0, title="Three", artist="A", year=1999))
+
+    destroyed = await viewset.perform_destroy(None, first.id)
+    ActionCodec(DestroyingTrackViewSet, DestroyingTrackViewSet.destroy).encode_result(destroyed)
+
+    bulk_destroyed = await viewset.perform_bulk_destroy(None, [second.id, third.id])
+    assert bulk_destroyed == [{second.id: None}, {third.id: None}]
+    ActionCodec(DestroyingTrackViewSet, DestroyingTrackViewSet.bulk_destroy).encode_result(bulk_destroyed)
 
 
 @pytest.mark.asyncio
@@ -674,14 +696,14 @@ async def test_a_client_filter_survives_the_cursor_on_a_renamed_primary_key(code
 
 @pytest.mark.asyncio
 async def test_a_renamed_primary_key_retrieves_updates_and_destroys(coded_rows):  # noqa: ARG001
-    """Lookup by key uses Django's `pk` alias; the destroy response names it `id` regardless."""
+    """Lookup by key uses Django's `pk` alias; the destroy response is keyed by the primary key."""
     viewset = CodedTrackViewSet()
     assert (await viewset.perform_retrieve(None, "T005")).title == "Track 005"
 
     updated = await viewset.perform_update(None, "T005", CodedTrack(code="T005", title="Renamed", year=1999))
     assert updated.title == "Renamed"
 
-    assert await viewset.perform_destroy(None, "T005") == {"id": "T005"}
+    assert await viewset.perform_destroy(None, "T005") == {"T005": None}
 
 
 # ---------------------------------------------------------------------------

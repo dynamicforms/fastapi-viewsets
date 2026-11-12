@@ -6,6 +6,15 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.3] - 2026-11-12
+
+### Fixed
+
+- `DjangoORMViewSet.perform_destroy` returns `{pk: None}` and `perform_bulk_destroy` a list of them, the result
+  `DestroyMixin.destroy` and `BulkOnlyDestroyMixin.bulk_destroy` declare (`dict[K, Any]`). The result was
+  `{"id": pk}`: over REST the response failed validation with 500, and through a `celery_viewset` worker it did not
+  encode as the declared result and answered 500 `fastapi-viewsets.action_failed` (`reason: result`).
+
 ## [0.14.2] - 2026-10-27
 
 ### Fixed
