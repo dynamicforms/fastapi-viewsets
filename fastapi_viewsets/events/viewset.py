@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     GetJsonSchemaHandler,
     model_serializer,
@@ -44,11 +45,16 @@ def _leave_out_none(data: Any, names: tuple[str, ...]) -> Any:
 class TopicRequest(BaseModel):
     """The body of `subscribe` and `unsubscribe`."""
 
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
     topic: str
+    """The topic: a viewset's routed base path or a declared source's `name[:key]`."""
 
 
 class SubscribeAnswer(BaseModel):
     """The answer of `subscribe`. `scope` is left out of the serialized answer when it is None."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
 
     rev: int
     """The topic's current rev, 0 for a topic without events."""
@@ -68,7 +74,10 @@ class SubscribeAnswer(BaseModel):
 class PollRequest(BaseModel):
     """The body of `poll`: each topic mapped to the rev the caller holds, or None to start from now."""
 
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
     cursors: dict[str, int | None]
+    """The rev the caller holds per topic; null to start from the topic's current rev."""
     scopes: dict[str, str] | None = None
     """The scope key the caller holds per topic; a cursor whose scope key differs from the server's answers
     `events: null`. None trusts every cursor."""
@@ -77,13 +86,17 @@ class PollRequest(BaseModel):
 class PolledEvent(BaseModel):
     """One event of a poll answer."""
 
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
     rev: int
+    """The event's rev in its topic."""
     prev: int
     """The rev of the event before it in the answer; for the first event, the cursor."""
     event: str
     """The event's `event_name`."""
     version: int = Field(ge=1, description="The event's `event_version`: the version of the payload's shape.")
     payload: Any = None
+    """The event's fields."""
 
 
 class TopicAnswer(BaseModel):
@@ -93,9 +106,14 @@ class TopicAnswer(BaseModel):
     and `status` set. `error`, `status` and `scope` are left out when None.
     """
 
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
     rev: int | None
+    """The topic's current rev; null for a refused or invalid topic."""
     events: list[PolledEvent] | None
+    """The events after the cursor, oldest first; null when the log cannot answer the cursor or the topic is refused."""
     error: ApiErrorBody | None = None
+    """Why the topic is refused or invalid."""
     status: int | None = None
     """The HTTP status of the refusal; set on every answer with `error`."""
     scope: str | None = None
@@ -113,6 +131,8 @@ class TopicAnswer(BaseModel):
 
 class PollAnswer(BaseModel):
     """The answer of `poll`."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
 
     topics: dict[str, TopicAnswer]
     """One answer per cursor of the request, in the request's order."""

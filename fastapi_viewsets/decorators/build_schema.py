@@ -7,8 +7,9 @@ from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
 from starlette.responses import Response
 
-from ..endpoint_docs import docs_for, viewset_tags
+from ..endpoint_docs import operation_docs_for, viewset_tags
 from ..middleware import unwrap_viewset_result_type
+from ..routing import SCHEMA_ENDPOINT_DOCS
 
 
 def _generic_args(annotation) -> tuple:
@@ -144,7 +145,7 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
             endpoint=schema,
             tags=default_tags,
             methods=["GET"],
-            description="Returns OpenAPI schema for the ViewSet",
+            **SCHEMA_ENDPOINT_DOCS,
         )
         class_router.add_api_route(**schema_route_kwargs)
 
@@ -179,7 +180,7 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
                         route.endpoint.__name__,
                         getattr(endpoint_wrapper, "__shape_openapi_extra__", None) or route.openapi_extra,
                     ),
-                    **docs_for(cls, route.endpoint.__name__),
+                    **operation_docs_for(cls, route.endpoint.__name__),
                 )
             )
 

@@ -80,7 +80,9 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
 - Registers routes most specific first: literal segments such as `bulk` and `lookup`, then `{pk}`, then the bare
   `base_path`; within one path the order is `DELETE`, `PATCH`, `PUT`, `POST`, `GET`.
 - Adds `GET {base_path}/schema` once per transport, each answering with the OpenAPI document of the endpoints
-  published on that transport. Each operation in it carries `x-viewset-action`, the name of the viewset method that
+  published on that transport, documented as the named schema `OpenAPIDocument` (`fastapi_viewsets.routing`); its
+  documentation is `SCHEMA_ENDPOINT_DOCS`, overridable with `@endpoint_docs` under the action name `schema`. Each
+  operation in it carries `x-viewset-action`, the name of the viewset method that
   serves it (`top_rated` for `GET {base_path}/top-rated`); the FE schema check matches a custom endpoint to a ViewSet
   method by it.
 - Derives an OpenAPI tag from the class name (strips `ViewSet` suffix) and records the class's own docstring as that
@@ -89,6 +91,10 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
   plus `settings.viewsets_security_scheme` when one is set. That dependency is the last entry of the route's
   `dependencies` and carries the attribute named by `MIDDLEWARE_DEPENDS_ATTRIBUTE`
   (`"__viewset_middleware_depends__"`, in `fastapi_viewsets.decorators.route_viewset`) set to `True`.
+- Describes the `pk` path parameter with the `Field(description=...)` of the response model's primary key field, else
+  with `PK_DESCRIPTION` (`"Primary key of the record."`), and applies the `parameters` of `@endpoint_docs`; a name
+  there that the endpoint does not have raises `ValueError`.
+- Leaves out a filter parameter whose type resolves to `None` (a `ListMixin` without `TFilter`).
 - Reads the filter model of an endpoint parameter annotated `Annotated[Model, Query()]` (a list's `TFilter`, a
   lookup's `TLookupFilter`) from the query string: every field of the model is a query parameter, documented with its
   type, default, description and constraints, under its alias when it has one. A sequence-typed field (`list[int]`)

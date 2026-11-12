@@ -6,6 +6,24 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] - 2026-11-12
+
+### Added
+
+- Every parameter the package declares is described in the OpenAPI document: `pk` with the `Field(description=...)`
+  of the model's primary key field, else `Primary key of the record.`; `offset`, `cursor` (`OFFSET_DESCRIPTION`,
+  `CURSOR_DESCRIPTION`); `limit` with the viewset's `default_page_size` and `max_page_size`.
+- `@endpoint_docs` key `parameters`: descriptions of an endpoint's path, query and header parameters by their schema
+  name, merged per parameter along the MRO. A name the endpoint does not have raises `ValueError`.
+- `GET {base}/schema` answers the named schema `OpenAPIDocument` (`fastapi_viewsets.routing`), with a description of
+  the endpoint and its response; `@endpoint_docs` documents it under the action name `schema`.
+- Field descriptions on `PaginatedList`, `CursorPage`, `LookupItem`, `LookupFilter`, `SortStateColumn`, `Change`,
+  `RecordsChanged` and the events viewset models.
+
+### Fixed
+
+- A list without a filter model no longer publishes a `fltr` query parameter of type `null`.
+
 ## [0.15.0] - 2026-11-12
 
 ### Changed

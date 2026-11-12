@@ -57,9 +57,9 @@ async def list_items(
     context: Context,
     fltr: Annotated[TFilter, Query()] = None,
     sort: Annotated[str | None, Query(description=SORT_DESCRIPTION)] = None,
-    offset: int = 0,
-    limit: int | None = None,
-    cursor: str | None = None,
+    offset: Annotated[int, Query(ge=0, description=OFFSET_DESCRIPTION)] = 0,
+    limit: Annotated[int | None, Query(ge=1, description="Page size.")] = None,
+    cursor: Annotated[str | None, Query(description=CURSOR_DESCRIPTION)] = None,
     x_list_shape: Annotated[str | None, Header()] = None,
 ) -> Union[ListOf[T], PaginatedList[T], CursorPage[T]]: ...
 ```
@@ -69,7 +69,7 @@ async def list_items(
 - `sort` is always exposed (`column:asc,column:desc`, comma-separated). Without it the list is
   ordered by `default_sort`; an empty `sort=` leaves it unordered. When `TFilter` is provided, its
   fields are exposed as individual query parameters; a sequence-typed field is read from a repeated
-  key (`?ids=1&ids=2`).
+  key (`?ids=1&ids=2`). Without `TFilter` the endpoint has no filter parameter.
 - `route_viewset` narrows both the parameters and the return type per viewset: `offset` survives
   only when `paginated` is among the declared shapes, `cursor` only when `cursor` is, `limit` when
   either is, and the `X-List-Shape` header only when more than one shape is declared. The return
@@ -206,6 +206,10 @@ a pydantic model, a column that is neither a field nor a computed field of it. `
 it with the response model.
 
 `SORT_DESCRIPTION: str` — the `sort` parameter's description on every list endpoint.
+
+`OFFSET_DESCRIPTION: str`, `CURSOR_DESCRIPTION: str` — the descriptions of `offset` and `cursor`.
+`route_viewset` replaces the description of `limit` with one stating the viewset's `default_page_size` and
+`max_page_size`.
 
 ### LookupMixin `[TLookupFilter=LookupFilter, TLookupItem=LookupItem]`
 

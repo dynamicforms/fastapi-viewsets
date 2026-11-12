@@ -19,6 +19,8 @@ class EndpointDoc(TypedDict, total=False):
     response_description: str
     deprecated: bool
     tags: list[str]
+    parameters: dict[str, str]
+    """Descriptions of the endpoint's path, query and header parameters, by their name in the schema."""
 
 
 def endpoint_docs(docs: dict[str, EndpointDoc]):
@@ -40,13 +42,24 @@ def endpoint_docs(docs: dict[str, EndpointDoc]):
 
 
 def docs_for(cls: type, action: str) -> dict[str, Any]:
-    """The documentation of one action, merged along the MRO (subclass entries override)."""
+    """
+    The documentation of one action, merged along the MRO (subclass entries override; `parameters` merges
+    per parameter).
+    """
     merged: dict[str, Any] = {}
     for base in reversed(cls.__mro__):
         entry = base.__dict__.get(DOCS_ATTRIBUTE, {}).get(action)
         if entry:
+            parameters = {**merged.get("parameters", {}), **entry.get("parameters", {})}
             merged.update(entry)
+            if parameters:
+                merged["parameters"] = parameters
     return merged
+
+
+def operation_docs_for(cls: type, action: str) -> dict[str, Any]:
+    """`docs_for` without `parameters`: the keyword arguments of `add_api_route`."""
+    return {key: value for key, value in docs_for(cls, action).items() if key != "parameters"}
 
 
 # ---------------------------------------------------------------------------
