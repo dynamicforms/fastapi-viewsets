@@ -294,3 +294,70 @@ def test_a_custom_endpoint_keeps_its_own_pk_description():
     app.include_router(router)
     operation = TestClient(app).get("/c/schema").json()["paths"]["/c/{pk}/play"]["get"]
     assert parameter(operation, "pk")["description"] == "Track to play."
+
+
+def default_param_client(docs=None) -> TestClient:
+    from fastapi import Path, Query
+
+    app, router = FastAPI(), APIRouter()
+
+    @route_viewset(router, base_path="/p", pk_field_name="id")
+    @endpoint_docs(docs or {})
+    class DefaultParamViewSet(CollectionViewSet[int, Track]):
+        __router = APIRouter()
+
+        def __init__(self):
+            super().__init__(container=DATABASE, pk_field="id")
+
+        @__router.get("/{pk}/play")
+        async def play(
+            self,
+            pk: int = Path(description="Track to play."),
+            volume: int = Query(5, description="Loudness."),
+            speed: float = Query(description="Playback speed."),
+        ) -> dict:
+            return {"pk": pk, "volume": volume, "speed": speed}
+
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_parameters_declared_as_defaults_keep_their_description_and_default():
+    client = default_param_client()
+    operation = client.get("/p/schema").json()["paths"]["/p/{pk}/play"]["get"]
+    pk, volume, speed = (parameter(operation, name) for name in ("pk", "volume", "speed"))
+    assert (pk["description"], pk["required"]) == ("Track to play.", True)
+    assert (volume["description"], volume["required"], volume["schema"]["default"]) == ("Loudness.", False, 5)
+    assert (speed["description"], speed["required"]) == ("Playback speed.", True)
+    assert client.get("/p/1/play?speed=1.5").json() == {"pk": 1, "volume": 5, "speed": 1.5}
+    assert client.get("/p/1/play").status_code == 422
+
+
+def test_endpoint_docs_describe_parameters_declared_as_defaults():
+    docs = {"play": {"parameters": {"pk": "Which track.", "volume": "How loud."}}}
+    operation = default_param_client(docs).get("/p/schema").json()["paths"]["/p/{pk}/play"]["get"]
+    assert parameter(operation, "pk")["description"] == "Which track."
+    assert parameter(operation, "volume")["description"] == "How loud."
+
+
+def test_derived_request_bodies_keep_the_models_description():
+    class Album(BaseModel):
+        """A released album."""
+
+        id: int = Field(json_schema_extra={"autoinc_int": True})
+        title: str
+
+    app, router = FastAPI(), APIRouter()
+
+    @route_viewset(router, base_path="/a", pk_field_name="id")
+    class AlbumViewSet(CollectionViewSet[int, Album], BulkViewSetMixin[int, Album]):
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+    app.include_router(router)
+    schemas = TestClient(app).get("/a/schema").json()["components"]["schemas"]
+    assert {name: schemas[name].get("description") for name in ("Album", "AlbumNoPK", "AlbumPartial")} == {
+        "Album": "A released album.",
+        "AlbumNoPK": "A released album.",
+        "AlbumPartial": "A released album.",
+    }

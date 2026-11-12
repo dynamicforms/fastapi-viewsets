@@ -9,6 +9,7 @@ from typing import Annotated, get_args, get_origin, Literal, TypeVar
 from fastapi import APIRouter, Depends, Header, Path, Request, Response
 from fastapi.params import FieldInfo, Header as HeaderParam, Param
 from pydantic import BaseModel
+from pydantic_core import PydanticUndefined
 
 try:
     from typing_extensions import NoDefault as _TypeVarNoDefault
@@ -206,6 +207,21 @@ def _published_name(name: str, annotation) -> str | None:
     return None
 
 
+def _param_in_annotation(annotation, default):
+    """
+    A parameter declared `x: T = Query(...)` as `x: Annotated[T, Query(...)] = <its default>`, so it is
+    described and documented as the `Annotated` form; any other parameter unchanged.
+    """
+    if not isinstance(default, Param):
+        return annotation, default
+    param = copy.copy(default)
+    value = param.default
+    param.default = PydanticUndefined
+    param._attributes_set = {k: v for k, v in getattr(param, "_attributes_set", {}).items() if k != "default"}
+    required = value is PydanticUndefined or value is Ellipsis
+    return Annotated[annotation, param], inspect.Parameter.empty if required else value
+
+
 def _with_description(annotation, description: str):
     """`annotation` (`Annotated[X, Param]`) with the parameter's description replaced."""
     metadata = []
@@ -386,9 +402,11 @@ def _route(
             annotation = resolve_typevars(type_map, p.annotation)
             if _is_absent_model_param(annotation):
                 continue
+            annotation, default = _param_in_annotation(annotation, p.default)
             if name == "pk" and "{pk}" in route_path and _published_name(name, annotation) is None:
                 annotation = Annotated[annotation, Path(description=_pk_description(item_model, pk_field_name))]
-            new_p = p.replace(annotation=annotation)
+            # Keyword-only: FastAPI passes every value by name, and a required parameter may follow one with a default.
+            new_p = p.replace(annotation=annotation, default=default, kind=inspect.Parameter.KEYWORD_ONLY)
 
             # `context` (detected by name) never reaches FastAPI; lifecycle_runner builds and injects it.
             if name == "context":
