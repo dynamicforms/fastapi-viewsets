@@ -22,6 +22,30 @@ _LIST_LOOKUPS = frozenset({"in", "overlaps"})
 
 _LIST_DESCRIPTION = "One or more values; the parameter repeats for each (`?{parameter}=a&{parameter}=b`)."
 
+_OPERATOR_DESCRIPTIONS = {
+    "exact": "Records whose `{field}` equals the value.",
+    "iexact": "Records whose `{field}` equals the value, case-insensitive.",
+    "contains": "Records whose `{field}` contains the value.",
+    "icontains": "Records whose `{field}` contains the value, case-insensitive.",
+    "startswith": "Records whose `{field}` starts with the value.",
+    "gt": "Records whose `{field}` is greater than the value.",
+    "gte": "Records whose `{field}` is greater than or equal to the value.",
+    "lt": "Records whose `{field}` is less than the value.",
+    "lte": "Records whose `{field}` is less than or equal to the value.",
+    "in": "Records whose `{field}` is one of the values.",
+    "isnull": "`true`: records whose `{field}` is null; `false`: records whose `{field}` is set.",
+    "overlaps": "Records whose `{field}` shares at least one member with the values.",
+}
+"""The description of a filter query parameter by operator; another operator gets a generic one."""
+
+
+def _parameter_description(field_name: str, lookup: str, parameter: str) -> str:
+    text = _OPERATOR_DESCRIPTIONS.get(lookup, "Records `{field}` matches with the `" + lookup + "` operator.")
+    text = text.format(field=field_name)
+    if lookup in _LIST_LOOKUPS:
+        text += " " + _LIST_DESCRIPTION.format(parameter=parameter)
+    return text + " Omit to not filter."
+
 
 def _optional(annotation: Any) -> Any:
     if get_origin(annotation) is Union and type(None) in get_args(annotation):
@@ -69,12 +93,10 @@ def make_filter_model(model: type[BaseModel], declaration: FilterDeclaration) ->
                 )
             parameter = field_name if lookup == "exact" else f"{field_name}__{lookup}"
             annotation = _parameter_annotation(field_annotation, lookup)
-            default = (
-                Field(None, description=_LIST_DESCRIPTION.format(parameter=parameter))
-                if lookup in _LIST_LOOKUPS
-                else None
+            fields[parameter] = (
+                annotation,
+                Field(None, description=_parameter_description(field_name, lookup, parameter)),
             )
-            fields[parameter] = (annotation, default)
             spec[parameter] = (field_name, lookup, _item_annotation(field_annotation, lookup))
 
     filter_model = create_model(f"{model.__name__}Filter", **fields)

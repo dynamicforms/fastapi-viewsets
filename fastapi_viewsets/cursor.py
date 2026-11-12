@@ -20,6 +20,7 @@ from typing_extensions import TypeVar
 
 from .error_namespace import _namespaced
 from .filters import Filter
+from .list_query import _with_description
 
 if TYPE_CHECKING:
     from .mixins import SortState
@@ -157,7 +158,8 @@ class CursorPage(BaseModel, Generic[TItem]):
     are the same anchors read inclusively, present whenever the page is non-empty, for polling an edge.
     """
 
-    model_config = ConfigDict(use_attribute_docstrings=True)
+    # A parametrised model (`CursorPage[Track]`) has no docstring of its own; a subclass keeps its own.
+    model_config = ConfigDict(use_attribute_docstrings=True, json_schema_extra=_with_description(__doc__))
 
     results: list[TItem]
     """The records of the page."""

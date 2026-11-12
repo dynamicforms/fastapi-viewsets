@@ -447,7 +447,7 @@ describe('MuxwsProxyImpl — repeats', () => {
    * be dropped and reconnected the way a muxws Peer reports it.
    */
   function makeFlakyPeer(errors: Error[], body: unknown = MOCK_ITEM) {
-    const opened: { headers: Record<string, unknown>; cancelled: boolean }[] = [];
+    const opened: { headers: Record<string, unknown>; canceled: boolean }[] = [];
     const reconnectHandlers: ((...args: any[]) => void)[] = [];
     const closeHandlers: ((reason: { willRetry: boolean }) => void)[] = [];
     const state = { isOpen: true, goingAway: false, ambient: undefined as string | undefined };
@@ -461,7 +461,7 @@ describe('MuxwsProxyImpl — repeats', () => {
         // an open interceptor that adds a header from state bound only for the caller's synchronous part
         const headers = { ...options?.headers } as Record<string, unknown>;
         if (state.ambient !== undefined) headers['X-Token'] = state.ambient;
-        const entry = { headers, cancelled: false };
+        const entry = { headers, canceled: false };
         opened.push(entry);
         const error = errors[opened.length - 1];
         return {
@@ -470,7 +470,7 @@ describe('MuxwsProxyImpl — repeats', () => {
           replyHeadersArrived: Promise.resolve(),
           replyHeaders: { ':status': 200 },
           cancel: () => {
-            entry.cancelled = true;
+            entry.canceled = true;
             return Promise.resolve();
           },
         };
@@ -529,7 +529,7 @@ describe('MuxwsProxyImpl — repeats', () => {
     await expect(call).resolves.toEqual(MOCK_ITEM);
     expect(flaky.opened).toHaveLength(2);
     expect(flaky.opened[1].headers['Idempotency-Key']).toBe(flaky.opened[0].headers['Idempotency-Key']);
-    expect(flaky.opened[0].cancelled).toBe(true);
+    expect(flaky.opened[0].canceled).toBe(true);
   });
 
   it('reports the call and its repeat to onCallActivity under the call key', async () => {

@@ -512,7 +512,8 @@ settings.viewsets_event_authorizers = [ViewsetTopics(), allow_authenticated]
 A viewset whose rows belong to a tenant (an organisation, a workspace) publishes the changes of each
 tenant separately, whichever route the tenant was selected by: a path parameter
 (`/orgs/{org_slug}/tags`), a header or the domain (`/api/v1/tags` with `X-Org`), or both at once
-while an application moves from one to the other. The class declares the scope of its events:
+while an application moves from one to the other. Scoped topics need `@dynamicforms/fastapi-viewsets`
+0.11.2 or later on the frontend. The class declares the scope of its events:
 
 ```python
 from fastapi_viewsets.events import event_scope
@@ -661,7 +662,6 @@ drop_subscriptions(lambda s: s.scope == str(org_id) and s.context.raw().get("use
 | Membership revoked | the next subscribe or poll refuses the topic and removes the server subscription; pushes are gated again after `viewsets_event_reauthorize_after`; `drop_subscriptions(where)` removes them at once |
 | Scope change of a client (header, domain) | the client calls `refresh()`; it refreshes a topic itself on a push after its `headers()` changed; a poll's `scopes` that differ resync the topic and subscribe it again |
 | Client sends `@...` | 422, or poll `fastapi-viewsets.event_topic_invalid` |
-| Frontend before 0.11.2 against a scoped topic | subscribe works and `:scope` is ignored; a poll without `scopes` trusts the cursor. Scoped topics need the frontend of 0.11.2 or later |
 | Action configuration differs between the gate action and a write | the keys can differ, and the event goes to a store topic no subscriber holds; the resolver's inputs are set for both the gate action and the write actions |
 | Endpoint that writes outside the eight actions | publishes to `await write_topic(self, request, context)` (see [Custom endpoints](#custom-endpoints)) |
 | Write outside a request | `await publish(scope_of(TagsViewSet).topic(key), RecordsChanged(...))` |

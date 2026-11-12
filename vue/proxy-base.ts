@@ -32,13 +32,17 @@ import { parseSort, type SortState } from './sort';
 
 export { ViewSetRequestError } from './errors';
 
+/** The HTTP methods a ViewSet call uses. */
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /** Query values; an array becomes a repeated key, which is how FastAPI binds `list[str]`. */
 export type QueryParams = Record<string, string | number | boolean | null | undefined | Array<string | number>>;
 
+/** Options of one `request()` call. */
 export interface RequestOptions {
+  /** Query parameters; see `QueryParams`. */
   query?: QueryParams;
+  /** The request body, sent as JSON. */
   body?: unknown;
   /** Headers for this call only; on muxws they override the proxy's own `headers`. */
   headers?: Record<string, string>;
@@ -188,6 +192,7 @@ function declaredActions(instance: object, fromOptions?: readonly ViewSetMixinDe
   return actions;
 }
 
+/** Options of a ViewSet proxy, common to both transports. */
 export interface ProxyBaseOptions {
   /** Base path to the resource, e.g. '/items'. */
   basePath: string;
@@ -238,6 +243,7 @@ export abstract class ViewSetInternals {
   }
 }
 
+/** The ViewSet actions over a transport's `request()`; a transport subclass implements `request()`. */
 export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   extends ViewSetInternals
   implements

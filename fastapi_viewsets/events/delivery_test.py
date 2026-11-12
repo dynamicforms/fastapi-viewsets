@@ -297,7 +297,7 @@ async def test_connection_lost_drops_the_sockets_subscriptions():
 
 
 @pytest.mark.asyncio
-async def test_muxws_connection_lost_and_its_subclasses_are_recognised():
+async def test_muxws_connection_lost_and_its_subclasses_are_recognized():
     from muxws.errors import ConnectionLost as MuxwsConnectionLost
 
     class Subclass(MuxwsConnectionLost):

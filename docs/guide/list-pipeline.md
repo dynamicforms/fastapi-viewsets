@@ -266,7 +266,9 @@ class TrackViewSet(CollectionViewSet[int, Track], ListMixin[Track, TrackFilter])
 ```
 
 That produces the query parameters `year`, `year__gte`, `year__lte`, `year__in`,
-`title__icontains`, `genres__overlaps` — and nothing else. `exact` keeps the bare field name.
+`title__icontains`, `genres__overlaps` — and nothing else. `exact` keeps the bare field name. Each
+parameter is described in the OpenAPI document by its field and operator; a registered operator other
+than the built-in ones gets a generic description.
 
 An unknown field or operator raises at import time.
 

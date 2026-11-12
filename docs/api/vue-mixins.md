@@ -326,6 +326,8 @@ is not in `ActionName`:
 interface ListDefaultSort {
   defaultSort(): Promise<SortState>;
 }
+type ListAction = 'list' | 'listPage' | 'listCursor';
+type DefaultSortOf<A> = [Extract<A, ListAction>] extends [never] ? unknown : ListDefaultSort;
 ```
 
 `defaultSort()` resolves to the BE viewset's `default_sort`, `[]` when it declares none. It reads the

@@ -385,8 +385,8 @@ def test_to_jsonable_with_viewset_result():
 
 
 def test_celery_viewset_server_pushes_viewset_result_to_redis():
-    """A custom endpoint returning a ViewSetResult survives the push to Redis. A route endpoint, as a
-    mixin hook like perform_list returns plain records."""
+    """A custom endpoint returning a ViewSetResult survives the push to Redis. The endpoint is a route
+    method because a mixin hook such as perform_list returns plain records."""
     import json
 
     from fastapi import APIRouter

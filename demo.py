@@ -1,8 +1,8 @@
 """
 Runs the demo: FastAPI, the Vue dev server, and optionally a Celery worker.
 
-    python demo.py              # backend + frontend
-    python demo.py --celery     # ... and every viewset call routed through a Celery worker
+    uv run python demo.py              # backend + frontend
+    uv run python demo.py --celery     # ... and every viewset call routed through a Celery worker
 
 Celery is off by default: its queueing latency would dominate the HTTP vs WebSocket benchmark.
 Ctrl-C stops the children one by one; each runs in its own session and is stopped by process group.

@@ -117,7 +117,8 @@ let capturing: { key?: string } | null = null;
 
 /**
  * Sets `key` on `promise`, hands it to the enclosing keyed method, and emits `start` / `settle` call
- * events. Transports call this synchronously from `request()`.
+ * events. The enclosing keyed method receives the key only when this runs synchronously inside it,
+ * and only the first call's key.
  */
 export function issueCall<R>(promise: Promise<R>, key: string, background = false): ViewSetCall<R> {
   if (capturing && capturing.key === undefined) capturing.key = key;
@@ -325,7 +326,8 @@ export function retryNow(): void {
 /**
  * Runs a call, starting the first attempt synchronously and repeating (after abandoning the failed
  * attempt) while `classify` reports a failure and `repeat.withinMs` has not elapsed. A throwing `start()`
- * is a failed attempt. `beforeRepeat(deadline)` runs before each repeat; muxws awaits reconnection there.
+ * is a failed attempt. `beforeRepeat(deadline)` runs after the delay and before each repeat; a repeat
+ * past `deadline` is not sent.
  */
 export async function runCall<R>(
   start: () => CallAttempt<R>,

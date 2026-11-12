@@ -8,8 +8,6 @@ Postgres backend to hang it off.
 
 ## Cursor pagination: what is not done
 
-`CursorListMixin` is in. Left over:
-
 - **Row values need the right index.** The fast path only pays off with a composite index on
   exactly the ordering columns, in order. Nothing checks or warns; a viewset can page correctly and
   slowly without anyone noticing.
@@ -46,7 +44,7 @@ frontend that pages on the server re-reads its page.
 
 ## Async actions in a gevent worker with concurrency above 1
 
-*Recorded 2026-10-17, Claude Code session `16391925-a3f2-4380-8a30-f3c15ec62bad` (taskwire repo).*
+*Recorded 2026-10-17, session `16391925-a3f2-4380-8a30-f3c15ec62bad` (taskwire repo).*
 
 `celery_viewset` runs an async action on the event loop of the current thread: `_event_loop()` in
 `decorators/celery_viewset/server.py` takes the thread's loop and, when that loop is already

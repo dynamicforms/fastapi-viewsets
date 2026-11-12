@@ -137,17 +137,17 @@ class Money:
         )
 
 
-class Colour:
+class Color:
     """A class the application does not own: its parameter's annotation carries the conversion."""
 
     def __init__(self, hex_value: str):
         self.hex = hex_value
 
 
-ColourParam = Annotated[
-    Colour,
-    PlainValidator(lambda value: value if isinstance(value, Colour) else Colour(value)),
-    PlainSerializer(lambda colour: colour.hex, when_used="json"),
+ColorParam = Annotated[
+    Color,
+    PlainValidator(lambda value: value if isinstance(value, Color) else Color(value)),
+    PlainSerializer(lambda color: color.hex, when_used="json"),
 ]
 
 
@@ -163,13 +163,13 @@ def test_a_type_of_its_own_crosses_by_its_pydantic_schema():
 
 
 def test_a_foreign_type_crosses_by_its_annotated_validator_and_serializer():
-    async def paint(self, colour: ColourParam) -> ColourParam: ...  # noqa: ARG001
+    async def paint(self, color: ColorParam) -> ColorParam: ...  # noqa: ARG001
 
     codec = ActionCodec(None, paint)
-    data, typed = codec.encode_argument("colour", Colour("#ff0000"))
+    data, typed = codec.encode_argument("color", Color("#ff0000"))
     assert (data, typed) == ("#ff0000", True)
-    assert codec.decode_argument("colour", data, typed).hex == "#ff0000"
-    result, encoding = codec.encode_result(Colour("#00ff00"))
+    assert codec.decode_argument("color", data, typed).hex == "#ff0000"
+    result, encoding = codec.encode_result(Color("#00ff00"))
     assert codec.decode_result(EncodedResult(result, encoding)).hex == "#00ff00"
 
 

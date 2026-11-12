@@ -28,11 +28,12 @@ pipeline stage write it — it means `ListRecords[Any]`: what a backend yields i
 records are `T` only once `to_record` has run over them.
 
 The same module carries the two helpers the pipeline reads a source with.
-`materialize(records: ListRecords[TItem]) -> list[TItem]` drains a lazy source when an in-memory
+`async materialize(records: ListRecords[TItem]) -> list[TItem]` drains a lazy source when an in-memory
 stage needs a list and returns a list untouched;
-`take_page(records: ListRecords[TItem], offset: int, limit: int) -> tuple[list[TItem], bool]` walks a
-lazy source only as far as the page it is cutting. Both hand back the item type they were given. The
-`ListMixin.take_page` hook below is the overridable stage of the same name and delegates to this one.
+`async take_page(records: ListRecords[TItem], offset: int, limit: int) -> tuple[list[TItem], bool]`
+walks a lazy source only as far as the page it is cutting. Both are coroutines and hand back the
+item type they were given. The `ListMixin.take_page` hook below is the overridable stage of the
+same name and delegates to this one.
 
 ## Operation mixins
 
@@ -61,7 +62,7 @@ async def list_items(
     limit: Annotated[int | None, Query(ge=1, description="Page size.")] = None,
     cursor: Annotated[str | None, Query(description=CURSOR_DESCRIPTION)] = None,
     x_list_shape: Annotated[str | None, Header()] = None,
-) -> Union[ListOf[T], PaginatedList[T], CursorPage[T]]: ...
+) -> Union[list[T], PaginatedList[T], CursorPage[T]]: ...
 ```
 
 - `GET /` → `list_items`, which builds a `ListQuery` out of the parameters and hands it to

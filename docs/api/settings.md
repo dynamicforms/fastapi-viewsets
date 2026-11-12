@@ -35,7 +35,7 @@ attributes once, before any viewset class is decorated with `route_viewset`.
 take a `config` keyword, see [Action Configuration](../guide/action-configuration).
 
 `viewsets_register_muxws` and `viewsets_security_scheme` are read when a viewset is decorated, and
-so is whether an entry of `viewsets_command_middleware` declares `modifies_response_shape`: changed
+so are the `modifies_response_shape` and `openapi_parameters` of the entries of `viewsets_command_middleware`: changed
 later, they do not reach viewsets already decorated. The middleware list itself, the processors,
 the auth backends, the idempotency TTLs and the `viewsets_event_*` settings are read on every use.
 
@@ -46,5 +46,5 @@ the auth backends, the idempotency TTLs and the `viewsets_event_*` settings are 
 | `SaveState` | `fastapi_viewsets.save_state.save_state` | Base of a viewset that loads and saves its state around each call: `load_state()`, `save_state()`; see [ViewSet Lifecycle](../guide/lifecycle) |
 | `SaveStateRedis` | `fastapi_viewsets.save_state.save_state` | `SaveState` backed by one Redis key, `save_state_redis_key` |
 | `SerializeState`, `SerializeStateSlots` | `fastapi_viewsets.save_state.serialize_state` | `serialize_state()` / `deserialize_state(state)`; the second serialises the slots `__slots__` names |
-| `NOT_FOUND_RESPONSE`, `VIEWSET_ERROR_RESPONSES`, `with_error_responses(responses)` | `fastapi_viewsets.response_classes` | The OpenAPI `responses` entries of a viewset's error responses, each with the schema `ApiErrorBody` and examples: the 404 the mixins attach to the endpoints that address an item by `pk`, and the 422, 500 and `default` `route_viewset` attaches to every endpoint under the endpoint's own entries; see [Documenting endpoints](../guide/endpoint-docs#error-responses) |
+| `NOT_FOUND_RESPONSE`, `BULK_NOT_FOUND_RESPONSE`, `CURSOR_ERROR_RESPONSES`, `SUBSCRIBE_ERROR_RESPONSES`, `POLL_ERROR_RESPONSES`, `VIEWSET_ERROR_RESPONSES`, `with_error_responses(responses)` | `fastapi_viewsets.response_classes` | The OpenAPI `responses` entries of a viewset's error responses, each with the schema `ApiErrorBody` and examples: the endpoints' own (the 404 of the endpoints that address items by `pk` or by the keys of the body, the cursor codes of the list endpoint, kept on a viewset serving the cursor shape, the 422 of the events `subscribe` and `poll`), and the 422, 500 and `default` `route_viewset` attaches to every endpoint under the endpoint's own entries; see [Documenting endpoints](../guide/endpoint-docs#error-responses) |
 | `ApiErrorBody`, `ApiFieldError`, `install_error_handlers(app)`, `error_body(error)`, `error_response(error)`, `error_status(error)`, `field_errors(errors)` | `fastapi_viewsets.error_responses` | The error body of every error response and the functions that build it; see [Error codes](../guide/error-codes#the-error-body) |
