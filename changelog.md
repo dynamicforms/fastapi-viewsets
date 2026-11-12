@@ -6,6 +6,16 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.3] - 2026-11-12
+
+### Added
+
+- `Middleware.openapi_parameters_for(viewset, action, configuration)`: the OpenAPI parameters of one operation, called by
+  `route_viewset` for each operation with the middleware's `@action_configuration` value for that action (`ByAction`
+  resolved). It returns `openapi_parameters`; a middleware overrides it to leave its parameters out of the operations it
+  does not read, e.g. those configured `False`. A function middleware's `openapi_parameters` still applies to every
+  operation.
+
 ## [0.15.2] - 2026-11-12
 
 ### Added

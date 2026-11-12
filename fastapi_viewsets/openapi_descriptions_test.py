@@ -161,3 +161,51 @@ def test_without_idempotency_middleware_no_operation_has_its_header():
         for parameter in operation.get("parameters", [])
     ]
     assert "Idempotency-Key" not in names
+
+
+def test_a_middleware_declares_its_parameters_per_operation(monkeypatch):
+    """`openapi_parameters_for()` receives the viewset, the action and the middleware's resolved
+    `@action_configuration` value, and its answer is what the operation declares."""
+    from .action_configuration import action_configuration
+    from .context import ByAction
+    from .middleware import Middleware
+
+    calls = []
+
+    class Tenant(Middleware):
+        openapi_parameters = ({"name": "X-Tenant", "in": "header", "required": False, "schema": {"type": "string"}},)
+
+        async def __call__(self, _request, _viewset, _context, call_next):
+            return await call_next()
+
+        def openapi_parameters_for(self, viewset, action, configuration):
+            calls.append((viewset.__name__, action, configuration))
+            return () if configuration is False else self.openapi_parameters
+
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [Tenant()])
+    router = APIRouter()
+
+    @route_viewset(router, "/notes", pk_field_name="id")
+    @action_configuration({Tenant: ByAction(retrieve=False, default=None)})
+    class NotesViewSet(CollectionViewSet[int, Track], ListMixin[int, Track]):
+        __router = APIRouter()
+
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+        @__router.get("{pk}")
+        async def retrieve(self, pk: int) -> Track:
+            """One note."""
+            return Track(id=pk, title="")
+
+    app = FastAPI()
+    app.include_router(router)
+    paths = app.openapi()["paths"]
+
+    def headers(path, method):
+        return [p["name"] for p in paths[path][method].get("parameters", []) if p["in"] == "header"]
+
+    assert "X-Tenant" in headers("/notes", "get")
+    assert "X-Tenant" not in headers("/notes/{pk}", "get")
+    assert ("NotesViewSet", "retrieve", False) in calls
+    assert ("NotesViewSet", "list_items", None) in calls

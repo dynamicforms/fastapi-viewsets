@@ -530,7 +530,6 @@ def _route(
             ),
         )
 
-    middleware_parameters = middleware_openapi_parameters(settings.viewsets_command_middleware)
     rest_routes = []
     muxws_routes = []
     documented = set()
@@ -555,10 +554,17 @@ def _route(
         )
         # Per-viewset wording from @endpoint_docs.
         route_kwargs.update(operation_docs_for(cls, action_name))
-        if middleware_parameters and not is_schema_route(route):
-            extra = dict(route_kwargs.get("openapi_extra") or {})
-            extra["parameters"] = [*extra.get("parameters", []), *middleware_parameters]
-            route_kwargs["openapi_extra"] = extra
+        if not is_schema_route(route):
+            middleware_parameters = middleware_openapi_parameters(
+                settings.viewsets_command_middleware,
+                cls,
+                action_name,
+                resolve_action_configuration(cls, action_name),
+            )
+            if middleware_parameters:
+                extra = dict(route_kwargs.get("openapi_extra") or {})
+                extra["parameters"] = [*extra.get("parameters", []), *middleware_parameters]
+                route_kwargs["openapi_extra"] = extra
         if parent is not None and not route_kwargs.get("summary"):
             # Prefix the mount, telling a sub-viewset's `List Items` apart from the parent's in its group.
             default_summary = (route_kwargs.get("name") or action_name).replace("_", " ").title()

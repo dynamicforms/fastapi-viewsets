@@ -106,8 +106,9 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
   declares `modifies_response_shape`, since that middleware may reshape the body. A middleware instance
   `@action_configuration` injects is not consulted. `status_code`, `headers` and `cookies` of a `ViewSetResult` are not
   part of the body and need no `modifies_response_shape`.
-- Adds the `openapi_parameters` of the entries of `settings.viewsets_command_middleware` to every operation but
-  `/schema`, a parameter of the same name and location once.
+- Adds the OpenAPI parameters of the entries of `settings.viewsets_command_middleware` to every operation but
+  `/schema`, a parameter of the same name and location once: `openapi_parameters_for(viewset, action, configuration)`
+  of a `Middleware`, the `openapi_parameters` attribute of a function middleware.
 - Leaves the cursor codes (`CURSOR_ERROR_RESPONSES`) out of the list endpoint's responses when the viewset does not serve
   the cursor shape.
 - Raises `ValueError` when `lifecycle` is none of `"singleton"`, `"per-request"`, `"instance-key"`, when

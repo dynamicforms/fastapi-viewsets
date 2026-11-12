@@ -2,12 +2,12 @@ import asyncio
 import logging
 
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Generic, get_args, get_origin, Literal, TYPE_CHECKING, TypeVar
 
-from ..context import Context, from_jsonable, SerializableObject, to_jsonable
+from ..context import ByAction, Context, from_jsonable, SerializableObject, to_jsonable
 from .cookies import apply_cookies as apply_cookies, Cookie, DeleteCookie, SameSite
 
 if TYPE_CHECKING:
@@ -188,9 +188,18 @@ class Middleware(ABC):
     openapi_parameters: tuple[dict[str, Any], ...] = ()
     """
     OpenAPI parameter objects of the request values this middleware reads itself, such as a header.
-    `route_viewset` adds them to every operation of a viewset it routes, reading them from
-    `settings.viewsets_command_middleware` at that time. A function middleware sets it as an attribute.
+    `route_viewset` adds what `openapi_parameters_for()` returns to each operation of a viewset it routes,
+    reading `settings.viewsets_command_middleware` at that time. A function middleware sets it as an
+    attribute, which applies to every operation.
     """
+
+    def openapi_parameters_for(self, _viewset: type, _action: str, _configuration: Any) -> Sequence[dict[str, Any]]:
+        """
+        The OpenAPI parameter objects of the operation of `action` on `viewset`. `configuration` is this
+        middleware's `@action_configuration` value for that action (`ByAction` resolved), None without one.
+        Returns `openapi_parameters`; override it to leave out the operations the middleware does not read.
+        """
+        return self.openapi_parameters
 
     def config_from(self, context: Context) -> Any:
         """This middleware's `@action_configuration` value for the current call, or None."""
@@ -252,12 +261,28 @@ def any_modifies_response_shape(middlewares: list) -> bool:
     return any(getattr(middleware, "modifies_response_shape", False) for middleware in middlewares)
 
 
-def middleware_openapi_parameters(middlewares: list) -> list[dict[str, Any]]:
-    """The `openapi_parameters` of `middlewares` in order, each name and location once."""
+def middleware_openapi_parameters(
+    middlewares: list,
+    viewset: type | None = None,
+    action: str | None = None,
+    action_configuration: dict[Any, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    The OpenAPI parameters of `middlewares` in order, each name and location once: `openapi_parameters_for()`
+    of a `Middleware` when `viewset` and `action` are given, the `openapi_parameters` attribute otherwise.
+    """
     seen: set[tuple[str, str]] = set()
     parameters: list[dict[str, Any]] = []
+    configuration = action_configuration or {}
     for middleware in middlewares:
-        for parameter in getattr(middleware, "openapi_parameters", ()):
+        if isinstance(middleware, Middleware) and viewset is not None and action is not None:
+            value = configuration.get(type(middleware))
+            declared = middleware.openapi_parameters_for(
+                viewset, action, value.resolve(action) if isinstance(value, ByAction) else value
+            )
+        else:
+            declared = getattr(middleware, "openapi_parameters", ())
+        for parameter in declared:
             identity = (parameter["name"].lower(), parameter["in"])
             if identity not in seen:
                 seen.add(identity)
