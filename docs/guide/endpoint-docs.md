@@ -165,11 +165,12 @@ has a description. Nothing to write:
 | status | when | examples |
 |---|---|---|
 | `404` | the operations that address an item by `pk` (`retrieve`, `update`, `partial_update`, `destroy`) and by the keys of the body (`bulk_update`, `bulk_partial_update`): `fastapi-viewsets.not_found` | `not_found` |
-| `422` | the request failed validation, `fastapi-viewsets.validation_failed` with `field_errors`; with the `Idempotency` middleware `fastapi-viewsets.idempotency_key_reused`; on the list endpoint `fastapi-viewsets.unsupported_list_shape`; on the events `subscribe` `fastapi-viewsets.event_topic_invalid`, on `poll` `fastapi-viewsets.event_cursors_exceeded` | `validation_failed`, `idempotency_key_reused`, and the endpoint's own code |
+| `422` | the request failed validation, `fastapi-viewsets.validation_failed` with `field_errors`; with the `Idempotency` middleware `fastapi-viewsets.idempotency_key_reused`; on the events `subscribe` `fastapi-viewsets.event_topic_invalid`, on `poll` `fastapi-viewsets.event_cursors_exceeded` | `validation_failed`, `idempotency_key_reused`, and the endpoint's own code |
 | `500` | an exception without a handler, `fastapi-viewsets.unhandled_error`; a deferred action that failed, `fastapi-viewsets.action_failed` | `unhandled_error` |
-| `default` | any other error: the package's codes by status, each with the middleware it needs; on the list endpoint the 400 cursor codes; `fastapi-viewsets.http_error` for an `HTTPException` without a code | `http_error`, `rate_limited`, on the list endpoint `cursor_stale` |
+| `default` | any other error: the package's codes by status, each with the middleware or collection that answers it; on the list endpoint of a viewset serving the cursor shape the 400 cursor codes; `fastapi-viewsets.http_error` for an `HTTPException` without a code | `http_error`, `rate_limited`, with the cursor codes `cursor_stale` |
 
 The entries replace FastAPI's own `422` with `HTTPValidationError`, which no longer appears in the document. An
 entry the endpoint declares itself (`@router.get(..., responses={409: {...}})`) is kept, and replaces the package's
-entry of the same status. The entries are in `fastapi_viewsets.response_classes`: `VIEWSET_ERROR_RESPONSES`, `LIST_ERROR_RESPONSES`,
-`SUBSCRIBE_ERROR_RESPONSES`, `POLL_ERROR_RESPONSES`, `NOT_FOUND_RESPONSE` and `BULK_NOT_FOUND_RESPONSE`.
+entry of the same status. The entries are in `fastapi_viewsets.response_classes`: `VIEWSET_ERROR_RESPONSES` on every
+endpoint, and the endpoints' own `NOT_FOUND_RESPONSE`, `BULK_NOT_FOUND_RESPONSE`, `CURSOR_ERROR_RESPONSES`,
+`SUBSCRIBE_ERROR_RESPONSES` and `POLL_ERROR_RESPONSES`.

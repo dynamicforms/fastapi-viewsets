@@ -85,8 +85,9 @@ _422_DESCRIPTION = (
 _DEFAULT_DESCRIPTION = (
     "Any other error, with the same body. The package's own errors carry their codes (see the error codes "
     "guide): 400 `fastapi-viewsets.idempotency_key_invalid` (with the `Idempotency` middleware), 401 "
-    "`fastapi-viewsets.session_expired`, 403 `fastapi-viewsets.not_authorized`, 405 `fastapi-viewsets.read_only`, "
-    "429 `fastapi-viewsets.rate_limited` (with the `RateLimiter` middleware), 503 and 504 of a deferred action. "
+    "`fastapi-viewsets.session_expired` (with the `Session` middleware), 403 `fastapi-viewsets.not_authorized` "
+    "(with the `Authorization` middleware), 405 `fastapi-viewsets.read_only` (a read-only collection), 429 "
+    "`fastapi-viewsets.rate_limited` (with the `RateLimiter` middleware), 503 and 504 of a deferred action. "
     "An `HTTPException` of the application, or of a dependency, without a code of its own answers "
     "`fastapi-viewsets.http_error` with its status in `detail_params.status`."
 )
@@ -121,22 +122,7 @@ VIEWSET_ERROR_RESPONSES = {
 }
 """The `responses` entries every endpoint of a viewset carries, under the endpoint's own entries."""
 
-LIST_ERROR_RESPONSES = {
-    "422": _entry(
-        _422_DESCRIPTION + " An `X-List-Shape` the viewset does not serve: `fastapi-viewsets.unsupported_list_shape`.",
-        {
-            "validation_failed": _VALIDATION_FAILED_EXAMPLE,
-            "unsupported_list_shape": (
-                "The viewset does not serve the requested list shape",
-                _example(
-                    "unsupported list shape 'cursor'; this endpoint offers plain",
-                    _namespaced("unsupported_list_shape"),
-                    {"shape": "cursor", "allowed": ["plain"]},
-                ),
-            ),
-            "idempotency_key_reused": _IDEMPOTENCY_KEY_REUSED_EXAMPLE,
-        },
-    ),
+CURSOR_ERROR_RESPONSES = {
     "default": _entry(
         _DEFAULT_DESCRIPTION + " A `cursor` the list cannot continue from answers 400: "
         "`fastapi-viewsets.cursor_unreadable`, `fastapi-viewsets.cursor_missing_position`, "
@@ -155,7 +141,7 @@ LIST_ERROR_RESPONSES = {
         },
     ),
 }
-"""The entries of the list endpoint, in place of the same statuses of `VIEWSET_ERROR_RESPONSES`."""
+"""The `responses` entry of the list endpoint; `route_viewset` keeps it on a viewset serving the cursor shape."""
 
 SUBSCRIBE_ERROR_RESPONSES = {
     "422": _entry(
@@ -174,7 +160,7 @@ SUBSCRIBE_ERROR_RESPONSES = {
         },
     ),
 }
-"""The entries of the events `subscribe` endpoint, in place of the same statuses of `VIEWSET_ERROR_RESPONSES`."""
+"""The `responses` entry of the events `subscribe` endpoint."""
 
 POLL_ERROR_RESPONSES = {
     "422": _entry(
@@ -194,21 +180,12 @@ POLL_ERROR_RESPONSES = {
         },
     ),
 }
-"""The entries of the events `poll` endpoint, in place of the same statuses of `VIEWSET_ERROR_RESPONSES`."""
-
-_ACTION_ERROR_RESPONSES = {
-    "list_items": LIST_ERROR_RESPONSES,
-    "subscribe": SUBSCRIBE_ERROR_RESPONSES,
-    "poll": POLL_ERROR_RESPONSES,
-}
+"""The `responses` entry of the events `poll` endpoint."""
 
 
-def with_error_responses(responses: dict | None, action_name: str | None = None) -> dict:
-    """
-    `responses` over the package's entries for `action_name`: `VIEWSET_ERROR_RESPONSES`, with the entries of
-    the list endpoint or of the events `subscribe` and `poll` endpoints in their place. An entry of `responses`
-    replaces the entry of the same status.
-    """
-    merged = {**VIEWSET_ERROR_RESPONSES, **_ACTION_ERROR_RESPONSES.get(action_name, {})}
+def with_error_responses(responses: dict | None) -> dict:
+    """`responses` over `VIEWSET_ERROR_RESPONSES`: an entry of `responses` replaces the entry of
+    the same status."""
+    merged = dict(VIEWSET_ERROR_RESPONSES)
     merged.update({str(status): entry for status, entry in (responses or {}).items()})
     return merged

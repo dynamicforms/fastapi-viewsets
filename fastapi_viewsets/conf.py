@@ -21,13 +21,16 @@ class Settings:
 
     def __init__(self):
         self.viewsets_context_processors: list[ContextProcessor] = []
-        """Build each request's context, in order."""
+        """Builds each request's context, in order."""
         self.viewsets_context_json_encoder: type[json.JSONEncoder] | None = None
         """Encodes context values that cross to a Celery worker; None is the standard encoder."""
         self.viewsets_context_json_decoder: type[json.JSONDecoder] | None = None
         """Decodes context values on the Celery worker; None is the standard decoder."""
         self.viewsets_command_middleware: list[CommandMiddleware] = []
-        """Wraps every request-facing execution. Read on every call."""
+        """
+        Wraps every request-facing execution. The list is read on every call; the `modifies_response_shape`
+        and `openapi_parameters` of its entries when a viewset is decorated.
+        """
         self.viewsets_idempotency_ttl: float = 86400
         """Seconds an `Idempotency` outcome is kept; a later repeat runs the action again."""
         self.viewsets_idempotency_lock_ttl: float = 600
@@ -36,7 +39,10 @@ class Settings:
         it); once expired, a repeat runs the action again.
         """
         self.viewsets_auth_processors: list[AuthBackend] = []
-        """Tried in order to resolve `context.user`; the first backend that claims the request decides."""
+        """
+        Tried in order by `auth_context_processor` to resolve `context.user`; the first backend that claims
+        the request decides.
+        """
         self.default_action_configuration: dict[Any, Any] = {}
         """The configuration every action starts from."""
         self.default_list_shape: str = "plain"

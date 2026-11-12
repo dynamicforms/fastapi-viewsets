@@ -18,6 +18,17 @@ Not the mixins' TypeVar: Pydantic returns the bare class for `M[X]` when X is M'
 would strip the item type from `PaginatedList[T]`.
 """
 
+
+def _with_description(doc: str | None):
+    """A `json_schema_extra` that gives a schema without a description the cleaned `doc`."""
+    description = inspect.cleandoc(doc or "")
+
+    def extra(schema: dict[str, Any]) -> None:
+        schema.setdefault("description", description)
+
+    return extra
+
+
 ListRecords = Iterable[TItem] | AsyncIterable[TItem]
 """Any sync or async iterable flowing through the list pipeline; `to_record` converts its items."""
 
@@ -36,7 +47,7 @@ class ListQuery:
     offset: int = 0
     """Number of records to skip."""
     limit: int | None = None
-    """Page size; None when the request sent no `limit`."""
+    """Page size; None for the plain shape, which is not paged."""
     applied: set[str] = field(default_factory=set)
     """Stages a backend performed in its store: `filter`, `sort`, `pagination`, `conversion`."""
     cursor: str | None = None
@@ -78,10 +89,8 @@ _PAGINATED_LIST_DESCRIPTION = (
 class PaginatedList(BaseModel, Generic[TItem]):
     """One page of results; `count` is null when the source cannot be counted without draining it."""
 
-    # A parametrised model (`PaginatedList[Track]`) has no docstring of its own; the config carries the description.
-    model_config = ConfigDict(
-        use_attribute_docstrings=True, json_schema_extra={"description": inspect.cleandoc(__doc__)}
-    )
+    # A parametrised model (`PaginatedList[Track]`) has no docstring of its own; a subclass keeps its own.
+    model_config = ConfigDict(use_attribute_docstrings=True, json_schema_extra=_with_description(__doc__))
 
     results: list[TItem]
     """The records of the page."""

@@ -26,6 +26,7 @@ from ..decorators.route_viewset import route_viewset
 from ..error_responses import ApiErrorBody, error_body
 from ..exceptions import EventCursorsExceededError, EventTopicInvalidError
 from ..mux_ws.transports import transports
+from ..response_classes import POLL_ERROR_RESPONSES, SUBSCRIBE_ERROR_RESPONSES
 from ..routing import PEER_SCOPE_KEY
 from . import delivery
 from .authorizers import authorize_topic
@@ -168,7 +169,7 @@ class EventsViewSet:
     __router = APIRouter()
 
     @transports(rest=False, muxws=True)
-    @__router.post("/subscribe")
+    @__router.post("/subscribe", responses=SUBSCRIBE_ERROR_RESPONSES)
     async def subscribe(self, request: Request, context: Context, body: TopicRequest) -> SubscribeAnswer:
         """
         Subscribes the socket to `topic` until it closes or unsubscribes, and answers the topic's current
@@ -205,7 +206,9 @@ class EventsViewSet:
         await delivery.unsubscribe(_peer_of(request, "unsubscribe"), body.topic)
 
     @transports(rest=True, muxws=True)
-    @__router.post("/poll", response_description="The answer of each topic of the body.")
+    @__router.post(
+        "/poll", responses=POLL_ERROR_RESPONSES, response_description="The answer of each topic of the body."
+    )
     async def poll(self, request: Request, context: Context, body: PollRequest) -> PollAnswer:
         """
         Answers every cursor: a null cursor gets the current rev and no events, any other the events

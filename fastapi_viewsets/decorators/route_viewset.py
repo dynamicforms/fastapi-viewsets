@@ -36,7 +36,7 @@ from fastapi_viewsets.mixins import (
     T as ITEM_TYPE_VAR,  # noqa: N811
 )
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
-from fastapi_viewsets.response_classes import with_error_responses
+from fastapi_viewsets.response_classes import CURSOR_ERROR_RESPONSES, with_error_responses
 from fastapi_viewsets.routing import MUXWS, openapi_endpoint, REST, transport_route_class
 
 from .build_schema import _pydantic_generic_args, build_schema, route_to_add_api_route_kwargs
@@ -545,12 +545,17 @@ def _route(
             *gates,
             Depends(_make_middleware_depends(cls, action_name)),
         ]
+        responses = route.responses
+        if getattr(route.endpoint, "__list_shape_aware__", False) and "cursor" not in cls.resolve_shapes()[1]:
+            responses = {
+                status: entry for status, entry in responses.items() if CURSOR_ERROR_RESPONSES.get(status) is not entry
+            }
         route_kwargs = route_to_add_api_route_kwargs(
-            route, dependencies=dependencies, responses=with_error_responses(route.responses, action_name)
+            route, dependencies=dependencies, responses=with_error_responses(responses)
         )
         # Per-viewset wording from @endpoint_docs.
         route_kwargs.update(operation_docs_for(cls, action_name))
-        if middleware_parameters:
+        if middleware_parameters and not is_schema_route(route):
             extra = dict(route_kwargs.get("openapi_extra") or {})
             extra["parameters"] = [*extra.get("parameters", []), *middleware_parameters]
             route_kwargs["openapi_extra"] = extra

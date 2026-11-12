@@ -37,7 +37,7 @@ from fastapi_viewsets.list_query import (
     take_page,
 )
 from fastapi_viewsets.list_shapes import resolve_shapes
-from fastapi_viewsets.response_classes import BULK_NOT_FOUND_RESPONSE, NOT_FOUND_RESPONSE
+from fastapi_viewsets.response_classes import BULK_NOT_FOUND_RESPONSE, CURSOR_ERROR_RESPONSES, NOT_FOUND_RESPONSE
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -335,7 +335,11 @@ class ListMixin(Generic[T, TFilter], ABC):
         return resolve_shapes(cls.list_shape, cls.list_shapes, settings.default_list_shape)
 
     @final
-    @__router.get("", response_description="The records, in the list shape the request asked for.")
+    @__router.get(
+        "",
+        responses=CURSOR_ERROR_RESPONSES,
+        response_description="The records, in the list shape the request asked for.",
+    )
     async def list_items(
         self: "ImplMixin[Any, T] | ListMixin[T]",
         context: Context,

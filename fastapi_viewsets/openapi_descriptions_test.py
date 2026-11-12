@@ -5,9 +5,11 @@ from pydantic import BaseModel, Field
 
 from .collection_viewset import CollectionViewSet
 from .conf import settings
+from .cursor import CursorPage
 from .decorators import route_viewset
 from .events.viewset import register_events
 from .filters import make_filter_model
+from .list_query import PaginatedList
 from .middleware.idempotency import Idempotency
 from .mixins import BulkViewSetMixin, ListMixin, LookupMixin
 
@@ -90,21 +92,65 @@ def test_the_bulk_updates_declare_the_404_and_describe_their_body():
         assert "primary key" in bulk[method]["requestBody"]["description"]
 
 
-def test_the_list_endpoint_alone_names_the_list_shape_and_cursor_codes():
+def test_the_list_endpoint_alone_names_the_cursor_codes():
     paths = openapi()["paths"]
-    list_responses = paths["/tracks"]["get"]["responses"]
-    assert "unsupported_list_shape" in list_responses["422"]["description"]
-    assert "cursor_stale" in list_responses["default"]["description"]
-    retrieve_responses = paths["/tracks/{pk}"]["get"]["responses"]
-    assert "unsupported_list_shape" not in retrieve_responses["422"]["description"]
-    assert "cursor_stale" not in retrieve_responses["default"]["description"]
+    assert "cursor_stale" in paths["/tracks"]["get"]["responses"]["default"]["description"]
+    assert "cursor_stale" not in paths["/tracks/{pk}"]["get"]["responses"]["default"]["description"]
+
+
+def test_a_list_without_the_cursor_shape_does_not_name_the_cursor_codes():
+    app, router = FastAPI(), APIRouter()
+
+    @route_viewset(router, base_path="/plain", pk_field_name="id")
+    class PlainViewSet(CollectionViewSet[int, Track], ListMixin[Track]):
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+    app.include_router(router)
+    assert "cursor_stale" not in app.openapi()["paths"]["/plain"]["get"]["responses"]["default"]["description"]
+
+
+def test_an_application_action_named_poll_gets_only_the_common_error_responses():
+    app, router = FastAPI(), APIRouter()
+
+    @route_viewset(router, base_path="/q", pk_field_name="id")
+    class Q(CollectionViewSet[int, Track]):
+        __router = APIRouter()
+
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+        @__router.post("poll")
+        async def poll(self) -> int:
+            """Polls."""
+            return 1
+
+    app.include_router(router)
+    assert "event_cursors_exceeded" not in app.openapi()["paths"]["/q/poll"]["post"]["responses"]["422"]["description"]
+
+
+def test_the_events_poll_names_its_cursor_limit():
+    assert "event_cursors_exceeded" in openapi()["paths"]["/events/poll"]["post"]["responses"]["422"]["description"]
+
+
+def test_a_documented_subclass_of_a_page_model_keeps_its_description():
+    class TrackPage(PaginatedList[Track]):
+        """Tracks of one page."""
+
+    class TrackCursorPage(CursorPage[Track]):
+        """Tracks of one cursor page."""
+
+    assert TrackPage.model_json_schema()["description"] == "Tracks of one page."
+    assert TrackCursorPage.model_json_schema()["description"] == "Tracks of one cursor page."
 
 
 def test_an_installed_idempotency_middleware_documents_its_header(monkeypatch):
     monkeypatch.setattr(settings, "viewsets_command_middleware", [Idempotency()])
-    operation = openapi()["paths"]["/tracks/{pk}"]["get"]
-    headers = [parameter for parameter in operation["parameters"] if parameter["in"] == "header"]
+    paths = openapi()["paths"]
+    headers = [parameter for parameter in paths["/tracks/{pk}"]["get"]["parameters"] if parameter["in"] == "header"]
     assert [header["name"] for header in headers].count("Idempotency-Key") == 1
+    schema_parameters = paths["/tracks/schema"]["get"].get("parameters", [])
+    assert "Idempotency-Key" not in [parameter["name"] for parameter in schema_parameters]
 
 
 def test_without_idempotency_middleware_no_operation_has_its_header():

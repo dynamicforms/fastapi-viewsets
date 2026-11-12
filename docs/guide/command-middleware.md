@@ -381,7 +381,7 @@ through response_model validation at all, so this doesn't come up.
 
 A middleware that reads a request value itself, such as a header, declares it in `openapi_parameters`, a tuple of
 OpenAPI [parameter objects](https://spec.openapis.org/oas/v3.1.0#parameter-object); a function middleware sets it as
-an attribute. `route_viewset` adds them to every operation of a viewset it routes, reading them from
+an attribute. `route_viewset` adds them to every operation of a viewset it routes but `/schema`, reading them from
 `settings.viewsets_command_middleware` when it decorates the class, as it reads `modifies_response_shape`:
 
 ```python

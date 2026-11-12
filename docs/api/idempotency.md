@@ -42,7 +42,7 @@ headers, one `content-length` and the body, and no background task. A `Streaming
 action again. A recorded `set-cookie` header is a cookie: the outcome is not stored.
 
 `modifies_response_shape` is `False`. `openapi_parameters` declares the optional `Idempotency-Key` header, so every
-operation of a viewset routed while `Idempotency` is in `settings.viewsets_command_middleware` documents it.
+operation but `/schema` of a viewset routed while `Idempotency` is in `settings.viewsets_command_middleware` documents it.
 
 ## Settings
 
