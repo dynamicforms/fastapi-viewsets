@@ -78,9 +78,41 @@ omitted is left alone:
 | `response_description` | describes the 200 rather than the request |
 | `deprecated` | strikes the operation through |
 | `tags` | moves it to a different group |
+| `parameters` | descriptions of path, query and header parameters, by their name in the schema (`pk`, `sort`, `limit`, `X-List-Shape`, …) |
+
+```python
+@endpoint_docs({
+    "retrieve": {"parameters": {"pk": "Catalogue number of the track."}},
+    "list_items": {"parameters": {"sort": "Order of the tracks; `title:asc` by default."}},
+})
+```
+
+A name in `parameters` that the endpoint does not have raises. The fields of a filter model are not
+endpoint parameters: their descriptions come from the model's `Field(description=...)`.
 
 Documentation is inherited through the MRO, so a base viewset can document the actions its
-subclasses share and each subclass override only what it disagrees with.
+subclasses share and each subclass override only what it disagrees with. `parameters` merges per
+parameter.
+
+The action name of the `/schema` endpoint is `schema`.
+
+## Parameters and library models
+
+Every parameter the package declares has a default description:
+
+| parameter | description |
+|---|---|
+| `pk` | the `Field(description=...)` of the model's primary key field, else `Primary key of the record.` |
+| `sort` | the ordering syntax (`SORT_DESCRIPTION`) |
+| `offset` | `OFFSET_DESCRIPTION` |
+| `limit` | the page size, with the viewset's `default_page_size` and `max_page_size` |
+| `cursor` | `CURSOR_DESCRIPTION` |
+| `X-List-Shape` | the shapes and the default |
+
+A list without a filter model has no filter parameter. Every field of a model the package publishes
+(`PaginatedList`, `CursorPage`, `LookupItem`, `LookupFilter`, `ApiErrorBody`, the events models) has
+a description, and `/schema` answers the named schema `OpenAPIDocument`
+(`fastapi_viewsets.routing`).
 
 ## Across the whole schema: post-processing
 

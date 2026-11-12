@@ -1,3 +1,4 @@
+import copy
 import inspect
 import re
 
@@ -5,8 +6,8 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Annotated, get_args, get_origin, Literal, TypeVar
 
-from fastapi import APIRouter, Depends, Header, Request, Response
-from fastapi.params import FieldInfo
+from fastapi import APIRouter, Depends, Header, Path, Request, Response
+from fastapi.params import FieldInfo, Header as HeaderParam, Param
 from pydantic import BaseModel
 
 try:
@@ -20,11 +21,15 @@ from fastapi_viewsets.context import build_context, Context, get_shared_context
 from fastapi_viewsets.endpoint_docs import (
     DOCS_ATTRIBUTE,
     docs_for,
+    operation_docs_for,
     register_tag,
     viewset_description,
 )
 from fastapi_viewsets.middleware import any_modifies_response_shape, Middleware, unwrap_viewset_result_type
-from fastapi_viewsets.mixins import FilterParam
+from fastapi_viewsets.mixins import (
+    FilterParam,
+    T as ITEM_TYPE_VAR,  # noqa: N811
+)
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
 from fastapi_viewsets.response_classes import with_error_responses
 from fastapi_viewsets.routing import MUXWS, openapi_endpoint, REST, transport_route_class
@@ -172,6 +177,48 @@ def _with_security_scheme(run):
     return dependency
 
 
+PK_DESCRIPTION = "Primary key of the record."
+"""The `pk` path parameter's description when the model's primary key field has none."""
+
+
+def _pk_description(model, pk_field_name: str | None) -> str:
+    """The description of the `pk` path parameter: that of the model's primary key field, else `PK_DESCRIPTION`."""
+    fields = getattr(model, "model_fields", None) or {}
+    field = fields.get(pk_field_name) if pk_field_name else None
+    return field.description if field is not None and field.description else PK_DESCRIPTION
+
+
+def _published_name(name: str, annotation) -> str | None:
+    """The schema name of a path, query, header or cookie parameter; None for any other parameter."""
+    for metadata in getattr(annotation, "__metadata__", ()):
+        if isinstance(metadata, Param):
+            if metadata.alias:
+                return metadata.alias
+            if isinstance(metadata, HeaderParam) and metadata.convert_underscores:
+                return name.replace("_", "-")
+            return name
+    return None
+
+
+def _with_description(annotation, description: str):
+    """`annotation` (`Annotated[X, Param]`) with the parameter's description replaced."""
+    metadata = []
+    for item in annotation.__metadata__:
+        if isinstance(item, Param):
+            item = copy.copy(item)
+            item.description = description
+            item._attributes_set = {**getattr(item, "_attributes_set", {}), "description": description}
+        metadata.append(item)
+    return Annotated[(annotation.__origin__, *metadata)]
+
+
+def _is_absent_model_param(annotation) -> bool:
+    """Whether `annotation` is `Annotated[None, Query()]`: a filter parameter of a viewset declaring no filter."""
+    args = getattr(annotation, "__args__", None)
+    metadata = getattr(annotation, "__metadata__", None)
+    return bool(args and metadata) and args[0] in (None, type(None)) and any(isinstance(m, FieldInfo) for m in metadata)
+
+
 def route_viewset(
     router: APIRouter,
     base_path: str,
@@ -276,6 +323,14 @@ def _route(
                         ),
                     ]
                 )
+            if name == "limit":
+                parameter = parameter.replace(
+                    annotation=_with_description(
+                        parameter.annotation,
+                        f"Page size. Omit for {cls.default_page_size}; a larger value than {cls.max_page_size}"
+                        f" returns {cls.max_page_size}.",
+                    )
+                )
             if name == "sort" and cls.default_sort is not None:
                 check_declared_sort(cls.default_sort, item_type)
                 parameter = parameter.replace(default=cls.default_sort)
@@ -286,6 +341,26 @@ def _route(
         return sig.replace(parameters=params, return_annotation=response_model(allowed, item_type))
 
     shape_openapi_extra = None
+    item_model = type_map.get(ITEM_TYPE_VAR)
+
+    def _describe_parameters(params: list[inspect.Parameter], descriptions: dict[str, str]) -> None:
+        """Replaces the descriptions of `params` named in `descriptions` (`@endpoint_docs` `parameters`)."""
+        if not descriptions:
+            return
+        published = {}
+        for index, parameter in enumerate(params):
+            name = _published_name(parameter.name, parameter.annotation)
+            if name is not None:
+                published[name] = index
+        unknown = set(descriptions) - set(published)
+        if unknown:
+            raise ValueError(
+                f"@endpoint_docs on {cls.__name__} describes parameter(s) its endpoint does not have: "
+                f"{', '.join(sorted(unknown))}; it has {', '.join(sorted(published)) or 'none'}"
+            )
+        for name, description in descriptions.items():
+            index = published[name]
+            params[index] = params[index].replace(annotation=_with_description(params[index].annotation, description))
 
     def get_wrapper(original_endpoint, route_path, route_methods):
         nonlocal shape_openapi_extra
@@ -303,6 +378,10 @@ def _route(
                 continue
 
             annotation = resolve_typevars(type_map, p.annotation)
+            if _is_absent_model_param(annotation):
+                continue
+            if name == "pk" and "{pk}" in route_path and _published_name(name, annotation) is None:
+                annotation = Annotated[annotation, Path(description=_pk_description(item_model, pk_field_name))]
             new_p = p.replace(annotation=annotation)
 
             # `context` (detected by name) never reaches FastAPI; lifecycle_runner builds and injects it.
@@ -334,6 +413,8 @@ def _route(
                     new_p = new_p.replace(annotation=create_model_without_pk(annotation, pk_field_name))
 
             new_params.append(new_p)
+
+        _describe_parameters(new_params, docs_for(cls, original_endpoint.__name__).get("parameters", {}))
 
         # Reserved: FastAPI injects the real Response, onto which lifecycle_runner applies headers/cookies.
         new_params.append(inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response))
@@ -461,7 +542,7 @@ def _route(
             route, dependencies=dependencies, responses=with_error_responses(route.responses)
         )
         # Per-viewset wording from @endpoint_docs.
-        route_kwargs.update(docs_for(cls, action_name))
+        route_kwargs.update(operation_docs_for(cls, action_name))
         if parent is not None and not route_kwargs.get("summary"):
             # Prefix the mount, telling a sub-viewset's `List Items` apart from the parent's in its group.
             default_summary = (route_kwargs.get("name") or action_name).replace("_", " ").title()

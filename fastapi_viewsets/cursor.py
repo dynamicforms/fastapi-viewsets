@@ -15,7 +15,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, ClassVar, Generic, TYPE_CHECKING
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import TypeVar
 
 from .error_namespace import _namespaced
@@ -157,14 +157,24 @@ class CursorPage(BaseModel, Generic[TItem]):
     are the same anchors read inclusively, present whenever the page is non-empty, for polling an edge.
     """
 
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
     results: list[TItem]
+    """The records of the page."""
     limit: int
+    """Page size the page was read with."""
     has_more: bool = False
+    """Whether records follow the page."""
     has_previous: bool = False
+    """Whether records precede the page."""
     next: str | None = None
+    """Cursor of the records after the page; null when there are none."""
     previous: str | None = None
+    """Cursor of the records before the page; null when there are none."""
     first: str | None = None
+    """Cursor of the page's first record onwards (that record included); null for an empty page."""
     last: str | None = None
+    """Cursor of the page's last record backwards (that record included); null for an empty page."""
 
 
 @dataclass(frozen=True)

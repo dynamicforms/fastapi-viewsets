@@ -91,7 +91,7 @@ The declaration decides the endpoint's parameters and its response model:
 
 | `list_shape` | parameters | response |
 |---|---|---|
-| `plain` | `fltr`, `sort` | `ListOf_Track_` |
+| `plain` | the filter model's fields, `sort` | `ListOf_Track_` |
 | `paginated` | `+ offset, limit` | `PaginatedList_Track_` |
 | `cursor` | `+ cursor, limit` | `CursorPage_Track_` |
 

@@ -6,7 +6,7 @@ from typing import Annotated, Any, final, Generic, get_args, get_origin, Union
 
 from fastapi import APIRouter, Header, Query
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ConfigDict, create_model
+from pydantic import BaseModel, ConfigDict, create_model, Field
 from pydantic.alias_generators import to_camel
 from starlette.exceptions import HTTPException
 from typing_extensions import TypeVar
@@ -200,12 +200,21 @@ class SortStateColumn(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
-    column_name: str
-    direction: SortDirection = SortDirection.asc
+    column_name: str = Field(description="Name of the field to order by.")
+    direction: SortDirection = Field(SortDirection.asc, description="`asc` or `desc`.")
 
 
 SortState = list[SortStateColumn]
 
+
+OFFSET_DESCRIPTION = "Number of records to skip before the page."
+"""The `offset` parameter's description on every paginated list endpoint."""
+
+CURSOR_DESCRIPTION = (
+    "Position to read from: `next`, `previous`, `first` or `last` of a page returned by the same ordering and"
+    " filter. Omit for the first page."
+)
+"""The `cursor` parameter's description on every cursor list endpoint."""
 
 SORT_DESCRIPTION = (
     "Ordering: comma-separated `column:direction` entries in priority order (`name:asc,score:desc`)."
@@ -318,9 +327,9 @@ class ListMixin(Generic[T, TFilter], ABC):
         context: Context,
         fltr: Annotated[TFilter, Query()] = None,
         sort: Annotated[str | None, Query(description=SORT_DESCRIPTION)] = None,
-        offset: Annotated[int, Query(ge=0)] = 0,
-        limit: Annotated[int | None, Query(ge=1)] = None,
-        cursor: str | None = None,
+        offset: Annotated[int, Query(ge=0, description=OFFSET_DESCRIPTION)] = 0,
+        limit: Annotated[int | None, Query(ge=1, description="Page size.")] = None,
+        cursor: Annotated[str | None, Query(description=CURSOR_DESCRIPTION)] = None,
         x_list_shape: Annotated[str | None, Header()] = None,
     ) -> Union[list[T], PaginatedList[T], CursorPage[T]]:  # noqa: UP007 - see list_shapes.response_model
         """List the collection."""
@@ -705,16 +714,18 @@ class BulkDestroyMixin(DestroyMixin[K, T], BulkOnlyDestroyMixin[K, T]):
 # LOOKUP
 ###################################################################################################
 class LookupItem(BaseModel):
-    group: Any = None
-    pk: object
-    title: str
-    icon: str | None = None
+    """One choice of a lookup."""
+
+    group: Any = Field(None, description="Group the choice is listed under; null for an ungrouped choice.")
+    pk: object = Field(description="Primary key of the record.")
+    title: str = Field(description="Text shown for the choice.")
+    icon: str | None = Field(None, description="Icon shown with the choice; null for none.")
 
 
 class LookupFilter(BaseModel):
     """Default filter model for LookupMixin. Provides case-insensitive title search via q."""
 
-    q: str | None = None
+    q: str | None = Field(None, description="Text the choice's title contains, case-insensitive. Omit for all choices.")
 
 
 TLookupFilter = TypeVar("TLookupFilter", default=LookupFilter)

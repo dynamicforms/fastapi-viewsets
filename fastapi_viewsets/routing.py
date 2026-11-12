@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException
 from starlette.routing import Match
 from starlette.types import Message, Receive, Scope, Send
@@ -76,6 +77,30 @@ def transport_route_class(base: type[APIRoute], transports: frozenset[str]) -> t
     """
     name = f"{base.__name__}On{''.join(sorted(transport.capitalize() for transport in transports))}"
     return type(name, (TransportRoute, base), {"transports": transports})
+
+
+class OpenAPIDocument(BaseModel):
+    """An OpenAPI 3.1 document (https://spec.openapis.org/oas/v3.1.0); members not listed here are kept."""
+
+    model_config = ConfigDict(extra="allow")
+
+    openapi: str = Field(description="Version of the OpenAPI specification the document follows.")
+    info: dict[str, Any] = Field(description="Title and version of the API.")
+    paths: dict[str, Any] = Field(description="The endpoints, by path and HTTP method.")
+    components: dict[str, Any] | None = Field(None, description="Schemas the endpoints refer to.")
+    tags: list[dict[str, Any]] | None = Field(None, description="Names and descriptions of the endpoint groups.")
+
+
+SCHEMA_ENDPOINT_DOCS: dict[str, Any] = {
+    "description": (
+        "OpenAPI document of this viewset's endpoints on the transport it is requested over (REST or muxws),"
+        " this endpoint included."
+    ),
+    "response_description": "The OpenAPI document.",
+    "responses": {200: {"model": OpenAPIDocument}},
+    "response_model": None,
+}
+"""`add_api_route` keyword arguments of every viewset's `/schema` endpoint; `@endpoint_docs` key `schema`."""
 
 
 def openapi_endpoint(route_kwargs: list[dict[str, Any]]) -> Callable[[], dict[str, Any]]:

@@ -10,7 +10,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Literal, TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from ..action_configuration import resolve_action_configuration
 from ..context import _Deferred, Context
@@ -48,7 +48,10 @@ _OPTIONS = frozenset({"topic"})
 class Change(BaseModel):
     """One record an action touched, by its pk; a frontend reads the record through the viewset's retrieve."""
 
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
     pk: Any
+    """Primary key of the record."""
 
 
 class RecordsChanged(Event):
@@ -56,8 +59,12 @@ class RecordsChanged(Event):
 
     event_name = "records_changed"
 
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
     op: Literal["created", "updated", "deleted"]
+    """What the action did to the records."""
     changes: list[Change]
+    """The records the action touched."""
 
 
 def routed_base_path(request: "Request") -> str | None:

@@ -186,3 +186,111 @@ def test_the_description_reaches_the_per_viewset_schema_without_any_wiring():
     app.include_router(router)
     tags = TestClient(app).get("/wired/schema").json().get("tags", [])
     assert any(t["name"] == "Wired" and "lifting a finger" in t["description"] for t in tags)
+
+
+# ---------------------------------------------------------------------------
+# Parameters and the /schema endpoint
+# ---------------------------------------------------------------------------
+
+
+def parameter(operation: dict, name: str) -> dict:
+    return next(p for p in operation["parameters"] if p["name"] == name)
+
+
+def test_parameter_descriptions_merge_per_parameter_along_the_mro():
+    class Base:
+        pass
+
+    endpoint_docs({"retrieve": {"parameters": {"pk": "base", "other": "kept"}}})(Base)
+
+    class Derived(Base):
+        pass
+
+    endpoint_docs({"retrieve": {"summary": "s", "parameters": {"pk": "derived"}}})(Derived)
+
+    assert docs_for(Derived, "retrieve") == {"summary": "s", "parameters": {"pk": "derived", "other": "kept"}}
+
+
+def test_the_pk_is_described_by_default():
+    assert (
+        parameter(paths(documented_client({}))["/t/{pk}"]["get"], "pk")["description"] == "Primary key of the record."
+    )
+
+
+def test_the_pk_takes_the_description_of_the_models_primary_key_field():
+    class Described(BaseModel):
+        id: int = Field(description="Catalogue number.")
+        title: str
+
+    app, router = FastAPI(), APIRouter()
+
+    @route_viewset(router, base_path="/d", pk_field_name="id")
+    class DescribedViewSet(CollectionViewSet[int, Described], BulkViewSetMixin[int, Described]):
+        def __init__(self):
+            super().__init__(container={}, pk_field="id")
+
+    app.include_router(router)
+    operations = TestClient(app).get("/d/schema").json()["paths"]["/d/{pk}"]
+    assert {parameter(operation, "pk")["description"] for operation in operations.values()} == {"Catalogue number."}
+
+
+def test_endpoint_docs_describe_parameters_by_their_schema_name():
+    docs = {
+        "retrieve": {"parameters": {"pk": "Track number."}},
+        "list_items": {"parameters": {"sort": "Order of the tracks."}},
+    }
+    documented = paths(documented_client(docs))
+    assert parameter(documented["/t/{pk}"]["get"], "pk")["description"] == "Track number."
+    assert parameter(documented["/t"]["get"], "sort")["description"] == "Order of the tracks."
+    # other actions keep the default
+    assert parameter(documented["/t/{pk}"]["delete"], "pk")["description"] == "Primary key of the record."
+
+
+def test_describing_a_parameter_the_endpoint_does_not_have_is_refused():
+    with pytest.raises(ValueError, match="describes parameter.*nope.*it has pk"):
+        documented_client({"retrieve": {"parameters": {"nope": "x"}}})
+
+
+def test_a_list_without_a_filter_model_publishes_no_filter_parameter():
+    names = [p["name"] for p in paths(documented_client({}))["/t"]["get"]["parameters"]]
+    assert "fltr" not in names
+
+
+def test_the_list_without_a_filter_model_still_answers():
+    client = documented_client({})
+    assert client.get("/t").status_code == 200
+
+
+def test_the_schema_endpoint_answers_a_named_openapi_document():
+    operation = paths(documented_client({}))["/t/schema"]["get"]
+    assert operation["description"].startswith("OpenAPI document of this viewset's endpoints")
+    content = operation["responses"]["200"]["content"]["application/json"]
+    assert content["schema"] == {"$ref": "#/components/schemas/OpenAPIDocument"}
+
+
+def test_the_schema_endpoint_is_documented_through_endpoint_docs():
+    operation = paths(documented_client({"schema": {"description": "For the TS client."}}))["/t/schema"]["get"]
+    assert operation["description"] == "For the TS client."
+
+
+def test_a_custom_endpoint_keeps_its_own_pk_description():
+    from typing import Annotated
+
+    from fastapi import Path
+
+    app, router = FastAPI(), APIRouter()
+
+    @route_viewset(router, base_path="/c", pk_field_name="id")
+    class CustomViewSet(CollectionViewSet[int, Track]):
+        __router = APIRouter()
+
+        def __init__(self):
+            super().__init__(container=DATABASE, pk_field="id")
+
+        @__router.get("/{pk}/play")
+        async def play(self, pk: Annotated[int, Path(description="Track to play.")]) -> int:
+            return pk
+
+    app.include_router(router)
+    operation = TestClient(app).get("/c/schema").json()["paths"]["/c/{pk}/play"]["get"]
+    assert parameter(operation, "pk")["description"] == "Track to play."

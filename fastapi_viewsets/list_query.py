@@ -8,7 +8,7 @@ from collections.abc import AsyncIterable, AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 TItem = TypeVar("TItem")
 """
@@ -61,12 +61,20 @@ class ListQuery:
 class PaginatedList(BaseModel, Generic[TItem]):
     """One page of results; `count` is None when the source cannot be counted without draining it."""
 
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
     results: list[TItem]
+    """The records of the page."""
     offset: int
+    """Number of records before the page."""
     limit: int | None
+    """Page size the page was read with."""
     count: int | None = None
+    """Number of records in the whole list; null when the source cannot be counted."""
     has_more: bool = False
+    """Whether records follow the page."""
     has_previous: bool = False
+    """Whether records precede the page."""
 
 
 def build_list_query(fltr: Any, sort: str | None, offset: int = 0, limit: int | None = None) -> ListQuery:

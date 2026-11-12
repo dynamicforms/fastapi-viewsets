@@ -95,7 +95,7 @@ def test_an_unknown_shape_is_refused_at_import_time():
 
 def test_a_plain_viewset_advertises_no_paging_parameters():
     client = client_for()
-    assert parameters(client) == {"fltr", "sort"}
+    assert parameters(client) == {"sort"}
     assert response_schema(client)["$ref"].endswith("/ListOf_Track_")
 
 
