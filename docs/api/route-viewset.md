@@ -106,6 +106,8 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
   declares `modifies_response_shape`, since that middleware may reshape the body. A middleware instance
   `@action_configuration` injects is not consulted. `status_code`, `headers` and `cookies` of a `ViewSetResult` are not
   part of the body and need no `modifies_response_shape`.
+- Adds the `openapi_parameters` of the entries of `settings.viewsets_command_middleware` to every operation, a parameter
+  of the same name and location once.
 - Raises `ValueError` when `lifecycle` is none of `"singleton"`, `"per-request"`, `"instance-key"`, when
   `@endpoint_docs` names an endpoint the class does not have, when a route of the class starts with a path it mounts a
   sub-viewset at, and when it mounts a class it is mounted under, itself included.

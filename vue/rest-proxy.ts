@@ -55,6 +55,7 @@ declare const FACTORY_BUILT_REJECTION: 'route_rest cannot take a factory-built c
  */
 export type RestProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>> & DefaultSortOf<keyof M>;
 
+/** Options of a ViewSet proxy over HTTP. */
 export interface RestProxyOptions extends ProxyBaseOptions {
   /** Optional: existing axios instance. Defaults to the global axios. */
   axiosInstance?: AxiosInstance;
@@ -69,6 +70,7 @@ export interface RestProxyOptions extends ProxyBaseOptions {
 // Proxy implementation
 // ---------------------------------------------------------------------------
 
+/** A ViewSet proxy that sends its calls over HTTP with axios. */
 export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends ViewSetProxyBase<K, T, PK> {
   protected readonly http: AxiosInstance;
 

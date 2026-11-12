@@ -4,6 +4,8 @@ The list request (`ListQuery`) and answer types. `perform_list` returns `ListRec
 query down by overriding one of them. See docs/guide/list-pipeline.md.
 """
 
+import inspect
+
 from collections.abc import AsyncIterable, AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
@@ -28,11 +30,17 @@ class ListQuery:
     """
 
     fltr: Any = None
+    """The filter model instance; None when the request filters nothing."""
     sort: list = field(default_factory=list)
+    """The requested order (`SortState`); empty for no order."""
     offset: int = 0
+    """Number of records to skip."""
     limit: int | None = None
+    """Page size; None when the request sent no `limit`."""
     applied: set[str] = field(default_factory=set)
+    """Stages a backend performed in its store: `filter`, `sort`, `pagination`, `conversion`."""
     cursor: str | None = None
+    """The cursor the request sent, for the cursor shape."""
     shape: str | None = None
     """The answer envelope; when unset, `get_list` uses the viewset's default shape."""
     extra_filters: list = field(default_factory=list)
@@ -40,10 +48,12 @@ class ListQuery:
 
     @property
     def has_filter(self) -> bool:
+        """Whether the request filters: a filter model or a pipeline filter."""
         return self.fltr is not None or bool(self.extra_filters)
 
     @property
     def has_sort(self) -> bool:
+        """Whether the request sets an order."""
         return bool(self.sort)
 
     @property
@@ -52,16 +62,26 @@ class ListQuery:
         return self.limit is not None
 
     def mark_applied(self, *stages: str) -> None:
+        """Records `stages` as performed, so their in-memory steps are skipped."""
         self.applied.update(stages)
 
     def needs(self, stage: str) -> bool:
+        """Whether the in-memory step of `stage` still has to run."""
         return stage not in self.applied
 
 
-class PaginatedList(BaseModel, Generic[TItem]):
-    """One page of results; `count` is None when the source cannot be counted without draining it."""
+_PAGINATED_LIST_DESCRIPTION = (
+    "One page of results; `count` is null when the source cannot be counted without draining it."
+)
 
-    model_config = ConfigDict(use_attribute_docstrings=True)
+
+class PaginatedList(BaseModel, Generic[TItem]):
+    """One page of results; `count` is null when the source cannot be counted without draining it."""
+
+    # A parametrised model (`PaginatedList[Track]`) has no docstring of its own; the config carries the description.
+    model_config = ConfigDict(
+        use_attribute_docstrings=True, json_schema_extra={"description": inspect.cleandoc(__doc__)}
+    )
 
     results: list[TItem]
     """The records of the page."""

@@ -300,6 +300,22 @@ class Idempotency(Middleware):
     process. The storage and replay rules are on the Idempotency guide page.
     """
 
+    openapi_parameters = (
+        {
+            "name": IDEMPOTENCY_KEY_HEADER,
+            "in": "header",
+            "required": False,
+            "description": (
+                "Makes the call repeatable: a repeat with the same key answers the first call's outcome. A "
+                "Structured Field string (RFC 8941), the key in double quotes. An invalid value answers 400 "
+                "`fastapi-viewsets.idempotency_key_invalid`; a key recorded for a different request answers "
+                "422 `fastapi-viewsets.idempotency_key_reused`."
+            ),
+            "schema": {"type": "string"},
+            "example": '"8e03978e-40d5-43e8-bc93-6894a57f9324"',
+        },
+    )
+
     def __init__(self, redis_client: "Redis | None" = None, key_prefix: str = "idempotency:"):
         self.redis_client = redis_client
         self.key_prefix = key_prefix

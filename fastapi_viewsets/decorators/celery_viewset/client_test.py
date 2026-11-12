@@ -313,7 +313,7 @@ def test_celery_viewset_client_times_out_with_504():
     asyncio.run(run())
 
 
-def test_celery_viewset_client_cancelled_call_drops_the_pending_future():
+def test_celery_viewset_client_canceled_call_drops_the_pending_future():
     """A call cancelled while it awaits its result leaves no pending future."""
     from fastapi_viewsets.decorators.celery_viewset import result_reader
 

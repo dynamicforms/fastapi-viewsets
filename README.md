@@ -91,8 +91,9 @@ list pipeline and pagination, the muxws transport, events, and the Vue client.
 ## Demo
 
 ```bash
-python demo.py                       # backend on :8000, frontend on :5173
-python demo.py --celery              # ... with every viewset call routed through a Celery worker
+uv sync && npm ci
+uv run python demo.py                # backend on :8000, frontend on :5173
+uv run python demo.py --celery       # ... with every viewset call routed through a Celery worker
 npm run test:e2e                     # drives the demo in a browser
 ```
 

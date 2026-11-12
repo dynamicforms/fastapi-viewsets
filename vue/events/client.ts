@@ -118,6 +118,7 @@ export interface EventPeerLike extends MuxwsPeerLike {
  */
 export type EventPeerSource = EventPeerLike | (() => EventPeerLike | Promise<EventPeerLike>);
 
+/** Options of `createEventClient()`. */
 export interface EventClientOptions {
   /** The path the BE's `register_events` serves, e.g. `/events`. */
   basePath: string;
@@ -149,7 +150,9 @@ export interface EventClientOptions {
 /** 60 s: the default `EventClientOptions.checkIntervalMs`. */
 export const DEFAULT_CHECK_INTERVAL_MS = 60000;
 
+/** Subscriptions to event topics, delivered by push over the peer or by polling. */
 export interface EventClient {
+  /** `EventClientOptions.basePath`. */
   readonly basePath: string;
   /**
    * Subscribes `handlers` to the events named `event.name` on `topic`. The client holds one server
@@ -1034,7 +1037,7 @@ class EventClientImpl implements EventClient {
   /**
    * Sends `subscribe` again, over the open peer, for every topic not subscribed on its socket and
    * without a subscribe in flight: a topic whose subscribe failed with a 429, a status of 500 or
-   * above, or without a status. The ladder calls it on every rung, so the retries follow its delays.
+   * above, or without a status.
    */
   private resubscribe(): void {
     if (!this.peerOpen()) return;
@@ -1295,9 +1298,8 @@ export function attachEvents(peer: EventPeerLike, fallback?: EventStreamHandler)
 // ---------------------------------------------------------------------------
 
 /**
- * A subscription made once `client` resolves (`watch()` on a muxws ViewSet whose peer source has not
- * resolved yet). `unsubscribe()` before then subscribes nothing. When `client` rejects or `subscribe`
- * throws, `ready` rejects and the error goes to `onError`, or to `rethrowLater` without one.
+ * A subscription made once `client` resolves. `unsubscribe()` before then subscribes nothing. When
+ * `client` rejects or `subscribe` throws, `ready` rejects and the error goes to `onError`, or to `rethrowLater` without one.
  */
 export function deferSubscription(
   client: Promise<EventClient>,
@@ -1305,9 +1307,9 @@ export function deferSubscription(
   onError?: (error: unknown) => void,
 ): EventSubscription {
   let inner: EventSubscription | null = null;
-  let cancelled = false;
+  let canceled = false;
   const report = (error: unknown): void => {
-    if (cancelled) return;
+    if (canceled) return;
     const handler = outer.onError;
     if (handler) runHandler(() => handler(error));
     else rethrowLater(error);
@@ -1315,7 +1317,7 @@ export function deferSubscription(
   const outer: { -readonly [P in keyof EventSubscription]: EventSubscription[P] } = {
     ready: client.then(
       (resolved) => {
-        if (cancelled) return undefined;
+        if (canceled) return undefined;
         try {
           inner = subscribe(resolved);
         } catch (error) {
@@ -1331,7 +1333,7 @@ export function deferSubscription(
       },
     ),
     unsubscribe() {
-      cancelled = true;
+      canceled = true;
       inner?.unsubscribe();
     },
     onError,

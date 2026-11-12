@@ -185,6 +185,13 @@ class Middleware(ABC):
     `route_viewset` reads it from `settings.viewsets_command_middleware` only, per class.
     """
 
+    openapi_parameters: tuple[dict[str, Any], ...] = ()
+    """
+    OpenAPI parameter objects of the request values this middleware reads itself, such as a header.
+    `route_viewset` adds them to every operation of a viewset it routes, reading them from
+    `settings.viewsets_command_middleware` at that time. A function middleware sets it as an attribute.
+    """
+
     def config_from(self, context: Context) -> Any:
         """This middleware's `@action_configuration` value for the current call, or None."""
         return context.configuration_for(type(self))
@@ -243,6 +250,19 @@ class Middleware(ABC):
 def any_modifies_response_shape(middlewares: list) -> bool:
     """Whether any middleware (class or function) sets `modifies_response_shape`."""
     return any(getattr(middleware, "modifies_response_shape", False) for middleware in middlewares)
+
+
+def middleware_openapi_parameters(middlewares: list) -> list[dict[str, Any]]:
+    """The `openapi_parameters` of `middlewares` in order, each name and location once."""
+    seen: set[tuple[str, str]] = set()
+    parameters: list[dict[str, Any]] = []
+    for middleware in middlewares:
+        for parameter in getattr(middleware, "openapi_parameters", ()):
+            identity = (parameter["name"].lower(), parameter["in"])
+            if identity not in seen:
+                seen.add(identity)
+                parameters.append(parameter)
+    return parameters
 
 
 def unwrap_viewset_result_type(annotation: Any) -> Any:

@@ -73,7 +73,9 @@ type FactoryBuiltClass = (abstract new (...args: any[]) => any) & {
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- type-only, read via `typeof` below
 declare const FACTORY_BUILT_REJECTION: 'route_muxws cannot take a factory-built class - extend it directly instead';
 
+/** Options of a ViewSet proxy over muxws. */
 export interface MuxwsProxyOptions extends ProxyBaseOptions {
+  /** The muxws peer the calls are sent on; see `MuxwsPeerSource`. */
   peer: MuxwsPeerSource;
   /**
    * Per-attempt timeout in milliseconds, reply headers included. On expiry muxws resets the stream and
@@ -87,6 +89,7 @@ export interface MuxwsProxyOptions extends ProxyBaseOptions {
   headers?: Record<string, string>;
 }
 
+/** A ViewSet proxy that sends its calls as muxws streams. */
 export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends ViewSetProxyBase<K, T, PK> {
   private readonly peerSource: MuxwsPeerSource;
 

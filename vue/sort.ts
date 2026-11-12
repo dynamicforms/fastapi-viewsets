@@ -1,8 +1,9 @@
-/**
+/*
  * The list endpoint's `sort` parameter as a value (BE `SortState`, `parse_sort_param`). A `SortState`
  * has the shape of a `@dynamicforms/vue-grid` `sortState`.
  */
 
+/** One sorted column: its name and direction. */
 export interface SortStateColumn {
   columnName: string;
   direction: 'asc' | 'desc';

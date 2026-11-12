@@ -280,7 +280,7 @@ async def test_a_repeat_runs_again_once_the_running_record_expires():
 
 
 @pytest.mark.asyncio
-async def test_a_cancelled_call_leaves_no_record():
+async def test_a_canceled_call_leaves_no_record():
     middleware, chain = Idempotency(), Counter(delay=1)
     first = asyncio.ensure_future(call(middleware, chain))
     await asyncio.sleep(0.01)

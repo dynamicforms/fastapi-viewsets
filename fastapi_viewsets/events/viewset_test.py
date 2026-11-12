@@ -752,7 +752,7 @@ async def test_viewset_topics_refuses_a_topic_whose_dependency_parameters_do_not
 
 
 @pytest.mark.asyncio
-async def test_a_viewset_under_a_parametrised_prefix_is_followed_on_the_path_with_its_values():
+async def test_a_viewset_under_a_parametrized_prefix_is_followed_on_the_path_with_its_values():
     members = {"7": {"ana"}, "9": {"bor"}}
 
     async def org_member(request, _cls, context):

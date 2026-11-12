@@ -223,7 +223,8 @@ body as-is, and no headers/cookies are touched.
 
 `Cookie` and `DeleteCookie` (in `fastapi_viewsets.middleware`) are dataclasses with the parameters
 and defaults of Starlette's `Response.set_cookie()` and `Response.delete_cookie()`: `path="/"`,
-`samesite="lax"`, `secure`/`httponly`/`partitioned` `False`, the rest `None`. `max_age` is in
+`samesite="lax"`, `secure`/`httponly`/`partitioned` `False`, `Cookie.value` `""`, the rest
+(`max_age`, `expires`, `domain`) `None`. `max_age` is in
 seconds; `expires` is a `datetime` (sent as an HTTP date), a number of seconds from now, or a string
 sent as it is. `partitioned=True` is passed on to Starlette, which refuses it with `ValueError`
 where the running Python does not support the attribute (before Python 3.14). A deletion is a
@@ -334,13 +335,11 @@ action runs in-process or in a worker.
 
 `status_code`, `headers` and `cookies` (`set_cookie()`, `delete_cookie()`) are not part of the body:
 a middleware or an endpoint that sets them does not change the response shape and needs no
-`modifies_response_shape`. Most middleware only attaches `headers`/`cookies` or a `status_code` - it
-never touches `result.body` at all, so the endpoint's declared return type is still exactly what
-gets served. For that common case, `route_viewset` keeps using it as the route's `response_model`:
-the OpenAPI docs stay typed, and FastAPI still validates/serializes the response against it, same
-as with no middleware configured at all. A value that has to reach the client outside the body,
-such as a session key, goes into `cookies` or `headers` rather than into a body field a middleware
-strips.
+`modifies_response_shape`. When no configured middleware declares `modifies_response_shape`,
+`route_viewset` registers the endpoint's declared return type as the route's `response_model`: the
+OpenAPI schema is typed and FastAPI validates and serialises the response against it. A value that
+has to reach the client outside the body, such as a session key, goes into `cookies` or `headers`
+rather than into a body field a middleware strips.
 
 A middleware whose `__call__` reassigns `result.body` to something that no longer matches the
 original return annotation must declare `modifies_response_shape = True` - as a class attribute on a
@@ -356,11 +355,9 @@ async def strip_internal_notes(request, viewset, context, call_next):
 strip_internal_notes.modifies_response_shape = True
 ```
 
-This tells `route_viewset` the declared return type can no longer be trusted, so it registers the
-route with `response_model=None` instead: FastAPI serves whatever `result.body` actually is, without
-re-validating/coercing it back towards the original model (which would silently undo the
-reshaping - e.g. reintroducing a stripped field with its default value) - at the cost of an untyped
-response schema in the OpenAPI docs.
+With the flag, `route_viewset` registers the route with `response_model=None`: FastAPI sends
+`result.body` as it is, without validating it against the declared model, which would put back a
+removed field with its default. The operation's response schema in OpenAPI is then untyped.
 
 `route_viewset` reads the flag from the entries of `settings.viewsets_command_middleware` when it
 decorates a class. One entry declaring it drops the `response_model` of every route of every viewset
@@ -379,6 +376,24 @@ without calling `call_next()`, see `status_code` above) with a `body` of its own
 the declared model, e.g. an error payload. Prefer raising `HTTPException` from `depends()` instead
 for that case (see [Early rejection](#early-rejection-middleware-depends) above) - it never goes
 through response_model validation at all, so this doesn't come up.
+
+## OpenAPI parameters: `openapi_parameters`
+
+A middleware that reads a request value itself, such as a header, declares it in `openapi_parameters`, a tuple of
+OpenAPI [parameter objects](https://spec.openapis.org/oas/v3.1.0#parameter-object); a function middleware sets it as
+an attribute. `route_viewset` adds them to every operation of a viewset it routes, reading them from
+`settings.viewsets_command_middleware` when it decorates the class, as it reads `modifies_response_shape`:
+
+```python
+class Tenant(Middleware):
+    openapi_parameters = (
+        {"name": "X-Tenant", "in": "header", "required": True, "description": "Slug of the tenant.",
+         "schema": {"type": "string"}},
+    )
+```
+
+A parameter of a name and location an earlier entry declared is added once. A middleware instance that
+`@action_configuration` injects is not consulted. `Idempotency` declares its `Idempotency-Key` header this way.
 
 ## Around the execution: `Middleware.execute()`
 

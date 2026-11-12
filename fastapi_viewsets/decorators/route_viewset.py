@@ -25,7 +25,12 @@ from fastapi_viewsets.endpoint_docs import (
     register_tag,
     viewset_description,
 )
-from fastapi_viewsets.middleware import any_modifies_response_shape, Middleware, unwrap_viewset_result_type
+from fastapi_viewsets.middleware import (
+    any_modifies_response_shape,
+    Middleware,
+    middleware_openapi_parameters,
+    unwrap_viewset_result_type,
+)
 from fastapi_viewsets.mixins import (
     FilterParam,
     T as ITEM_TYPE_VAR,  # noqa: N811
@@ -121,7 +126,8 @@ def resolve_typevars(type_map, annotation):
 def _make_middleware_depends(cls: type, action_name: str):
     """
     A per-route FastAPI dependency running `Middleware.depends()` before the body is parsed.
-    `@action_configuration` and settings are resolved per request.
+    `@action_configuration`, the context processors and the command middleware are resolved per request,
+    `viewsets_security_scheme` when the route is built.
     """
 
     async def _run(request: Request) -> None:
@@ -524,6 +530,7 @@ def _route(
             ),
         )
 
+    middleware_parameters = middleware_openapi_parameters(settings.viewsets_command_middleware)
     rest_routes = []
     muxws_routes = []
     documented = set()
@@ -539,10 +546,14 @@ def _route(
             Depends(_make_middleware_depends(cls, action_name)),
         ]
         route_kwargs = route_to_add_api_route_kwargs(
-            route, dependencies=dependencies, responses=with_error_responses(route.responses)
+            route, dependencies=dependencies, responses=with_error_responses(route.responses, action_name)
         )
         # Per-viewset wording from @endpoint_docs.
         route_kwargs.update(operation_docs_for(cls, action_name))
+        if middleware_parameters:
+            extra = dict(route_kwargs.get("openapi_extra") or {})
+            extra["parameters"] = [*extra.get("parameters", []), *middleware_parameters]
+            route_kwargs["openapi_extra"] = extra
         if parent is not None and not route_kwargs.get("summary"):
             # Prefix the mount, telling a sub-viewset's `List Items` apart from the parent's in its group.
             default_summary = (route_kwargs.get("name") or action_name).replace("_", " ").title()

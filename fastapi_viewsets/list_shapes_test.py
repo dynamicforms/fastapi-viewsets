@@ -178,6 +178,6 @@ def test_the_named_mixins_are_shorthand_for_a_shape():
     assert response_schema(client_for(base=CursorListMixin))["$ref"].endswith("/CursorPage_Track_")
 
 
-def test_list_of_serialises_to_a_bare_array():
+def test_list_of_serializes_to_a_bare_array():
     """`ListOf` only affects the schema, not the wire format."""
     assert ListOf[Track]([Track(id=1, title="x")]).model_dump(mode="json") == [{"id": 1, "title": "x"}]

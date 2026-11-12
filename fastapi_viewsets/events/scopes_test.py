@@ -116,7 +116,7 @@ def test_classes_a_function_defines_need_a_scope_name_each():
 
 
 @pytest.mark.asyncio
-async def test_resolve_scope_awaits_and_normalises_the_key():
+async def test_resolve_scope_awaits_and_normalizes_the_key():
     context = Context({})
 
     async def asynchronous(_request, _context):

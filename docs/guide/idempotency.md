@@ -87,8 +87,7 @@ rejected from `depends()`, before the request body is parsed.
   `fastapi_viewsets.exceptions` defines it (an `ActionInterruptedError` is replayed as one). A
   `RequestValidationError` raised by the action is replayed as the `RequestValidationError` of the
   same errors. Any other exception is replayed as an `UnhandledError`. A repeat is answered with the
-  [error body](./error-codes#the-error-body) of the replayed error, the body of the first call; a
-  record 0.11 wrote is answered the same way.
+  [error body](./error-codes#the-error-body) of the replayed error, the body of the first call.
 - **A call that did not run is not an outcome.** For an `ActionDispatchError` (a `celery_viewset`
   task that could not be sent, or that the worker revoked, rejected or did not know) the record is
   deleted, and a repeat runs the call again.

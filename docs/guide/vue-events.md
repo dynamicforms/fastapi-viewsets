@@ -356,7 +356,7 @@ class MemberApi extends restViewSet<MemberRow>()('id', [PaginatedListMixin]) {}
 
 const members = new MemberApi({ basePath: '/accounts/members', events });
 const watching = members.watch({
-  fetch: (pks) => members.list({ id__in: pks }),
+  fetch: async (pks) => (await members.listPage({ id__in: pks, limit: pks.length })).results,
   onChange(change) { rows.value = applyChanges(rows.value, change, members.pkFieldName); },
   onResync() { void reload(); },
 });

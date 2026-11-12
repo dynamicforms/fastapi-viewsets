@@ -328,6 +328,7 @@ def encode_value(hint: Any, value: Any, what: str = "the value") -> tuple[Any, b
 
 
 def decode_value(adapter: TypeAdapter | None, data: Any, typed: bool) -> Any:
+    """`data` validated by `adapter` when `typed`, else rebuilt with `from_jsonable`; inverse of `encode_value`."""
     if typed and adapter is not None:
         return _decode_typed(adapter, data)
     return from_jsonable(data)
@@ -354,6 +355,8 @@ def is_model_hint(hint: Any) -> bool:
 
 @dataclass(frozen=True)
 class ParamCodec:
+    """How one parameter of an action is encoded for the worker."""
+
     name: str
     hint: Any
     kind: str
@@ -424,6 +427,7 @@ class ActionCodec:
             raise TypeError(f"{self.task_name}: {error}") from error
 
     def decode_argument(self, name: str, data: Any, typed: bool) -> Any:
+        """The value of parameter `name` from its encoded form; inverse of `encode_argument`."""
         codec = self.params.get(name)
         return decode_value(adapter_for(codec.hint) if codec is not None else None, data, typed)
 
@@ -435,6 +439,7 @@ class ActionCodec:
             raise TypeError(f"{self.task_name}: {error}") from error
 
     def decode_result(self, result: EncodedResult) -> Any:
+        """The result from its `EncodedResult`; inverse of `encode_result`."""
         return _decode_result(result.data, result.encoding, self.result_hint)
 
 

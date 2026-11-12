@@ -375,13 +375,13 @@ A class the application does not own crosses when the annotation carries the con
 ```python
 from pydantic import PlainSerializer, PlainValidator
 
-ColourParam = Annotated[
-    Colour,
-    PlainValidator(lambda value: value if isinstance(value, Colour) else Colour(value)),
-    PlainSerializer(lambda colour: colour.hex, when_used="json"),
+ColorParam = Annotated[
+    Color,
+    PlainValidator(lambda value: value if isinstance(value, Color) else Color(value)),
+    PlainSerializer(lambda color: color.hex, when_used="json"),
 ]
 
-    async def paint(self, colour: Annotated[ColourParam, Depends(read_colour)]) -> ColourParam: ...
+    async def paint(self, color: Annotated[ColorParam, Depends(read_color)]) -> ColorParam: ...
 ```
 
 A value without an annotation, or annotated `Any`, crosses as a

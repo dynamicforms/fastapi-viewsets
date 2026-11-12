@@ -69,7 +69,10 @@ type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[
 /** `any` options, as the transports' options differ; the calling factory's return type restores the real type. */
 type TransportClass = new (options: any) => any;
 
-/** Named `ViewSet` so that a stack trace and the devtools prototype chain say something. */
+/**
+ * A subclass of `Impl` with `pkFieldName` fixed and `declares` as its `static declares`, named
+ * `ViewSet` for stack traces and devtools.
+ */
 function bindViewSet(
   Impl: TransportClass,
   pkFieldName: string,

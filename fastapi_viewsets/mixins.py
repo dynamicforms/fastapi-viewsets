@@ -37,10 +37,18 @@ from fastapi_viewsets.list_query import (
     take_page,
 )
 from fastapi_viewsets.list_shapes import resolve_shapes
-from fastapi_viewsets.response_classes import NOT_FOUND_RESPONSE
+from fastapi_viewsets.response_classes import BULK_NOT_FOUND_RESPONSE, NOT_FOUND_RESPONSE
 
 T = TypeVar("T")
 K = TypeVar("K")
+
+
+def _body_description(description: str) -> dict:
+    """`openapi_extra` describing an endpoint's request body."""
+    return {"requestBody": {"description": description}}
+
+
+BULK_UPDATE_BODY = _body_description('An object mapping each primary key to its record: `{"<pk>": {...}, ...}`.')
 TFilter = TypeVar("TFilter", default=None)
 
 
@@ -134,8 +142,9 @@ class CreateMixin(Generic[K, T], ABC):
     __router = APIRouter()
 
     @final
-    @__router.post("")
+    @__router.post("", response_description="The created record.")
     async def create(self: "ImplMixin[K, T] | CreateMixin[K ,T]", context: Context, data: T) -> T:
+        """Create one record from the body. Answers the record as stored."""
         return await self.perform_create(context, data)
 
 
@@ -147,10 +156,15 @@ class BulkOnlyCreateMixin(Generic[K, T], ABC):
     __router = APIRouter()
 
     @final
-    @__router.post("bulk")
+    @__router.post(
+        "bulk", response_description="The created records.", openapi_extra=_body_description("The records to create.")
+    )
     async def bulk_create(
-        self: "ImplMixin[K, T] | BulkOnlyCreateMixin[K ,T]", context: Context, data: list[T]
+        self: "ImplMixin[K, T] | BulkOnlyCreateMixin[K ,T]",
+        context: Context,
+        data: list[T],
     ) -> list[T]:
+        """Create the records of the body, a list. Answers the records as stored."""
         return await self.perform_bulk_create(context, data)
 
 
@@ -321,7 +335,7 @@ class ListMixin(Generic[T, TFilter], ABC):
         return resolve_shapes(cls.list_shape, cls.list_shapes, settings.default_list_shape)
 
     @final
-    @__router.get("")
+    @__router.get("", response_description="The records, in the list shape the request asked for.")
     async def list_items(
         self: "ImplMixin[Any, T] | ListMixin[T]",
         context: Context,
@@ -542,7 +556,7 @@ class ListMixin(Generic[T, TFilter], ABC):
     async def count_records(
         self: "ImplMixin[Any, T] | ListMixin[T]",
         context: Context,  # noqa: ARG002 - part of the hook signature, for overrides to use
-        query: ListQuery,  # noqa: ARG002 - part of the hook signature, for overrides to use
+        query: ListQuery,
         records: ListRecords,
     ) -> int | None:
         """
@@ -613,8 +627,9 @@ class RetrieveMixin(Generic[K, T], ABC):
     __router = APIRouter()
 
     @final
-    @__router.get("/{pk}", responses=NOT_FOUND_RESPONSE)
+    @__router.get("/{pk}", responses=NOT_FOUND_RESPONSE, response_description="The record.")
     async def retrieve(self: "ImplMixin[K, T] | RetrieveMixin[K, T]", context: Context, pk: K) -> T:
+        """Read one record. 404 `fastapi-viewsets.not_found` for a missing record."""
         return await self.perform_retrieve(context, pk)
 
 
@@ -629,13 +644,23 @@ class UpdateMixin(Generic[K, T], ABC):
     __router = APIRouter()
 
     @final
-    @__router.put("/{pk}", responses=NOT_FOUND_RESPONSE)
+    @__router.put("/{pk}", responses=NOT_FOUND_RESPONSE, response_description="The updated record.")
     async def update(self: "ImplMixin[K, T] | UpdateMixin[K, T]", context: Context, pk: K, data: T) -> T:
+        """
+        Replace every field of one record with the body. Answers the record as stored; 404
+        `fastapi-viewsets.not_found` for a missing record.
+        """
         return await self.perform_update(context, pk, data, partial=False)
 
     @final
-    @__router.patch("/{pk}", name="partial_update", responses=NOT_FOUND_RESPONSE)
+    @__router.patch(
+        "/{pk}", name="partial_update", responses=NOT_FOUND_RESPONSE, response_description="The updated record."
+    )
     async def partial_update(self: "ImplMixin[K, T] | UpdateMixin[K, T]", context: Context, pk: K, data: T) -> T:
+        """
+        Write the fields the body states to one record; the other fields keep their values. Answers the
+        record as stored; 404 `fastapi-viewsets.not_found` for a missing record.
+        """
         return await self.perform_update(context, pk, data, partial=True)
 
 
@@ -647,17 +672,40 @@ class BulkOnlyUpdateMixin(Generic[K, T], ABC):
     __router = APIRouter()
 
     @final
-    @__router.put("bulk")
+    @__router.put(
+        "bulk",
+        responses=BULK_NOT_FOUND_RESPONSE,
+        response_description="The updated records.",
+        openapi_extra=BULK_UPDATE_BODY,
+    )
     async def bulk_update(
-        self: "ImplMixin[K, T] | BulkOnlyUpdateMixin[K, T]", context: Context, records: dict[K, T]
+        self: "ImplMixin[K, T] | BulkOnlyUpdateMixin[K, T]",
+        context: Context,
+        records: dict[K, T],
     ) -> list[T]:
+        """
+        Replace every field of the records of the keys in the body. Answers the records as stored; 404
+        `fastapi-viewsets.not_found` when a key has no record.
+        """
         return await self.perform_bulk_update(context, records, partial=False)
 
     @final
-    @__router.patch("bulk", name="bulk_partial_update")
+    @__router.patch(
+        "bulk",
+        name="bulk_partial_update",
+        responses=BULK_NOT_FOUND_RESPONSE,
+        response_description="The updated records.",
+        openapi_extra=BULK_UPDATE_BODY,
+    )
     async def bulk_partial_update(
-        self: "ImplMixin[K, T] | BulkOnlyUpdateMixin[K, T]", context: Context, records: dict[K, T]
+        self: "ImplMixin[K, T] | BulkOnlyUpdateMixin[K, T]",
+        context: Context,
+        records: dict[K, T],
     ) -> list[T]:
+        """
+        Write the fields the body states to the records of its keys; the other fields keep their values.
+        Answers the records as stored; 404 `fastapi-viewsets.not_found` when a key has no record.
+        """
         return await self.perform_bulk_update(context, records, partial=True)
 
 
@@ -678,7 +726,7 @@ class DestroyMixin(Generic[K, T], ABC):
     __router = APIRouter()
 
     @final
-    @__router.delete("/{pk}", responses=NOT_FOUND_RESPONSE)
+    @__router.delete("/{pk}", responses=NOT_FOUND_RESPONSE, response_description="The primary key, mapped to null.")
     async def destroy(self: "ImplMixin[K, T] | DestroyMixin[K, T]", context: Context, pk: K) -> dict[K, None]:
         """Destroy one record. Answers `{pk: null}`; 404 `fastapi-viewsets.not_found` for a missing record."""
         return await self.perform_destroy(context, pk)
@@ -692,9 +740,15 @@ class BulkOnlyDestroyMixin(Generic[K, T], ABC):
     __router = APIRouter()
 
     @final
-    @__router.delete("bulk")
+    @__router.delete(
+        "bulk",
+        response_description="Each primary key, mapped to null when destroyed or to the error otherwise.",
+        openapi_extra=_body_description("The primary keys of the records to destroy."),
+    )
     async def bulk_destroy(
-        self: "ImplMixin[K, T] | BulkOnlyDestroyMixin[K, T]", context: Context, pk: list[K]
+        self: "ImplMixin[K, T] | BulkOnlyDestroyMixin[K, T]",
+        context: Context,
+        pk: list[K],
     ) -> dict[K, ApiErrorBody | None]:
         """
         Destroy the records of the keys in the body, each independently of the others. Answers 200 with an
@@ -716,8 +770,15 @@ class BulkDestroyMixin(DestroyMixin[K, T], BulkOnlyDestroyMixin[K, T]):
 class LookupItem(BaseModel):
     """One choice of a lookup."""
 
-    group: Any = Field(None, description="Group the choice is listed under; null for an ungrouped choice.")
-    pk: object = Field(description="Primary key of the record.")
+    group: Any = Field(
+        None,
+        description="Group the choice is listed under; null for an ungrouped choice.",
+        json_schema_extra={"anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}]},
+    )
+    pk: object = Field(
+        description="Primary key of the record.",
+        json_schema_extra={"anyOf": [{"type": "integer"}, {"type": "string"}]},
+    )
     title: str = Field(description="Text shown for the choice.")
     icon: str | None = Field(None, description="Icon shown with the choice; null for none.")
 
@@ -800,12 +861,13 @@ class LookupMixin(Generic[TLookupFilter, TLookupItem], ABC):
         return materialized
 
     @final
-    @__router.get("lookup")
+    @__router.get("lookup", response_description="The choices.")
     async def lookup(
         self: "LookupMixin",
         context: Context,
         fltr: Annotated[TLookupFilter, Query()] = None,
     ) -> list[TLookupItem]:
+        """Choices for a select or autocomplete input, filtered by the query parameters, in the source's order."""
         return await self.get_lookup(context, build_list_query(fltr, None))
 
 

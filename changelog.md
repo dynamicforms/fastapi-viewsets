@@ -6,6 +6,28 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.2] - 2026-11-12
+
+### Added
+
+- `Middleware.openapi_parameters`: OpenAPI parameter objects of the request values a middleware reads itself.
+  `route_viewset` adds those of `settings.viewsets_command_middleware` to every operation; `Idempotency` declares the
+  optional `Idempotency-Key` header.
+- `response_classes`: `BULK_NOT_FOUND_RESPONSE`, `LIST_ERROR_RESPONSES`, `SUBSCRIBE_ERROR_RESPONSES`,
+  `POLL_ERROR_RESPONSES`; `with_error_responses(responses, action_name=None)` takes the action name.
+
+### Changed
+
+- The OpenAPI error responses of an operation name only the codes it can answer: `unsupported_list_shape` and the
+  cursor codes (by name) on the list endpoint, `event_topic_invalid` on `subscribe`, `event_cursors_exceeded` on
+  `poll`; codes of the `Idempotency` and `RateLimiter` middleware say they need it.
+- Every mixin operation has a description and a success response description; the bulk request bodies are described.
+- `PUT` and `PATCH {base}/bulk` declare the 404 `fastapi-viewsets.not_found`.
+- Every query parameter of a `make_filter_model` filter model is described by its field and operator.
+- `PaginatedList[T]`, `CursorPage[T]` and `ListOf[T]` carry a description in the schema; `LookupItem.pk` and
+  `LookupItem.group` state their JSON types.
+- The events models and the `poll` description say `null` or absent for values the client does not receive.
+
 ## [0.15.1] - 2026-11-12
 
 ### Added

@@ -10,6 +10,7 @@ inserted next to the page are not skipped when paging back.
 import base64
 import binascii
 import hashlib
+import inspect
 import json
 
 from dataclasses import dataclass
@@ -157,7 +158,10 @@ class CursorPage(BaseModel, Generic[TItem]):
     are the same anchors read inclusively, present whenever the page is non-empty, for polling an edge.
     """
 
-    model_config = ConfigDict(use_attribute_docstrings=True)
+    # A parametrised model (`CursorPage[Track]`) has no docstring of its own; the config carries the description.
+    model_config = ConfigDict(
+        use_attribute_docstrings=True, json_schema_extra={"description": inspect.cleandoc(__doc__)}
+    )
 
     results: list[TItem]
     """The records of the page."""

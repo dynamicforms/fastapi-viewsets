@@ -52,14 +52,14 @@ class TopicRequest(BaseModel):
 
 
 class SubscribeAnswer(BaseModel):
-    """The answer of `subscribe`. `scope` is left out of the serialized answer when it is None."""
+    """The answer of `subscribe`. `scope` is absent for an unscoped topic."""
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
     rev: int
     """The topic's current rev, 0 for a topic without events."""
     scope: str | None = None
-    """The scope key of a scoped viewset topic; None for an unscoped topic."""
+    """The scope key of a scoped viewset topic; absent for an unscoped topic."""
 
     @model_serializer(mode="wrap")
     def _leave_out_no_scope(self, handler: SerializerFunctionWrapHandler, _info: SerializationInfo) -> Any:
@@ -72,7 +72,7 @@ class SubscribeAnswer(BaseModel):
 
 
 class PollRequest(BaseModel):
-    """The body of `poll`: each topic mapped to the rev the caller holds, or None to start from now."""
+    """The body of `poll`: each topic mapped to the rev the caller holds, or null to start from now."""
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
@@ -80,7 +80,7 @@ class PollRequest(BaseModel):
     """The rev the caller holds per topic; null to start from the topic's current rev."""
     scopes: dict[str, str] | None = None
     """The scope key the caller holds per topic; a cursor whose scope key differs from the server's answers
-    `events: null`. None trusts every cursor."""
+    `events: null`. Absent or null trusts every cursor."""
 
 
 class PolledEvent(BaseModel):
@@ -101,9 +101,9 @@ class PolledEvent(BaseModel):
 
 class TopicAnswer(BaseModel):
     """
-    The answer of `poll` for one topic. `events` is None when the log cannot answer the cursor; the
-    caller then re-reads its state. A refused or invalid topic has `rev` and `events` None and `error`
-    and `status` set. `error`, `status` and `scope` are left out when None.
+    The answer of `poll` for one topic. `events` is null when the log cannot answer the cursor; the
+    caller then re-reads its state. A refused or invalid topic has `rev` and `events` null and `error`
+    and `status` set. `error`, `status` and `scope` are absent when they have no value.
     """
 
     model_config = ConfigDict(use_attribute_docstrings=True)
@@ -117,7 +117,7 @@ class TopicAnswer(BaseModel):
     status: int | None = None
     """The HTTP status of the refusal; set on every answer with `error`."""
     scope: str | None = None
-    """The scope key of a scoped viewset topic; None for an unscoped topic."""
+    """The scope key of a scoped viewset topic; absent for an unscoped topic."""
 
     @model_serializer(mode="wrap")
     def _leave_out_absent(self, handler: SerializerFunctionWrapHandler, _info: SerializationInfo) -> Any:
@@ -176,7 +176,7 @@ class EventsViewSet:
 
         Errors: 422 `fastapi-viewsets.event_topic_invalid` (malformed topic); 403
         `fastapi-viewsets.event_topic_refused` or the authorizer's `HTTPException`; 403
-        `fastapi-viewsets.event_scope_missing` (scope resolver answers None); 409
+        `fastapi-viewsets.event_scope_missing` (the topic has no scope key for the caller); 409
         `fastapi-viewsets.event_subscriptions_exceeded` (`settings.viewsets_event_max_subscriptions`
         reached). A 4xx refusal other than 429 also drops an existing subscription to the topic.
         """
@@ -205,10 +205,10 @@ class EventsViewSet:
         await delivery.unsubscribe(_peer_of(request, "unsubscribe"), body.topic)
 
     @transports(rest=True, muxws=True)
-    @__router.post("/poll")
+    @__router.post("/poll", response_description="The answer of each topic of the body.")
     async def poll(self, request: Request, context: Context, body: PollRequest) -> PollAnswer:
         """
-        Answers every cursor: a None cursor gets the current rev and no events, any other the events
+        Answers every cursor: a null cursor gets the current rev and no events, any other the events
         since it, or `events: null` when the log cannot answer it (or its `scopes` entry differs from
         the server's scope key). Events refused by a delivery filter are left out; `prev` chains the
         events returned and `rev` covers all of them.

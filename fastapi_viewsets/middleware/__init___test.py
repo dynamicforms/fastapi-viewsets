@@ -528,12 +528,12 @@ async def test_a_transition_listener_that_fails_or_overruns_is_logged_and_the_re
     received = []
 
     class Listening(_Seeing):
-        def __init__(self, behaviour):
+        def __init__(self, behavior):
             super().__init__([])
-            self.behaviour = behaviour
+            self.behavior = behavior
 
         async def on_transition(self, transition):
-            await self.behaviour(transition)
+            await self.behavior(transition)
 
     async def fail(_transition):
         raise RuntimeError("listener")

@@ -54,6 +54,7 @@ class ListOf(RootModel[list[TItem]], Generic[TItem]):
     @classmethod
     def __get_pydantic_json_schema__(cls, core_schema, handler):
         schema = handler(core_schema)
+        schema.setdefault("description", "Every record of the list, as an array.")
         if "example" not in schema:
             item = cls.__pydantic_generic_metadata__.get("args", (None,))[0]
             if item is not None and hasattr(item, "model_json_schema"):

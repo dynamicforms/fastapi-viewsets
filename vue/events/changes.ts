@@ -43,8 +43,9 @@ export type FetchRows<T, K extends KeyType = KeyType> = (pks: K[]) => Promise<re
  */
 export interface WatchOptions<T, K extends KeyType = KeyType> {
   /**
-   * Called per `records_changed` event of version 1, in rev order; with `fetch`, a second time with
-   * `op: 'deleted'` for the records that are gone. Another version calls `onResync` instead.
+   * Called per `records_changed` event of version 1, in rev order. With `fetch`, the pks of a
+   * `created`/`updated` event whose rows are gone arrive in a separate `op: 'deleted'` call, after the
+   * call with the found rows if there are any. Another version calls `onResync` instead.
    */
   onChange: (change: RecordsChanged<T, K>, meta: EventMeta) => void;
   /** Called on a resync and for a `records_changed` event whose version is not 1: re-read the data. */

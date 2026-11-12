@@ -16,7 +16,7 @@ import {
 const { baseIntervalMs: BASE, ceilingMs: CEILING, backoffFactor: FACTOR } = DEFAULT_POLL_SETTINGS;
 
 /** The middle of the jitter window: multiplier exactly 1, so the ladder is readable in the assertion. */
-const centre = (): number => 0.5;
+const center = (): number => 0.5;
 
 /** The lowest draw: multiplier 0.8, the one that must never undercut a floor. */
 const low = (): number => 0;
@@ -35,13 +35,13 @@ describe('the ladder while something is active', () => {
   it('polls at the base 400 ms on the first poll and after a change', () => {
     [state(), state({ revChanged: true, previousDelay: CEILING })].forEach((first) => {
       expect(ladderInterval(first)).toBe(BASE);
-      expect(nextDelay(first, centre)).toBe(BASE);
+      expect(nextDelay(first, center)).toBe(BASE);
     });
     expect(BASE).toBe(400);
   });
 
   it('multiplies by 1.5 up to the 5 s ceiling when no rev changed', () => {
-    const ladder = new PollLadder(DEFAULT_POLL_SETTINGS, centre);
+    const ladder = new PollLadder(DEFAULT_POLL_SETTINGS, center);
 
     const walked = Array.from({ length: 12 }, () => ladder.next(running));
     expect(walked.slice(0, 8)).toEqual([400, 600, 900, 1350, 2025, 3038, 4556, 5000]);
@@ -52,7 +52,7 @@ describe('the ladder while something is active', () => {
   });
 
   it('resets to the base interval on any change', () => {
-    const ladder = new PollLadder(DEFAULT_POLL_SETTINGS, centre);
+    const ladder = new PollLadder(DEFAULT_POLL_SETTINGS, center);
     Array.from({ length: 8 }, () => ladder.next(running));
     expect(ladder.ladder).toBe(CEILING);
 
@@ -90,7 +90,7 @@ describe('the ceiling cadences', () => {
   it('polls at the ceiling as a heartbeat when nothing is active', () => {
     const heartbeat = state({ anyActive: false });
     expect(ladderInterval(heartbeat)).toBe(CEILING);
-    expect(nextDelay(heartbeat, centre)).toBe(CEILING);
+    expect(nextDelay(heartbeat, center)).toBe(CEILING);
   });
 
   it('never stops: every reachable state yields a finite delay of at least the base', () => {
@@ -102,7 +102,7 @@ describe('the ceiling cadences', () => {
         flags.forEach((revChanged) =>
           previous.forEach((previousDelay) =>
             advised.forEach((pollAfterMs) => {
-              [low, centre, high].forEach((draw) => {
+              [low, center, high].forEach((draw) => {
                 const delay = nextDelay({ anyActive, anyDialogOpen, revChanged, previousDelay, pollAfterMs }, draw);
                 expect(Number.isFinite(delay)).toBe(true);
                 expect(delay).toBeGreaterThanOrEqual(BASE);
@@ -126,19 +126,19 @@ describe('poll_after_ms only slows the ladder', () => {
   ladderValues.forEach(({ name, state: base, ladder }) => {
     floors.forEach((pollAfterMs) => {
       it(`emits no sooner than the floor or the base interval: ${name} ladder, server floor ${pollAfterMs}`, () => {
-        [low, centre, high].forEach((draw) => {
+        [low, center, high].forEach((draw) => {
           const delay = nextDelay({ ...base, pollAfterMs }, draw);
           expect(delay).toBeGreaterThanOrEqual(pollAfterMs);
           expect(delay).toBeGreaterThanOrEqual(BASE);
         });
         // Above the ladder it slows the client; below it, it changes nothing.
-        expect(nextDelay({ ...base, pollAfterMs }, centre)).toBe(Math.max(ladder, pollAfterMs, BASE));
+        expect(nextDelay({ ...base, pollAfterMs }, center)).toBe(Math.max(ladder, pollAfterMs, BASE));
       });
     });
   });
 
   it('is a floor and never a target: a large value is honoured in full', () => {
-    expect(nextDelay(state({ pollAfterMs: 30_000 }), centre)).toBe(30_000);
+    expect(nextDelay(state({ pollAfterMs: 30_000 }), center)).toBe(30_000);
   });
 
   it('cannot pull the client below its base interval, whatever the number', () => {
@@ -152,7 +152,7 @@ describe('jitter', () => {
   it('is +/- 20 % and is applied', () => {
     expect(DEFAULT_POLL_SETTINGS.jitterFraction).toBe(0.2);
     expect(jitterMultiplier(low)).toBeCloseTo(0.8, 10);
-    expect(jitterMultiplier(centre)).toBeCloseTo(1, 10);
+    expect(jitterMultiplier(center)).toBeCloseTo(1, 10);
     expect(jitterMultiplier(high)).toBeCloseTo(1.2, 10);
 
     // At the ceiling both halves of the window are visible, because neither floor is in the way.
@@ -181,7 +181,7 @@ describe('jitter', () => {
 
   it('follows custom settings', () => {
     const settings = { baseIntervalMs: 100, backoffFactor: 2, ceilingMs: 1000, jitterFraction: 0.5 };
-    const ladder = new PollLadder(settings, centre);
+    const ladder = new PollLadder(settings, center);
     expect(Array.from({ length: 6 }, () => ladder.next(running))).toEqual([100, 200, 400, 800, 1000, 1000]);
     expect(jitterMultiplier(low, settings)).toBeCloseTo(0.5, 10);
     expect(nextDelay(state({ anyActive: false }), low, settings)).toBe(500);
@@ -194,7 +194,7 @@ describe('PollLadder', () => {
   });
 
   it('returns to the first-poll state on reset()', () => {
-    const ladder = new PollLadder(DEFAULT_POLL_SETTINGS, centre);
+    const ladder = new PollLadder(DEFAULT_POLL_SETTINGS, center);
     Array.from({ length: 5 }, () => ladder.next(running));
     ladder.reset();
     expect(ladder.ladder).toBeNull();
@@ -203,7 +203,7 @@ describe('PollLadder', () => {
   });
 
   it('resumes on the base rung, jittered and floored at the base, whatever the state would answer', () => {
-    const ladder = new PollLadder(DEFAULT_POLL_SETTINGS, centre);
+    const ladder = new PollLadder(DEFAULT_POLL_SETTINGS, center);
     Array.from({ length: 8 }, () => ladder.next(idle));
     expect(ladder.ladder).toBe(CEILING);
 

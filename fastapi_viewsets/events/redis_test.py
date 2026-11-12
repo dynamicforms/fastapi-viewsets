@@ -368,7 +368,7 @@ def test_per_loop_redis_applies_the_default_options_under_the_given_ones():
     }
 
 
-def test_per_loop_redis_forgets_the_client_of_a_loop_closed_without_cancelling_its_tasks():
+def test_per_loop_redis_forgets_the_client_of_a_loop_closed_without_canceling_its_tasks():
     redis, clients = per_loop()
     loop = asyncio.new_event_loop()
 
