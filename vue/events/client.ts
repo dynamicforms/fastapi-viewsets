@@ -1299,7 +1299,8 @@ export function attachEvents(peer: EventPeerLike, fallback?: EventStreamHandler)
 
 /**
  * A subscription made once `client` resolves. `unsubscribe()` before then subscribes nothing. When
- * `client` rejects or `subscribe` throws, `ready` rejects and the error goes to `onError`, or to `rethrowLater` without one.
+ * `client` rejects or `subscribe` throws, `ready` rejects and the error goes to `onError`, or to
+ * `rethrowLater` without one.
  */
 export function deferSubscription(
   client: Promise<EventClient>,
