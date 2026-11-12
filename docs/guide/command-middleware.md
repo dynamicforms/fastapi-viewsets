@@ -395,6 +395,18 @@ class Tenant(Middleware):
 A parameter of a name and location an earlier entry declared is added once. A middleware instance that
 `@action_configuration` injects is not consulted. `Idempotency` declares its `Idempotency-Key` header this way.
 
+`route_viewset` asks each `Middleware` per operation, through `openapi_parameters_for(viewset, action, configuration)`;
+`configuration` is the middleware's `@action_configuration` value for that action (`ByAction` resolved), None without
+one. It returns `openapi_parameters`. A middleware that does not read its value on some operations overrides it:
+
+```python
+class Tenant(Middleware):
+    openapi_parameters = (...)
+
+    def openapi_parameters_for(self, viewset, action, configuration):
+        return () if configuration is False else self.openapi_parameters
+```
+
 ## Around the execution: `Middleware.execute()`
 
 ```python
