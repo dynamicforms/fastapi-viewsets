@@ -361,3 +361,37 @@ def test_derived_request_bodies_keep_the_models_description():
         "AlbumNoPK": "A released album.",
         "AlbumPartial": "A released album.",
     }
+
+
+def test_a_form_model_is_the_named_request_body():
+    from typing import Annotated
+
+    from fastapi import Form, UploadFile
+
+    class TitledUpload(BaseModel):
+        """A file with its title."""
+
+        title: str = Field(description="Shown under the file.")
+        file: UploadFile
+
+    app, router = FastAPI(), APIRouter()
+
+    @route_viewset(router, base_path="/u", pk_field_name="id")
+    class UploadViewSet(CollectionViewSet[int, Track]):
+        __router = APIRouter()
+
+        def __init__(self):
+            super().__init__(container=DATABASE, pk_field="id")
+
+        @__router.post("/titled")
+        async def titled(self, data: Annotated[TitledUpload, Form()]) -> dict:
+            return {"title": data.title, "content": (await data.file.read()).hex()}
+
+    app.include_router(router)
+    client = TestClient(app)
+    response = client.post("/u/titled", data={"title": "Logo"}, files={"file": ("logo.png", b"\x89PNG", "image/png")})
+    assert response.json() == {"title": "Logo", "content": "89504e47"}
+    document = client.get("/u/schema").json()
+    content = document["paths"]["/u/titled"]["post"]["requestBody"]["content"]
+    assert [media["schema"] for media in content.values()] == [{"$ref": "#/components/schemas/TitledUpload"}]
+    assert document["components"]["schemas"]["TitledUpload"]["description"] == "A file with its title."

@@ -63,6 +63,13 @@ class Level(enum.IntEnum):
     HIGH = 2
 
 
+class Caption(BaseModel):
+    """A caption and its position."""
+
+    title: str
+    position: int
+
+
 class Point(BaseModel):
     x: int
     at: date
@@ -503,6 +510,10 @@ def make_files_viewset():
                 "content": content.hex(),
             }
 
+        @__router.post("titled")
+        async def titled(self, data: Annotated[Caption, Form()]) -> dict:
+            return {"title": data.title, "position": data.position}
+
         @__router.post("uploads")
         async def uploads(self, files: list[UploadFile]) -> list[str]:
             return [f"{file.filename}:{len(await file.read())}" for file in files]
@@ -632,6 +643,17 @@ def test_an_upload_arrives_as_an_upload_file(files_app):
         "size": 6,
         "content": "89504e4700ff",
     }
+
+
+def test_a_form_model_crosses_as_a_named_body(files_app):
+    app, _lists = files_app
+    with TestClient(app) as client:
+        response = client.post("/files/titled", data={"title": "Logo", "position": "2"})
+        schema = client.get("/files/schema").json()
+    assert response.status_code == 200, response.text
+    assert response.json() == {"title": "Logo", "position": 2}
+    body = schema["paths"]["/files/titled"]["post"]["requestBody"]["content"]
+    assert body == {"application/x-www-form-urlencoded": {"schema": {"$ref": "#/components/schemas/Caption"}}}
 
 
 def test_the_action_checks_the_size_of_an_upload(files_app):

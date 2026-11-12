@@ -7,7 +7,7 @@ from functools import wraps
 from typing import Annotated, get_args, get_origin, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, Header, Path, Request, Response
-from fastapi.params import FieldInfo, Header as HeaderParam, Param
+from fastapi.params import FieldInfo, Header as HeaderParam, Param, Query as QueryParam
 from pydantic import BaseModel
 from pydantic_core import PydanticUndefined
 
@@ -303,7 +303,7 @@ def _route(
         return hasattr(annotation, "__metadata__") and any(isinstance(m, FilterParam) for m in annotation.__metadata__)
 
     def _is_model_query_param(annotation) -> bool:
-        """Return True for Annotated[PydanticModel, <FieldInfo>] (e.g. Query()), read from the query string."""
+        """Return True for Annotated[PydanticModel, Query()], read from the query string."""
         args = getattr(annotation, "__args__", None)
         metadata = getattr(annotation, "__metadata__", None)
         if not (args and metadata):
@@ -311,7 +311,7 @@ def _route(
         inner = args[0]
         if not (inspect.isclass(inner) and issubclass(inner, BaseModel)):
             return False
-        return any(isinstance(m, FieldInfo) for m in metadata)
+        return any(isinstance(m, QueryParam) for m in metadata)
 
     def _shape_signature(sig):
         """
@@ -413,7 +413,7 @@ def _route(
                 needs_context = True
                 continue
 
-            # Annotated[PydanticModel, FilterParam() | <FieldInfo>]: one query parameter per model field
+            # Annotated[PydanticModel, FilterParam() | Query()]: one query parameter per model field
             if _is_filter_param(annotation) or _is_model_query_param(annotation):
                 inner_type = annotation.__args__[0]
                 if inspect.isclass(inner_type) and issubclass(inner_type, BaseModel):
