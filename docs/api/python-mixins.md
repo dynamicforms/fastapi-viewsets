@@ -2,7 +2,7 @@
 
 ## ImplMixin
 
-Abstract base. Subclasses must implement all `perform_*` methods.
+Abstract base. Subclasses implement every `perform_*` method except `perform_bulk_destroy`, which has a default.
 
 ```python
 class ImplMixin(Generic[K, T], ABC):
@@ -12,8 +12,8 @@ class ImplMixin(Generic[K, T], ABC):
     async def perform_retrieve(self, context: Context, pk: K) -> T: ...
     async def perform_update(self, context: Context, pk: K, data: T, partial: bool = True) -> T: ...
     async def perform_bulk_update(self, context: Context, records: dict[K, T], partial: bool = True) -> list[T]: ...
-    async def perform_destroy(self, context: Context, pk: K) -> dict[K, Any]: ...
-    async def perform_bulk_destroy(self, context: Context, pk: list[K]) -> list[dict[K, Any]]: ...
+    async def perform_destroy(self, context: Context, pk: K) -> dict[K, None]: ...
+    async def perform_bulk_destroy(self, context: Context, pk: list[K]) -> dict[K, ApiErrorBody | None]: ...
 ```
 
 `context` (a [`Context`](../guide/context-processors) instance) is built by `route_viewset` from
@@ -168,11 +168,15 @@ Combines `UpdateMixin` + `BulkOnlyUpdateMixin`.
 
 ### DestroyMixin `[K, T]`
 
-- `DELETE /{pk}` → calls `perform_destroy(context, pk: K) -> dict[K, Any]`
+- `DELETE /{pk}` → calls `perform_destroy(context, pk: K) -> dict[K, None]`; answers `{pk: null}`,
+  404 `fastapi-viewsets.not_found` for a missing record
 
 ### BulkOnlyDestroyMixin `[K, T]`
 
-- `DELETE /bulk` → calls `perform_bulk_destroy(context, pk: list[K]) -> list[dict[K, Any]]`
+- `DELETE /bulk` → calls `perform_bulk_destroy(context, pk: list[K]) -> dict[K, ApiErrorBody | None]`; answers 200
+  keyed by pk: `null` for a deleted record, the failure's `ApiErrorBody` otherwise
+- `ImplMixin.perform_bulk_destroy` (default): calls `perform_destroy` for each distinct key; an `HTTPException` or
+  `RequestValidationError` becomes that key's `ApiErrorBody`, any other exception propagates
 
 ### BulkDestroyMixin `[K, T]`
 

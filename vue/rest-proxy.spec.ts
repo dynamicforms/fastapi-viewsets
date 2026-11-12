@@ -115,10 +115,10 @@ describe('RestProxyImpl — direct instance', () => {
   });
 
   it('destroy() — DELETE /items/1', async () => {
-    http.delete.mockResolvedValue({ data: { deleted: 1 } });
+    http.delete.mockResolvedValue({ data: { 1: null } });
     const result = await proxy.destroy(1);
     expect(http.delete).toHaveBeenCalledWith('/items/1', sent());
-    expect(result).toEqual({ deleted: 1 });
+    expect(result).toEqual({ 1: null });
   });
 
   it('bulkCreate() — POST /items/bulk', async () => {
@@ -145,10 +145,16 @@ describe('RestProxyImpl — direct instance', () => {
   });
 
   it('bulkDestroy() — DELETE /items/bulk', async () => {
-    http.delete.mockResolvedValue({ data: [{ deleted: 1 }] });
+    const notFound = {
+      detail: 'Item with pk 2 not found',
+      detail_code: 'fastapi-viewsets.not_found',
+      detail_params: { pk: 2 },
+      field_errors: {},
+    };
+    http.delete.mockResolvedValue({ data: { 1: null, 2: notFound } });
     const result = await proxy.bulkDestroy([1, 2]);
     expect(http.delete).toHaveBeenCalledWith('/items/bulk', sent({ data: [1, 2] }));
-    expect(result).toEqual([{ deleted: 1 }]);
+    expect(result).toEqual({ 1: null, 2: notFound });
   });
 
   it('listPage() requests the paginated shape and passes offset/limit as params', async () => {

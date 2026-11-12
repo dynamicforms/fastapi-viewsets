@@ -3,6 +3,7 @@ import pytest
 from pydantic import BaseModel, Field, field_validator
 
 from fastapi_viewsets.collection_viewset import CollectionViewSet
+from fastapi_viewsets.error_responses import ApiErrorBody
 from fastapi_viewsets.exceptions import ReadOnlyCollectionError
 
 CTX = {}
@@ -175,8 +176,39 @@ async def test_collection_viewset_bulk():
     assert container[0]["name"] == "a"
     assert container[1]["name"] == "b"
 
-    await viewset.perform_bulk_destroy(CTX, [1, 2])
+    assert await viewset.perform_bulk_destroy(CTX, [1, 2]) == {1: None, 2: None}
     assert len(container) == 0
+
+
+@pytest.mark.asyncio
+async def test_bulk_destroy_answers_each_key_and_destroys_the_others():
+    container = [{"id": 1}, {"id": 2}]
+    viewset = CollectionViewSet(container)
+
+    result = await viewset.perform_bulk_destroy(CTX, [1, 9, 2, 1])
+
+    assert list(result) == [1, 9, 2]
+    assert result[1] is None
+    assert result[2] is None
+    assert result[9] == ApiErrorBody(
+        detail="Item with pk 9 not found",
+        detail_code="fastapi-viewsets.not_found",
+        detail_params={"pk": 9},
+        field_errors={},
+    )
+    assert container == []
+
+
+@pytest.mark.asyncio
+async def test_bulk_destroy_propagates_an_exception_that_is_no_http_error():
+    class Failing(CollectionViewSet):
+        async def perform_destroy(self, context, pk):
+            if pk == 2:
+                raise RuntimeError("disk full")
+            return await super().perform_destroy(context, pk)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        await Failing([{"id": 1}, {"id": 2}]).perform_bulk_destroy(CTX, [1, 2])
 
 
 @pytest.mark.asyncio

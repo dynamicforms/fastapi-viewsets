@@ -110,7 +110,7 @@ const updatedMany: Item[] = await itemsApi.bulkUpdate({ 1: { id: 1, name: 'A2', 
 // Bulk partial update
 const patchedMany: Item[] = await itemsApi.bulkPartialUpdate({ 1: { price: 2.0 } });
 
-// Bulk delete
+// Bulk delete: { 1: null, 2: null, 3: ApiErrorBody } — null for deleted, the failure otherwise
 const deletedMany = await itemsApi.bulkDestroy([1, 2, 3]);
 
 // Lookup (requires LookupMixin)

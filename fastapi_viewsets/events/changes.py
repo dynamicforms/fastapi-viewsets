@@ -241,12 +241,19 @@ class ChangeEvents(Middleware):
         return name
 
     def changes_for(self, execution: ActionExecution, op: str, result: Any) -> list[Change]:
-        """One change per pk of the `pk` argument for `deleted`, else per returned record (`ViewSetResult.body`)."""
+        """
+        For `deleted`, one change per pk of the `pk` argument; of a bulk, only the pks the result maps to None
+        (destroyed). Otherwise one per returned record. A `ViewSetResult` contributes its `body`.
+        """
         bulk = execution.action in _BULK_ACTIONS
+        body = result.body if isinstance(result, ViewSetResult) else result
         if op == "deleted":
             pk = _argument(execution, "pk")
-            return [Change(pk=one) for one in (pk if bulk else [pk])]
-        body = result.body if isinstance(result, ViewSetResult) else result
+            if not bulk:
+                return [Change(pk=pk)]
+            if isinstance(body, Mapping):
+                return [Change(pk=one) for one in dict.fromkeys(pk) if one in body and body[one] is None]
+            return [Change(pk=one) for one in pk]
         field = self.pk_field_for(execution)
         return [Change(pk=_read_pk(execution, record, field)) for record in (body if bulk else [body])]
 

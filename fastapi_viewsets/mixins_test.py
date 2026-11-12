@@ -17,6 +17,7 @@ from fastapi_viewsets.mixins import (
     BulkViewSetMixin,
     CreateMixin,
     DestroyMixin,
+    ImplMixin,
     ListMixin,
     LookupFilter,
     LookupItem,
@@ -50,7 +51,7 @@ _DB: dict[int, Item] = {
 }
 
 
-class ItemViewSet(BulkViewSetMixin[int, Item]):
+class ItemViewSet(ImplMixin[int, Item], BulkViewSetMixin[int, Item]):
     async def perform_create(self, _context: Context, data: Item) -> Item:
         return data
 
@@ -80,11 +81,8 @@ class ItemViewSet(BulkViewSetMixin[int, Item]):
     ) -> list[Item]:
         return list(records.values())
 
-    async def perform_destroy(self, _context: Context, pk: int) -> dict[int, Any]:
-        return {pk: "deleted"}
-
-    async def perform_bulk_destroy(self, _context: Context, pk: list[int]) -> list[dict[int, Any]]:
-        return [{p: "deleted"} for p in pk]
+    async def perform_destroy(self, _context: Context, pk: int) -> dict[int, None]:
+        return {pk: None}
 
 
 class ReadOnlyItemViewSet(ReadOnlyViewSetMixin[int, Item]):
@@ -114,8 +112,8 @@ class StandardItemViewSet(ViewSetMixin[int, Item]):
     ) -> Item:
         return data
 
-    async def perform_destroy(self, _context: Context, pk: int) -> dict[int, Any]:
-        return {pk: "deleted"}
+    async def perform_destroy(self, _context: Context, pk: int) -> dict[int, None]:
+        return {pk: None}
 
 
 class FilterableItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item, ItemFilter]):
@@ -149,8 +147,8 @@ async def test_viewset_methods():
     assert await viewset.retrieve(context, 1) == Item(id=1, name="test")
     assert await viewset.update(context, 1, item) == item
     assert await viewset.bulk_update(context, {1: item}) == [item]
-    assert await viewset.destroy(context, 1) == {1: "deleted"}
-    assert await viewset.bulk_destroy(context, [1]) == [{1: "deleted"}]
+    assert await viewset.destroy(context, 1) == {1: None}
+    assert await viewset.bulk_destroy(context, [1]) == {1: None}
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="typing.final only sets __final__ from Python 3.11")

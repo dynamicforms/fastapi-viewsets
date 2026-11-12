@@ -468,7 +468,6 @@ def test_a_class_key_without_a_global_instance_raises_value_error_at_request_tim
     [
         pytest.param("PUT", "/tracks/9", {"id": 9, "title": "Nine"}, id="update"),
         pytest.param("DELETE", "/tracks/9", None, id="destroy"),
-        pytest.param("DELETE", "/tracks/bulk", [1, 9], id="bulk_destroy"),
     ],
 )
 def test_an_action_that_raises_publishes_nothing(method, path, body):
@@ -476,6 +475,16 @@ def test_an_action_that_raises_publishes_nothing(method, path, body):
     collection_viewset(router)
     assert TestClient(app_for(router)).request(method, path, json=body).status_code == 404
     assert logged("/tracks") == []
+
+
+def test_a_bulk_destroy_publishes_only_the_destroyed_keys():
+    router = APIRouter()
+    collection_viewset(router)
+    response = TestClient(app_for(router)).request("DELETE", "/tracks/bulk", json=[1, 9])
+    assert response.status_code == 200
+    assert response.json()["1"] is None
+    assert response.json()["9"]["detail_code"] == "fastapi-viewsets.not_found"
+    assert logged("/tracks") == [("records_changed", {"op": "deleted", "changes": changes(1)})]
 
 
 def test_an_exception_of_the_action_propagates_through_execute():
@@ -588,7 +597,7 @@ def test_a_pk_passed_by_position_is_read_from_the_arguments():
             return pk
 
     execution = ActionExecution(Plain, Plain(), "bulk_destroy", (None, [1, 2]), {}, Context({}), None, None)
-    assert ChangeEvents().changes_for(execution, "deleted", None) == [Change(pk=1), Change(pk=2)]
+    assert ChangeEvents().changes_for(execution, "deleted", {1: None, 2: None}) == [Change(pk=1), Change(pk=2)]
 
 
 # the hooks

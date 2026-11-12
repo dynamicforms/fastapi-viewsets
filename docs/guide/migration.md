@@ -5,6 +5,50 @@ releases at once, work from the bottom of the page upwards.
 
 <!-- New releases go directly below this comment, above the previous one, as `## Upgrading to vX.Y.Z (from vA.B.x)`. -->
 
+## Upgrading to v0.15.0 (from v0.14.x)
+
+- [ ] `perform_destroy` returns `{pk: None}`. A destroy that answered anything else, such as a record
+      that still exists after the call, moves to its own action:
+
+  ```python
+  # 0.14
+  async def perform_destroy(self, context, pk: str) -> dict:
+      record = await reset_setting(pk)
+      return record.model_dump()
+
+  # 0.15
+  @__router.post("{pk}/reset")
+  async def reset(self, context: Context, pk: str) -> Setting:
+      return await reset_setting(pk)
+  ```
+
+  ```ts
+  reset(pk: string) {
+    return this.request<Setting>('POST', `/${pk}/reset`);
+  }
+  ```
+
+  See [custom endpoints](./custom-endpoints) and [TS custom endpoints](./vue-custom-endpoints).
+- [ ] Remove an override of `perform_bulk_destroy` that only calls `perform_destroy` for each key:
+      `ImplMixin.perform_bulk_destroy` does that. An override that remains returns
+      `dict[K, ApiErrorBody | None]`, one entry per key: `None` for a deleted record, the failure's
+      `ApiErrorBody` otherwise. A viewset that does not inherit `ImplMixin` (`CollectionViewSet` and
+      `DjangoORMViewSet` do) implements `perform_bulk_destroy` with that result.
+- [ ] A client of `DELETE /bulk` reads one object keyed by pk instead of a list, and finds a missing
+      or refused key in its value: the request answers 200, not 404, and deletes the other keys.
+
+  ```ts
+  // 0.14
+  await api.bulkDestroy(pks); // DestroyReturnData[]; throws on the first missing key
+
+  // 0.15
+  const result = await api.bulkDestroy(pks); // BulkDestroyReturnData<K>
+  const failed = Object.entries(result).filter(([, error]) => error !== null);
+  ```
+
+- [ ] TS code that names the result types: `destroy()` returns `DestroyReturnData<K>` (`Record<K, null>`),
+      `bulkDestroy()` `BulkDestroyReturnData<K>` (`Record<K, ApiErrorBody | null>`).
+
 ## Upgrading to v0.14.0 (from v0.13.x)
 
 - [ ] A client that sends the `in` or `overlaps` parameter of a `make_filter_model` filter as one

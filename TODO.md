@@ -82,9 +82,6 @@ any work starts.
 
 - **`CollectionViewSet.create` on an existing key.** A mapping overwrites the stored record, a list
   appends a duplicate. A CRUD create would answer 409 for every container type.
-- **`DjangoORMViewSet.perform_bulk_destroy` is not atomic.** It deletes row by row; a missing key
-  in the middle answers 404 with the earlier rows already gone. `transaction.atomic()` around the
-  loop, or per-record results in the response (the latter needs a Vue counterpart).
 - **Strict list pipeline.** A setting that rejects the in-memory fallback instead of reading the
   whole table, plus a signal when the fallback happens. The trade-offs are in `GAPS.md`, "A
   declined push-down reads the whole table, and says nothing".

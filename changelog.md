@@ -6,6 +6,28 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-11-12
+
+### Changed
+
+- `bulk_destroy` deletes each key independently of the others and answers 200 with one object keyed by pk:
+  `null` for a deleted record, the failure's `ApiErrorBody` otherwise (`fastapi-viewsets.not_found` for a
+  missing record). The answer was a list of `{pk: ...}` objects, and a missing key answered 404 for the whole
+  request with the keys before it already deleted. `perform_bulk_destroy` returns `dict[K, ApiErrorBody | None]`.
+- `ImplMixin.perform_bulk_destroy` has a default: `perform_destroy` for each distinct key, an `HTTPException` or
+  `RequestValidationError` as that key's `ApiErrorBody`, any other exception propagated. `CollectionViewSet` and
+  `DjangoORMViewSet` use it.
+- `destroy` and `perform_destroy` return `dict[K, None]`, `{pk: None}`.
+- `ChangeEvents` publishes a `bulk_destroy` with the deleted pks only.
+- TS: `DestroyReturnData<K>` is `Record<K, null>`; `bulkDestroy()` returns `BulkDestroyReturnData<K>`,
+  `Record<K, ApiErrorBody | null>`, in place of `DestroyReturnData[]`.
+
+### Fixed
+
+- `DjangoORMViewSet.perform_destroy` returns `{pk: None}`. It returned `{"id": pk}`: over REST the response failed
+  validation with 500, and through a `celery_viewset` worker it did not encode as the declared result and answered
+  500 `fastapi-viewsets.action_failed` (`reason: result`).
+
 ## [0.14.2] - 2026-10-27
 
 ### Fixed

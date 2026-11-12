@@ -17,7 +17,8 @@ optional in the type, so an override may return a plain `Promise<R>`.
 
 ```ts
 type KeyType = string | number;
-type DestroyReturnData = Record<KeyType, any>;
+type DestroyReturnData<K extends KeyType = KeyType> = Record<K, null>;
+type BulkDestroyReturnData<K extends KeyType = KeyType> = Record<K, ApiErrorBody | null>;
 
 interface LookupItem {
   group: unknown;
@@ -366,14 +367,16 @@ Interface extends `UpdateMixin<K, T>` and `BulkOnlyUpdateMixin<K, T>`; `actions`
 ### DestroyMixin `<K extends KeyType>`
 
 ```ts
-destroy(pk: K): ViewSetActionCall<DestroyReturnData>;
+destroy(pk: K): ViewSetActionCall<DestroyReturnData<K>>;
 ```
 
 ### BulkOnlyDestroyMixin `<K extends KeyType>`
 
 ```ts
-bulkDestroy(pks: K[]): ViewSetActionCall<DestroyReturnData[]>;
+bulkDestroy(pks: K[]): ViewSetActionCall<BulkDestroyReturnData<K>>;
 ```
+
+Keyed by pk: `null` for a deleted record, the failure's [`ApiErrorBody`](#error-bodies) otherwise.
 
 ### BulkDestroyMixin `<K extends KeyType>`
 
