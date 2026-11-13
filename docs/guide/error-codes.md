@@ -337,9 +337,11 @@ toFieldErrors(body);
 ```
 
 A name is a path through the members of a vue-forms form: a `Group` member by its name, a `List`
-row by its index. The errors keyed `''` belong to the form itself, and so do the errors of a name
-the form does not hold. A `SubmitAction` sends the form through a ViewSet and, where the server
-refuses it, writes the server's errors to the form before it throws:
+row by its index. vue-forms' [`elementAt()`](:vue-forms:/api/container.html#elementat-root-path-fieldbase-undefined)
+returns the element at a name, the form itself for `''`, and `undefined` for a name the form does not hold; the errors
+of such a name belong to the form itself. A `SubmitAction` sends the form through a ViewSet and, where the server
+refuses it, writes the server's errors to the form before it throws. The example needs `@dynamicforms/vue-forms`
+3.0.0-alpha.4 or later:
 
 ```ts
 import {
@@ -348,17 +350,14 @@ import {
   toErrorDescription,
   toFieldErrors,
 } from '@dynamicforms/fastapi-viewsets';
-import { Action, type FieldBase, Group, List, SubmitAction, ValidationError } from '@dynamicforms/vue-forms';
-
-function elementAt(root: FieldBase, name: string): FieldBase | undefined {
-  let element: FieldBase | null | undefined = root;
-  for (const key of name ? name.split('.') : []) {
-    if (element instanceof Group) element = element.field(key);
-    else if (element instanceof List) element = element.get(Number(key));
-    else return undefined;
-  }
-  return element ?? undefined;
-}
+import {
+  Action,
+  elementAt,
+  type FieldBase,
+  Group,
+  SubmitAction,
+  ValidationError,
+} from '@dynamicforms/vue-forms';
 
 function addErrors(element: FieldBase, errors: ErrorDescription[]) {
   element.errors = [
