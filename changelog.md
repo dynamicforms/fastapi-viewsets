@@ -6,6 +6,18 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.4] - 2026-11-12
+
+### Fixed
+
+- A path, query or header parameter declared with its `Param` as the default (`pk: int = Path(description=...)`) is
+  treated as the `Annotated` form: `route_viewset` no longer fails at import with "Path parameters cannot have default
+  values" on such a `pk`, the parameter keeps its description, and `@endpoint_docs` `parameters` describes it by name.
+- A model parameter annotated with `Form()` or `Body()` (`data: Annotated[Model, Form()]`) is the request body. It was
+  read from the query string as a filter model; only `Query()` and `FilterParam()` make a model a query parameter now.
+- `<Model>NoPK` and `<Model>Partial`, the create and partial-update bodies derived from a viewset's model, carry the
+  model's docstring as their OpenAPI description.
+
 ## [0.15.3] - 2026-11-12
 
 ### Added

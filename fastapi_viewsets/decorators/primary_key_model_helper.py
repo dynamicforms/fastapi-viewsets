@@ -26,9 +26,10 @@ class _AssignedByServer:
 
 def create_model_without_pk(model: type[T], pk_field_name: str) -> type[BaseModel]:
     """
-    The create body of `model`: a subclass without `pk_field_name` in the JSON schema. The key may be
-    omitted or null; any other value fails with `pk_assigned_by_server`. Its `after` field validators
-    never run, other modes run on non-null values; `after` model validators see the key as None.
+    The create body of `model`: a subclass with its docstring, without `pk_field_name` in the JSON
+    schema. The key may be omitted or null; any other value fails with `pk_assigned_by_server`. Its
+    `after` field validators never run, other modes run on non-null values; `after` model validators
+    see the key as None.
     """
     original = model.model_fields[pk_field_name]
     pk = Field(default=None, validate_default=False, alias=original.alias, validation_alias=original.validation_alias)
@@ -43,6 +44,7 @@ def create_model_without_pk(model: type[T], pk_field_name: str) -> type[BaseMode
     return create_model(
         f"{model.__name__}NoPK",
         __base__=model,
+        __doc__=model.__doc__,
         __validators__={"drop_null_pk": model_validator(mode="before")(classmethod(drop_null_pk))},
         **{pk_field_name: (SkipJsonSchema[_AssignedByServer], pk)},
     )
@@ -93,8 +95,9 @@ def typecast_to_original_model(value: Any, original_annotation: type[T]) -> T:
 
 def create_partial_model(model: type[T], pk_field_name: str | None) -> type[BaseModel]:
     """
-    The partial-update body of `model`: every field optional, without `pk_field_name`. Stated fields
-    are validated with the model's field validators; `@model_validator`s are not applied.
+    The partial-update body of `model`, with its docstring: every field optional, without
+    `pk_field_name`. Stated fields are validated with the model's field validators; `@model_validator`s
+    are not applied.
     """
     fields = {
         name: (field.annotation, _without_default(field))
@@ -107,7 +110,13 @@ def create_partial_model(model: type[T], pk_field_name: str | None) -> type[Base
         )
         for name, decorator in model.__pydantic_decorators__.field_validators.items()
     }
-    return create_model(f"{model.__name__}Partial", __config__=model.model_config, __validators__=validators, **fields)
+    return create_model(
+        f"{model.__name__}Partial",
+        __config__=model.model_config,
+        __doc__=model.__doc__,
+        __validators__=validators,
+        **fields,
+    )
 
 
 def _without_default(field: FieldInfo) -> FieldInfo:

@@ -87,7 +87,8 @@ omitted is left alone:
 })
 ```
 
-A name in `parameters` that the endpoint does not have raises. The fields of a filter model are not
+A name in `parameters` that the endpoint does not have raises. A parameter is named the same whether it
+is declared `Annotated[int, Path()]` or `int = Path()`. The fields of a filter model are not
 endpoint parameters: their descriptions come from the model's `Field(description=...)`.
 
 Documentation is inherited through the MRO, so a base viewset can document the actions its
@@ -108,6 +109,11 @@ Every parameter the package declares has a default description:
 | `limit` | the page size, with the viewset's `default_page_size` and `max_page_size` |
 | `cursor` | `CURSOR_DESCRIPTION` |
 | `X-List-Shape` | the shapes and the default |
+
+A `pk` the endpoint declares with `Path(description=...)` (either form) keeps that description.
+
+The request bodies the mixins derive from the viewset's model, `<Model>NoPK` (create) and
+`<Model>Partial` (`PATCH`), carry the model's docstring as their description.
 
 A list without a filter model has no filter parameter. Every field of a model the package publishes
 (`PaginatedList`, `CursorPage`, `LookupItem`, `LookupFilter`, `ApiErrorBody`, the events models) has
