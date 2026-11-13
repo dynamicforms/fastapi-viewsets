@@ -43,7 +43,8 @@ themselves live in the proxy underneath.
 ## LookupItem
 
 `lookup(params?)` sends `params` as query parameters, the fields of the BE viewset's lookup filter
-model (`q`, and e.g. `ids`; an array goes out as a repeated key). It returns `L[]`, where `L` is the
+model: `q` and `ids` for the default `LookupFilter`, plus whatever a custom filter model declares. An
+array goes out as a repeated key (`ids=1&ids=5`). It returns `L[]`, where `L` is the
 second type argument of `restViewSet<T, L>()` / `muxwsViewSet<T, L>()`, the BE viewset's
 `TLookupItem`. The default is `LookupItem`:
 
@@ -55,6 +56,76 @@ interface LookupItem {
   icon: string | null;
 }
 ```
+
+## Select choices: lookupChoices
+
+`lookupChoices` turns a lookup into the `fetchChoices` of a `@dynamicforms/vuetify-inputs` `df-select`.
+`df-select` calls it with the search text while the user types, and with the ids of the value (one id,
+or an array for a `multiple` select) to show their labels. A search sends `q`, without `q` when the
+text is empty; ids send `ids`, and an empty array resolves to `[]` without a request.
+
+```ts
+import { lookupChoices } from '@dynamicforms/fastapi-viewsets';
+
+// The default LookupItem: pk → id, title → text, icon → icon (left out when null).
+const fetchItemChoices = lookupChoices(itemsApi);
+
+// The viewset's own item type, converted by the second argument.
+class TagApi extends restViewSet<Tag, TagLookup>()('id', [LookupMixin]) {}
+const tagsApi = new TagApi({ basePath: '/tags' });
+const fetchTagChoices = lookupChoices(tagsApi, (tag) => ({ id: tag.id, text: tag.name }));
+
+// The lookup call itself, here with a fixed parameter of a custom filter model.
+const fetchActivityTagChoices = lookupChoices(
+  (params) => tagsApi.lookup({ ...params, activity: 12 }),
+  (tag) => ({ id: tag.id, text: tag.name }),
+);
+```
+
+```vue
+<df-select :control="form.fields.tags" label="Tags" :fetch-choices="fetchTagChoices" multiple />
+```
+
+The one-argument form takes only a viewset whose lookup answers `LookupItem`; for any other item type
+it is a compile error. The ids reach the BE default `LookupFilter.ids`; a custom filter model needs an
+`ids` field for the same call.
+
+A filter model built with `make_filter_model` has neither `q` nor `ids`: its parameters are
+`<field>__<operator>`, and the BE ignores query keys the model does not declare, so the first two forms
+return every row. Such a lookup takes the third form and maps the parameters onto the model's:
+
+```ts
+// BE: LookupMixin[make_filter_model(TagLookup, {"name": ["icontains"], "id": ["in"]}), TagLookup]
+const fetchTagChoices = lookupChoices(
+  (params) => tagsApi.lookup({ name__icontains: params.q, id__in: params.ids }),
+  (tag) => ({ id: tag.id, text: tag.name }),
+);
+```
+
+The `in` operator compares values of the field's declared type, so the lookup item type declares its
+key field with a concrete type; `LookupItem.pk` is declared as `object` and compares as a string.
+
+### Choices the application already has
+
+A `fetchChoices` can answer ids whose choices the application already holds, e.g. loaded once when
+the screen opens, and leave the rest to `lookupChoices`:
+
+```ts
+import { lookupChoices, type LookupChoice } from '@dynamicforms/fastapi-viewsets';
+
+const fetchTags = lookupChoices(tagsApi, (tag) => ({ id: tag.id, text: tag.name }));
+const knownTags = new Map<number, LookupChoice>(); // filled by the application
+
+async function fetchTagChoices(queryValue?: string, idValue?: number | number[] | null) {
+  if (idValue == null) return fetchTags(queryValue);
+  const ids = Array.isArray(idValue) ? idValue : [idValue];
+  const missing = ids.filter((id) => !knownTags.has(id));
+  const fetched = missing.length ? await fetchTags(undefined, missing) : [];
+  return [...ids.flatMap((id) => knownTags.get(id) ?? []), ...fetched];
+}
+```
+
+The reference is [`lookupChoices`](../api/vue-mixins#lookupchoices).
 
 ## Declaring a viewset class
 

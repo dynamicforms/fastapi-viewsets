@@ -174,8 +174,11 @@ repeated key is deleted once. Override it to delete in one statement or one tran
 
 `LookupMixin[TLookupFilter, TLookupItem]` adds a `GET /lookup` endpoint that returns a list of
 `TLookupItem` objects — useful for populating select/autocomplete widgets. `TLookupFilter` defaults
-to `LookupFilter` (a single `q: str | None` field) and `TLookupItem` to `LookupItem`
-(`group`, `pk`, `title`, `icon`). The fields of `TLookupFilter` are the endpoint's query parameters.
+to `LookupFilter` and `TLookupItem` to `LookupItem` (`group`, `pk`, `title`, `icon`). The fields of
+`TLookupFilter` are the endpoint's query parameters. `LookupFilter` has two: `q`, a search in the
+title, and `ids`, primary keys read from a repeated key (`?ids=1&ids=5`). The TS
+[`lookupChoices`](./vue-mixins#select-choices-lookupchoices) sends `q` for a select's search and `ids`
+for the labels of its value.
 
 A lookup request runs through the same stages as a [list](./list-pipeline):
 
@@ -185,7 +188,8 @@ A lookup request runs through the same stages as a [list](./list-pipeline):
    `query.mark_applied("filter")`; the default then leaves the records as they are. Without an
    override, the default filters the converted items in memory: by the declaration of a filter model
    built with `make_filter_model`, otherwise through **`filter_lookup(fltr, items)`**, whose default
-   keeps the items whose `title` contains `fltr.q`, ignoring case.
+   keeps the items whose `title` contains `fltr.q`, ignoring case, and whose `pk` is in `fltr.ids`,
+   compared as strings (`str(item.pk)`); a field that is not set does not filter.
 3. **`to_lookup_item(raw)`** converts each row to `TLookupItem`. The default is identity.
 
 The filter is passed through `query`, so concurrent requests on one viewset instance (the default
@@ -201,7 +205,7 @@ import locale
 
 from fastapi_viewsets.mixins import LookupMixin, LookupItem, LookupFilter
 
-# Default behaviour: q= query param, filters by title
+# Default filter: ?q= searches the title, ?ids=1&ids=5 selects by pk
 class MyViewSet(..., LookupMixin):
     async def perform_lookup(self, context: Context) -> list[LookupItem]:
         items = sorted(db.values(), key=lambda i: locale.strxfrm(i.name))

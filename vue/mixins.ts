@@ -200,9 +200,13 @@ export class LookupMixin<L = LookupItem> {
   static readonly actions: readonly string[] = ['lookup'];
 }
 
-/** Query parameters a lookup call accepts: `q` and whatever else the BE lookup filter model declares. */
+/**
+ * Query parameters a lookup call accepts: `q` and `ids` of the BE default `LookupFilter`, and whatever else the BE
+ * lookup filter model declares. `ids` is sent as a repeated key.
+ */
 export interface LookupParams {
   q?: string;
+  ids?: Array<string | number>;
   [key: string]: string | number | boolean | null | undefined | Array<string | number>;
 }
 

@@ -223,7 +223,8 @@ it with the response model.
     by the declaration of a `make_filter_model` filter model, otherwise with `filter_lookup`.
   - `filter_lookup(fltr: TLookupFilter, items: list[TLookupItem]) -> list[TLookupItem]` — in-memory
     hook of a hand-written filter model; the default keeps items whose `title` contains `fltr.q`,
-    ignoring case.
+    ignoring case, and whose `str(pk)` equals the string of an entry of `fltr.ids`. A field that is
+    `None` does not filter.
   - `to_lookup_item(raw) -> TLookupItem` — row conversion; identity by default.
   - `land_lookup(query, records) -> list[TLookupItem]` — materialises the source and converts it,
     once per request.
@@ -238,7 +239,11 @@ class LookupItem(BaseModel):
 
 class LookupFilter(BaseModel):
     q: str | None = None
+    ids: list[int | str] | None = None
 ```
+
+`ids` is read from a repeated query key (`?ids=1&ids=5`) and documented in OpenAPI as an array of integers or
+strings.
 
 ## Combined viewset mixins
 

@@ -27,9 +27,10 @@ interface LookupItem {
   icon: string | null;
 }
 
-/** `q` and the other fields of the BE lookup filter model. */
+/** `q` and `ids` of the BE default `LookupFilter`, and the other fields of the BE lookup filter model. */
 interface LookupParams {
   q?: string;
+  ids?: Array<string | number>;
   [key: string]: string | number | boolean | null | undefined | Array<string | number>;
 }
 
@@ -392,6 +393,48 @@ lookup(params?: LookupParams): ViewSetActionCall<L[]>;
 
 An array in `params` goes out as a repeated key (`ids=1&ids=2`) on both transports. On
 `ViewSetProxyBase` the method is `lookup<I = LookupItem>(params?: LookupParams): ViewSetActionCall<I[]>`.
+
+## lookupChoices
+
+```ts
+interface LookupChoice {
+  id: any;
+  text: any;
+  icon?: string;
+}
+type FetchLookupChoices = (queryValue?: string, idValue?: KeyType | KeyType[] | null) => Promise<LookupChoice[]>;
+type LookupChoicesParams = Pick<LookupParams, 'q' | 'ids'>;
+interface LookupChoicesSource<L> {
+  lookup(params: LookupChoicesParams): PromiseLike<L[]>;
+}
+
+function lookupChoices(viewset: LookupChoicesSource<LookupItem>): FetchLookupChoices;
+function lookupChoices<L>(viewset: LookupChoicesSource<L>, toChoice: (item: L) => LookupChoice): FetchLookupChoices;
+function lookupChoices<L>(
+  lookup: (params: LookupChoicesParams) => PromiseLike<L[]>,
+  toChoice: (item: L) => LookupChoice,
+): FetchLookupChoices;
+```
+
+Returns a `fetchChoices` for a `@dynamicforms/vuetify-inputs` `df-select`. `LookupChoice` has the shape of its
+`SelectChoice`, and `FetchLookupChoices` is assignable to its `SelectFetchChoices`; the package does not import
+`@dynamicforms/vuetify-inputs`.
+
+The returned function:
+
+- with `idValue` neither `null` nor `undefined`: sends `{ ids }`, `idValue` as an array; an empty array resolves to
+  `[]` without a request;
+- otherwise: sends `{ q: queryValue }`, or `{}` when `queryValue` is `undefined` or `''`;
+- converts each item with `toChoice`.
+
+| Form | Lookup call | Conversion |
+|------|-------------|------------|
+| `lookupChoices(viewset)` | `viewset.lookup(params)` | `pk` → `id`, `title` → `text`, `icon` → `icon`, left out when `null` |
+| `lookupChoices(viewset, toChoice)` | `viewset.lookup(params)` | `toChoice(item)` |
+| `lookupChoices(lookup, toChoice)` | `lookup(params)` | `toChoice(item)` |
+
+`lookup` is called as a method of `viewset`. The first form is a compile error for a viewset whose lookup item type is
+not a `LookupItem`.
 
 ## Combined viewset mixins
 

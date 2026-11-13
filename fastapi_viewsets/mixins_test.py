@@ -6,6 +6,7 @@ from typing import Any, TypeVar
 import pytest
 
 from fastapi import APIRouter, FastAPI
+from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from fastapi_viewsets.collection_viewset import CollectionViewSet
@@ -432,7 +433,7 @@ _LOOKUP_DB: list[LookupItem] = [
 
 
 class LookupItemViewSet(CollectionViewSet[int, Item], LookupMixin):
-    """Uses the default LookupFilter (q only)."""
+    """Uses the default LookupFilter."""
 
     def __init__(self):
         super().__init__(container=_DB, pk_field="id")
@@ -554,6 +555,85 @@ async def test_lookup_fltr_none_returns_all():
 
     result = await lookup_route.endpoint(fltr=None)
     assert len(result) == len(_LOOKUP_DB)
+
+
+# ---------------------------------------------------------------------------
+# runtime behaviour – default filter by ids
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ids", [[2, 4], ["2", "4"]])
+async def test_lookup_ids_filters_integer_pks(ids):
+    result = await lookup_endpoint(LookupItemViewSet)(fltr=LookupFilter(ids=ids))
+    assert [item.title for item in result] == ["Banana", "Cherry"]
+
+
+class StrPkLookupViewSet(CollectionViewSet[int, Item], LookupMixin):
+    def __init__(self):
+        super().__init__(container=_DB, pk_field="id")
+
+    async def perform_lookup(self, _context: Context) -> list[LookupItem]:
+        return [LookupItem(pk=code, title=title) for code, title in [("si", "Slovenia"), ("hr", "Croatia")]]
+
+
+@pytest.mark.asyncio
+async def test_lookup_ids_filters_string_pks():
+    result = await lookup_endpoint(StrPkLookupViewSet)(fltr=LookupFilter(ids=["hr", "xx"]))
+    assert [item.title for item in result] == ["Croatia"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_q_and_ids_both_filter():
+    result = await lookup_endpoint(LookupItemViewSet)(fltr=LookupFilter(q="ap", ids=[1, 2]))
+    assert [item.title for item in result] == ["Apple"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_without_ids_does_not_filter_by_pk():
+    result = await lookup_endpoint(LookupItemViewSet)(fltr=LookupFilter(q="a"))
+    assert [item.title for item in result] == ["Apple", "Banana", "Apricot"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_empty_ids_matches_nothing():
+    assert await lookup_endpoint(LookupItemViewSet)(fltr=LookupFilter(ids=[])) == []
+
+
+def test_lookup_ids_param_documented_as_an_array_in_openapi():
+    router = APIRouter()
+    route_viewset(router, base_path="/items")(LookupItemViewSet)
+    app = FastAPI()
+    app.include_router(router)
+
+    parameters = app.openapi()["paths"]["/items/lookup"]["get"]["parameters"]
+    ids = next(p for p in parameters if p["name"] == "ids")
+    assert ids["in"] == "query"
+    assert ids["required"] is False
+    assert ids["description"] == LookupFilter.model_fields["ids"].description
+    array = next(option for option in ids["schema"]["anyOf"] if option.get("type") == "array")
+    assert array["items"] == {"anyOf": [{"type": "integer"}, {"type": "string"}]}
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("?ids=1&ids=3", [1, 3]),
+        ("?ids=4", [4]),
+        ("?q=ap&ids=1&ids=2", [1]),
+        ("?q=an", [2]),
+        ("", [1, 2, 3, 4]),
+    ],
+)
+def test_lookup_reads_ids_from_repeated_keys_over_http(query, expected):
+    router = APIRouter()
+    route_viewset(router, base_path="/items")(LookupItemViewSet)
+    app = FastAPI()
+    app.include_router(router)
+
+    response = TestClient(app).get(f"/items/lookup{query}")
+    assert response.status_code == 200
+    assert [item["pk"] for item in response.json()] == expected
 
 
 # ---------------------------------------------------------------------------

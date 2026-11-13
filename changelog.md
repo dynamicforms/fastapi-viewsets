@@ -6,6 +6,18 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.5] - 2026-11-13
+
+### Added
+
+- `LookupFilter.ids`: primary keys of the choices to return, read from a repeated key (`ids=1&ids=5`). The default
+  `filter_lookup` keeps the items matching both `q` and `ids`, comparing each id as a string with `str(item.pk)`. The
+  OpenAPI of every lookup with the default filter documents `ids` as an array of integers or strings.
+- TS: `lookupChoices(viewset)`, `lookupChoices(viewset, toChoice)` and `lookupChoices(lookup, toChoice)` build the
+  `fetchChoices` of a `@dynamicforms/vuetify-inputs` `df-select` from a lookup: a search sends `q`, resolving the
+  select's value sends `ids`. Types `LookupChoice`, `FetchLookupChoices`, `LookupChoicesParams`,
+  `LookupChoicesSource`. `LookupParams` declares `ids`.
+
 ## [0.15.4] - 2026-11-12
 
 ### Fixed
