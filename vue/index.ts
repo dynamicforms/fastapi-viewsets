@@ -39,6 +39,9 @@ export type {
   PaginatedList,
 } from './mixins';
 
+export type { FetchLookupChoices, LookupChoice, LookupChoicesParams, LookupChoicesSource } from './lookup-choices';
+export { lookupChoices } from './lookup-choices';
+
 export type { SortState, SortStateColumn } from './sort';
 export { formatSort, parseSort } from './sort';
 

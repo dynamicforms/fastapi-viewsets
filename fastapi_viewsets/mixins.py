@@ -788,9 +788,13 @@ class LookupItem(BaseModel):
 
 
 class LookupFilter(BaseModel):
-    """Default filter model for LookupMixin. Provides case-insensitive title search via q."""
+    """Default filter model for LookupMixin: a case-insensitive title search (`q`) and primary keys (`ids`)."""
 
     q: str | None = Field(None, description="Text the choice's title contains, case-insensitive. Omit for all choices.")
+    ids: list[int | str] | None = Field(
+        None,
+        description="Primary keys of the choices to return, as a repeated key (`ids=1&ids=5`). Omit for all choices.",
+    )
 
 
 TLookupFilter = TypeVar("TLookupFilter", default=LookupFilter)
@@ -843,13 +847,18 @@ class LookupMixin(Generic[TLookupFilter, TLookupItem], ABC):
     async def filter_lookup(self, fltr: TLookupFilter, items: list[TLookupItem]) -> list[TLookupItem]:
         """
         In-memory filter hook of a hand-written filter model, called with the converted items.
-        The default filters by `fltr.q`: a case-insensitive substring of the item's `title`.
+        The default keeps the items matching both `fltr.q`, a case-insensitive substring of the item's
+        `title`, and `fltr.ids`, compared as strings with `str(item.pk)`; an unset field does not filter.
         """
         q = getattr(fltr, "q", None)
-        if q is None:
-            return items
-        needle = q.lower()
-        return [item for item in items if needle in str(getattr(item, "title", "")).lower()]
+        ids = getattr(fltr, "ids", None)
+        if q is not None:
+            needle = q.lower()
+            items = [item for item in items if needle in str(getattr(item, "title", "")).lower()]
+        if ids is not None:
+            wanted = {str(pk) for pk in ids}
+            items = [item for item in items if (pk := getattr(item, "pk", None)) is not None and str(pk) in wanted]
+        return items
 
     def to_lookup_item(self, raw: Any) -> TLookupItem:
         """Converts one source row into TLookupItem; identity by default."""
