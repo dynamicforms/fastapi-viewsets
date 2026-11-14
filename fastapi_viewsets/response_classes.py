@@ -1,80 +1,155 @@
 """
-The OpenAPI `responses` entries of the error responses of a viewset's endpoints. Every entry
-documents the body as `ApiErrorBody` (`fastapi_viewsets.error_responses`).
+The OpenAPI `responses` entries of the error responses of a viewset's endpoints, and `error_entry()` /
+`merge_responses()`, which build and merge such entries. Every entry documents the body as `ApiErrorBody`
+(`fastapi_viewsets.error_responses`).
 """
+
+import copy
 
 from typing import Any
 
+from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
+
+from .cursor import CursorError
 from .error_namespace import _namespaced
-from .error_responses import ApiErrorBody, VALIDATION_FAILED_DETAIL
+from .error_responses import ApiErrorBody, error_body
+from .exceptions import (
+    CursorRequestError,
+    EventCursorsExceededError,
+    EventTopicInvalidError,
+    IdempotencyKeyReusedError,
+    NotFoundError,
+    RateLimitedError,
+    UnhandledError,
+)
+
+_JSON = "application/json"
+_ERROR_BODY_REF = {"$ref": "#/components/schemas/ApiErrorBody"}
+_DESCRIPTION_SEPARATOR = "\n\n"
 
 
-def _example(detail: str, code: str, params: dict[str, Any] | None = None, fields: dict | None = None) -> dict:
-    return {"detail": detail, "detail_code": code, "detail_params": params or {}, "field_errors": fields or {}}
+def error_entry(
+    status: int | str, description: str, *errors: BaseException, as_ref: bool = False, **named_errors: BaseException
+) -> dict[str, dict[str, Any]]:
+    """
+    `{str(status): entry}`, an OpenAPI `responses` entry whose body is `ApiErrorBody`, with one example per
+    exception, its body built with `error_body()`. A positional exception's example is named after the last
+    segment of its code and summarised by its detail; a keyword exception's example is named and summarised
+    by its keyword. The body is `model: ApiErrorBody` (the form of route declarations and `@endpoint_docs`);
+    with `as_ref` it is `content.application/json.schema` referring to `#/components/schemas/ApiErrorBody`,
+    the form for editing a generated schema. Two examples of one name raise `ValueError`.
+    """
+    examples: dict[str, dict[str, Any]] = {}
+
+    def add(name: str, summary: str, value: dict[str, Any]) -> None:
+        if name in examples:
+            raise ValueError(f"error_entry({status!r}) has two examples named {name!r}; name one by keyword")
+        examples[name] = {"summary": summary, "value": value}
+
+    for error in errors:
+        body = error_body(error)
+        add(body["detail_code"].rsplit(".", 1)[-1], body["detail"], body)
+    for name, error in named_errors.items():
+        add(name, name, error_body(error))
+
+    media: dict[str, Any] = {"schema": dict(_ERROR_BODY_REF)} if as_ref else {}
+    if examples:
+        media["examples"] = examples
+    entry: dict[str, Any] = {} if as_ref else {"model": ApiErrorBody}
+    entry["description"] = description
+    entry["content"] = {_JSON: media}
+    return {str(status): entry}
 
 
-def _entry(description: str, examples: dict[str, tuple[str, dict]]) -> dict[str, Any]:
-    return {
-        "model": ApiErrorBody,
-        "description": description,
-        "content": {
-            "application/json": {
-                "examples": {name: {"summary": summary, "value": value} for name, (summary, value) in examples.items()}
-            }
-        },
-    }
+def _merged_description(first: str | None, second: str | None) -> str | None:
+    """Both descriptions as paragraphs, each paragraph once."""
+    paragraphs: list[str] = []
+    for text in (first, second):
+        for paragraph in (text or "").split(_DESCRIPTION_SEPARATOR):
+            if paragraph.strip() and paragraph not in paragraphs:
+                paragraphs.append(paragraph)
+    return _DESCRIPTION_SEPARATOR.join(paragraphs) if paragraphs else None
 
 
-NOT_FOUND_RESPONSE = {
-    "404": _entry(
-        "No item has the primary key `pk`: `fastapi-viewsets.not_found`.",
-        {
-            "not_found": (
-                "No item with this primary key",
-                _example("Item with pk 42 not found", _namespaced("not_found"), {"pk": 42}),
-            )
-        },
-    )
-}
+def _add_lone_example(examples: dict[str, Any], example: dict[str, Any]) -> None:
+    """Adds `example` as `example` (`example_2`, ... when taken) unless an equal example is there."""
+    if example in examples.values():
+        return
+    name, number = "example", 1
+    while name in examples:
+        number += 1
+        name = f"example_{number}"
+    examples[name] = example
+
+
+def _merged_media(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+    merged = {**first, **second}
+    if any(key in media for media in (first, second) for key in ("example", "examples")):
+        examples: dict[str, Any] = {}
+        for media in (first, second):
+            examples.update(media.get("examples") or {})
+            if "example" in media:
+                _add_lone_example(examples, {"value": media["example"]})
+        merged.pop("example", None)
+        merged["examples"] = examples
+    return merged
+
+
+def _merged_entry(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+    merged = {**first, **second}
+    description = _merged_description(first.get("description"), second.get("description"))
+    if description is not None:
+        merged["description"] = description
+    if "content" in first or "content" in second:
+        content = dict(first.get("content") or {})
+        for media_type, media in (second.get("content") or {}).items():
+            content[media_type] = _merged_media(content[media_type], media) if media_type in content else media
+        merged["content"] = content
+    if "headers" in first or "headers" in second:
+        merged["headers"] = {**(first.get("headers") or {}), **(second.get("headers") or {})}
+    return merged
+
+
+def merge_responses(*responses: dict[Any, dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    """
+    OpenAPI `responses` merged by status (keys as strings), in the `model` or the `$ref` form: descriptions
+    joined as paragraphs, each once; `content` combined per media type, with `examples` merged by name (a
+    later example replaces one of the same name; a lone `example` becomes a named one); `headers` merged by
+    name; any other key of a later entry replaces the earlier one's. The arguments are not modified.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    for response in responses:
+        for status, entry in (response or {}).items():
+            key = str(status)
+            entry = copy.deepcopy(entry)
+            merged[key] = _merged_entry(merged[key], entry) if key in merged else entry
+    return merged
+
+
+NOT_FOUND_RESPONSE = error_entry(
+    404, "No item has the primary key `pk`: `fastapi-viewsets.not_found`.", NotFoundError(42)
+)
 """The `responses` entry of the endpoints that address one item by `pk`."""
 
-BULK_NOT_FOUND_RESPONSE = {
-    "404": _entry(
-        "A primary key of the body has no item: `fastapi-viewsets.not_found`.",
-        {
-            "not_found": (
-                "No item with this primary key",
-                _example("Item with pk 42 not found", _namespaced("not_found"), {"pk": 42}),
-            )
-        },
-    )
-}
+BULK_NOT_FOUND_RESPONSE = error_entry(
+    404, "A primary key of the body has no item: `fastapi-viewsets.not_found`.", NotFoundError(42)
+)
 """The `responses` entry of the bulk endpoints that address items by the primary keys of the body."""
 
-_VALIDATION_FAILED_EXAMPLE = (
-    "A value of the request failed validation",
-    _example(
-        VALIDATION_FAILED_DETAIL,
-        _namespaced("validation_failed"),
-        fields={
-            "name": [
-                {
-                    "code": "pydantic.string_too_short",
-                    "params": {"min_length": 3},
-                    "detail": "String should have at least 3 characters",
-                }
-            ],
-            "": [{"code": "pydantic.missing", "params": {}, "detail": "Field required"}],
+_VALIDATION_FAILED = RequestValidationError(
+    [
+        {
+            "type": "string_too_short",
+            "loc": ("body", "name"),
+            "msg": "String should have at least 3 characters",
+            "ctx": {"min_length": 3},
         },
-    ),
+        {"type": "missing", "loc": ("body",), "msg": "Field required"},
+    ]
 )
 
-_IDEMPOTENCY_KEY_REUSED_EXAMPLE = (
-    "With the Idempotency middleware: the Idempotency-Key was recorded for a different request",
-    _example(
-        "Idempotency key k1 was used for a different request", _namespaced("idempotency_key_reused"), {"key": "k1"}
-    ),
-)
+_IDEMPOTENCY_KEY_REUSED = IdempotencyKeyReusedError("k1")
 
 _422_DESCRIPTION = (
     "The request failed validation: `fastapi-viewsets.validation_failed`, with each failure in `field_errors` "
@@ -92,94 +167,55 @@ _DEFAULT_DESCRIPTION = (
     "`fastapi-viewsets.http_error` with its status in `detail_params.status`."
 )
 
-_HTTP_ERROR_EXAMPLE = (
-    "An HTTPException without a code",
-    _example("Not your item", _namespaced("http_error"), {"status": 403}),
-)
+_HTTP_ERROR = HTTPException(403, "Not your item")
 
-_RATE_LIMITED_EXAMPLE = (
-    "With the RateLimiter middleware: the call was refused",
-    _example("Rate limit exceeded", _namespaced("rate_limited")),
-)
-
-VIEWSET_ERROR_RESPONSES = {
-    "422": _entry(
-        _422_DESCRIPTION,
-        {"validation_failed": _VALIDATION_FAILED_EXAMPLE, "idempotency_key_reused": _IDEMPOTENCY_KEY_REUSED_EXAMPLE},
-    ),
-    "500": _entry(
+VIEWSET_ERROR_RESPONSES = merge_responses(
+    error_entry(422, _422_DESCRIPTION, _VALIDATION_FAILED, _IDEMPOTENCY_KEY_REUSED),
+    error_entry(
+        500,
         "The endpoint raised an exception without a handler: `fastapi-viewsets.unhandled_error`. The body "
         "names no part of the exception; the server logs it. A deferred action that failed in its executor "
         "answers `fastapi-viewsets.action_failed`.",
-        {
-            "unhandled_error": (
-                "An exception without a handler",
-                _example("Internal Server Error", _namespaced("unhandled_error")),
-            )
-        },
+        UnhandledError(),
     ),
-    "default": _entry(_DEFAULT_DESCRIPTION, {"http_error": _HTTP_ERROR_EXAMPLE, "rate_limited": _RATE_LIMITED_EXAMPLE}),
-}
+    error_entry("default", _DEFAULT_DESCRIPTION, _HTTP_ERROR, RateLimitedError()),
+)
 """The `responses` entries every endpoint of a viewset carries, under the endpoint's own entries."""
 
-CURSOR_ERROR_RESPONSES = {
-    "default": _entry(
-        _DEFAULT_DESCRIPTION + " A `cursor` the list cannot continue from answers 400: "
-        "`fastapi-viewsets.cursor_unreadable`, `fastapi-viewsets.cursor_missing_position`, "
-        "`fastapi-viewsets.cursor_stale`, `fastapi-viewsets.cursor_missing_keys`, "
-        "`fastapi-viewsets.cursor_value_mismatch`.",
-        {
-            "http_error": _HTTP_ERROR_EXAMPLE,
-            "cursor_stale": (
-                "The cursor belongs to another query",
-                _example(
-                    "this cursor was issued for a different ordering or filter - start from the first page",
-                    _namespaced("cursor_stale"),
-                ),
-            ),
-            "rate_limited": _RATE_LIMITED_EXAMPLE,
-        },
+CURSOR_ERROR_RESPONSES = error_entry(
+    "default",
+    _DEFAULT_DESCRIPTION + " A `cursor` the list cannot continue from answers 400: "
+    "`fastapi-viewsets.cursor_unreadable`, `fastapi-viewsets.cursor_missing_position`, "
+    "`fastapi-viewsets.cursor_stale`, `fastapi-viewsets.cursor_missing_keys`, "
+    "`fastapi-viewsets.cursor_value_mismatch`.",
+    _HTTP_ERROR,
+    CursorRequestError(
+        CursorError(
+            "this cursor was issued for a different ordering or filter - start from the first page",
+            _namespaced("cursor_stale"),
+        )
     ),
-}
+    RateLimitedError(),
+)
 """The `responses` entry of the list endpoint; `route_viewset` keeps it on a viewset serving the cursor shape."""
 
-SUBSCRIBE_ERROR_RESPONSES = {
-    "422": _entry(
-        _422_DESCRIPTION + " A malformed topic: `fastapi-viewsets.event_topic_invalid`.",
-        {
-            "validation_failed": _VALIDATION_FAILED_EXAMPLE,
-            "event_topic_invalid": (
-                "A malformed topic",
-                _example(
-                    "Topic @x is neither a path starting with / nor a source name with an optional key",
-                    _namespaced("event_topic_invalid"),
-                    {"topic": "@x"},
-                ),
-            ),
-            "idempotency_key_reused": _IDEMPOTENCY_KEY_REUSED_EXAMPLE,
-        },
-    ),
-}
+SUBSCRIBE_ERROR_RESPONSES = error_entry(
+    422,
+    _422_DESCRIPTION + " A malformed topic: `fastapi-viewsets.event_topic_invalid`.",
+    _VALIDATION_FAILED,
+    EventTopicInvalidError("@x"),
+    _IDEMPOTENCY_KEY_REUSED,
+)
 """The `responses` entry of the events `subscribe` endpoint."""
 
-POLL_ERROR_RESPONSES = {
-    "422": _entry(
-        _422_DESCRIPTION + " More cursors than `settings.viewsets_event_max_subscriptions`: "
-        "`fastapi-viewsets.event_cursors_exceeded`.",
-        {
-            "validation_failed": _VALIDATION_FAILED_EXAMPLE,
-            "event_cursors_exceeded": (
-                "More cursors than the server accepts in one poll",
-                _example(
-                    "A poll carries at most 256 cursors, this one carries 300",
-                    _namespaced("event_cursors_exceeded"),
-                    {"count": 300, "limit": 256},
-                ),
-            ),
-            "idempotency_key_reused": _IDEMPOTENCY_KEY_REUSED_EXAMPLE,
-        },
-    ),
-}
+POLL_ERROR_RESPONSES = error_entry(
+    422,
+    _422_DESCRIPTION + " More cursors than `settings.viewsets_event_max_subscriptions`: "
+    "`fastapi-viewsets.event_cursors_exceeded`.",
+    _VALIDATION_FAILED,
+    EventCursorsExceededError(300, 256),
+    _IDEMPOTENCY_KEY_REUSED,
+)
 """The `responses` entry of the events `poll` endpoint."""
 
 

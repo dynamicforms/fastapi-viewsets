@@ -180,3 +180,48 @@ entry the endpoint declares itself (`@router.get(..., responses={409: {...}})`) 
 entry of the same status. The entries are in `fastapi_viewsets.response_classes`: `VIEWSET_ERROR_RESPONSES` on every
 endpoint, and the endpoints' own `NOT_FOUND_RESPONSE`, `BULK_NOT_FOUND_RESPONSE`, `CURSOR_ERROR_RESPONSES`,
 `SUBSCRIBE_ERROR_RESPONSES` and `POLL_ERROR_RESPONSES`.
+
+### An application's own error responses
+
+`error_entry(status, description, *errors, as_ref=False, **named_errors)` builds one entry, `{str(status): entry}`,
+whose examples are the bodies its exceptions are answered with (`error_body()`):
+
+- a positional exception gives an example named after the last segment of its code, summarised by its `detail`;
+- a keyword exception gives an example named and summarised by its keyword, for errors the code does not tell apart
+  (two `fastapi-viewsets.http_error`, two `app.conflict` with different `params`).
+
+Two examples of one name raise `ValueError`. The body is `model: ApiErrorBody`, the form of route declarations; with
+`as_ref=True` it is `content.application/json.schema: {"$ref": "#/components/schemas/ApiErrorBody"}`, the form for
+editing a generated document.
+
+`merge_responses(*responses)` merges entries by status, in either form, and returns a new dict with string keys:
+
+| part | merged |
+|---|---|
+| `description` | joined as paragraphs (`\n\n`), each paragraph once |
+| `content` | per media type; a media type of one entry only is kept as it is |
+| `examples` | by name, a later example replaces one of the same name; a lone `example` becomes a named one (`example`, `example_2`, …), unless an equal example is there |
+| `headers` | by name, a later header replaces one of the same name |
+| any other key (`model`, `schema`, `links`) | a later entry's replaces |
+
+```python
+from fastapi import APIRouter, HTTPException
+
+from fastapi_viewsets.response_classes import NOT_FOUND_RESPONSE, error_entry, merge_responses
+
+class OrderViewSet(CollectionViewSet[int, Order]):
+    __router = APIRouter()
+
+    @__router.get(
+        "{pk}/invoice",
+        responses=merge_responses(
+            NOT_FOUND_RESPONSE,
+            error_entry(404, "The order has no invoice.", no_invoice=HTTPException(404, "No invoice")),
+            error_entry(409, "The invoice is being issued: `app.invoice_pending`.", InvoicePendingError(42)),
+        ),
+    )
+    async def invoice(self, pk: int) -> Invoice: ...
+```
+
+`with_error_responses(responses)` puts `responses` over `VIEWSET_ERROR_RESPONSES`, an entry replacing the package's
+entry of the same status.

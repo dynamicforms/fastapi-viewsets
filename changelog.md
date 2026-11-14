@@ -6,7 +6,7 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.15.5] - 2026-11-13
+## [0.15.5] - 2026-11-14
 
 ### Added
 
@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fetchChoices` of a `@dynamicforms/vuetify-inputs` `df-select` from a lookup: a search sends `q`, resolving the
   select's value sends `ids`. Types `LookupChoice`, `FetchLookupChoices`, `LookupChoicesParams`,
   `LookupChoicesSource`. `LookupParams` declares `ids`.
+- `error_entry(status, description, *errors, as_ref=False, **named_errors)` in `fastapi_viewsets.response_classes`:
+  an OpenAPI `responses` entry whose body is `ApiErrorBody`, with one example per exception built with `error_body()`;
+  a positional exception's example is named after its code and summarised by its detail, a keyword exception's by its
+  keyword. The body is `model: ApiErrorBody`, or with `as_ref=True` a `$ref` to `#/components/schemas/ApiErrorBody`.
+- `merge_responses(*responses)` in `fastapi_viewsets.response_classes`: merges OpenAPI `responses` entries by status,
+  joining descriptions, merging `examples` by name (a lone `example` becomes a named one) and `headers` by name.
+
+### Changed
+
+- The package's own error `responses` entries (`NOT_FOUND_RESPONSE`, `VIEWSET_ERROR_RESPONSES`, …) are built with
+  `error_entry()`: each example's summary is the error's `detail`. Example names and bodies are unchanged.
 
 ## [0.15.4] - 2026-11-12
 
