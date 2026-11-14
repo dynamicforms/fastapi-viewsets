@@ -19,7 +19,8 @@ export default defineConfig({
         const dist = resolve(import.meta.dirname, 'dist');
         const paths = readdirSync(dist, { recursive: true, encoding: 'utf-8' })
           .filter((file) => file.endsWith('.d.ts'))
-          .flatMap((file) => readFileSync(resolve(dist, file), 'utf-8').match(/(?:from |import\()['"][^'"]*node_modules[^'"]*['"]/g) ?? []);
+          .flatMap((file) => readFileSync(resolve(dist, file), 'utf-8')
+            .match(/(?:from |import\()['"][^'"]*node_modules[^'"]*['"]/g) ?? []);
         if (paths.length) throw new Error(`declarations import from node_modules paths: ${paths.join(', ')}`);
       },
     }),
