@@ -79,6 +79,10 @@ omitted is left alone:
 | `deprecated` | strikes the operation through |
 | `tags` | moves it to a different group |
 | `parameters` | descriptions of path, query and header parameters, by their name in the schema (`pk`, `sort`, `limit`, `X-List-Shape`, …) |
+| `responses` | `responses` entries by status, merged into the endpoint's entries of the same status (see [Error responses](#error-responses)) |
+| `openapi_extra` | fields merged into the operation, e.g. `security` or full parameter objects under `parameters` |
+
+A key outside these raises `ValueError`.
 
 ```python
 @endpoint_docs({
@@ -91,11 +95,64 @@ A name in `parameters` that the endpoint does not have raises. A parameter is na
 is declared `Annotated[int, Path()]` or `int = Path()`. The fields of a filter model are not
 endpoint parameters: their descriptions come from the model's `Field(description=...)`.
 
-Documentation is inherited through the MRO, so a base viewset can document the actions its
-subclasses share and each subclass override only what it disagrees with. `parameters` merges per
-parameter.
+### Every action: `'*'`
 
-The action name of the `/schema` endpoint is `schema`.
+The entry under the key `'*'` (`EVERY_ACTION` in `fastapi_viewsets.endpoint_docs`) documents every action of the
+viewset except `schema`:
+
+```python
+from fastapi_viewsets.exceptions import SessionExpiredError
+from fastapi_viewsets.response_classes import error_entry
+
+@endpoint_docs({
+    "*": {
+        "openapi_extra": {"security": [{"session": []}]},
+        "responses": error_entry(401, "No session: `fastapi-viewsets.session_expired`.", SessionExpiredError()),
+    },
+    "lookup": {"openapi_extra": {"security": []}},
+})
+```
+
+A name in its `parameters` that an endpoint does not have is skipped for that endpoint.
+
+### Inheritance and merging
+
+Documentation is inherited through the MRO, so a base viewset can document the actions its
+subclasses share and each subclass override only what it disagrees with. The entries of an action are
+applied from the base class down; within one class, `'*'` comes before the action's own entry. A later
+entry replaces a field, except:
+
+| field | merged |
+|---|---|
+| `parameters` | per parameter |
+| `responses` | per status with `merge_responses()`, starting from the endpoint's entry of that status (the mixin's, the package's) |
+| `openapi_extra` | `parameters` lists concatenated; dicts merged per key, recursively; any other value replaced (`security`, …): `merge_openapi_extra(base, extra)` |
+
+The merged `openapi_extra` goes into the route's own (the request body description, `x-viewset-action`), and the
+parameters of the [command middleware](./command-middleware) follow its `parameters`. A list declared in
+`openapi_extra`, other than the top-level `parameters`, replaces the operation's list of the same key: a declared
+`security` replaces the one of `settings.viewsets_security_scheme`, and `security: []` documents a public endpoint.
+
+The action name of the `/schema` endpoint is `schema`; `/schema` carries the same operations as the application's
+OpenAPI document.
+
+### Viewsets the package routes
+
+`register_events()` and taskwire's `register_taskwire_rest()` route a viewset class themselves, so
+`@endpoint_docs` cannot go below `@route_viewset` on it. Call `endpoint_docs` on that class before the
+register call:
+
+```python
+from fastapi_viewsets.endpoint_docs import endpoint_docs
+from fastapi_viewsets.events.viewset import EventsViewSet, register_events
+
+endpoint_docs({"*": {"openapi_extra": {"security": [{"session": []}]}}})(EventsViewSet)
+register_events(router)
+```
+
+`register_events()` routes a subclass of `EventsViewSet`, which inherits the documentation;
+`register_taskwire_rest()` routes `TaskwireViewSet` itself. The documentation applies to every mount
+of that class.
 
 ## Parameters and library models
 
@@ -177,6 +234,52 @@ has a description. Nothing to write:
 
 The entries replace FastAPI's own `422` with `HTTPValidationError`, which no longer appears in the document. An
 entry the endpoint declares itself (`@router.get(..., responses={409: {...}})`) is kept, and replaces the package's
-entry of the same status. The entries are in `fastapi_viewsets.response_classes`: `VIEWSET_ERROR_RESPONSES` on every
+entry of the same status. An entry of `@endpoint_docs` `responses` is merged with the entry of the same status, so
+the package's examples stay. The entries are in `fastapi_viewsets.response_classes`: `VIEWSET_ERROR_RESPONSES` on every
 endpoint, and the endpoints' own `NOT_FOUND_RESPONSE`, `BULK_NOT_FOUND_RESPONSE`, `CURSOR_ERROR_RESPONSES`,
 `SUBSCRIBE_ERROR_RESPONSES` and `POLL_ERROR_RESPONSES`.
+
+### An application's own error responses
+
+`error_entry(status, description, *errors, as_ref=False, **named_errors)` builds one entry, `{str(status): entry}`,
+whose examples are the bodies its exceptions are answered with (`error_body()`):
+
+- a positional exception gives an example named after the last segment of its code, summarised by its `detail`;
+- a keyword exception gives an example named and summarised by its keyword, for errors the code does not tell apart
+  (two `fastapi-viewsets.http_error`, two `app.conflict` with different `params`).
+
+Two examples of one name raise `ValueError`. The body is `model: ApiErrorBody`, the form of route declarations; with
+`as_ref=True` it is `content.application/json.schema: {"$ref": "#/components/schemas/ApiErrorBody"}`, the form for
+editing a generated document.
+
+`merge_responses(*responses)` merges entries by status, in either form, and returns a new dict with string keys:
+
+| part | merged |
+|---|---|
+| `description` | joined as paragraphs (`\n\n`), each paragraph once |
+| `content` | per media type; a media type of one entry only is kept as it is |
+| `examples` | by name, a later example replaces one of the same name; a lone `example` becomes a named one (`example`, `example_2`, …), unless an equal example is there |
+| `headers` | by name, a later header replaces one of the same name |
+| any other key (`model`, `schema`, `links`) | a later entry's replaces |
+
+```python
+from fastapi import APIRouter, HTTPException
+
+from fastapi_viewsets.response_classes import NOT_FOUND_RESPONSE, error_entry, merge_responses
+
+class OrderViewSet(CollectionViewSet[int, Order]):
+    __router = APIRouter()
+
+    @__router.get(
+        "{pk}/invoice",
+        responses=merge_responses(
+            NOT_FOUND_RESPONSE,
+            error_entry(404, "The order has no invoice.", no_invoice=HTTPException(404, "No invoice")),
+            error_entry(409, "The invoice is being issued: `app.invoice_pending`.", InvoicePendingError(42)),
+        ),
+    )
+    async def invoice(self, pk: int) -> Invoice: ...
+```
+
+`with_error_responses(responses)` puts `responses` over `VIEWSET_ERROR_RESPONSES`, an entry replacing the package's
+entry of the same status.

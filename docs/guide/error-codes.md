@@ -224,6 +224,20 @@ class InsufficientBalanceError(DfViewSetError):
 A route of a viewset answers every subclass with its `code` and `params`, the package's own errors and an
 application's own alike; `install_error_handlers` does the same for the application's other routes.
 
+`error_entry()` (`fastapi_viewsets.response_classes`) documents such errors as an OpenAPI `responses` entry whose body
+is `ApiErrorBody`, with one example per exception, built as the error is answered; `merge_responses()` merges entries
+of the same status. See [Documenting endpoints](./endpoint-docs#error-responses):
+
+```python
+from fastapi_viewsets.response_classes import error_entry
+
+PAYMENT_REQUIRED = error_entry(
+    402, "The balance does not cover the call: `app.insufficient_balance`.", InsufficientBalanceError(10, 2.5)
+)
+# {"402": {"model": ApiErrorBody, "description": "...", "content": {"application/json": {"examples": {
+#     "insufficient_balance": {"summary": "balance 2.5 is short of the required 10", "value": {...}}}}}}}
+```
+
 An application's own subclass raised by a `celery_viewset` action reaches the FastAPI process as a
 `DfViewSetError` with the same status, `detail`, `code`, `params` and headers; only the classes
 `fastapi_viewsets.exceptions` defines are rebuilt as their own class.
