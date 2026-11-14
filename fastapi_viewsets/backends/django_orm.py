@@ -12,6 +12,7 @@ from functools import reduce
 from typing import Any, ClassVar, Generic, TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import router, transaction
 from django.db.models import BooleanField, F, Func, Q, Value
 from django.db.models.fields import AutoFieldMixin
@@ -21,6 +22,7 @@ from typing_extensions import TypeVar
 
 from ..context import Context
 from ..cursor import CursorPredicate, wants_greater
+from ..error_responses import _django_errors
 from ..exceptions import NotFoundError
 from ..filters import (
     can_compile_all,
@@ -237,7 +239,8 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
     async def perform_update(self, context: Context, pk: K, data: T, partial: bool = True) -> T:
         """
         Writes `data` onto row `pk` under a row lock; see `_update_locked`. A merged record that fails
-        `schema` raises `RequestValidationError` with `loc` `("body", *field)`.
+        `schema`, or whose `save()` raises Django's `ValidationError`, raises `RequestValidationError`
+        with `loc` `("body", *field)`.
         """
         (record,) = await sync_to_async(self._update_locked)(context, {pk: data}, partial, bulk=False)
         return record
@@ -245,14 +248,18 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
     async def perform_bulk_update(self, context: Context, records: dict[K, T], partial: bool = True) -> list[T]:
         """
         Writes every record in one transaction under row locks; one missing or invalid row writes none.
-        All failures raise one `RequestValidationError` with `loc` `("body", pk, *field)`.
+        All `schema` failures raise one `RequestValidationError` with `loc` `("body", pk, *field)` before
+        any row is saved. If every row passes `schema`, the Django `ValidationError`s from `save()` are
+        raised as one `RequestValidationError` with the same `loc` form.
         """
         return await sync_to_async(self._update_locked)(context, records, partial, bulk=True)
 
     def _update_locked(self, context: Context, records: dict[K, T], partial: bool, bulk: bool) -> list[T]:
         """
         In one transaction: locks each row (`SELECT ... FOR UPDATE`), sets the record's fields, validates
-        as `schema` and saves.
+        as `schema` and saves. Each save runs in a savepoint, so the other rows are still saved after one
+        row's `save()` raises a Django `ValidationError`. The errors of all rows are then raised as one
+        `RequestValidationError`, which rolls back every save.
 
         Rows lock in key order so overlapping bulk updates do not deadlock. The lock goes through
         `_base_manager` because `FOR UPDATE` refuses the `distinct()`, aggregation or nullable
@@ -275,15 +282,18 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
                     self.to_record(instance)
                 except ValidationError as error:
                     prefix = ("body", pk) if bulk else ("body",)
-                    errors.extend(
-                        {**entry, "loc": (*prefix, *entry["loc"])}
-                        for entry in error.errors(include_url=False, include_input=False)
-                    )
+                    errors.extend(_merged_row_error(entry, prefix) for entry in error.errors(include_url=False))
                 rows[pk] = instance
             if errors:
                 raise RequestValidationError(errors)
-            for instance in rows.values():
-                instance.save()
+            for pk, instance in rows.items():
+                try:
+                    with transaction.atomic(using=locked.db):
+                        instance.save()
+                except DjangoValidationError as error:
+                    errors.extend(_django_errors(error, ("body", pk) if bulk else ("body",)))
+            if errors:
+                raise RequestValidationError(errors)
         return [self.to_record(rows[pk]) for pk in records]
 
     async def perform_destroy(self, context: Context, pk: K) -> dict[K, None]:
@@ -315,6 +325,14 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
         }
         dumped = data.model_dump(exclude_unset=exclude_unset) if hasattr(data, "model_dump") else dict(data)
         return {editable[name]: value for name, value in dumped.items() if name in editable}
+
+
+def _merged_row_error(entry: dict, prefix: tuple) -> dict:
+    """A pydantic error of a merged row under `prefix`; its input is kept only when null."""
+    error = {key: value for key, value in entry.items() if key != "input"}
+    if entry.get("input", ...) is None:
+        error["input"] = None
+    return {**error, "loc": (*prefix, *entry["loc"])}
 
 
 def _model_columns(model: type["Model"]) -> list:

@@ -248,9 +248,13 @@ class CommandInvalidError(DfViewSetError):
 def _error_to_jsonable(error: BaseException) -> dict[str, Any]:
     """
     `error` as JSON fields (`status_code`, `detail`, `headers`, plus `class`, `code`, `params` for a
-    `DfViewSetError`), for `_error_from_jsonable` in another process or later. A non-HTTP error becomes an
-    `UnhandledError`.
+    `DfViewSetError`), for `_error_from_jsonable` in another process or later. A Django `ValidationError`
+    becomes a `RequestValidationError`, any other non-HTTP error an `UnhandledError`.
     """
+    from .error_responses import _django_errors, _is_django_validation_error
+
+    if _is_django_validation_error(error):
+        error = RequestValidationError(_django_errors(error))
     if isinstance(error, RequestValidationError):
         return {
             "status_code": 422,

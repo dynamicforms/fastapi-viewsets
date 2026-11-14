@@ -25,7 +25,7 @@ from fastapi_viewsets.cursor import (
     make_predicate,
     position_of,
 )
-from fastapi_viewsets.error_responses import ApiErrorBody, error_body
+from fastapi_viewsets.error_responses import _is_django_validation_error, ApiErrorBody, error_body, FieldNames
 from fastapi_viewsets.exceptions import CursorRequestError, UnsupportedListShapeError
 from fastapi_viewsets.filters import filters_from, FilterSet
 from fastapi_viewsets.list_query import (
@@ -61,7 +61,38 @@ def _item_type(cls: type) -> Any:
     return Any if isinstance(item, TypeVar) else item
 
 
-class ImplMixin(Generic[K, T], ABC):
+ROW_KEYED_ACTIONS = frozenset({"bulk_create", "bulk_update", "bulk_partial_update", "bulk_destroy"})
+"""The actions whose body holds one entry per row: a list, or an object keyed by primary key."""
+
+
+class ViewSetBase:
+    """The hooks of every viewset mixin."""
+
+    def error_field(self, context: Context, field: str, code: str) -> str:  # noqa: ARG002
+        """
+        The key a field error goes under in `field_errors`. `field` is the error's key (`''` for the body or a
+        non-field error; in a bulk action the part after the row's key, which stays in front of the result);
+        `code` is its code before the package's field error codes apply: `pydantic.<type>`, `django.<code>`,
+        or a namespaced custom type as is. Returns `field`; `''` puts the error on the form (on the row in
+        a bulk action).
+        """
+        return field
+
+
+def field_names_of(viewset: Any, context: Context, row_keyed: bool | None = None) -> FieldNames | None:
+    """
+    The `FieldNames` of `viewset`'s `error_field` for the action of `context`; None for a viewset without it.
+    `row_keyed` defaults to whether the action is in `ROW_KEYED_ACTIONS`.
+    """
+    error_field = getattr(viewset, "error_field", None)
+    if error_field is None:
+        return None
+    if row_keyed is None:
+        row_keyed = context.action_name in ROW_KEYED_ACTIONS
+    return FieldNames(functools.partial(error_field, context), row_keyed)
+
+
+class ImplMixin(ViewSetBase, Generic[K, T], ABC):
     @abstractmethod
     async def perform_create(self, context: Context, data: T) -> T:
         """
@@ -115,8 +146,9 @@ class ImplMixin(Generic[K, T], ABC):
     async def perform_bulk_destroy(self, context: Context, pk: list[K]) -> dict[K, ApiErrorBody | None]:
         """
         Destroys each key with `perform_destroy`, independently of the others: None for a destroyed key, the
-        `ApiErrorBody` of an `HTTPException` or `RequestValidationError` its destruction raised. Any other
-        exception propagates. A repeated key is destroyed once.
+        `ApiErrorBody` of an `HTTPException`, `RequestValidationError` or Django `ValidationError` raised
+        while destroying the key, its field names from `error_field`. Any other exception propagates. A
+        repeated key is destroyed once.
         """
         results: dict[K, ApiErrorBody | None] = {}
         for one in pk:
@@ -124,8 +156,12 @@ class ImplMixin(Generic[K, T], ABC):
                 continue
             try:
                 await self.perform_destroy(context, one)
-            except (HTTPException, RequestValidationError) as error:
-                results[one] = ApiErrorBody.model_validate(error_body(error))
+            except Exception as error:
+                if not isinstance(error, (HTTPException, RequestValidationError)) and not _is_django_validation_error(
+                    error
+                ):
+                    raise
+                results[one] = ApiErrorBody.model_validate(error_body(error, field_names_of(self, context, False)))
             else:
                 results[one] = None
         return results
@@ -134,7 +170,7 @@ class ImplMixin(Generic[K, T], ABC):
 ###################################################################################################
 # CREATE
 ###################################################################################################
-class CreateMixin(Generic[K, T], ABC):
+class CreateMixin(ViewSetBase, Generic[K, T], ABC):
     """
     Create a model instance.
     """
@@ -148,7 +184,7 @@ class CreateMixin(Generic[K, T], ABC):
         return await self.perform_create(context, data)
 
 
-class BulkOnlyCreateMixin(Generic[K, T], ABC):
+class BulkOnlyCreateMixin(ViewSetBase, Generic[K, T], ABC):
     """
     Create model instances in bulk.
     """
@@ -286,7 +322,7 @@ def check_declared_sort(sort_csv: str, model: Any = None) -> SortState:
 ###################################################################################################
 # LIST
 ###################################################################################################
-class ListMixin(Generic[T, TFilter], ABC):
+class ListMixin(ViewSetBase, Generic[T, TFilter], ABC):
     """
     List endpoint in the shape(s) set by `list_shape` / `list_shapes` (see list_shapes.py). More than one
     shape adds the `X-List-Shape` header and makes the response a union of those models.
@@ -623,7 +659,7 @@ class CursorListMixin(ListMixin[T, TFilter], ABC):
 ###################################################################################################
 # RETRIEVE
 ###################################################################################################
-class RetrieveMixin(Generic[K, T], ABC):
+class RetrieveMixin(ViewSetBase, Generic[K, T], ABC):
     """
     Retrieve a model instance.
     """
@@ -640,7 +676,7 @@ class RetrieveMixin(Generic[K, T], ABC):
 ###################################################################################################
 # UPDATE
 ###################################################################################################
-class UpdateMixin(Generic[K, T], ABC):
+class UpdateMixin(ViewSetBase, Generic[K, T], ABC):
     """
     Update a model instance.
     """
@@ -668,7 +704,7 @@ class UpdateMixin(Generic[K, T], ABC):
         return await self.perform_update(context, pk, data, partial=True)
 
 
-class BulkOnlyUpdateMixin(Generic[K, T], ABC):
+class BulkOnlyUpdateMixin(ViewSetBase, Generic[K, T], ABC):
     """
     Update model instances in bulk.
     """
@@ -722,7 +758,7 @@ class BulkUpdateMixin(UpdateMixin[K, T], BulkOnlyUpdateMixin[K, T]):
 ###################################################################################################
 # DELETE
 ###################################################################################################
-class DestroyMixin(Generic[K, T], ABC):
+class DestroyMixin(ViewSetBase, Generic[K, T], ABC):
     """
     Destroy a model instance.
     """
@@ -736,7 +772,7 @@ class DestroyMixin(Generic[K, T], ABC):
         return await self.perform_destroy(context, pk)
 
 
-class BulkOnlyDestroyMixin(Generic[K, T], ABC):
+class BulkOnlyDestroyMixin(ViewSetBase, Generic[K, T], ABC):
     """
     Destroy model instances in bulk.
     """
@@ -801,7 +837,7 @@ TLookupFilter = TypeVar("TLookupFilter", default=LookupFilter)
 TLookupItem = TypeVar("TLookupItem", default=LookupItem)
 
 
-class LookupMixin(Generic[TLookupFilter, TLookupItem], ABC):
+class LookupMixin(ViewSetBase, Generic[TLookupFilter, TLookupItem], ABC):
     """
     `GET /lookup`: TLookupItem rows for select/autocomplete widgets, filtered by TLookupFilter's fields
     as query parameters. Pipeline: `perform_lookup` -> `apply_lookup_filter` -> `to_lookup_item`. The

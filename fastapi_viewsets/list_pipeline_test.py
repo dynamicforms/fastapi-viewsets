@@ -265,7 +265,7 @@ def test_a_filter_value_that_will_not_convert_is_a_422_on_the_query_parameter():
     assert response.status_code == 422
     assert response.json()["detail_code"] == "fastapi-viewsets.validation_failed"
     [error] = response.json()["field_errors"]["year__in.1"]
-    assert error["code"] == "pydantic.int_parsing"
+    assert error["code"] == "fastapi-viewsets.invalid_integer"
 
 
 def test_in_reads_a_repeated_query_parameter_and_keeps_commas_in_a_value():

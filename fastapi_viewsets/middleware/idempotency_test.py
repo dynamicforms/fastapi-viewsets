@@ -364,7 +364,7 @@ VALIDATION_FAILED = {
     "detail": "The request failed validation",
     "detail_code": "fastapi-viewsets.validation_failed",
     "detail_params": {},
-    "field_errors": {"name": [{"code": "pydantic.value_error", "params": {}, "detail": "Value error, taken"}]},
+    "field_errors": {"name": [{"code": "fastapi-viewsets.invalid", "params": {}, "detail": "Value error, taken"}]},
 }
 
 UNHANDLED = {
@@ -806,3 +806,19 @@ def test_a_repeated_post_answering_a_response_answers_it_again():
         assert response.headers["x-report"] == "7"
         assert response.headers["content-type"] == "application/pdf"
     assert len(runs) == 1
+
+
+def test_a_repeat_of_a_call_that_raised_djangos_validation_error_answers_the_first_calls_422():
+    from django.core.exceptions import ValidationError
+
+    settings.viewsets_command_middleware = [Idempotency(redis_client=FakeRedis())]
+    app, calls = make_failing_app(ValidationError({"name": ["taken"]}))
+    client = TestClient(app, raise_server_exceptions=False)
+    first = client.post("/items", json={"id": 1, "name": "a"}, headers={"Idempotency-Key": KEY})
+    repeat = client.post("/items", json={"id": 1, "name": "a"}, headers={"Idempotency-Key": KEY})
+    expected = {
+        **VALIDATION_FAILED,
+        "field_errors": {"name": [{"code": "fastapi-viewsets.invalid", "params": {}, "detail": "taken"}]},
+    }
+    assert (first.status_code, first.json()) == (repeat.status_code, repeat.json()) == (422, expected)
+    assert len(calls) == 1

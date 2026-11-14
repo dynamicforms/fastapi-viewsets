@@ -130,7 +130,7 @@ def test_a_value_of_a_sequence_field_that_does_not_validate_is_a_422_under_the_p
     body = response.json()
     assert body["detail_code"] == "fastapi-viewsets.validation_failed"
     assert list(body["field_errors"]) == ["ids.1"]
-    assert body["field_errors"]["ids.1"][0]["code"] == "pydantic.int_parsing"
+    assert body["field_errors"]["ids.1"][0]["code"] == "fastapi-viewsets.invalid_integer"
 
 
 def test_the_filter_is_not_read_from_a_body(client):
@@ -286,10 +286,10 @@ def test_a_field_is_read_from_its_alias(constrained):
 @pytest.mark.parametrize(
     ("query", "field", "code"),
     [
-        ("?required=1&page=0", "page", "pydantic.greater_than_equal"),
-        ("?required=1&code=abcd", "code", "pydantic.string_too_long"),
-        ("", "required", "pydantic.missing"),
-        ("?required=13", "", "pydantic.value_error"),
+        ("?required=1&page=0", "page", "fastapi-viewsets.min_value"),
+        ("?required=1&code=abcd", "code", "fastapi-viewsets.max_length"),
+        ("", "required", "fastapi-viewsets.required"),
+        ("?required=13", "", "fastapi-viewsets.invalid"),
     ],
 )
 def test_a_value_that_does_not_validate_is_a_422(constrained, query, field, code):

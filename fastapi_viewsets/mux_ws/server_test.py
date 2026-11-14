@@ -149,7 +149,9 @@ async def test_validation_errors_come_back_as_422_with_the_body_rest_answers():
         "detail_code": "fastapi-viewsets.validation_failed",
         "detail_params": {},
         "field_errors": {
-            "title": [{"code": "pydantic.string_type", "params": {}, "detail": "Input should be a valid string"}]
+            "title": [
+                {"code": "fastapi-viewsets.invalid_type", "params": {}, "detail": "Input should be a valid string"}
+            ]
         },
     }
 
