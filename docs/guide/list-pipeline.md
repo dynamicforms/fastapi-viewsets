@@ -411,7 +411,9 @@ does not revert fields it did not state, and a rule over several fields is check
 values that end up stored. Two updates of the same field end with the later one's value.
 
 A row that fails validation answers 422 `fastapi-viewsets.validation_failed` with the errors of `schema` in
-`field_errors` under `field`, or under `pk.field` for `PATCH /bulk` and `PUT /bulk`, which report every failing row. A bulk
+`field_errors` under `field`, or under `pk.field` for `PATCH /bulk` and `PUT /bulk`, which report every failing row.
+When every row passes `schema`, a Django `ValidationError` from `save()` is reported the same way (see
+[Django's ValidationError](./django-integration#django-s-validationerror)). A bulk
 update with a missing or invalid row writes none of its rows. A row already stored in breach of a
 `@model_validator` rejects every update that leaves it in breach, including one that changes an
 unrelated field.

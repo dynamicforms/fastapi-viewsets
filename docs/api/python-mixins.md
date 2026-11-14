@@ -1,11 +1,30 @@
 # Python Mixins — API Reference
 
-## ImplMixin
+## ViewSetBase
 
-Abstract base. Subclasses implement every `perform_*` method except `perform_bulk_destroy`, which has a default.
+The base of `ImplMixin` and of every operation mixin and `LookupMixin`. It holds the hooks every viewset has.
 
 ```python
-class ImplMixin(Generic[K, T], ABC):
+class ViewSetBase:
+    def error_field(self, context: Context, field: str, code: str) -> str: ...
+```
+
+- `error_field` returns the key under which a field error of the viewset's endpoint goes into `field_errors`.
+  `field` is the error's key (`''` for the body or a non-field error; in `bulk_create`, `bulk_update`,
+  `bulk_partial_update` and `bulk_destroy` the part after the row's key, which is put in front of the result; a
+  Django `ValidationError` raised by a `perform_*` method or an action has no row's key).
+  `code` is the error's code before the package's field error codes apply: `pydantic.<type>`, `django.<code>`,
+  a namespaced type as it is, or `pydantic.custom_error`. The default returns `field`; `''` puts the error on
+  the form. It is synchronous. An exception it raises answers 500 `fastapi-viewsets.unhandled_error`. See
+  [Field names](../guide/error-codes#field-names).
+
+## ImplMixin
+
+Abstract base, a `ViewSetBase`. Subclasses implement every `perform_*` method except `perform_bulk_destroy`, which
+has a default.
+
+```python
+class ImplMixin(ViewSetBase, Generic[K, T], ABC):
     async def perform_create(self, context: Context, data: T) -> T: ...
     async def perform_bulk_create(self, context: Context, data: list[T]) -> list[T]: ...
     async def perform_list(self, context: Context) -> ListRecords: ...
@@ -176,8 +195,9 @@ Combines `UpdateMixin` + `BulkOnlyUpdateMixin`.
 
 - `DELETE /bulk` → calls `perform_bulk_destroy(context, pk: list[K]) -> dict[K, ApiErrorBody | None]`; answers 200
   keyed by pk: `null` for a deleted record, the failure's `ApiErrorBody` otherwise
-- `ImplMixin.perform_bulk_destroy` (default): calls `perform_destroy` for each distinct key; an `HTTPException` or
-  `RequestValidationError` becomes that key's `ApiErrorBody`, any other exception propagates
+- `ImplMixin.perform_bulk_destroy` (default): calls `perform_destroy` for each distinct key; an `HTTPException`, a
+  `RequestValidationError` or Django's `ValidationError` becomes that key's `ApiErrorBody`, any other exception
+  propagates
 
 ### BulkDestroyMixin `[K, T]`
 

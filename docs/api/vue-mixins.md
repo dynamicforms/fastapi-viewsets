@@ -254,10 +254,31 @@ interface ApiErrorBody {
 
 /** One failure of one field of a request that failed validation. */
 interface ApiFieldError {
-  code: string; // pydantic.<type>
+  code: string; // a FieldErrorCode, pydantic.<type>, django.<code>, an application code or pydantic.custom_error
   params: Record<string, unknown>;
   detail: string;
 }
+
+/** The params of each field error code the BE declares; see Field error codes. */
+interface FieldErrorParams {
+  'fastapi-viewsets.required': Record<string, never>;
+  'fastapi-viewsets.min_length': { minLength: number };
+  // ... one entry per code
+  'fastapi-viewsets.unique': { fields: string[] };
+}
+type FieldErrorCode = keyof FieldErrorParams;
+interface FieldErrorOf<C extends FieldErrorCode> {
+  code: C;
+  params: FieldErrorParams[C];
+  detail: string;
+}
+const FIELD_ERROR_PARAM_NAMES: { readonly [C in FieldErrorCode]: readonly (keyof FieldErrorParams[C] & string)[] };
+const FIELD_ERROR_CODES: readonly FieldErrorCode[];
+function isFieldErrorCode(code: string): code is FieldErrorCode;
+
+const ERROR_NAMESPACE: 'fastapi-viewsets';
+const ERROR_NAMESPACE_PYDANTIC: 'pydantic';
+const ERROR_NAMESPACE_DJANGO: 'django';
 
 /** Assignable to vue-forms' `ErrorDescription`. */
 interface ErrorDescription {
@@ -274,7 +295,8 @@ function toErrorDescription(body: ApiErrorBody): ErrorDescription;
 function toFieldErrors(body: ApiErrorBody): Record<string, ErrorDescription[]>;
 ```
 
-What each conversion produces is in [Error codes → Frontend](../guide/error-codes#frontend).
+The result of each conversion is described in [Error codes → Frontend](../guide/error-codes#frontend). The codes and
+their params are listed in [Field error codes](../guide/error-codes#field-error-codes).
 
 ## Individual operation mixins
 

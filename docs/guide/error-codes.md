@@ -1,6 +1,6 @@
 # Error Codes
 
-Every error response of the package has one body: a stable `code`, the `params` its English `detail` was built
+Every error response of the package has one body: a stable `code`, the `params` its `detail` was built
 from, `detail` itself and, for a request that failed validation, the failures per field. This page covers why that
 exists, which errors carry which code, and how the frontend reads it.
 
@@ -13,8 +13,9 @@ recover what went wrong - both wrong. A `code` names the failure independently o
 `params` are the values that wording was interpolated with, so a client can rebuild the message in
 any language without ever reading `detail`.
 
-The server never picks a locale for an error: `detail` is always English, and the client shows the
-error in its own language by its `code`.
+`detail` is in English, except in field errors: the message of a pydantic custom error, `value_error` or
+`assertion_error` contains the application's text, and the message of an error from Django's `ValidationError` is in
+Django's active language. The client translates an error by its `code`.
 
 ### The error body
 
@@ -43,6 +44,7 @@ The body is built from the exception the request raised:
 |-----------|--------|---------------|-----------------|
 | a `DfViewSetError` (the package's errors, an application's subclass) | its own | its `code` | its `params` |
 | `RequestValidationError` (FastAPI's validation of the request, or raised by the endpoint) | 422 | `fastapi-viewsets.validation_failed` | `{}` |
+| Django's `ValidationError`, when Django is installed (see [Django's ValidationError](./django-integration#django-s-validationerror)) | 422 | `fastapi-viewsets.validation_failed` | `{}` |
 | any other `HTTPException`, FastAPI's or Starlette's | its own | `fastapi-viewsets.http_error` | `{status}` |
 | any other exception | 500 | `fastapi-viewsets.unhandled_error` | `{}` |
 
@@ -61,7 +63,7 @@ The routes `route_viewset` adds answer every error of their endpoint, its depend
 with the body, without any registration by the application:
 
 - the package's handler of `HTTPException` and of `RequestValidationError` replaces FastAPI's default handlers for
-  the request;
+  the request, and also handles Django's `ValidationError` when Django is installed;
 - an exception without a handler is answered with 500 `fastapi-viewsets.unhandled_error` and re-raised.
 
 A handler the application registered itself takes precedence, as Starlette's lookup gives it: a handler for a class
@@ -82,7 +84,8 @@ app = FastAPI()
 install_error_handlers(app)
 ```
 
-It registers one handler for `DfViewSetError`, `HTTPException`, `RequestValidationError` and `Exception`. Starlette's
+It registers one handler for `DfViewSetError`, `HTTPException`, `RequestValidationError`, Django's `ValidationError`
+(when Django is installed) and `Exception`. Starlette's
 routing errors are not the errors of a viewset: they are answered with the body only once the handlers are
 installed, as `fastapi-viewsets.http_error` with `detail` Starlette's text and the status in `detail_params`:
 
@@ -109,14 +112,15 @@ same values in Python and TypeScript:
 | Constant | Value | Codes |
 |----------|-------|-------|
 | `ERROR_NAMESPACE` | `fastapi-viewsets` | the codes this package declares, e.g. `fastapi-viewsets.not_found` |
-| `ERROR_NAMESPACE_PYDANTIC` | `pydantic` | pydantic's error types, which the [field errors](#field-errors) forward, e.g. `pydantic.string_too_short` |
+| `ERROR_NAMESPACE_PYDANTIC` | `pydantic` | pydantic's error types in field errors that do not become a [field error code](#field-error-codes), e.g. `pydantic.json_invalid`, and `pydantic.custom_error` |
+| `ERROR_NAMESPACE_DJANGO` | `django` | Django's validation codes in field errors that do not become a [field error code](#field-error-codes), e.g. `django.unique_for_date` |
 
 ```python
-from fastapi_viewsets import ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC
+from fastapi_viewsets import ERROR_NAMESPACE, ERROR_NAMESPACE_DJANGO, ERROR_NAMESPACE_PYDANTIC
 ```
 
 ```ts
-import { ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC } from '@dynamicforms/fastapi-viewsets';
+import { ERROR_NAMESPACE, ERROR_NAMESPACE_DJANGO, ERROR_NAMESPACE_PYDANTIC } from '@dynamicforms/fastapi-viewsets';
 ```
 
 The code of an application's own `DfViewSetError` is used as given: the package does not prefix, check or rewrite it.
@@ -164,7 +168,7 @@ The codes the package answers errors with that no exception class of its own car
 
 | `code` | Status | `params` | When |
 |--------|--------|----------|------|
-| `fastapi-viewsets.validation_failed` | 422 | — | a `RequestValidationError`; the failures are in `field_errors` |
+| `fastapi-viewsets.validation_failed` | 422 | — | a `RequestValidationError`, or Django's `ValidationError` when Django is installed; the failures are in `field_errors` |
 | `fastapi-viewsets.http_error` | the exception's | `{status}`, and `{detail}` for a `detail` that is not a string | an `HTTPException` that is not a `DfViewSetError` |
 
 The cursor codes, raised as `fastapi_viewsets.cursor.CursorError` (a `ValueError` carrying `code`
@@ -200,7 +204,7 @@ The errors that end a call to a `celery_viewset` action without its result, by `
 | `fastapi-viewsets.action_interrupted` | `time_limit` | exceeded its soft or hard time limit (504) |
 | | `terminated` | was terminated (503) |
 | | `lost` | lost the worker process executing it (503) |
-| `fastapi-viewsets.action_failed` | `error` | raised an error that is not an `HTTPException`; `detail` names the task only, the error is logged in the worker |
+| `fastapi-viewsets.action_failed` | `error` | raised an error that is not an `HTTPException`, a `RequestValidationError` or Django's `ValidationError`; `detail` names the task only, the error is logged in the worker |
 | | `result` | returned a result that cannot be serialized (e.g. a `StreamingResponse`), or that the caller cannot deserialize |
 | | `executor` | did not complete because the worker failed around it, or `Middleware.executor_started()` raised |
 
@@ -253,13 +257,13 @@ when it was raised:
 |-------|---------------|------------|
 | a `DfViewSetError` | `status_code`, `detail`, `headers`, `class`, `code`, `params` | the class `class` names where `fastapi_viewsets.exceptions` defines it, else `DfViewSetError` |
 | another `HTTPException` | `status_code`, `detail`, `headers` | `HTTPException` |
-| `RequestValidationError` | `status_code` 422, pydantic's errors as `detail`, `headers` null, `class` `"RequestValidationError"` | `RequestValidationError` |
+| `RequestValidationError`, or Django's `ValidationError` converted to a `RequestValidationError` of its field errors | `status_code` 422, pydantic's errors as `detail`, `headers` null, `class` `"RequestValidationError"` | `RequestValidationError` |
 | any other exception (an idempotency record; a `celery_viewset` worker answers it as `ActionFailedError`) | the fields of `UnhandledError` | `UnhandledError` |
 
 ## Frontend
 
 `@dynamicforms/fastapi-viewsets` reads errors as `ApiErrorBody`, and converts one into an `ErrorDescription`: `code`,
-`params`, the English `detail` and `origin: 'server'`. The interface has the shape of
+`params`, the `detail` and `origin: 'server'`. The interface has the shape of
 `ErrorDescription` in `@dynamicforms/vue-forms`, so the application renders and translates a
 server's errors with the same function as its validators' errors. The package holds no
 translations. How an application converts an error into text in its own language is described in
@@ -312,28 +316,172 @@ A request whose body or parameters fail validation is answered with status 422,
   "detail_code": "fastapi-viewsets.validation_failed",
   "detail_params": {},
   "field_errors": {
-    "name": [{ "code": "pydantic.string_too_short", "params": { "min_length": 3 }, "detail": "String should have at least 3 characters" }],
-    "address.zip": [{ "code": "pydantic.int_parsing", "params": {}, "detail": "Input should be a valid integer" }]
+    "name": [{ "code": "fastapi-viewsets.min_length", "params": { "minLength": 3 }, "detail": "String should have at least 3 characters" }],
+    "address.zip": [{ "code": "fastapi-viewsets.invalid_integer", "params": {}, "detail": "Input should be a valid integer" }]
   }
 }
 ```
 
-The server builds `field_errors` from pydantic's errors. The name of a field is pydantic's `loc` without its first
-element (`body`, `query`, `path`, `header` or `cookie`), joined with `.`; a failure of the body as a whole is keyed
-`''`. Each entry (`ApiFieldError`) has pydantic's own `type` in the namespace `ERROR_NAMESPACE_PYDANTIC` as `code`
-(`pydantic.string_too_short`), pydantic's `ctx` as `params` (an exception in it, such as the `error` of a
-`value_error`, as its message) and pydantic's `msg` as `detail`. pydantic's `input` is left out.
+`field_errors` is built from pydantic's errors and from Django's `ValidationError` (see
+[Django's ValidationError](./django-integration#django-s-validationerror)). The name of a field is pydantic's `loc`
+without its first element (`body`, `query`, `path`, `header` or `cookie`), joined with `.`; a failure of the body as a
+whole is keyed `''`. Each entry (`ApiFieldError`) has `code`, `params` and `detail`. `detail` is pydantic's `msg` or
+Django's message. pydantic's messages are English; the message of a `PydanticCustomError`, a `value_error` or an
+`assertion_error` contains the application's text; Django's message is in Django's active language. pydantic's
+`input` is left out.
 
-A type pydantic does not declare, the type of an application's `PydanticCustomError`, is reported as
-`pydantic.custom_error`, with `params` `{type, ctx}`: the custom type and the error's `ctx`, nested so that no key of
-`ctx` collides with `type`. pydantic's own types are the values of `pydantic_core.core_schema.ErrorType`
-(`PYDANTIC_ERROR_TYPES` in `fastapi_viewsets.error_responses`). The package's own custom type, a primary key in the
-body of a create, is `fastapi-viewsets.pk_assigned_by_server`:
+#### Field names
+
+On a viewset's endpoint, the viewset's `error_field(context, field, code)` returns the key of each field error before
+it goes into `field_errors`. It is called for every field error: the request's validation (body, query, path), the
+pydantic errors of a backend's record and Django's `ValidationError`. `field` is the key described above (`''` for the
+body as a whole or a non-field error). `code` is the error's code before the package's field error codes apply:
+`pydantic.<type>` for a pydantic type (`pydantic.string_too_short`), `django.<code>` for a Django code (`django.unique`;
+`django.invalid` for an error without a code), a namespaced type or code as it is (`app.slug_taken`), and
+`pydantic.custom_error` for a custom type without a namespace. The default returns `field`. A result of `''` puts the
+error on the form.
+
+```python
+from fastapi_viewsets.backends.django_orm import DjangoORMViewSet
+from fastapi_viewsets.context import Context
+from fastapi_viewsets.mixins import BulkViewSetMixin
+
+
+class TrackViewSet(DjangoORMViewSet[int, Track], BulkViewSetMixin[int, Track]):
+    model = TrackModel
+    schema = Track
+
+    def error_field(self, context: Context, field: str, code: str) -> str:
+        if field == "slug":  # a model field that is not in the schema
+            return "title"
+        if code == "django.unique":
+            return ""
+        return field
+```
+
+- In `bulk_create`, `bulk_update`, `bulk_partial_update` and `bulk_destroy`, the key of a body error starts with the
+  row's index or primary key (`3.title`). `field` is the part after it (`title`, or `''` for the row itself), and the
+  row's key is put in front of the result. A result of `''` puts the error on the row (`3`). A `RequestValidationError`
+  raised by the application in these actions has the row's key as the first `loc` element after `body`.
+- A Django `ValidationError` raised in these actions by a `perform_*` method or an action has no row's key: `field` is
+  the Django field name, and the result is the key.
+- In `bulk_destroy`, the field errors in the `ApiErrorBody` of one key have no row key.
+- `context` has the request's context values; `context.action_name` is the action. `error_field` is synchronous, and
+  the context's values are awaitables. The request's validation fails before the context processors run when the body
+  is not valid JSON; the context then has no values, and no context processor runs for `error_field`.
+- The viewset that routes the endpoint names its errors: on a sub-viewset's endpoint, the sub-viewset.
+- Every package mixin and backend has `error_field`. A viewset class without them can define it.
+- The field errors of a `celery_viewset` action and of an idempotent repeat are named in the FastAPI process. The
+  worker's payload and the stored outcome keep the codes `error_field` receives.
+- An exception raised in `error_field` answers 500 `fastapi-viewsets.unhandled_error`.
+- A route outside the viewsets, under `install_error_handlers`, keeps the keys. A `RequestValidationError` handler
+  registered by the application answers without `error_field`.
+
+#### Field error codes
+
+The package declares the field error codes below, in its namespace. Each code has a fixed set of params with camelCase
+names. Where `@dynamicforms/vue-forms` has a validator code with the same meaning, the code has the same name. The
+codes and their params are listed in `FIELD_ERROR_PARAMS` (`fastapi_viewsets`) and in `FieldErrorParams` and
+`FIELD_ERROR_PARAM_NAMES` (TS package):
+
+| `code` | Params | Meaning |
+|--------|--------|---------|
+| `fastapi-viewsets.required` | — | no value given, or null where null is not allowed |
+| `fastapi-viewsets.min_length` | `minLength` | too few characters, items or bytes |
+| `fastapi-viewsets.max_length` | `maxLength` | too many characters, items or bytes |
+| `fastapi-viewsets.min_value` | `minValue` | below an inclusive lower bound |
+| `fastapi-viewsets.min_value_exclusive` | `minValue` | not greater than an exclusive lower bound |
+| `fastapi-viewsets.max_value` | `maxValue` | above an inclusive upper bound |
+| `fastapi-viewsets.max_value_exclusive` | `maxValue` | not less than an exclusive upper bound |
+| `fastapi-viewsets.multiple_of` | `multipleOf` | not a multiple of `multipleOf` |
+| `fastapi-viewsets.max_digits` | `maxDigits` | too many digits in total |
+| `fastapi-viewsets.max_decimal_places` | `maxDecimalPlaces` | too many decimal places |
+| `fastapi-viewsets.max_whole_digits` | `maxWholeDigits` | too many digits before the decimal point |
+| `fastapi-viewsets.pattern` | `pattern` | does not match the regular expression; `pattern` is its source |
+| `fastapi-viewsets.in_allowed_values` | `allowedAsText` | not one of the allowed values; `allowedAsText` is pydantic's text of them, e.g. `'a', 'b' or 'c'` |
+| `fastapi-viewsets.invalid_choice` | — | not an allowed value; the allowed values are not in `params` |
+| `fastapi-viewsets.invalid_integer` | — | not an integer |
+| `fastapi-viewsets.invalid_number` | — | not a number |
+| `fastapi-viewsets.invalid_boolean` | — | not a boolean |
+| `fastapi-viewsets.invalid_date` | — | not a date |
+| `fastapi-viewsets.invalid_time` | — | not a time |
+| `fastapi-viewsets.invalid_datetime` | — | not a date and time |
+| `fastapi-viewsets.invalid_duration` | — | not a duration |
+| `fastapi-viewsets.invalid_url` | — | not a URL, or a URL with invalid syntax |
+| `fastapi-viewsets.invalid_uuid` | — | not a UUID |
+| `fastapi-viewsets.past` | — | a date or date and time not in the past |
+| `fastapi-viewsets.future` | — | a date or date and time not in the future |
+| `fastapi-viewsets.invalid_type` | — | the value has the wrong JSON or structural type |
+| `fastapi-viewsets.unique` | `fields` | a row with the same values in `fields` exists; `fields` are Django model field names |
+| `fastapi-viewsets.invalid` | — | not valid; the reason is in `detail` |
+| `fastapi-viewsets.pk_assigned_by_server` | — | a primary key in the body of a create |
+
+`minLength`, `maxLength`, `multipleOf`, `maxDigits`, `maxDecimalPlaces` and `maxWholeDigits` are numbers. `minValue`
+and `maxValue` are numbers, or ISO strings for a date or time bound. `fields` is an array of strings.
+`allowedAsText` has a different format from vue-forms' `allowedAsText` (`a, b, c`). It is pydantic's `expected`
+text; pydantic's error does not contain the allowed values as a list.
+
+pydantic error types become these codes as follows. Keys of pydantic's `ctx` that the table does not list are left
+out:
+
+| `code` | pydantic types | Params from `ctx` |
+|--------|----------------|-------------------|
+| `required` | `missing`, `missing_argument`, `missing_keyword_only_argument`, `missing_positional_only_argument` | — |
+| `min_length` | `string_too_short`, `too_short`, `bytes_too_short` | `min_length` |
+| `max_length` | `string_too_long`, `too_long`, `bytes_too_long`, `url_too_long` | `max_length` |
+| `min_value` / `min_value_exclusive` | `greater_than_equal` / `greater_than` | `ge` / `gt` |
+| `max_value` / `max_value_exclusive` | `less_than_equal` / `less_than` | `le` / `lt` |
+| `multiple_of` | `multiple_of` | `multiple_of` |
+| `max_digits`, `max_decimal_places`, `max_whole_digits` | `decimal_max_digits`, `decimal_max_places`, `decimal_whole_digits` | `max_digits`, `decimal_places`, `whole_digits` |
+| `pattern` | `string_pattern_mismatch` | `pattern` |
+| `in_allowed_values` | `enum`, `literal_error` | `expected` |
+| `invalid_integer` | `int_type`, `int_parsing`, `int_parsing_size`, `int_from_float` | — |
+| `invalid_number` | `float_type`, `float_parsing`, `finite_number`, `decimal_type`, `decimal_parsing`, `fraction_type`, `fraction_parsing` | — |
+| `invalid_boolean` | `bool_type`, `bool_parsing` | — |
+| `invalid_date` | `date_type`, `date_parsing`, `date_from_datetime_parsing`, `date_from_datetime_inexact` | — |
+| `invalid_time` | `time_type`, `time_parsing` | — |
+| `invalid_datetime` | `datetime_type`, `datetime_parsing`, `datetime_object_invalid`, `datetime_from_date_parsing` | — |
+| `invalid_duration` | `time_delta_type`, `time_delta_parsing` | — |
+| `invalid_url` | `url_type`, `url_parsing`, `url_syntax_violation` | — |
+| `invalid_uuid` | `uuid_type`, `uuid_parsing` | — |
+| `past` / `future` | `date_past`, `datetime_past` / `date_future`, `datetime_future` | — |
+| `invalid_type` | `string_type`, `string_unicode`, `bytes_type`, `dict_type`, `frozen_dict_type`, `ordered_dict_type`, `counter_type`, `list_type`, `tuple_type`, `set_type`, `frozen_set_type`, `deque_type`, `mapping_type`, `iterable_type`, `model_type`, `model_attributes_type`, `dataclass_type`, `dataclass_exact_type`, `named_tuple_type`, `none_required`, `arguments_type`, `callable_type`, `is_instance_of`, `is_subclass_of` | — |
+| `invalid` | `value_error`, `assertion_error` | — (the application's text is in `detail`) |
+
+- An error of a type in the `invalid_*`, `invalid_type` or `in_allowed_values` rows becomes `fastapi-viewsets.required`
+  when its input is null. A `value_error` with a null input stays `fastapi-viewsets.invalid`, with the validator's
+  message in `detail`.
+- An error of a type in the table becomes `pydantic.<type>`, with `ctx` as `params`, when its `ctx` does not contain a
+  key listed in the 'Params from `ctx`' column.
+- Any other pydantic type (the values of `pydantic_core.core_schema.ErrorType`, `PYDANTIC_ERROR_TYPES` in
+  `fastapi_viewsets.error_responses`) becomes `pydantic.<type>`, with pydantic's `ctx` as `params`. An exception in
+  `ctx` becomes its message. Examples: `pydantic.json_invalid`, `pydantic.extra_forbidden`, `pydantic.url_scheme`,
+  `pydantic.timezone_naive`.
+- The code of a `PydanticCustomError` whose type has a namespace, such as `app.slug_taken`, is that type; `params` is
+  the error's `ctx`. An application that raises a custom type in the namespace `fastapi-viewsets` must give it a `ctx`
+  with the params that code declares. The package does not check the params.
+- A custom type without a namespace becomes `pydantic.custom_error` (`CUSTOM_ERROR_CODE`) with `params` `{type, ctx}`:
+  the custom type and the error's `ctx`. `ctx` is nested so that its keys cannot collide with `type`.
 
 ```json
 {
-  "slug": [{ "code": "pydantic.custom_error", "params": { "type": "app.slug_taken", "ctx": { "slug": "blue" } }, "detail": "Slug blue is taken" }],
+  "slug": [{ "code": "app.slug_taken", "params": { "slug": "blue" }, "detail": "Slug blue is taken" }],
   "id": [{ "code": "fastapi-viewsets.pk_assigned_by_server", "params": {}, "detail": "The primary key is assigned by the server" }]
+}
+```
+
+The TS package declares types for the codes and their params. `isFieldErrorCode(code)` returns whether `code` is one
+of the package's field error codes. `FieldErrorOf<C>` is the type of a field error with code `C`:
+
+```ts
+import { type ApiFieldError, type FieldErrorOf, isFieldErrorCode } from '@dynamicforms/fastapi-viewsets';
+
+function lengthHint(error: ApiFieldError): string {
+  if (error.code === 'fastapi-viewsets.min_length') {
+    const { minLength } = (error as FieldErrorOf<'fastapi-viewsets.min_length'>).params;
+    return `at least ${minLength}`;
+  }
+  return isFieldErrorCode(error.code) ? '' : error.detail;
 }
 ```
 
@@ -345,8 +493,8 @@ import { toFieldErrors } from '@dynamicforms/fastapi-viewsets';
 
 toFieldErrors(body);
 // {
-//   name: [{ code: 'pydantic.string_too_short', params: { min_length: 3 }, detail: 'String should have at least 3 characters', origin: 'server' }],
-//   'address.zip': [{ code: 'pydantic.int_parsing', params: {}, detail: 'Input should be a valid integer', origin: 'server' }],
+//   name: [{ code: 'fastapi-viewsets.min_length', params: { minLength: 3 }, detail: 'String should have at least 3 characters', origin: 'server' }],
+//   'address.zip': [{ code: 'fastapi-viewsets.invalid_integer', params: {}, detail: 'Input should be a valid integer', origin: 'server' }],
 // }
 ```
 
@@ -413,14 +561,19 @@ vue-forms' [`ErrorPolicy`](:vue-forms:/api/validators.html#errorpolicy). By defa
 an element drops it when the element, or a member below it, is marked touched while the element
 holds a value other than the one it held when the error was written.
 
-The codes are pydantic's error types in the namespace `pydantic` (`pydantic.missing`,
-`pydantic.string_too_short`, `pydantic.int_parsing`, ...), and `params` holds the values pydantic built `msg` from.
-`pydantic.custom_error` carries the application's own type in `params.type`, so a translation of it looks that type
-up.
+The codes are:
+
+- the [field error codes](#field-error-codes), with their params;
+- `pydantic.<type>`, with pydantic's `ctx` as params;
+- `django.<code>`, with Django's params (JSON values only);
+- the application's namespaced codes, with the custom error's `ctx` or Django's params.
+
+The `params` of `pydantic.custom_error` are `{type, ctx}`; `type` is the application's custom type. A translation of
+`pydantic.custom_error` can select its text by `params.type`.
 
 ### Codes
 
-The codes this package raises, with their English `detail`:
+The codes this package raises, with their `detail`:
 
 | `code` | `detail` | Params |
 |--------|----------|--------|
@@ -449,6 +602,7 @@ The codes this package raises, with their English `detail`:
 | `fastapi-viewsets.cursor_value_mismatch` | `cursor value for '{name}' does not fit the field: {error}` | `name`, `error` |
 | `fastapi-viewsets.validation_failed` | `The request failed validation` | — |
 | `fastapi-viewsets.pk_assigned_by_server` (a field error) | `The primary key is assigned by the server` | — |
+| the other [field error codes](#field-error-codes) | pydantic's `msg` or Django's message (see [Field errors](#field-errors)) | see their table |
 | `fastapi-viewsets.http_error` | the `HTTPException`'s `detail`; its status phrase for a `detail` that is not a string | `status`, `detail` |
 | `fastapi-viewsets.unhandled_error` | `Internal Server Error` | — |
 | `fastapi-viewsets.command_invalid` | `The stream headers carry no :method or :path` (`address_missing`), `:method and :path must both be strings` (`address_type`), `:path must be an absolute path` (`path_relative`), `:query must be a string or a mapping` (`query_type`) | `reason` |
@@ -467,7 +621,8 @@ to the translations under the prefix of their namespace.
 
 The application maps each namespace to a translation key prefix of its own and the code after the namespace to a key
 under that prefix, taking a library's namespace from its constant. Here `fastapi-viewsets.not_found` renders through
-the key `libs.fastapi-viewsets.not_found`, `pydantic.string_too_short` through `libs.pydantic.string_too_short` and
+the key `libs.fastapi-viewsets.not_found`, `fastapi-viewsets.min_length` through `libs.fastapi-viewsets.min_length`,
+`pydantic.json_invalid` through `libs.pydantic.json_invalid` and
 the application's `app.insufficient_balance` through `errors.insufficient_balance`, with
 [vue-i18n](https://vue-i18n.intlify.dev/)'s `t` and `te`:
 
@@ -491,8 +646,8 @@ function errorText(error: ErrorDescription): string {
 ```json
 {
   "libs": {
-    "fastapi-viewsets": { "not_found": "Element {pk} ne obstaja" },
-    "pydantic": { "string_too_short": "Vnesite vsaj {min_length} znake" }
+    "fastapi-viewsets": { "not_found": "Element {pk} ne obstaja", "min_length": "Vnesite vsaj {minLength} znake" },
+    "pydantic": { "json_invalid": "Neveljaven JSON" }
   },
   "errors": { "insufficient_balance": "Stanje {available} ne zadošča za {required}" }
 }
