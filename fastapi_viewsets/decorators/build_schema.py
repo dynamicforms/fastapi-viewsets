@@ -7,8 +7,9 @@ from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
 from starlette.responses import Response
 
-from ..endpoint_docs import operation_docs_for, viewset_tags
+from ..endpoint_docs import operation_docs_for, SCHEMA_ACTION, viewset_tags
 from ..middleware import unwrap_viewset_result_type
+from ..response_classes import CURSOR_ERROR_RESPONSES, with_error_responses
 from ..routing import SCHEMA_ENDPOINT_DOCS
 
 
@@ -96,9 +97,22 @@ def action_openapi_extra(action_name: str, openapi_extra: dict | None) -> dict:
     return {**(openapi_extra or {}), ACTION_EXTENSION: action_name}
 
 
+def _own_error_responses(cls, route: APIRoute) -> dict:
+    """The route's own `responses`, without the cursor codes on a list of a viewset not serving the cursor shape."""
+    if getattr(route.endpoint, "__list_shape_aware__", False) and "cursor" not in cls.resolve_shapes()[1]:
+        return {
+            status: entry
+            for status, entry in route.responses.items()
+            if CURSOR_ERROR_RESPONSES.get(status) is not entry
+        }
+    return route.responses
+
+
 def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, disable_response_model=False):
     """
-    Builds `__router` (all mixin routes) and `__app` (the FastAPI app serving `/schema`) on the class.
+    Builds `__router` (all mixin routes) and `__app` (the FastAPI app serving `/schema`) on the class. With
+    `get_wrapper`, each route carries its own `responses` over `VIEWSET_ERROR_RESPONSES`, merged with the
+    `responses` of the class's `@endpoint_docs`.
 
     Without `get_wrapper` only `__router` is built, unwrapped, and only once per class; with it the routes are
     rebuilt per routing. `disable_response_model`: set when a middleware declares `modifies_response_shape`,
@@ -147,6 +161,9 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
             methods=["GET"],
             **SCHEMA_ENDPOINT_DOCS,
         )
+        schema_route_kwargs.update(
+            operation_docs_for(cls, SCHEMA_ACTION, with_error_responses(SCHEMA_ENDPOINT_DOCS["responses"]))
+        )
         class_router.add_api_route(**schema_route_kwargs)
 
         for route in sorted(all_routes, key=route_sort_key, reverse=True):
@@ -168,21 +185,24 @@ def build_schema(cls, base_path: str = "", default_tags=None, get_wrapper=None, 
                 if inspect.isclass(response_model) and issubclass(response_model, Response):
                     response_model = None
 
-            # Per-viewset wording applied here, so that /schema shows it too.
-            class_router.add_api_route(
-                **route_to_add_api_route_kwargs(
-                    route,
-                    path=full_path,
-                    endpoint=endpoint_wrapper,
-                    response_model=response_model,
-                    tags=route.tags or default_tags,
-                    openapi_extra=action_openapi_extra(
-                        route.endpoint.__name__,
+            action_name = route.endpoint.__name__
+            # Per-viewset documentation applied here, so that /schema shows it too; it replaces `tags`.
+            route_kwargs = {
+                "path": full_path,
+                "endpoint": endpoint_wrapper,
+                "response_model": response_model,
+                "tags": route.tags or default_tags,
+                **operation_docs_for(
+                    cls,
+                    action_name,
+                    with_error_responses(_own_error_responses(cls, route)),
+                    action_openapi_extra(
+                        action_name,
                         getattr(endpoint_wrapper, "__shape_openapi_extra__", None) or route.openapi_extra,
                     ),
-                    **operation_docs_for(cls, route.endpoint.__name__),
-                )
-            )
+                ),
+            }
+            class_router.add_api_route(**route_to_add_api_route_kwargs(route, **route_kwargs))
 
         app.include_router(class_router)
         cls.__app = app

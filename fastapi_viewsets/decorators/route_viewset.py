@@ -20,9 +20,10 @@ from fastapi_viewsets.action_configuration import extra_middlewares_for, resolve
 from fastapi_viewsets.conf import settings
 from fastapi_viewsets.context import build_context, Context, get_shared_context
 from fastapi_viewsets.endpoint_docs import (
+    action_parameter_names,
     DOCS_ATTRIBUTE,
     docs_for,
-    operation_docs_for,
+    EVERY_ACTION,
     register_tag,
     viewset_description,
 )
@@ -37,7 +38,6 @@ from fastapi_viewsets.mixins import (
     T as ITEM_TYPE_VAR,  # noqa: N811
 )
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
-from fastapi_viewsets.response_classes import CURSOR_ERROR_RESPONSES, with_error_responses
 from fastapi_viewsets.routing import MUXWS, openapi_endpoint, REST, transport_route_class
 
 from .build_schema import _pydantic_generic_args, build_schema, route_to_add_api_route_kwargs
@@ -366,8 +366,12 @@ def _route(
     shape_openapi_extra = None
     item_model = type_map.get(ITEM_TYPE_VAR)
 
-    def _describe_parameters(params: list[inspect.Parameter], descriptions: dict[str, str]) -> None:
-        """Replaces the descriptions of `params` named in `descriptions` (`@endpoint_docs` `parameters`)."""
+    def _describe_parameters(params: list[inspect.Parameter], action: str) -> None:
+        """
+        Replaces the descriptions of `params` named in the `@endpoint_docs` `parameters` of `action`; a name of
+        the `'*'` entry the endpoint does not have is skipped.
+        """
+        descriptions = docs_for(cls, action).get("parameters", {})
         if not descriptions:
             return
         published = {}
@@ -375,7 +379,8 @@ def _route(
             name = _published_name(parameter.name, parameter.annotation)
             if name is not None:
                 published[name] = index
-        unknown = set(descriptions) - set(published)
+        unknown = action_parameter_names(cls, action) - set(published)
+        descriptions = {name: text for name, text in descriptions.items() if name in published}
         if unknown:
             raise ValueError(
                 f"@endpoint_docs on {cls.__name__} describes parameter(s) its endpoint does not have: "
@@ -438,7 +443,7 @@ def _route(
 
             new_params.append(new_p)
 
-        _describe_parameters(new_params, docs_for(cls, original_endpoint.__name__).get("parameters", {}))
+        _describe_parameters(new_params, original_endpoint.__name__)
 
         # Reserved: FastAPI injects the real Response, onto which lifecycle_runner applies headers/cookies.
         new_params.append(inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response))
@@ -562,16 +567,8 @@ def _route(
             *gates,
             Depends(_make_middleware_depends(cls, action_name)),
         ]
-        responses = route.responses
-        if getattr(route.endpoint, "__list_shape_aware__", False) and "cursor" not in cls.resolve_shapes()[1]:
-            responses = {
-                status: entry for status, entry in responses.items() if CURSOR_ERROR_RESPONSES.get(status) is not entry
-            }
-        route_kwargs = route_to_add_api_route_kwargs(
-            route, dependencies=dependencies, responses=with_error_responses(responses)
-        )
-        # Per-viewset wording from @endpoint_docs.
-        route_kwargs.update(operation_docs_for(cls, action_name))
+        # build_schema has applied the package's error responses and @endpoint_docs.
+        route_kwargs = route_to_add_api_route_kwargs(route, dependencies=dependencies)
         if not is_schema_route(route):
             middleware_parameters = middleware_openapi_parameters(
                 settings.viewsets_command_middleware,
@@ -614,7 +611,8 @@ def _route(
             add_route(route_kwargs, transports, action_name)
 
     # Checked here: the @endpoint_docs decorator runs before any route exists.
-    unknown = set(getattr(cls, DOCS_ATTRIBUTE, {})) - documented
+    declared = {action for base in cls.__mro__ for action in base.__dict__.get(DOCS_ATTRIBUTE, {})}
+    unknown = declared - documented - {EVERY_ACTION}
     if unknown:
         raise ValueError(
             f"@endpoint_docs on {cls.__name__} names endpoint(s) it does not have: "

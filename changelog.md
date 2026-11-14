@@ -23,11 +23,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keyword. The body is `model: ApiErrorBody`, or with `as_ref=True` a `$ref` to `#/components/schemas/ApiErrorBody`.
 - `merge_responses(*responses)` in `fastapi_viewsets.response_classes`: merges OpenAPI `responses` entries by status,
   joining descriptions, merging `examples` by name (a lone `example` becomes a named one) and `headers` by name.
+- `EndpointDoc` fields `responses` and `openapi_extra`. `responses` entries are merged with `merge_responses()` into
+  the endpoint's entries of the same status, the package's and the mixin's included; `openapi_extra` is merged into the
+  route's (`parameters` lists concatenated, dicts merged per key, other values replaced), followed by the middleware
+  parameters. `merge_openapi_extra(base, extra)` in `fastapi_viewsets.endpoint_docs` is that merge. A declared list
+  other than the top-level `parameters` replaces the generated operation's: a declared `security` replaces that of
+  `settings.viewsets_security_scheme`, and `security: []` documents a public endpoint.
+- The `@endpoint_docs` key `'*'` (`EVERY_ACTION`): its entry documents every action of the viewset except `schema`,
+  merged before the action's own entry in each class along the MRO. A name in its `parameters` that an endpoint does
+  not have is skipped for that endpoint.
 
 ### Changed
 
 - The package's own error `responses` entries (`NOT_FOUND_RESPONSE`, `VIEWSET_ERROR_RESPONSES`, …) are built with
   `error_entry()`: each example's summary is the error's `detail`. Example names and bodies are unchanged.
+- `@endpoint_docs` raises `ValueError` for a key of an entry outside `EndpointDoc`.
+
+### Fixed
+
+- `@endpoint_docs` `responses` replaced every response of the operation, the package's error responses and the
+  mixin's 404 included; it merges with them now.
+- `@endpoint_docs` `openapi_extra` or `tags` raised `TypeError` (`got multiple values for keyword argument`) when the
+  viewset was routed.
 
 ## [0.15.4] - 2026-11-12
 

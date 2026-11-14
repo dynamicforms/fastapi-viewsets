@@ -2,14 +2,18 @@
 
 import pytest
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
 from .collection_viewset import CollectionViewSet
+from .conf import settings
 from .decorators import route_viewset
-from .endpoint_docs import apply_viewset_tags, docs_for, endpoint_docs
+from .endpoint_docs import apply_viewset_tags, DOCS_ATTRIBUTE, docs_for, endpoint_docs, merge_openapi_extra
+from .exceptions import DfViewSetError, NotFoundError
+from .middleware.idempotency import Idempotency
 from .mixins import BulkViewSetMixin
+from .response_classes import error_entry, merge_responses, NOT_FOUND_RESPONSE
 
 
 class Track(BaseModel):
@@ -397,3 +401,196 @@ def test_a_form_model_is_the_named_request_body():
     content = document["paths"]["/u/titled"]["post"]["requestBody"]["content"]
     assert [media["schema"] for media in content.values()] == [{"$ref": "#/components/schemas/TitledUpload"}]
     assert document["components"]["schemas"]["TitledUpload"]["description"] == "A file with its title."
+
+
+# responses, openapi_extra and '*'
+
+
+class TrackConflictError(DfViewSetError):
+    def __init__(self, pk: int):
+        super().__init__(409, f"Track {pk} is being edited", "app.track_conflict", {"pk": pk})
+
+
+def app_document(docs) -> tuple[dict, dict]:
+    """The application's OpenAPI document and the viewset's `/schema`."""
+    client = documented_client(docs)
+    return client.app.openapi(), client.get("/t/schema").json()
+
+
+def media(response: dict) -> dict:
+    return response["content"]["application/json"]
+
+
+def test_responses_are_merged_with_the_package_and_mixin_entries():
+    document, _ = app_document(
+        {
+            "retrieve": {
+                "responses": merge_responses(
+                    error_entry(409, "The track is being edited: `app.track_conflict`.", TrackConflictError(1)),
+                    error_entry(404, "Or archived.", archived=NotFoundError(7)),
+                    error_entry(422, "Or a pk out of range.", out_of_range=HTTPException(422, "Out of range")),
+                )
+            }
+        }
+    )
+    responses = document["paths"]["/t/{pk}"]["get"]["responses"]
+    assert {"200", "404", "409", "422", "500", "default"} <= set(responses)
+    assert set(media(responses["409"])["examples"]) == {"track_conflict"}
+    assert set(media(responses["404"])["examples"]) == {"not_found", "archived"}
+    assert responses["404"]["description"] == f"{NOT_FOUND_RESPONSE['404']['description']}\n\nOr archived."
+    assert set(media(responses["422"])["examples"]) == {"validation_failed", "idempotency_key_reused", "out_of_range"}
+    assert media(responses["409"])["schema"] == {"$ref": "#/components/schemas/ApiErrorBody"}
+
+
+def test_responses_of_one_action_leave_the_others_alone():
+    document, _ = app_document({"retrieve": {"responses": error_entry(409, "Edited.", TrackConflictError(1))}})
+    assert "409" not in document["paths"]["/t/{pk}"]["put"]["responses"]
+    assert set(media(document["paths"]["/t/{pk}"]["put"]["responses"]["404"])["examples"]) == {"not_found"}
+
+
+def test_openapi_extra_is_merged_with_the_middleware_parameters(monkeypatch):
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [Idempotency()])
+    tenant = {"name": "X-Tenant", "in": "header", "required": True, "schema": {"type": "string"}}
+    document, schema = app_document(
+        {
+            "*": {"openapi_extra": {"security": [{"session": []}], "parameters": [tenant]}},
+            "retrieve": {"openapi_extra": {"security": [], "x-audit": {"level": "low"}}},
+        }
+    )
+    for doc in (document, schema):
+        retrieve = doc["paths"]["/t/{pk}"]["get"]
+        names = [parameter["name"] for parameter in retrieve["parameters"]]
+        assert names == ["pk", "X-Tenant", "Idempotency-Key"]
+        assert retrieve["security"] == []
+        assert retrieve["x-audit"] == {"level": "low"}
+        assert retrieve["x-viewset-action"] == "retrieve"
+        create = doc["paths"]["/t"]["post"]
+        assert create["security"] == [{"session": []}]
+        assert create["requestBody"]["content"]
+
+
+def test_declared_security_replaces_that_of_the_security_scheme(monkeypatch):
+    from fastapi.security import APIKeyCookie
+
+    monkeypatch.setattr(settings, "viewsets_security_scheme", APIKeyCookie(name="sessionid", auto_error=False))
+    document, schema = app_document(
+        {
+            "*": {"openapi_extra": {"security": [{"session": []}]}},
+            "retrieve": {"openapi_extra": {"security": []}},
+        }
+    )
+    for doc in (document, schema):
+        assert doc["paths"]["/t/{pk}"]["get"]["security"] == []
+        assert doc["paths"]["/t"]["get"]["security"] == [{"session": []}]
+        assert doc["paths"]["/t/{pk}"]["put"]["security"] == [{"session": []}]
+        assert doc["paths"]["/t/schema"]["get"]["security"] == [{"APIKeyCookie": []}]
+        assert "APIKeyCookie" in doc["components"]["securitySchemes"]
+
+
+def test_openapi_extra_merges_into_the_mixins_own():
+    document, _ = app_document({"bulk_create": {"openapi_extra": {"requestBody": {"required": True}}}})
+    body = document["paths"]["/t/bulk"]["post"]["requestBody"]
+    assert body["required"] is True
+    assert body["description"] == "The records to create."
+
+
+def test_the_every_action_entry_documents_every_action_but_schema():
+    document, _ = app_document({"*": {"deprecated": True, "tags": ["Catalogue"]}})
+    for path, operations in document["paths"].items():
+        for operation in operations.values():
+            if path == "/t/schema":
+                assert "deprecated" not in operation
+                assert operation["tags"] != ["Catalogue"]
+            else:
+                assert operation["deprecated"] is True
+                assert operation["tags"] == ["Catalogue"]
+
+
+def test_the_action_entry_overrides_the_every_action_entry():
+    document, _ = app_document(
+        {
+            "*": {"description": "Needs a session.", "responses": error_entry(409, "Edited.", TrackConflictError(1))},
+            "retrieve": {
+                "description": "One track.",
+                "responses": error_entry(409, "Locked.", locked=TrackConflictError(2)),
+            },
+        }
+    )
+    retrieve = document["paths"]["/t/{pk}"]["get"]
+    assert retrieve["description"] == "One track."
+    assert retrieve["responses"]["409"]["description"] == "Edited.\n\nLocked."
+    assert set(media(retrieve["responses"]["409"])["examples"]) == {"track_conflict", "locked"}
+    assert document["paths"]["/t"]["get"]["description"] == "Needs a session."
+
+
+def test_the_every_action_entry_is_merged_before_the_action_along_the_mro():
+    class Base:
+        pass
+
+    class Derived(Base):
+        pass
+
+    endpoint_docs(
+        {
+            "*": {"summary": "base every", "description": "base every", "openapi_extra": {"parameters": [{"n": 1}]}},
+            "retrieve": {"summary": "base retrieve", "openapi_extra": {"parameters": [{"n": 2}]}},
+        }
+    )(Base)
+    endpoint_docs({"*": {"description": "derived every", "openapi_extra": {"parameters": [{"n": 3}]}}})(Derived)
+    assert docs_for(Derived, "retrieve") == {
+        "summary": "base retrieve",
+        "description": "derived every",
+        "openapi_extra": {"parameters": [{"n": 1}, {"n": 2}, {"n": 3}]},
+    }
+    assert docs_for(Derived, "schema") == {}
+
+
+def test_a_parameter_of_the_every_action_entry_describes_only_the_endpoints_that_have_it():
+    document, _ = app_document({"*": {"parameters": {"pk": "Catalogue number."}}})
+    parameters = document["paths"]["/t/{pk}"]["get"]["parameters"]
+    assert parameters[0]["description"] == "Catalogue number."
+    assert "pk" not in [parameter["name"] for parameter in document["paths"]["/t"]["post"].get("parameters", [])]
+
+
+def test_a_key_outside_endpoint_doc_is_refused():
+    with pytest.raises(ValueError, match="response"):
+        endpoint_docs({"retrieve": {"response": {}}})
+    with pytest.raises(ValueError, match="operation_id"):
+        endpoint_docs({"*": {"operation_id": "x"}})
+
+
+def test_tags_and_openapi_extra_reach_the_schema_endpoint():
+    docs = {
+        "list_items": {"tags": ["Catalogue"], "openapi_extra": {"x-audit": True}},
+        "retrieve": {"responses": error_entry(409, "Edited.", TrackConflictError(1))},
+    }
+    document, schema = app_document(docs)
+    for path, method in (("/t", "get"), ("/t/{pk}", "get"), ("/t/{pk}", "delete")):
+        assert schema["paths"][path][method] == document["paths"][path][method]
+    assert schema["paths"]["/t"]["get"]["tags"] == ["Catalogue"]
+    assert schema["paths"]["/t"]["get"]["x-audit"] is True
+
+
+def test_a_library_routed_viewset_is_documented_through_its_class(monkeypatch):
+    from .events.viewset import EventsViewSet, register_events
+
+    monkeypatch.setattr(EventsViewSet, DOCS_ATTRIBUTE, {}, raising=False)
+    endpoint_docs({"*": {"openapi_extra": {"security": []}}, "poll": {"summary": "Poll the topics"}})(EventsViewSet)
+    app, router = FastAPI(), APIRouter()
+    register_events(router)
+    app.include_router(router)
+    poll = app.openapi()["paths"]["/events/poll"]["post"]
+    assert poll["summary"] == "Poll the topics"
+    assert poll["security"] == []
+
+
+def test_merge_openapi_extra_merges_dicts_concatenates_parameters_and_replaces_the_rest():
+    base = {"parameters": [{"n": 1}], "requestBody": {"description": "d", "content": {"a": 1}}, "security": [{"a": []}]}
+    extra = {"parameters": [{"n": 2}], "requestBody": {"required": True, "content": {"b": 2}}, "security": []}
+    assert merge_openapi_extra(base, extra) == {
+        "parameters": [{"n": 1}, {"n": 2}],
+        "requestBody": {"description": "d", "content": {"a": 1, "b": 2}, "required": True},
+        "security": [],
+    }
+    assert base["parameters"] == [{"n": 1}]
+    assert merge_openapi_extra(None, None) == {}

@@ -93,7 +93,11 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
   (`"__viewset_middleware_depends__"`, in `fastapi_viewsets.decorators.route_viewset`) set to `True`.
 - Describes the `pk` path parameter with the `Field(description=...)` of the response model's primary key field, else
   with `PK_DESCRIPTION` (`"Primary key of the record."`), and applies the `parameters` of `@endpoint_docs`; a name
-  there that the endpoint does not have raises `ValueError`.
+  of the action's own entry that the endpoint does not have raises `ValueError`, a name of the `'*'` entry is skipped.
+- Documents every operation with the package's error responses (`VIEWSET_ERROR_RESPONSES` under the endpoint's own
+  entries) and then with `@endpoint_docs`: its `responses` merged with `merge_responses()` into the entries of the same
+  status, its `openapi_extra` merged into the route's, and the middleware parameters appended after it. The
+  application's OpenAPI document and `/schema` carry the same operation.
 - Leaves out a filter parameter whose type resolves to `None` (a `ListMixin` without `TFilter`).
 - Reads the filter model of an endpoint parameter annotated `Annotated[Model, Query()]` (a list's `TFilter`, a
   lookup's `TLookupFilter`) from the query string: every field of the model is a query parameter, documented with its
@@ -112,8 +116,8 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
 - Leaves the cursor codes (`CURSOR_ERROR_RESPONSES`) out of the list endpoint's responses when the viewset does not serve
   the cursor shape.
 - Raises `ValueError` when `lifecycle` is none of `"singleton"`, `"per-request"`, `"instance-key"`, when
-  `@endpoint_docs` names an endpoint the class does not have, when a route of the class starts with a path it mounts a
-  sub-viewset at, and when it mounts a class it is mounted under, itself included.
+  `@endpoint_docs` names an endpoint the class does not have (other than `'*'`), when a route of the class starts
+  with a path it mounts a sub-viewset at, and when it mounts a class it is mounted under, itself included.
 - Adds each endpoint to `router` once, as a route that matches only the transports it is published on (see
   [muxws](../guide/muxws#choosing-which-viewsets-are-published)); a route not published on REST is left out of the
   application's OpenAPI document. Records the endpoints published on muxws in the muxws registry.
