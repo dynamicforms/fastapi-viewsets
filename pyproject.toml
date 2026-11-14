@@ -48,6 +48,7 @@ dev = [
     "python-multipart",
     "redis",
     "celery",
+    "celery-types>=0.26.0",
     "gevent",
     "django",
     "asgiref",
