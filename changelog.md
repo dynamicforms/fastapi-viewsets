@@ -44,9 +44,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `@endpoint_docs` key `'*'` (`EVERY_ACTION`): its entry documents every action of the viewset except `schema`,
   merged before the action's own entry in each class along the MRO. A name in its `parameters` that an endpoint does
   not have is skipped for that endpoint.
+- `get_collation(locale=None, on_mismatch="warn")`, `Collation` and `CollationWarning` in `fastapi_viewsets.collation`.
+  `get_collation()` returns the default collation. `get_collation(locale)` returns an ICU collator of the locale with
+  numeric collation, through the new `icu` extra (PyICU); legacy codes such as `iw` load their canonical locale's
+  collation. `on_mismatch` (`"use"`, `"warn"`, `"fallback"`) decides what a locale ICU collates with its root collation
+  returns. A string ICU does not read as a locale raises `ValueError`. Without PyICU a locale returns the default
+  collation.
+  One instance per `(locale, on_mismatch)`; its `CollationWarning` is issued once, when it is created. A collation is
+  any object with `sort_key(text)` (the `Collation` protocol).
+- `collation` and `async collation_for(context, column_name)` on `ListMixin`: the collation of the strings the default
+  `sort_list` and the in-memory cursor predicate compare. `collation_for` returns `collation`; override it for an order
+  per column or per request. For the primary key column a string's raw value follows its key.
+  `DjangoORMViewSet.collation_for` returns code point order, which its in-memory fallback uses.
+- `CursorPredicate` and `make_predicate()` take an optional `sort_value(column_name, value)`.
 
 ### Changed
 
+- **Breaking:** the in-memory sort and cursor compare strings case-insensitively, with digit runs by value
+  (`apple, Banana, Cesta, cesta, file2, file10`). They compared by code point. Strings compare by the code points of
+  their `str.casefold()` form, so accented letters sort after `z`. Ordering in the database is unchanged.
 - **Breaking:** field errors use the package's field error codes (`fastapi-viewsets.<code>`, camelCase params) for
   the pydantic types and Django codes that map to them. For example, `pydantic.string_too_short` `{min_length}` becomes
   `fastapi-viewsets.min_length` `{minLength}`. A type or choice error whose input is null becomes

@@ -12,7 +12,8 @@ import binascii
 import hashlib
 import json
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field as dataclass_field
 from typing import Any, ClassVar, Generic, TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -193,15 +194,23 @@ class CursorPredicate(Filter):
     backwards: bool = False
     inclusive: bool = False
     nulls_first: bool = True
+    sort_value: Callable[[str, Any], Any] | None = None
+    """Maps a column name and a non-NULL value to the value compared in memory; identity when None."""
+    _anchor: dict[str, Any] = dataclass_field(init=False, repr=False, compare=False, default=None)  # noqa: RUF009
+    """The position's compared values by column name, computed on the first `matches`."""
 
     def fields(self) -> tuple[str, ...]:
         return tuple(name for name, _ in self.keys)
 
     def matches(self, record: Any) -> bool:
+        anchor = self._anchor
+        if anchor is None:
+            anchor = {name: self._key(name, self.position.get(name)) for name, _ in self.keys}
+            object.__setattr__(self, "_anchor", anchor)
         for name, descending in self.keys:
             order = compare_in_order(
-                _read(record, name),
-                self.position.get(name),
+                self._key(name, _read(record, name)),
+                anchor[name],
                 descending,
                 self.nulls_first,
             )
@@ -210,8 +219,16 @@ class CursorPredicate(Filter):
                 return order < 0 if self.backwards else order > 0
         return self.inclusive  # every key equal: this is the anchor row itself
 
+    def _key(self, name: str, value: Any) -> Any:
+        return value if value is None or self.sort_value is None else self.sort_value(name, value)
 
-def make_predicate(state: CursorState, keys: CursorKeys, nulls_first: bool = True) -> CursorPredicate:
+
+def make_predicate(
+    state: CursorState,
+    keys: CursorKeys,
+    nulls_first: bool = True,
+    sort_value: Callable[[str, Any], Any] | None = None,
+) -> CursorPredicate:
     return CursorPredicate(
         field="",
         value=state.position,
@@ -220,6 +237,7 @@ def make_predicate(state: CursorState, keys: CursorKeys, nulls_first: bool = Tru
         backwards=state.backwards,
         inclusive=state.inclusive,
         nulls_first=nulls_first,
+        sort_value=sort_value,
     )
 
 

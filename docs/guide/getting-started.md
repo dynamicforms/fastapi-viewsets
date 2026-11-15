@@ -14,6 +14,15 @@ pip install dynamicforms-fastapi-viewsets
 
 Requirements: Python 3.10+, FastAPI, Pydantic 2.11+.
 
+Language-specific text order in the in-memory sort ([Text order](./python-mixins#text-order)) needs the
+`icu` extra, which installs [PyICU](https://pypi.org/project/PyICU/). PyICU is built from source against the
+system ICU, so the install needs the ICU headers, `pkg-config` and a C++ compiler:
+
+```bash
+sudo apt install libicu-dev pkg-config g++  # Debian, Ubuntu
+pip install "dynamicforms-fastapi-viewsets[icu]"
+```
+
 ### Vue / TypeScript (frontend)
 
 ```bash

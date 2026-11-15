@@ -63,8 +63,8 @@ or declares the filter with `make_filter_model`, which needs no code at all. See
 **Sorting** (active when the `sort` query parameter is non-empty, or is absent and the viewset
 declares `default_sort`): `sort_list(sort, records)` sorts in memory. The default is a stable
 multi-key sort; NULLs sit where the viewset's `nulls` says, lowest in both directions by default.
-It compares strings by code point, so `Č` sorts after `Z`; a backend that sorts in the database
-(`DjangoORMViewSet`) applies the database's collation instead.
+It compares strings by the viewset's [collation](#text-order) and other values as they are; a backend
+that sorts in the database (`DjangoORMViewSet`) applies the database's collation instead.
 
 To do either in the backend instead, override `apply_filter` or `apply_sort` — see
 [the list pipeline](./list-pipeline.md#the-stages).
@@ -106,6 +106,87 @@ default in `/schema`, where the TS client reads it with `defaultSort()`, e.g. as
 class CountryViewSet(CollectionViewSet[int, Country], ListMixin[Country, None]):
     default_sort = "name:asc"
 ```
+
+#### Text order
+
+The in-memory sort and the cursor compare strings by the keys of a collation and other values as they
+are. NULLs never reach the collation. A collation is any object with a `sort_key(text)` method whose
+results compare with each other:
+
+```python
+from fastapi_viewsets.collation import Collation  # Protocol: sort_key(self, text: str) -> Any
+```
+
+The default collation, `get_collation()`, compares the code points of the `str.casefold()` form of a
+string, with digit runs by value. It is case-insensitive, and `ß` compares as `ss`. Accented letters are
+not moved next to their base letters, so `Č` sorts after `z`. Equal keys after folding are ordered by the
+string itself, so only equal strings get equal keys:
+
+```text
+apple, Banana, Cesta, cesta, eclair, file2, file10, sa, Sz, zebra, zz, Éclair, čas, Čebula, Ša, Žaba
+```
+
+A digit run of up to 640 digits compares by value; a longer run compares as consecutive runs of 640
+digits.
+
+`get_collation(locale)` returns an ICU collation of the locale with numeric collation on. It needs the
+`icu` extra (PyICU, which builds against the system ICU; see [Installation](./getting-started#installation)):
+
+```python
+from fastapi_viewsets.collation import get_collation
+
+class WordViewSet(CollectionViewSet[int, Word], CursorListMixin[Word, None]):
+    collation = get_collation("sl")
+```
+
+```text
+apple, Banana, cesta, Cesta, čas, Čebula, eclair, Éclair, file2, file10, sa, Sz, Ša, zebra, zz, Žaba
+```
+
+`get_collation(locale, on_mismatch="warn")`:
+
+- creates the collation of each `(locale, on_mismatch)` once and returns the same instance afterwards;
+  creation and its checks run under a lock;
+- without PyICU returns the default collation and issues a `CollationWarning`;
+- creates the ICU collator of the canonical locale: `iw` is `he`, `in` is `id`, `sh` is `sr_Latn`;
+- raises `ValueError` for a string ICU does not read as a locale, such as `@@@`;
+- checks the locale ICU loads collation data for (its valid locale). ICU's root collation for a language
+  that is not root is a mismatch. Any other collation ICU loads is no mismatch, including the one ICU
+  assigns to another language code (`yue` loads `zh_Hant`, `no` loads `no` or `nb`). `""`, `root` and
+  `und` request the root collation and are no mismatch. On a mismatch, `on_mismatch` decides:
+  `"use"` uses ICU's collation without a warning, `"warn"` uses it and issues a `CollationWarning`,
+  `"fallback"` issues a `CollationWarning` and returns the default collation.
+
+Each warning is issued once, when the collation is created. An ICU collation keeps one ICU collator per
+thread. Its keys are `(bytes, str)`: ICU's sort key, then the string for strings ICU ranks equal.
+
+`collation_for(context, column_name)` returns the collation of a column. The default returns the
+viewset's `collation`. Override it for an order per column or per request. It is a coroutine, so it can
+read context values; `context` is `None` when `sort_list` is called outside `get_list`:
+
+```python
+class CodePoint:
+    def sort_key(self, text: str) -> str:
+        return text
+
+class WordViewSet(CollectionViewSet[int, Word], CursorListMixin[Word, None]):
+    async def collation_for(self, context: Context | None, column_name: str) -> Collation:
+        if column_name == "code":
+            return CodePoint()
+        if context is not None and "language" in context:
+            return get_collation(await context.language, on_mismatch="fallback")
+        return self.collation
+```
+
+The sort and the cursor predicate use the same keys, so cursor pages follow the sort's order. The cursor
+appends the primary key to every ordering; for a string primary key the raw value follows its collation
+key, so distinct primary keys never compare equal.
+
+The collation applies only to the in-memory stages. `DjangoORMViewSet` sorts and pages in SQL with the
+database's collation. When a filter or a sort column has no SQL translation, its sort and cursor run in
+memory, and its `collation_for` returns code point order; `collation` does not apply.
+
+#### Sorting in the backend
 
 For server-side sorting, override `apply_sort`, order the records in the backend and mark the stage
 applied so the in-memory sort leaves them alone:
@@ -198,17 +279,19 @@ The filter is passed through `query`, so concurrent requests on one viewset inst
 The endpoint answers in the order of the source; filtering and conversion keep it. `perform_lookup`
 returns the items ordered by group, then by their text, so that a select shows each group's items
 together. Ordering in the source applies its collation: `Tag.objects.order_by("name")` orders by the
-database's, so `Č` follows `C` under a Slovenian collation.
+database's, so `Č` follows `C` under a Slovenian collation. The example below orders in memory with
+a [collation](#text-order).
 
 ```python
-import locale
-
+from fastapi_viewsets.collation import get_collation
 from fastapi_viewsets.mixins import LookupMixin, LookupItem, LookupFilter
+
+_slovenian = get_collation("sl")
 
 # Default filter: ?q= searches the title, ?ids=1&ids=5 selects by pk
 class MyViewSet(..., LookupMixin):
     async def perform_lookup(self, context: Context) -> list[LookupItem]:
-        items = sorted(db.values(), key=lambda i: locale.strxfrm(i.name))
+        items = sorted(db.values(), key=lambda i: _slovenian.sort_key(i.name))
         return [LookupItem(group=None, pk=i.id, title=i.name, icon=None) for i in items]
 ```
 

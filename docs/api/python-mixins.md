@@ -153,8 +153,33 @@ In-memory hooks:
   implementation; it returns `None`, which `apply_filter` reads as "unfiltered" and answers with the
   records as they stand.
 - `sort_list(sort: SortState, records: list[T]) -> list[T]` — post-sort hook. Default is a stable
-  multi-key in-memory sort through `compare_in_order`, placing NULLs where `nulls` says. Strings
-  compare by code point.
+  multi-key in-memory sort in the order of `compare_in_order`, strings by the keys of `collation_for`,
+  placing NULLs where `nulls` says.
+- `collation: Collation` — class attribute, default `get_collation()`. The collation `collation_for`
+  returns.
+- `async collation_for(context: Context | None, column_name: str) -> Collation` — the collation of
+  `column_name`'s strings in the default `sort_list` and the in-memory cursor predicate. Default:
+  `collation`. `context` is the `get_list` context, `None` when `sort_list` runs outside `get_list`.
+  Non-string values and `None` do not reach the collation. For the primary key column a string's raw
+  value follows its key. `DjangoORMViewSet.collation_for` returns code point order for its in-memory
+  fallback. See [Text order](../guide/python-mixins#text-order).
+
+### Collations (`fastapi_viewsets.collation`)
+
+- `Collation` — `Protocol` (runtime-checkable) with `sort_key(text: str) -> Any`. Any object with that
+  method is a collation; keys of one collation compare with each other.
+- `get_collation(locale: str | None = None, on_mismatch: Literal["use", "warn", "fallback"] = "warn") -> Collation`
+  — `None`: the default collation, case-insensitive (`str.casefold`) with digit runs of up to 640 digits by
+  value; key `(parts, text)`. A locale: an ICU collator of `icu.Locale.createCanonical(locale)` with
+  `NUMERIC_COLLATION` on, one per
+  thread; key `(collator.getSortKey(text), text)`. Needs the `icu` extra; without PyICU it returns the
+  default collation with a `CollationWarning`. A mismatch is a valid ICU locale that is root (`""`) while
+  the canonical locale's language is not empty: `"use"` uses ICU's collation, `"warn"` uses it with a
+  `CollationWarning`, `"fallback"` returns the default collation with a `CollationWarning`. One instance per
+  `(locale, on_mismatch)`, created under a lock; its warning is issued at creation. Raises `ValueError` for
+  another `on_mismatch`, and with PyICU for a locale ICU cannot read or whose canonical language is empty
+  unless it is `""` or has the language `root` or `und`.
+- `CollationWarning` — `UserWarning` subclass.
 
 ### PaginatedListMixin `[T, TFilter=None]`
 
