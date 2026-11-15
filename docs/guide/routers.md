@@ -82,6 +82,25 @@ The decorator derives an OpenAPI tag from the class name by stripping the `ViewS
 - `ItemViewSet` → tag `Item`
 - `UserProfileViewSet` → tag `UserProfile`
 
+`settings.viewsets_tag_name` replaces this rule. It receives the viewset class and returns the tag; an empty string
+gives the routes no tag. The tag is used for the routes, for the operations of `/schema`, for the tag description
+and for the muxws registration:
+
+```python
+import re
+
+from fastapi_viewsets.conf import settings
+
+def tag_name(cls: type) -> str:
+    """`UserProfileViewSet` -> `User Profile`."""
+    return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", cls.__name__.removesuffix("ViewSet"))
+
+settings.viewsets_tag_name = tag_name
+```
+
+The setting is read when a viewset is decorated, so it is assigned before the modules that declare the viewsets are
+imported.
+
 A [sub-viewset](./nested-viewsets#openapi) takes the tag of the viewset at the top of its mounts.
 
 ### Route ordering

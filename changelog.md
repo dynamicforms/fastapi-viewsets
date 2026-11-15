@@ -65,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter whose return annotation is a list, tuple or set type, alone or in a union, raises `TypeError` before it
   runs; a custom action that writes several records publishes through `write_topic()`.
 - `ChangeEvents.op_for(execution)`: the hook that returns the `op` an execution publishes, `None` for none.
+- `settings.viewsets_tag_name`: a function that returns the OpenAPI tag of a viewset class. Its result tags the
+  viewset's routes and those of its sub-viewsets, the operations of `/schema`, the tag description and the muxws
+  registration. `None` (the default) keeps the class name without its `ViewSet` suffix. Read when a viewset is
+  decorated.
 
 ### Changed
 

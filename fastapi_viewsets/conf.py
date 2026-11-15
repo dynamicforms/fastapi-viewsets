@@ -52,6 +52,12 @@ class Settings:
         Whether a viewset is published on muxws when neither `route_viewset(register_muxws=)` nor
         `@transports(muxws=)` says. Read at decoration time.
         """
+        self.viewsets_tag_name: Callable[[type], str] | None = None
+        """
+        Returns the OpenAPI tag of a viewset class. The tag is used for the class's routes, the tag description and
+        the muxws registration; an empty string gives no tag. None uses the class name without its `ViewSet`
+        suffix. Read at decoration time.
+        """
         self.viewsets_security_scheme: SecurityBase | None = None
         """
         Security scheme added to every route for the OpenAPI "Authorize" flow only. Read at decoration

@@ -312,13 +312,11 @@ def _route(
     type_map = build_type_map(cls)
 
     if parent is None:
-        # Tag: the class name without its "ViewSet" suffix; its description is the viewset's docstring.
-        cls_name = cls.__name__
-        if cls_name.endswith("ViewSet"):
-            cls_name = cls_name[: -len("ViewSet")]
-        default_tags = [cls_name] if cls_name else None
-        if cls_name:
-            register_tag(cls_name, viewset_description(cls))
+        # The tag's description is the viewset's docstring.
+        tag = _tag_name(cls)
+        default_tags = [tag] if tag else None
+        if tag:
+            register_tag(tag, viewset_description(cls))
     else:
         # A sub-viewset's endpoints are listed in the group of the viewset at the top of its mounts.
         default_tags = parent.tags
@@ -658,6 +656,17 @@ def _route(
     }
 
     return cls
+
+
+def _tag_name(cls: type) -> str:
+    """
+    The OpenAPI tag of `cls`'s routes: `settings.viewsets_tag_name(cls)` when set, else the class name without its
+    `ViewSet` suffix. An empty name gives no tag.
+    """
+    if settings.viewsets_tag_name is not None:
+        return settings.viewsets_tag_name(cls)
+    name = cls.__name__
+    return name[: -len("ViewSet")] if name.endswith("ViewSet") else name
 
 
 @dataclass(frozen=True)
