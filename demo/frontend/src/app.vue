@@ -11,6 +11,14 @@
           <v-btn-toggle v-model="backend" mandatory density="comfortable" color="secondary">
             <v-btn value="memory" data-testid="backend-memory">in-memory</v-btn>
             <v-btn value="db" data-testid="backend-db">SQLite</v-btn>
+            <v-btn
+              value="adorm"
+              data-testid="backend-adorm"
+              :disabled="!adormAvailable"
+              :title="adormUnavailable ?? 'PostgreSQL through adorm'"
+            >
+              PostgreSQL (adorm)
+            </v-btn>
           </v-btn-toggle>
           <v-spacer />
           <v-btn
@@ -120,12 +128,26 @@ import { applyChanges, type Change, type RecordsChanged } from '../../../vue/eve
 import type { EventSubscription } from '../../../vue/events';
 
 import { runBenchmark, type BenchmarkResult } from './benchmark';
-import { viewSetFor, type Backend, type MusicTrack, type Transport } from './viewsets';
+import { demoBackends, viewSetFor, type Backend, type MusicTrack, type Transport } from './viewsets';
 
 const PAGE_SIZE = 50;
 
 const transport = ref<Transport>('rest');
 const backend = ref<Backend>('memory');
+
+/** Why the adorm backend is off, as `GET /backends` says; null while it is on or not yet known. */
+const adormUnavailable = ref<string | null>(null);
+const adormAvailable = ref(false);
+void demoBackends().then(
+  (backends) => {
+    const adorm = backends.find((one) => one.name === 'adorm');
+    adormAvailable.value = adorm?.available ?? false;
+    adormUnavailable.value = adorm?.available ? null : (adorm?.reason ?? 'not available');
+  },
+  () => {
+    adormUnavailable.value = 'GET /backends failed';
+  },
+);
 
 const records = ref<MusicTrack[]>([]);
 const cursor = ref<string | null>(null);
@@ -144,7 +166,7 @@ const following = ref<string | null>(null);
 const benchmarking = ref(false);
 const results = ref<BenchmarkResult[]>([]);
 
-// All four MusicTrack ViewSets share one pk field.
+// All six MusicTrack ViewSets share one pk field.
 const pkField = viewSetFor(transport.value, backend.value).pkFieldName;
 const pkOf = (track: MusicTrack): number => track[pkField as keyof MusicTrack] as number;
 

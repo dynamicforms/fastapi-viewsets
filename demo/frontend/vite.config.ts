@@ -17,6 +17,7 @@ export default defineConfig({
     proxy: {
       '/music': api,
       '/music-db': api,
+      '/backends': api,
       '/events': api,
       '/redoc': api,
       '/docs': api,
