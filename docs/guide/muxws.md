@@ -144,7 +144,7 @@ const total = await tracks.count();
 ```
 
 The mixin list is written once, as values, and does three jobs: it decides which actions the class
-exposes to callers, it types them, and it is handed to the proxy so the startup schema check can
+exposes to callers, it types them, and it is handed to the proxy so the schema check can
 compare it against `GET /music/schema`. Calling an action the ViewSet did not declare is a compile
 error (TS2339) rather than a 404 at runtime.
 

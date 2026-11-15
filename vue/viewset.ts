@@ -3,7 +3,7 @@
  *
  *   class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin, LookupMixin]) { ... }
  *
- * The mixin list selects and types the exposed actions and feeds the startup schema check; calling
+ * The mixin list selects and types the exposed actions and feeds the schema check; calling
  * an undeclared action is a compile error. Unlike `route_rest`, the object is the consumer's own
  * class, so its custom methods exist.
  */

@@ -355,7 +355,7 @@ type DefaultSortOf<A> = [Extract<A, ListAction>] extends [never] ? unknown : Lis
 
 `defaultSort()` resolves to the BE viewset's `default_sort`, `[]` when it declares none. It reads the
 `sort` parameter's default of `GET {base}` in the viewset's `/schema`, fetched over the ViewSet's
-transport once per instance and shared with the startup schema check. When the shared request fails,
+transport once per instance and shared with the schema check. When the shared request fails,
 `defaultSort()` issues one of its own, repeated as any other call is; when that fails too, it rejects,
 and the next call fetches again. `ViewSetProxyBase` implements it, so a hand-written proxy
 has it too; `RestProxy<M>` and `MuxwsProxy<M>` carry it when `M` has `list`, `listPage` or

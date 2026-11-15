@@ -214,7 +214,7 @@ const items = new ItemApi({
 | `repeat.delayMs` | `1000` | The delay before a repeat after a lost connection or a gateway status, doubled after each, at most 30000 |
 
 `repeat` is an option of every proxy and of `RequestOptions`, where it applies to one call. The
-startup schema check is not repeated.
+`/schema` request of the schema check is not repeated, except when `defaultSort()` sends it.
 
 A repeat over muxws waits for `peer.onReconnect`, at most until `withinMs` has elapsed. A peer that
 closes for good (`onClose` with `willRetry` false) ends the wait, and the call rejects with the
@@ -227,11 +227,12 @@ when it is issued, `retry` for each repeat, with how the attempt ended and the d
 repeat, and `settle` when its promise settles, with `error`, the rejection reason, when it rejected.
 Each event carries the call's `key`. A busy indicator, a connectivity notice or a central error
 report builds on it; `RequestOptions.background: true` marks a call such an indicator leaves out, and
-the startup schema check is sent with it. `inBackground(fn)` marks every call a proxy issues while
-`fn` runs synchronously; `watch({ fetch: true })` issues its retrieves that way. `pendingCalls()` lists the calls
-that have not settled, oldest first, with when each was issued and how many of its attempts went
-unanswered; `pendingCallCount()` counts them, background calls left out. `retryNow()` sends every
-waiting repeat at once, for a "try again now" button.
+the schema check is sent with it, except when it uses the `/schema` request of `defaultSort()`.
+`inBackground(fn)` marks every call a proxy issues while `fn` runs synchronously;
+`watch({ fetch: true })` issues its retrieves that way. `pendingCalls()` lists the calls that have
+not settled, oldest first, with when each was issued and how many of its attempts went unanswered;
+`pendingCallCount()` counts them, background calls left out. `retryNow()` sends every waiting repeat
+at once, for a "try again now" button.
 
 ```ts
 import { onCallActivity, retryNow } from '@dynamicforms/fastapi-viewsets';

@@ -58,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The package's own error `responses` entries (`NOT_FOUND_RESPONSE`, `VIEWSET_ERROR_RESPONSES`, …) are built with
   `error_entry()`: each example's summary is the error's `detail`. Example names and bodies are unchanged.
 - `@endpoint_docs` raises `ValueError` for a key of an entry outside `EndpointDoc`.
+- TS: the schema check of a ViewSet starts with the instance's first call that reaches the BE (`request()`,
+  `defaultSort()`, `watch()`), once per instance, as a background call that does not delay or fail that call.
+  Constructing a ViewSet sends no request and does not call a muxws `peer` function, so a ViewSet can be a module-level
+  constant. When the check's `/schema` request fails with no response, or with status 401, 403, 502, 503 or 504, the
+  next call starts the check again. A method that reaches the BE without `request()` starts the check with the
+  protected `ensureSchemaCheck()`. A transport implements `request()` as a class method; a `request` class field gets
+  no schema check. `initSchemaValidation()` does nothing and is deprecated; a transport need not call it.
 
 ### Fixed
 

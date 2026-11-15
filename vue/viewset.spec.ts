@@ -58,6 +58,12 @@ function makeMockAxios() {
   };
 }
 
+/** Starts the schema check that the first request of `api` would start; returns `api`. */
+function startSchemaCheck<A extends object>(api: A): A {
+  void (api as unknown as { ensureSchemaCheck(): Promise<void> }).ensureSchemaCheck();
+  return api;
+}
+
 describe('restViewSet', () => {
   let http: ReturnType<typeof makeMockAxios>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -104,14 +110,14 @@ describe('restViewSet', () => {
   });
 
   it('carries the declaration to the schema check, which then finds nothing to report', async () => {
-    build();
+    startSchemaCheck(build());
     await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema', sent()));
     await new Promise((r) => setTimeout(r, 0));
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it('warns when the BE serves an action the ViewSet did not declare', async () => {
-    build({ paths: { ...READONLY_LOOKUP_SCHEMA.paths, '/items/bulk': { post: {} } } });
+    startSchemaCheck(build({ paths: { ...READONLY_LOOKUP_SCHEMA.paths, '/items/bulk': { post: {} } } }));
     await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled());
     expect(warnSpy.mock.calls[0][0] as string).toContain("BE serves 'POST /items/bulk'");
   });
@@ -119,9 +125,11 @@ describe('restViewSet', () => {
   it('puts a custom endpoint on the prototype, so it is not reported as missing', async () => {
     // route_rest cannot do this: it returns a bare proxy, so a custom method typed into M is
     // undefined when called. Here the object is ItemApi itself.
-    const api = build({
-      paths: { ...READONLY_LOOKUP_SCHEMA.paths, '/items/count': { get: { 'x-viewset-action': 'count' } } },
-    });
+    const api = startSchemaCheck(
+      build({
+        paths: { ...READONLY_LOOKUP_SCHEMA.paths, '/items/count': { get: { 'x-viewset-action': 'count' } } },
+      }),
+    );
     expect(typeof Object.getPrototypeOf(api).count).toBe('function');
     await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema', sent()));
     await new Promise((r) => setTimeout(r, 0));
@@ -133,7 +141,7 @@ describe('restViewSet', () => {
     mockSchema({
       paths: { ...READONLY_LOOKUP_SCHEMA.paths, '/items/count': { get: { 'x-viewset-action': 'count' } } },
     });
-    new NoCount({ basePath: '/items', axiosInstance: http as unknown as typeof axios });
+    startSchemaCheck(new NoCount({ basePath: '/items', axiosInstance: http as unknown as typeof axios }));
     await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled());
     expect(warnSpy.mock.calls[0][0] as string).toContain("no 'count()' method");
   });
@@ -142,7 +150,7 @@ describe('restViewSet', () => {
     // `declares` is pinned to the factory's tuple, so restating it in a subclass is TS2417.
     class ItemDbApi extends restViewSet<Item>()('id', [CursorListMixin]) {}
     mockSchema({ paths: { '/items': { get: {} }, '/items/schema': { get: {} } } });
-    new ItemDbApi({ basePath: '/items', axiosInstance: http as unknown as typeof axios });
+    startSchemaCheck(new ItemDbApi({ basePath: '/items', axiosInstance: http as unknown as typeof axios }));
     await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema', sent()));
     await new Promise((r) => setTimeout(r, 0));
     expect(warnSpy).not.toHaveBeenCalled();
@@ -160,6 +168,7 @@ describe('restViewSet', () => {
         'http',
         'pkFieldName',
         'repeatOptions',
+        'schemaCheck',
         'schemaRequest',
         'schemaValidationEnabled',
         'topicOption',
@@ -176,7 +185,11 @@ describe('restViewSet', () => {
 
   it('still honours validateSchema: false per instance', async () => {
     mockSchema(READONLY_LOOKUP_SCHEMA);
-    new ItemApi({ basePath: '/items', validateSchema: false, axiosInstance: http as unknown as typeof axios });
+    await new ItemApi({
+      basePath: '/items',
+      validateSchema: false,
+      axiosInstance: http as unknown as typeof axios,
+    }).list();
     await new Promise((r) => setTimeout(r, 0));
     expect(http.get.mock.calls.map(([url]) => url)).not.toContain('/items/schema');
   });
@@ -353,7 +366,9 @@ describe('a ViewSet with custom endpoints only', () => {
     schema: object = CUSTOM_ONLY_SCHEMA,
   ): InstanceType<C> {
     mockSchema(schema);
-    return new ViewSet({ basePath: '/reports', axiosInstance: http as unknown as typeof axios }) as InstanceType<C>;
+    return startSchemaCheck(
+      new ViewSet({ basePath: '/reports', axiosInstance: http as unknown as typeof axios }) as InstanceType<C>,
+    );
   }
 
   it('calls its custom endpoints', async () => {
@@ -456,7 +471,7 @@ describe('a ViewSet with custom endpoints only', () => {
         return this.request<Report>('POST', `/${pk}/approve`);
       }
     }
-    new ReportWs({ basePath: '/reports', peer: () => Promise.resolve(peer as never) });
+    startSchemaCheck(new ReportWs({ basePath: '/reports', peer: () => Promise.resolve(peer as never) }));
     await vi.waitFor(() => expect(schemaRead).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 10));
     expect(opened).toHaveLength(1);

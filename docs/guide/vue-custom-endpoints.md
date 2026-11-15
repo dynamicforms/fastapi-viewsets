@@ -241,7 +241,8 @@ const itemsApi = new ItemApi({ basePath: '/items', pkFieldName: 'id', axiosInsta
 ```
 
 A call made through `this.http` directly carries no `Idempotency-Key` and is not repeated; only
-`request()` does both.
+`request()` does both. It does not start the [schema check](./route-rest#schema-validation) either;
+a method that may be the instance's first call calls `this.ensureSchemaCheck()` to start it.
 
 Here `pkFieldName` is a constructor option and `declares` a static, since there is no factory call
 to bind them. A custom axios instance is passed the same way to a factory-built REST ViewSet:

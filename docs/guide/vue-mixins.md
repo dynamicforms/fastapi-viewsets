@@ -2,7 +2,7 @@
 
 The `@dynamicforms/fastapi-viewsets` package ships TypeScript mixin classes that mirror the Python
 backend mixins. You list them in a ViewSet declaration to say which operations that viewset has; the
-list types the class and is what the startup schema check compares against the BE. The HTTP calls
+list types the class and is what the schema check compares against the BE. The HTTP calls
 themselves live in the proxy underneath.
 
 ## Individual operation mixins
@@ -158,7 +158,7 @@ await api.create({ name: 'Widget', price: 9.99 });  // TS2339: create was not de
 ```
 
 The mixin list is written once, as values, and does three jobs: it decides which actions the class
-exposes to callers, it types them, and it is handed to the proxy so that the startup
+exposes to callers, it types them, and it is handed to the proxy so that the
 [schema check](./route-rest#schema-validation) can compare it against the BE. Calling an action the
 ViewSet did not declare is a compile error rather than a 404 at runtime.
 
@@ -178,7 +178,7 @@ the constructor options.
 | Option | Factory | Description |
 |--------|---------|-------------|
 | `basePath` | both | Base path to the resource, e.g. `'/items'` |
-| `validateSchema` | both | Set `false` to skip the startup schema check |
+| `validateSchema` | both | Set `false` to skip the schema check on the first request |
 | `repeat` | both | [`RepeatOptions`](../api/idempotency#repeatoptions) of a call whose attempt ended without an answer; default `{ withinMs: 600000, delayMs: 1000 }` |
 | `events` | both | The event client [`watch()`](#following-changes-watch) subscribes on; without it, a `muxwsViewSet` uses the client registered for its peer and a `restViewSet` throws from `watch()` |
 | `topic` | both | The client topic `watch()` subscribes: the BE path relative to the app's `root_path`, without a Starlette `Mount` prefix; default `basePath` |
@@ -232,7 +232,7 @@ async function reload() {
 ```
 
 `defaultSort()` reads the viewset's `/schema`, fetched once per ViewSet instance and shared with the
-startup schema check. A list call without `sort` is ordered by `default_sort` on the BE either way.
+schema check. A list call without `sort` is ordered by `default_sort` on the BE either way.
 The reference is [`ListDefaultSort`](../api/vue-mixins#listdefaultsort).
 
 ### Overriding a declared action

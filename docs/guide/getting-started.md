@@ -136,4 +136,5 @@ passing `pkFieldName` or `declares` is TS2353.
 
 The mixin list decides the ViewSet's public surface. `itemsApi.listCursor()` is a compile error
 (TS2339), not a 404 at runtime. The same list reaches the proxy, which fetches `GET /items/schema`
-on construction and `console.warn`s anything the backend and the declaration disagree about.
+after the instance's first call and `console.warn`s anything the backend and the declaration disagree
+about. Constructing the ViewSet sends no request.

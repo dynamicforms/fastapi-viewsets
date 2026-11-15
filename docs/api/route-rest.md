@@ -26,7 +26,7 @@ function route_rest<M>(
 interface RestProxyOptions {
   basePath: string;
   pkFieldName: string;
-  /** Set false to skip the startup schema check (advisory, costs one request). */
+  /** Set false to skip the schema check on the first request (advisory, costs one request). */
   validateSchema?: boolean;
   /** The mixins the ViewSet declares, for the schema check. */
   declares?: readonly ViewSetMixinDeclaration[];

@@ -45,7 +45,7 @@ function route_rest<M>(
 | `viewSetClass` | class | The viewset class (used only as a type token; not instantiated) |
 | `basePath` | `string` | Base URL path, e.g. `'/items'` |
 | `pkFieldName` | `string` | Name of the PK field on the model, e.g. `'id'` |
-| `validateSchema` | `boolean` | Set `false` to skip the startup schema check |
+| `validateSchema` | `boolean` | Set `false` to skip the schema check on the first request |
 | `declares` | `readonly ViewSetMixinDeclaration[]` | The mixins the ViewSet declares, for that check |
 | `axiosInstance` | `AxiosInstance` | Optional custom axios instance (defaults to global axios) |
 
@@ -182,7 +182,7 @@ proxy = new RestProxyImpl<number, Item, 'id'>({
 |--------|------|-------------|
 | `basePath` | `string` | Base URL path, e.g. `'/items'` |
 | `pkFieldName` | `string` | Name of the PK field on the model, e.g. `'id'` |
-| `validateSchema` | `boolean` | Set `false` to skip the startup schema check |
+| `validateSchema` | `boolean` | Set `false` to skip the schema check on the first request |
 | `declares` | `readonly ViewSetMixinDeclaration[]` | The mixins the ViewSet declares, for that check |
 | `axiosInstance` | `AxiosInstance` | Optional custom axios instance (defaults to global axios) |
 | `attemptTimeoutMs` | `number` | Timeout of one attempt in milliseconds, passed to axios as `timeout`; default `30000`, `0` for none |
@@ -240,7 +240,7 @@ or the `topic` option, when set) on the proxy's `events` client; see
 ## Schema validation
 
 A ViewSet lists the mixins it is made of, and the proxy checks that list against the BE's schema
-when it is constructed:
+on the first call of the instance:
 
 ```ts
 import { BulkViewSetMixin, LookupMixin, RestProxyImpl } from '@dynamicforms/fastapi-viewsets';
@@ -261,9 +261,16 @@ returned class as `static declares`. That one list is what types the class and w
 so the two cannot disagree - which is why restating `static declares` on a subclass of a
 factory-built class is a compile error (TS2417).
 
-The proxy fetches `GET {basePath}/schema` in the background and emits one `console.warn` listing
-every disagreement. The check is **non-critical**: an unreachable schema endpoint or an unexpected
-format is ignored silently.
+The first call that reaches the BE (an action, a custom endpoint written against `request()`,
+`defaultSort()`, `lookup()` or `watch()`) starts the check, once per instance. The proxy fetches
+`GET {basePath}/schema` in the background after that call and emits one `console.warn` listing every
+disagreement. When `defaultSort()` is the first call, the check uses the `/schema` request
+`defaultSort()` sends, which is a foreground call. The check does not delay or fail the call that
+started it. Constructing a proxy sends no request, so a ViewSet can be a module-level constant: the
+request goes out with the application's first call. The check is **non-critical**: a failed schema
+request or an unexpected format is ignored silently. When the schema request fails with no response,
+or with status 401, 403, 502, 503 or 504 (for example, a call made before login), the next call
+starts the check again; otherwise the check is not sent again.
 
 Paths in the schema start at the BE `base_path`, without the `include_router` prefix and with path
 parameters unsubstituted. The check reads the base from the document's own `…/schema` path, so a

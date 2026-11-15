@@ -158,7 +158,7 @@ test('every ViewSet agrees with the backend it is pointed at', async ({ page }) 
     await page.getByTestId(`backend-${backend}`).click();
     await waitForFirstPage(page);
   }
-  // the check runs in the background after construction
+  // the check runs in the background after each ViewSet's first call
   await page.waitForTimeout(500);
 
   // the REST ViewSets fetched their schemas, so the check ran rather than failing silently

@@ -511,7 +511,7 @@ describe('RestProxyImpl — default axios instance', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. Schema validation — validateAgainstSchema()
+// 7. Schema validation
 // ---------------------------------------------------------------------------
 
 /** Full schema for an endpoint that exposes BulkViewSetMixin + LookupMixin. */
@@ -533,7 +533,7 @@ const READONLY_SCHEMA = {
   },
 };
 
-describe('schema validation — validateAgainstSchema()', () => {
+describe('schema validation', () => {
   let http: ReturnType<typeof makeMockAxios>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -572,24 +572,9 @@ describe('schema validation — validateAgainstSchema()', () => {
       pkFieldName: 'id',
       axiosInstance: http as unknown as typeof axios,
     });
-    // Wait for the constructor's fire-and-forget to complete, then reset the spy
-    // so that the explicit call below is the only one captured in assertions.
-    await new Promise((r) => setTimeout(r, 0));
-    warnSpy.mockClear();
-    await (proxy as any).validateAgainstSchema();
+    await (proxy as any).ensureSchemaCheck();
     return proxy;
   }
-
-  it('runs from the constructor, not only when called by hand', async () => {
-    // The check reads `this.http`, assigned after super() returns, so the subclass constructor starts it.
-    mockSchema(FULL_SCHEMA);
-    new (viewSetDeclaring([BulkViewSetMixin, LookupMixin]))({
-      basePath: '/items',
-      pkFieldName: 'id',
-      axiosInstance: http as unknown as typeof axios,
-    });
-    await vi.waitFor(() => expect(http.get).toHaveBeenCalledWith('/items/schema', sent()));
-  });
 
   it('no warnings when BE matches what the ViewSet declared', async () => {
     await createAndValidate(FULL_SCHEMA);
@@ -610,8 +595,8 @@ describe('schema validation — validateAgainstSchema()', () => {
       pkFieldName: 'id',
       axiosInstance: http as unknown as typeof axios,
     });
-    await new Promise((r) => setTimeout(r, 0));
-    await (proxy as any).validateAgainstSchema();
+    await proxy.list();
+    await (proxy as any).ensureSchemaCheck();
     expect(warnSpy).not.toHaveBeenCalled();
     expect(http.get.mock.calls.map(([url]) => url)).not.toContain('/items/schema');
   });
@@ -705,9 +690,7 @@ describe('schema validation — validateAgainstSchema()', () => {
       pkFieldName: 'id',
       axiosInstance: http as unknown as typeof axios,
     });
-    await new Promise((r) => setTimeout(r, 0));
-    warnSpy.mockClear();
-    await (proxy as any).validateAgainstSchema();
+    await (proxy as any).ensureSchemaCheck();
   }
 
   it('takes the base from the document under an include_router prefix', async () => {
@@ -737,6 +720,214 @@ describe('schema validation — validateAgainstSchema()', () => {
       },
     });
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('schema validation — when the check starts', () => {
+  let http: ReturnType<typeof makeMockAxios>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    http = makeMockAxios();
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  class Declared extends RestProxyImpl<number, Item, 'id'> {
+    static declares = [ReadOnlyViewSetMixin];
+  }
+
+  function makeApi(options: { validateSchema?: boolean } = {}) {
+    return new Declared({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+      ...options,
+    });
+  }
+
+  function schemaCalls(): number {
+    return http.get.mock.calls.filter(([url]) => url === '/items/schema').length;
+  }
+
+  /** Lets the deferred check issue its request and settle. */
+  function settle(): Promise<void> {
+    return new Promise((r) => setTimeout(r, 0));
+  }
+
+  it('sends no request on construction', async () => {
+    http.get.mockResolvedValue({ data: READONLY_SCHEMA });
+    makeApi();
+    await settle();
+    expect(http.get).not.toHaveBeenCalled();
+  });
+
+  it('sends one /schema request after the first call, as a background call', async () => {
+    http.get.mockImplementation((url: string) =>
+      Promise.resolve({ data: url === '/items/schema' ? READONLY_SCHEMA : MOCK_ITEM }),
+    );
+    const events: CallEvent[] = [];
+    const off = onCallActivity((event) => events.push(event));
+    const api = makeApi();
+    try {
+      await api.retrieve(1);
+      await settle();
+      await api.retrieve(2);
+      await settle();
+    } finally {
+      off();
+    }
+    expect(http.get.mock.calls.map(([url]) => url)).toEqual(['/items/1', '/items/schema', '/items/2']);
+    const starts = events.filter((event) => event.type === 'start');
+    expect(starts.map((event) => event.background)).toEqual([false, true, false]);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('sends one /schema request for concurrent first calls', async () => {
+    http.get.mockImplementation((url: string) =>
+      Promise.resolve({ data: url === '/items/schema' ? READONLY_SCHEMA : MOCK_ITEMS }),
+    );
+    const api = makeApi();
+    await Promise.all([api.list(), api.retrieve(1), api.list()]);
+    await settle();
+    expect(schemaCalls()).toBe(1);
+  });
+
+  it('keeps the key of the triggering call on its promise', async () => {
+    http.get.mockImplementation((url: string) =>
+      Promise.resolve({ data: url === '/items/schema' ? READONLY_SCHEMA : MOCK_ITEM }),
+    );
+    const call = makeApi().retrieve(1);
+    await call;
+    await settle();
+    const config = http.get.mock.calls[0][1] as { headers: Record<string, string> };
+    expect(config.headers['Idempotency-Key']).toBe(`"${call.key}"`);
+  });
+
+  it('neither delays nor fails the triggering call when the check fails', async () => {
+    http.get.mockImplementation((url: string) =>
+      url === '/items/schema' ? Promise.reject(new Error('offline')) : Promise.resolve({ data: MOCK_ITEM }),
+    );
+    await expect(makeApi().retrieve(1)).resolves.toEqual(MOCK_ITEM);
+    await settle();
+    expect(schemaCalls()).toBe(1);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('answers the triggering call while the check is still waiting', async () => {
+    http.get.mockImplementation((url: string) =>
+      url === '/items/schema' ? new Promise(() => {}) : Promise.resolve({ data: MOCK_ITEM }),
+    );
+    const api = makeApi();
+    await expect(api.retrieve(1)).resolves.toEqual(MOCK_ITEM);
+    await expect(api.retrieve(2)).resolves.toEqual(MOCK_ITEM);
+    expect(schemaCalls()).toBe(1);
+  });
+
+  it('starts the check again on the next call when /schema got no answer', async () => {
+    let online = false;
+    http.get.mockImplementation((url: string) => {
+      if (url === '/items/schema')
+        return online ? Promise.resolve({ data: READONLY_SCHEMA }) : Promise.reject(new Error('offline'));
+      return Promise.resolve({ data: MOCK_ITEM });
+    });
+    const api = makeApi();
+    await api.retrieve(1);
+    await settle();
+    online = true;
+    await api.retrieve(2);
+    await settle();
+    await api.retrieve(3);
+    await settle();
+    expect(http.get.mock.calls.map(([url]) => url)).toEqual([
+      '/items/1',
+      '/items/schema',
+      '/items/2',
+      '/items/schema',
+      '/items/3',
+    ]);
+  });
+
+  it('starts the check again after a 401 answer', async () => {
+    let loggedIn = false;
+    http.get.mockImplementation((url: string) =>
+      loggedIn
+        ? Promise.resolve({ data: url === '/items/schema' ? READONLY_SCHEMA : MOCK_ITEM })
+        : Promise.reject(Object.assign(new Error('401'), { response: { status: 401, data: {}, headers: {} } })),
+    );
+    const api = makeApi();
+    await expect(api.retrieve(1)).rejects.toThrow('401');
+    await settle();
+    loggedIn = true;
+    await api.retrieve(2);
+    await settle();
+    expect(http.get.mock.calls.map(([url]) => url)).toEqual(['/items/1', '/items/schema', '/items/2', '/items/schema']);
+  });
+
+  it('does not start the check again after /schema answered with an error status', async () => {
+    http.get.mockImplementation((url: string) =>
+      url === '/items/schema'
+        ? Promise.reject(Object.assign(new Error('404'), { response: { status: 404, data: {}, headers: {} } }))
+        : Promise.resolve({ data: MOCK_ITEM }),
+    );
+    const api = makeApi();
+    await api.retrieve(1);
+    await settle();
+    await api.retrieve(2);
+    await settle();
+    expect(schemaCalls()).toBe(1);
+  });
+
+  it('sends no /schema request with validateSchema: false', async () => {
+    http.get.mockResolvedValue({ data: MOCK_ITEM });
+    const api = makeApi({ validateSchema: false });
+    await api.retrieve(1);
+    await settle();
+    expect(schemaCalls()).toBe(0);
+  });
+
+  it('starts from a custom endpoint that calls request()', async () => {
+    class WithCustom extends Declared {
+      ping(): Promise<unknown> {
+        return this.request('GET', '/ping');
+      }
+    }
+    http.get.mockImplementation((url: string) =>
+      Promise.resolve({ data: url === '/items/schema' ? READONLY_SCHEMA : null }),
+    );
+    const api = new WithCustom({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+    });
+    await api.ping();
+    await settle();
+    expect(http.get.mock.calls.map(([url]) => url)).toEqual(['/items/ping', '/items/schema']);
+  });
+
+  it('sends no /schema request from a watch() without an event client', async () => {
+    http.get.mockResolvedValue({ data: READONLY_SCHEMA });
+    const api = makeApi();
+    expect(() => api.watch({ onChange() {}, onResync() {} })).toThrow('watch() needs an event client');
+    await settle();
+    expect(schemaCalls()).toBe(0);
+  });
+
+  it('starts from watch(), which talks to the BE over the event client', async () => {
+    http.get.mockResolvedValue({ data: READONLY_SCHEMA });
+    const subscribe = vi.fn(() => ({ close: () => {} }));
+    const api = new Declared({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+      events: { subscribe } as never,
+    });
+    api.watch({ onChange() {}, onResync() {} });
+    await settle();
+    expect(schemaCalls()).toBe(1);
   });
 });
 
@@ -787,7 +978,7 @@ describe('defaultSort()', () => {
     await expect(makeApi().defaultSort()).resolves.toEqual([{ columnName: 'id', direction: 'desc' }]);
   });
 
-  it("issues its own /schema request when the schema check's fails", async () => {
+  it('fetches /schema again when the first request fails', async () => {
     http.get.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ data: schemaWithSort('title:asc') });
     const api = makeApi();
     await expect(api.defaultSort()).resolves.toEqual([{ columnName: 'title', direction: 'asc' }]);

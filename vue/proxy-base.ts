@@ -153,6 +153,18 @@ interface SchemaDocument {
   paths?: Record<string, Record<string, unknown>>;
 }
 
+/** The statuses after which the schema check is started again: no access yet, or no answer from the application. */
+const SCHEMA_RETRY_STATUSES = new Set([401, 403, 502, 503, 504]);
+
+/**
+ * Whether a failed `/schema` request got an answer from the BE: a response with a status outside
+ * `SCHEMA_RETRY_STATUSES`.
+ */
+function schemaAnswered(error: unknown): boolean {
+  const status = (error as { response?: { status?: unknown } } | null)?.response?.status;
+  return typeof status === 'number' && !SCHEMA_RETRY_STATUSES.has(status);
+}
+
 /**
  * The viewset's base path as the schema document states it, taken from its /schema path. Document
  * paths lack the application's router prefixes, so they need not share a prefix with `basePath`,
@@ -198,7 +210,7 @@ export interface ProxyBaseOptions {
   basePath: string;
   /** Name of the PK field on the model, e.g. 'id'. */
   pkFieldName: string;
-  /** Set false to skip the startup schema check (it is advisory and costs one request). */
+  /** Set false to skip the schema check on the first request (it is advisory and costs one request). */
   validateSchema?: boolean;
   /** The mixins the ViewSet declares, for `route_rest` / `route_muxws`, whose bare proxy has no `static declares`. */
   declares?: readonly ViewSetMixinDeclaration[];
@@ -279,7 +291,14 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   /** The BE schema, once fetched; see `schemaDocument()`. */
   private schemaRequest?: Promise<SchemaDocument>;
 
-  /** Binds every method of the class chain, subclass included, to put its call's `key` on the returned promise. */
+  /** The schema check, once started; see `ensureSchemaCheck()`. */
+  private schemaCheck?: Promise<void>;
+
+  /**
+   * Binds every method of the class chain, subclass included, to put its call's `key` on the returned
+   * promise, and wraps the transport's `request()` method to start the schema check on the first call. A
+   * `request` class field replaces the wrapper.
+   */
   protected constructor(options: ProxyBaseOptions) {
     super(options.basePath);
     this.pkFieldName = options.pkFieldName;
@@ -289,30 +308,61 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     this.eventClientOption = options.events;
     this.topicOption = options.topic;
     bindCallKeys(this, Object.prototype);
+    const send = this.request;
+    Object.defineProperty(this, 'request', {
+      value: function <R>(this: ViewSetProxyBase<K, T, PK>, ...args: Parameters<typeof send>): ViewSetCall<R> {
+        void this.ensureSchemaCheck();
+        return send.apply(this, args) as ViewSetCall<R>;
+      },
+      writable: true,
+      configurable: true,
+    });
   }
 
   /**
-   * Starts the advisory schema check. Subclasses call this as the last statement of their constructor:
-   * during `super()` `request()` reads unassigned fields, and the check swallows its own errors.
+   * Starts the advisory schema check unless `validateSchema: false`, and returns it. The check sends its
+   * request after the current synchronous code, as a background call, and settles without error. It runs
+   * once per instance; a check whose `/schema` request gets no answer is discarded, so the next call
+   * starts it again (see `schemaAnswered()`).
    */
-  protected initSchemaValidation(): void {
-    if (this.schemaValidationEnabled) void this.validateAgainstSchema();
+  protected ensureSchemaCheck(): Promise<void> {
+    if (!this.schemaValidationEnabled) return Promise.resolve();
+    if (!this.schemaCheck) {
+      const check: Promise<void> = Promise.resolve()
+        .then(() => this.validateAgainstSchema())
+        .catch(() => {
+          if (this.schemaCheck === check) this.schemaCheck = undefined;
+        });
+      this.schemaCheck = check;
+    }
+    return this.schemaCheck;
   }
+
+  /** Does nothing. @deprecated The schema check starts with the first `request()`. */
+  protected initSchemaValidation(): void {}
 
   /** Abstract here, where a transport is actually held to it. See ViewSetInternals.request. */
   protected abstract override request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>;
 
   /**
    * Compares the BE schema, fetched over this proxy's own transport, against `static declares` (every
-   * action exists as a method on this class) and logs a console warning per mismatch. Errors are
-   * ignored.
+   * action exists as a method on this class) and logs a console warning per mismatch. Rejects only when
+   * the `/schema` request gets no answer; other errors are ignored.
    */
   private async validateAgainstSchema(): Promise<void> {
     const declared = declaredActions(this, this.declaredMixins);
     if (declared === null) return;
 
+    let document: SchemaDocument;
     try {
-      const paths = (await this.schemaDocument({ repeat: { withinMs: 0 }, background: true }))?.paths ?? {};
+      document = await this.schemaDocument({ repeat: { withinMs: 0 }, background: true });
+    } catch (error) {
+      if (schemaAnswered(error)) return;
+      throw error;
+    }
+
+    try {
+      const paths = document?.paths ?? {};
       const base = schemaBase(paths, this.basePath);
 
       const beActions = new Set<string>();
@@ -380,7 +430,7 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
         );
       }
     } catch {
-      // Schema validation is non-critical; ignore fetch/parse errors silently
+      // Schema validation is non-critical; ignore parse errors silently
     }
   }
 
@@ -430,13 +480,15 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
    * `fetch` function, as background calls.
    */
   watch(options: WatchOptions<T, K>): EventSubscription {
+    const client = this.eventClient();
+    void this.ensureSchemaCheck();
     return watchRecords<T, K>(
       {
         topic: options.topic ?? this.topicOption ?? this.basePath,
         pkFieldName: this.pkFieldName,
         retrieve: (pk) => this.retrieve(pk),
       },
-      this.eventClient(),
+      client,
       options,
     );
   }

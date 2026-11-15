@@ -143,7 +143,7 @@ given explicitly while the pk field and the mixin list are inferred in the same 
 TypeScript enforces that you only call methods the backend ViewSet actually exposes — the mixin list
 is the single source of truth for the contract. It is written once, as values, and does three jobs:
 it decides which actions the class exposes to callers, it types them, and it is handed to the proxy,
-which compares it against `GET /items/schema` on construction and warns about any disagreement.
+which compares it against `GET /items/schema` after the first call and warns about any disagreement.
 
 ---
 
