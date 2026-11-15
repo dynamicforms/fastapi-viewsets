@@ -810,10 +810,10 @@ def test_a_django_message_that_does_not_format_with_its_params_is_its_detail_as_
 def test_django_errors_prefix_their_loc():
     from django.core.exceptions import ValidationError
 
-    from fastapi_viewsets.error_responses import _django_errors
+    from fastapi_viewsets.error_responses import _validation_errors
 
     error = ValidationError({"title": ValidationError("x", code="blank"), "__all__": ValidationError("y")})
-    assert field_errors(_django_errors(error, ("body", 7))) == {
+    assert field_errors(_validation_errors(error, ("body", 7))) == {
         "7.title": [{"code": "fastapi-viewsets.required", "params": {}, "detail": "x"}],
         "7": [{"code": "fastapi-viewsets.invalid", "params": {}, "detail": "y"}],
     }
@@ -822,12 +822,12 @@ def test_django_errors_prefix_their_loc():
 def test_django_errors_have_the_django_code_as_type_until_field_errors_maps_it():
     from django.core.exceptions import ValidationError
 
-    from fastapi_viewsets.error_responses import _django_errors
+    from fastapi_viewsets.error_responses import _validation_errors
 
     error = ValidationError(
         {"title": ValidationError("x", code="blank"), "slug": ValidationError("y", code="app.taken"), "__all__": "z"}
     )
-    assert [(entry["type"], entry["loc"]) for entry in _django_errors(error)] == [
+    assert [(entry["type"], entry["loc"]) for entry in _validation_errors(error)] == [
         ("django.blank", ("django", "title")),
         ("app.taken", ("django", "slug")),
         ("django.invalid", ("django",)),
@@ -837,7 +837,7 @@ def test_django_errors_have_the_django_code_as_type_until_field_errors_maps_it()
 def test_django_errors_without_a_row_are_not_split_in_a_row_keyed_action():
     from django.core.exceptions import ValidationError
 
-    from fastapi_viewsets.error_responses import _django_errors, FieldNames
+    from fastapi_viewsets.error_responses import _validation_errors, FieldNames
 
     calls = []
 
@@ -846,8 +846,8 @@ def test_django_errors_without_a_row_are_not_split_in_a_row_keyed_action():
         return "name" if field == "title" else field
 
     error = ValidationError({"title": ValidationError("x", code="unique")})
-    assert list(field_errors(_django_errors(error), FieldNames(rename, row_keyed=True))) == ["name"]
-    assert list(field_errors(_django_errors(error, ("body", 7)), FieldNames(rename, row_keyed=True))) == ["7.name"]
+    assert list(field_errors(_validation_errors(error), FieldNames(rename, row_keyed=True))) == ["name"]
+    assert list(field_errors(_validation_errors(error, ("body", 7)), FieldNames(rename, row_keyed=True))) == ["7.name"]
     assert calls == [("title", "django.unique")] * 2
 
 

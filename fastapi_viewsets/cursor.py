@@ -249,6 +249,60 @@ def wants_greater(descending: bool, backwards: bool) -> bool:
     return (not descending) != backwards
 
 
+def segment_condition(
+    keys: CursorKeys,
+    position: dict[str, Any],
+    backwards: bool,
+    inclusive: bool,
+    nulls_first: bool,
+    lookup: Callable[..., Any],
+) -> Any:
+    """
+    "Everything past this row" as a union of per-key segments, built from a backend's conditions: `lookup(**kwargs)`
+    is one condition (`Q(**kwargs)` of Django or adorm), combined with `&` and `|`. Spells out NULL placement and
+    mixed directions, which a SQL comparison treats as unknown. None when nothing lies past the position.
+    """
+
+    def equals(name: str, value: Any) -> Any:
+        # `IS NULL` rather than `= NULL`, which is never true
+        return lookup(**{f"{name}__isnull": True}) if value is None else lookup(**{name: value})
+
+    segments: list[Any] = []
+    for index, (name, descending) in enumerate(keys):
+        segment = lookup()
+        for earlier, _ in keys[:index]:
+            segment &= equals(earlier, position[earlier])
+
+        value = position[name]
+        greater = wants_greater(descending, backwards)
+        # Whether NULLs come first as this page is read: `nulls`, flipped by descending and by backwards.
+        nulls_lead = (nulls_first != descending) != backwards
+
+        if value is None:
+            if not nulls_lead:
+                # Nothing lies past a NULL when the NULLs are at the far end already.
+                continue
+            segment &= lookup(**{f"{name}__isnull": False})
+        else:
+            beyond = lookup(**{f"{name}__gt" if greater else f"{name}__lt": value})
+            # SQL comparisons never match NULL, so NULLs ordered past the anchor are added explicitly.
+            segment &= beyond if nulls_lead else beyond | lookup(**{f"{name}__isnull": True})
+        segments.append(segment)
+
+    if inclusive:
+        anchor = lookup()
+        for name, _ in keys:
+            anchor &= equals(name, position[name])
+        segments.append(anchor)
+
+    if not segments:
+        return None
+    result = segments[0]
+    for segment in segments[1:]:
+        result |= segment
+    return result
+
+
 def compare_in_order(left: Any, right: Any, descending: bool = False, nulls_first: bool = True) -> int:
     """
     Three-way comparison in sort order, NULL being the lowest (`nulls_first`) or highest value.

@@ -28,7 +28,7 @@ from fastapi_viewsets.cursor import (
     make_predicate,
     position_of,
 )
-from fastapi_viewsets.error_responses import _is_django_validation_error, ApiErrorBody, error_body, FieldNames
+from fastapi_viewsets.error_responses import _is_validation_error, ApiErrorBody, error_body, FieldNames
 from fastapi_viewsets.exceptions import CursorRequestError, UnsupportedListShapeError
 from fastapi_viewsets.filters import filters_from, FilterSet
 from fastapi_viewsets.list_query import (
@@ -152,7 +152,7 @@ class ImplMixin(ViewSetBase, Generic[K, T], ABC):
     async def perform_bulk_destroy(self, context: Context, pk: list[K]) -> dict[K, ApiErrorBody | None]:
         """
         Destroys each key with `perform_destroy`, independently of the others: None for a destroyed key, the
-        `ApiErrorBody` of an `HTTPException`, `RequestValidationError` or Django `ValidationError` raised
+        `ApiErrorBody` of an `HTTPException`, `RequestValidationError` or Django or adorm `ValidationError` raised
         while destroying the key, its field names from `error_field`. Any other exception propagates. A
         repeated key is destroyed once.
         """
@@ -163,9 +163,7 @@ class ImplMixin(ViewSetBase, Generic[K, T], ABC):
             try:
                 await self.perform_destroy(context, one)
             except Exception as error:
-                if not isinstance(error, (HTTPException, RequestValidationError)) and not _is_django_validation_error(
-                    error
-                ):
+                if not isinstance(error, (HTTPException, RequestValidationError)) and not _is_validation_error(error):
                     raise
                 results[one] = ApiErrorBody.model_validate(error_body(error, field_names_of(self, context, False)))
             else:
