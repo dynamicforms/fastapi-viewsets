@@ -277,6 +277,166 @@ def test_true_and_no_value_are_the_defaults():
     assert events.options_for(Context({})) == {}
 
 
+# the op of a custom action
+
+
+def tracks_with_custom_actions(router: APIRouter, container: list[Track]) -> type:
+    @route_viewset(router, "/tracks", pk_field_name="id")
+    class TrackViewSet(CollectionViewSet[int, Track], BulkViewSetMixin[int, Track]):
+        __router = APIRouter()
+
+        def __init__(self):
+            super().__init__(container=container, pk_field="id")
+
+        @__router.post("{pk}/rename")
+        @action_configuration({ChangeEvents: {"op": "updated"}})
+        async def rename(self, pk: int, title: str) -> dict:
+            container[pk - 1] = Track(id=pk, title=title)
+            return {"renamed": True}
+
+        @__router.post("{pk}/touch")
+        async def touch(self, pk: int) -> Track:
+            return container[pk - 1]
+
+        @__router.post("import")
+        @action_configuration({ChangeEvents: {"op": "created"}})
+        async def import_one(self, title: str) -> Track:
+            track = Track(id=len(container) + 1, title=title)
+            container.append(track)
+            return track
+
+        @__router.post("import-many")
+        @action_configuration({ChangeEvents: {"op": "created"}})
+        async def import_many(self, title: str) -> list[Track]:
+            track = Track(id=len(container) + 1, title=title)
+            container.append(track)
+            return [track]
+
+        @__router.post("import-optional")
+        @action_configuration({ChangeEvents: {"op": "created"}})
+        async def import_optional(self, title: str) -> list[Track] | None:
+            container.append(Track(id=len(container) + 1, title=title))
+            return None
+
+        @__router.post("import-deferred")
+        @action_configuration({ChangeEvents: {"op": "created"}})
+        async def import_deferred(self, title: str) -> "list[Track]":
+            container.append(Track(id=len(container) + 1, title=title))
+            return []
+
+        @__router.post("import-dict")
+        @action_configuration({ChangeEvents: {"op": "created"}})
+        async def import_dict(self, title: str) -> dict[str, Any]:
+            track = Track(id=len(container) + 1, title=title)
+            container.append(track)
+            return track.model_dump()
+
+        @action_configuration({ChangeEvents: {"op": "updated"}})
+        async def perform_destroy(self, _context: Context, pk: int) -> dict[int, None]:
+            container[pk - 1] = Track(id=pk, title="Default")
+            return {pk: None}
+
+    return TrackViewSet
+
+
+def test_a_custom_action_with_a_pk_parameter_publishes_its_op_for_the_pk_argument():
+    container = [Track(id=1, title="One"), Track(id=2, title="Two")]
+    router = APIRouter()
+    tracks_with_custom_actions(router, container)
+    assert TestClient(app_for(router)).post("/tracks/2/rename", params={"title": "Dos"}).status_code == 200
+    assert logged("/tracks") == [("records_changed", {"op": "updated", "changes": changes(2)})]
+
+
+def test_a_custom_action_without_an_op_publishes_nothing():
+    router = APIRouter()
+    tracks_with_custom_actions(router, [Track(id=1, title="One")])
+    assert TestClient(app_for(router)).post("/tracks/1/touch").status_code == 200
+    assert logged("/tracks") == []
+
+
+def test_a_custom_action_without_a_pk_parameter_publishes_the_pk_of_the_returned_record():
+    container = [Track(id=1, title="One")]
+    router = APIRouter()
+    tracks_with_custom_actions(router, container)
+    assert TestClient(app_for(router)).post("/tracks/import", params={"title": "Two"}).status_code == 200
+    assert logged("/tracks") == [("records_changed", {"op": "created", "changes": changes(2)})]
+
+
+def test_a_custom_action_without_a_pk_parameter_returning_a_collection_raises_before_it_runs():
+    container = [Track(id=1, title="One")]
+    router = APIRouter()
+    tracks_with_custom_actions(router, container)
+    with pytest.raises(TypeError, match="import_many is configured with op 'created'.*write_topic"):
+        TestClient(app_for(router)).post("/tracks/import-many", params={"title": "Two"})
+    assert container == [Track(id=1, title="One")]
+    assert logged("/tracks") == []
+
+
+@pytest.mark.parametrize("path", ["import-optional", "import-deferred"])
+def test_a_collection_in_a_union_or_string_return_annotation_raises_before_the_action_runs(path):
+    container = [Track(id=1, title="One")]
+    router = APIRouter()
+    tracks_with_custom_actions(router, container)
+    with pytest.raises(TypeError, match="is configured with op 'created'.*write_topic"):
+        TestClient(app_for(router)).post(f"/tracks/{path}", params={"title": "Two"})
+    assert container == [Track(id=1, title="One")]
+    assert logged("/tracks") == []
+
+
+def test_a_custom_action_returning_a_dict_record_publishes_its_pk():
+    container = [Track(id=1, title="One")]
+    router = APIRouter()
+    tracks_with_custom_actions(router, container)
+    assert TestClient(app_for(router)).post("/tracks/import-dict", params={"title": "Two"}).status_code == 200
+    assert logged("/tracks") == [("records_changed", {"op": "created", "changes": changes(2)})]
+
+
+def test_a_destroy_declared_updated_publishes_updated_for_the_pk_argument():
+    container = [Track(id=1, title="One"), Track(id=2, title="Two")]
+    router = APIRouter()
+    tracks_with_custom_actions(router, container)
+    assert TestClient(app_for(router)).delete("/tracks/2").status_code == 200
+    assert container[1] == Track(id=2, title="Default")
+    assert logged("/tracks") == [("records_changed", {"op": "updated", "changes": changes(2)})]
+
+
+def test_an_op_on_the_class_raises_type_error_before_the_action_runs():
+    container = [Track(id=1, title="One")]
+    router = APIRouter()
+    collection_viewset(router, container, decorators=[action_configuration({ChangeEvents: {"op": "updated"}})])
+    client = TestClient(app_for(router))
+    with pytest.raises(TypeError, match="TrackViewSet: the ChangeEvents option 'op' is configured on the class"):
+        client.delete("/tracks/1")
+    with pytest.raises(TypeError, match="option 'op' is configured on the class"):
+        client.get("/tracks")
+    assert container == [Track(id=1, title="One")]
+
+
+def test_an_op_in_the_default_action_configuration_raises_type_error(monkeypatch):
+    monkeypatch.setattr(settings, "default_action_configuration", {ChangeEvents: {"op": "created"}})
+    router = APIRouter()
+    collection_viewset(router)
+    with pytest.raises(TypeError, match="option 'op' is configured on the class or in default_action_configuration"):
+        TestClient(app_for(router)).post("/tracks", json={"title": "Three"})
+
+
+@pytest.mark.parametrize("op", ["changed", None, "Created"])
+def test_an_op_of_another_value_raises_type_error(op):
+    with pytest.raises(TypeError, match=f"ChangeEvents is configured with op {op!r}"):
+        ChangeEvents().options_for(Context({}, action_configuration={ChangeEvents: {"op": op}}))
+
+
+def test_a_subclass_replaces_the_op():
+    class Rewrites(ChangeEvents):
+        def op_for(self, execution):
+            return "updated" if execution.action == "create" else super().op_for(execution)
+
+    execution = ActionExecution(Track, None, "create", (), {}, Context({}), None, None)
+    assert Rewrites().op_for(execution) == "updated"
+    assert ChangeEvents().op_for(execution) == "created"
+    assert ChangeEvents().op_for(ActionExecution(Track, None, "retrieve", (), {}, Context({}), None, None)) is None
+
+
 # the topic
 
 
@@ -845,19 +1005,31 @@ def test_a_celery_action_of_a_scoped_class_publishes_in_the_worker_to_the_key_of
     reset_event_scopes()
 
 
-def _custom_celery_pair(monkeypatch, resolver):
-    """A scoped celery_viewset pair whose custom action `archive` publishes to `write_topic()`."""
+def _custom_celery_pair(monkeypatch, resolver, declared: bool = False):
+    """
+    A scoped celery_viewset pair whose custom action `archive` publishes to `write_topic()`, or, when
+    `declared`, is configured with the op `deleted` and publishes nothing itself.
+    """
     executor = _Executor(monkeypatch)
 
     @event_scope(resolver, name="things")
     class Base:
         __router = APIRouter()
 
-        @__router.post("/{pk}/archive")
-        async def archive(self, request: Request, context: Context, pk: int) -> None:
-            topic = await write_topic(self, request, context)
-            if topic is not None:
-                await publish(topic, RecordsChanged(op="deleted", changes=[Change(pk=pk)]))
+        if declared:
+
+            @__router.post("/{pk}/archive")
+            @action_configuration({ChangeEvents: {"op": "deleted"}})
+            async def archive(self, pk: int) -> None:
+                pass
+
+        else:
+
+            @__router.post("/{pk}/archive")
+            async def archive(self, request: Request, context: Context, pk: int) -> None:
+                topic = await write_topic(self, request, context)
+                if topic is not None:
+                    await publish(topic, RecordsChanged(op="deleted", changes=[Change(pk=pk)]))
 
     celery_viewset_server(celery_app=executor.server_app, task_prefix="things", redis_client=MagicMock())(
         type("Worker", (Base,), {})
@@ -868,6 +1040,17 @@ def _custom_celery_pair(monkeypatch, resolver):
     router = APIRouter()
     route_viewset(router, "/things", pk_field_name="id")(client)
     return executor, TestClient(app_for(router, prefix="/api"))
+
+
+@pytest.mark.parametrize("org", ["7", None], ids=["key", "no-key"])
+def test_a_custom_celery_action_with_an_op_publishes_in_the_worker_to_the_key_of_the_web_process(monkeypatch, org):
+    reset_event_scopes()
+    monkeypatch.setattr(settings, "viewsets_command_middleware", [ChangeEvents(), SelectOrg()])
+    _executor, client = _custom_celery_pair(monkeypatch, lambda _request, context: context.raw().get("org_id"), True)
+    response = client.post("/api/things/3/archive", headers={"x-org": org} if org else {})
+    assert response.status_code == 200
+    assert logged("@things:7") == ([("records_changed", {"op": "deleted", "changes": changes(3)})] if org else [])
+    reset_event_scopes()
 
 
 @pytest.mark.parametrize("org", ["7", None], ids=["key", "no-key"])

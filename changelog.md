@@ -57,6 +57,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per column or per request. For the primary key column a string's raw value follows its key.
   `DjangoORMViewSet.collation_for` returns code point order, which its in-memory fallback uses.
 - `CursorPredicate` and `make_predicate()` take an optional `sort_value(column_name, value)`.
+- `ChangeEvents` option `op` (`"created"`, `"updated"` or `"deleted"`), accepted in `@action_configuration` on an
+  action method or its `perform_*` method: the action publishes one `RecordsChanged` with that `op`. A custom action
+  with a `pk` parameter publishes the `pk` argument, any other custom action the pk of its returned record; `destroy`
+  and `bulk_destroy` publish the `pk` argument whatever the `op`. An `op` on a class or in
+  `settings.default_action_configuration`, or of another value, raises `TypeError`. A custom action without a `pk`
+  parameter whose return annotation is a list, tuple or set type, alone or in a union, raises `TypeError` before it
+  runs; a custom action that writes several records publishes through `write_topic()`.
+- `ChangeEvents.op_for(execution)`: the hook that returns the `op` an execution publishes, `None` for none.
 
 ### Changed
 
@@ -74,6 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The package's own error `responses` entries (`NOT_FOUND_RESPONSE`, `VIEWSET_ERROR_RESPONSES`, …) are built with
   `error_entry()`: each example's summary is the error's `detail`. Example names and bodies are unchanged.
 - `@endpoint_docs` raises `ValueError` for a key of an entry outside `EndpointDoc`.
+- `ChangeEvents` reads its configuration on every action, so an invalid value raises `TypeError` on read actions and
+  custom actions as well as on the eight write actions.
 - TS: the schema check of a ViewSet starts with the instance's first call that reaches the BE (`request()`,
   `defaultSort()`, `watch()`), once per instance, as a background call that does not delay or fail that call.
   Constructing a ViewSet sends no request and does not call a muxws `peer` function, so a ViewSet can be a module-level
