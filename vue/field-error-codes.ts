@@ -62,6 +62,10 @@ export interface FieldErrorParams {
   'fastapi-viewsets.invalid': Record<string, never>;
   /** A primary key in a create's body. */
   'fastapi-viewsets.pk_assigned_by_server': Record<string, never>;
+  /** The record cannot be deleted: other records refer to it through a protecting reference (`PROTECT`). */
+  'fastapi-viewsets.protected': Record<string, never>;
+  /** The record cannot be deleted: other records refer to it through a restricting reference (`RESTRICT`). */
+  'fastapi-viewsets.restricted': Record<string, never>;
 }
 
 /** A field error code the BE declares. */
@@ -107,6 +111,8 @@ export const FIELD_ERROR_PARAM_NAMES: {
   'fastapi-viewsets.unique': ['fields'],
   'fastapi-viewsets.invalid': [],
   'fastapi-viewsets.pk_assigned_by_server': [],
+  'fastapi-viewsets.protected': [],
+  'fastapi-viewsets.restricted': [],
 };
 
 /** Every field error code the BE declares. */

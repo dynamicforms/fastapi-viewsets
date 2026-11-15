@@ -115,7 +115,8 @@ access from `perform_*`, not just as a Celery-specific workaround.
 
 When Django is installed, a `django.core.exceptions.ValidationError` raised during a request
 returns 422 `fastapi-viewsets.validation_failed` with `field_errors`, the same as a pydantic
-validation error. This applies to:
+validation error; so does adorm's `adorm.ValidationError` when adorm is installed (see
+[adorm's errors](./adorm-integration#errors)). This applies to:
 
 - every viewset route;
 - the application's routes under

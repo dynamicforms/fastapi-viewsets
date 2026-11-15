@@ -44,7 +44,7 @@ The body is built from the exception the request raised:
 |-----------|--------|---------------|-----------------|
 | a `DfViewSetError` (the package's errors, an application's subclass) | its own | its `code` | its `params` |
 | `RequestValidationError` (FastAPI's validation of the request, or raised by the endpoint) | 422 | `fastapi-viewsets.validation_failed` | `{}` |
-| Django's `ValidationError`, when Django is installed (see [Django's ValidationError](./django-integration#django-s-validationerror)) | 422 | `fastapi-viewsets.validation_failed` | `{}` |
+| Django's or adorm's `ValidationError`, when installed (see [Django's ValidationError](./django-integration#django-s-validationerror) and [adorm's errors](./adorm-integration#errors)) | 422 | `fastapi-viewsets.validation_failed` | `{}` |
 | any other `HTTPException`, FastAPI's or Starlette's | its own | `fastapi-viewsets.http_error` | `{status}` |
 | any other exception | 500 | `fastapi-viewsets.unhandled_error` | `{}` |
 
@@ -63,7 +63,7 @@ The routes `route_viewset` adds answer every error of their endpoint, its depend
 with the body, without any registration by the application:
 
 - the package's handler of `HTTPException` and of `RequestValidationError` replaces FastAPI's default handlers for
-  the request, and also handles Django's `ValidationError` when Django is installed;
+  the request, and also handles Django's and adorm's `ValidationError` when they are installed;
 - an exception without a handler is answered with 500 `fastapi-viewsets.unhandled_error` and re-raised.
 
 A handler the application registered itself takes precedence, as Starlette's lookup gives it: a handler for a class
@@ -84,8 +84,8 @@ app = FastAPI()
 install_error_handlers(app)
 ```
 
-It registers one handler for `DfViewSetError`, `HTTPException`, `RequestValidationError`, Django's `ValidationError`
-(when Django is installed) and `Exception`. Starlette's
+It registers one handler for `DfViewSetError`, `HTTPException`, `RequestValidationError`, Django's and adorm's
+`ValidationError` (when installed) and `Exception`. Starlette's
 routing errors are not the errors of a viewset: they are answered with the body only once the handlers are
 installed, as `fastapi-viewsets.http_error` with `detail` Starlette's text and the status in `detail_params`:
 
@@ -168,7 +168,7 @@ The codes the package answers errors with that no exception class of its own car
 
 | `code` | Status | `params` | When |
 |--------|--------|----------|------|
-| `fastapi-viewsets.validation_failed` | 422 | — | a `RequestValidationError`, or Django's `ValidationError` when Django is installed; the failures are in `field_errors` |
+| `fastapi-viewsets.validation_failed` | 422 | — | a `RequestValidationError`, or Django's or adorm's `ValidationError` when installed; the failures are in `field_errors` |
 | `fastapi-viewsets.http_error` | the exception's | `{status}`, and `{detail}` for a `detail` that is not a string | an `HTTPException` that is not a `DfViewSetError` |
 
 The cursor codes, raised as `fastapi_viewsets.cursor.CursorError` (a `ValueError` carrying `code`
@@ -204,7 +204,7 @@ The errors that end a call to a `celery_viewset` action without its result, by `
 | `fastapi-viewsets.action_interrupted` | `time_limit` | exceeded its soft or hard time limit (504) |
 | | `terminated` | was terminated (503) |
 | | `lost` | lost the worker process executing it (503) |
-| `fastapi-viewsets.action_failed` | `error` | raised an error that is not an `HTTPException`, a `RequestValidationError` or Django's `ValidationError`; `detail` names the task only, the error is logged in the worker |
+| `fastapi-viewsets.action_failed` | `error` | raised an error that is not an `HTTPException`, a `RequestValidationError` or Django's or adorm's `ValidationError`; `detail` names the task only, the error is logged in the worker |
 | | `result` | returned a result that cannot be serialized (e.g. a `StreamingResponse`), or that the caller cannot deserialize |
 | | `executor` | did not complete because the worker failed around it, or `Middleware.executor_started()` raised |
 
@@ -257,7 +257,7 @@ when it was raised:
 |-------|---------------|------------|
 | a `DfViewSetError` | `status_code`, `detail`, `headers`, `class`, `code`, `params` | the class `class` names where `fastapi_viewsets.exceptions` defines it, else `DfViewSetError` |
 | another `HTTPException` | `status_code`, `detail`, `headers` | `HTTPException` |
-| `RequestValidationError`, or Django's `ValidationError` converted to a `RequestValidationError` of its field errors | `status_code` 422, pydantic's errors as `detail`, `headers` null, `class` `"RequestValidationError"` | `RequestValidationError` |
+| `RequestValidationError`, or Django's or adorm's `ValidationError` converted to a `RequestValidationError` of its field errors | `status_code` 422, pydantic's errors as `detail`, `headers` null, `class` `"RequestValidationError"` | `RequestValidationError` |
 | any other exception (an idempotency record; a `celery_viewset` worker answers it as `ActionFailedError`) | the fields of `UnhandledError` | `UnhandledError` |
 
 ## Frontend
@@ -322,13 +322,14 @@ A request whose body or parameters fail validation is answered with status 422,
 }
 ```
 
-`field_errors` is built from pydantic's errors and from Django's `ValidationError` (see
-[Django's ValidationError](./django-integration#django-s-validationerror)). The name of a field is pydantic's `loc`
-without its first element (`body`, `query`, `path`, `header` or `cookie`), joined with `.`; a failure of the body as a
-whole is keyed `''`. Each entry (`ApiFieldError`) has `code`, `params` and `detail`. `detail` is pydantic's `msg` or
-Django's message. pydantic's messages are English; the message of a `PydanticCustomError`, a `value_error` or an
-`assertion_error` contains the application's text; Django's message is in Django's active language. pydantic's
-`input` is left out.
+`field_errors` is built from pydantic's errors and from Django's and adorm's `ValidationError` (see [Django's
+ValidationError](./django-integration#django-s-validationerror)); an error of adorm's `full_clean()` carries no code
+and answers `fastapi-viewsets.invalid` with adorm's message in `detail`. The name of a
+field is pydantic's `loc` without its first element (`body`, `query`, `path`, `header` or `cookie`), joined with `.`; a
+failure of the body as a whole is keyed `''`. Each entry (`ApiFieldError`) has `code`, `params` and `detail`. `detail`
+is pydantic's `msg` or Django's message. pydantic's messages are English; the message of a `PydanticCustomError`, a
+`value_error` or an `assertion_error` contains the application's text; Django's message is in Django's active language.
+pydantic's `input` is left out.
 
 #### Field names
 
@@ -412,9 +413,11 @@ codes and their params are listed in `FIELD_ERROR_PARAMS` (`fastapi_viewsets`) a
 | `fastapi-viewsets.past` | — | a date or date and time not in the past |
 | `fastapi-viewsets.future` | — | a date or date and time not in the future |
 | `fastapi-viewsets.invalid_type` | — | the value has the wrong JSON or structural type |
-| `fastapi-viewsets.unique` | `fields` | a row with the same values in `fields` exists; `fields` are Django model field names |
+| `fastapi-viewsets.unique` | `fields` | a row with the same values in `fields` exists; `fields` are Django model field names; from `AdormViewSet` the names clients know the adorm model's fields by (an alias where the field has one) |
 | `fastapi-viewsets.invalid` | — | not valid; the reason is in `detail` |
 | `fastapi-viewsets.pk_assigned_by_server` | — | a primary key in the body of a create |
+| `fastapi-viewsets.protected` | — | a delete refused because other records refer to the record through a `PROTECT` reference |
+| `fastapi-viewsets.restricted` | — | a delete refused because other records refer to the record through a `RESTRICT` reference |
 
 `minLength`, `maxLength`, `multipleOf`, `maxDigits`, `maxDecimalPlaces` and `maxWholeDigits` are numbers. `minValue`
 and `maxValue` are numbers, or ISO strings for a date or time bound. `fields` is an array of strings.

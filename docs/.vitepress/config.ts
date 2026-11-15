@@ -6,7 +6,7 @@ export default defineConfig({
   title: 'DynamicForms Viewsets',
   // the directory's own README, for contributors
   srcExclude: ['readme.md'],
-  description: 'Django REST Framework-style viewsets for FastAPI: CRUD and bulk endpoints, in-memory or Django ORM backends, typed TypeScript client, Celery, WebSockets.',
+  description: 'Django REST Framework-style viewsets for FastAPI: CRUD and bulk endpoints, in-memory, Django ORM or adorm backends, typed TypeScript client, Celery, WebSockets.',
   transformHead({ pageData, siteConfig }) {
     const path = pageData.relativePath.replace(/(^|\/)index\.md$/, '$1').replace(/\.md$/, '.html');
     return [['link', { rel: 'canonical', href: `https://docs.velis.si${siteConfig.site.base}${path}` }]];
@@ -15,6 +15,7 @@ export default defineConfig({
     config: crosslinksConfig({
       projects: {
         'vue-forms': 'https://docs.velis.si/dynamicforms/vue-forms',
+        adorm: 'https://docs.velis.si/adorm',
       },
     }),
   },
@@ -58,6 +59,7 @@ export default defineConfig({
             { text: 'Action Configuration', link: '/guide/action-configuration' },
             { text: 'Events', link: '/guide/events' },
             { text: 'Django Integration', link: '/guide/django-integration' },
+            { text: 'adorm Backend', link: '/guide/adorm-integration' },
           ],
         },
         {

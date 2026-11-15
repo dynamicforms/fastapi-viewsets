@@ -395,6 +395,16 @@ Django equivalent is Postgres-only.
 
 A declined stage is handled by the default, never an error.
 
+`AdormViewSet` (`fastapi_viewsets.backends.adorm`) does the same on adorm query sets, awaited on adorm's pool without
+`sync_to_async`; its schema is the adorm model unless the class names another (see [adorm Backend](./adorm-integration)).
+
+```python
+from fastapi_viewsets.backends.adorm import AdormViewSet
+
+class MemberViewSet(AdormViewSet[int, Member], CursorListMixin[Member, MemberFilter]):
+    model = Member          # adorm model, generated from the Django model; also the schema
+```
+
 ### Updates under a row lock
 
 `perform_update` and `perform_bulk_update` run in one transaction, in one `sync_to_async` call:
@@ -466,6 +476,21 @@ async def apply_filter(self, context, query, records):
     queryset = compile_all(type(self), self, filter_set, queryset)
     query.mark_applied("filter")
     return await super().apply_filter(context, query, queryset)
+```
+
+On a cursor page the set holds the cursor predicate, `fastapi_viewsets.cursor.CursorPredicate`, which a backend
+compiles like any other filter. `segment_condition()` builds "every row past this position" from the backend's own
+conditions, a class called as `Q(**lookups)` and combined with `&` and `|` (Django's and adorm's `Q` are such
+classes), and returns None when no row lies past it:
+
+```python
+from fastapi_viewsets.cursor import CursorPredicate, segment_condition
+
+
+@compiles(MyViewSet, CursorPredicate)
+def _cursor(viewset, fltr, queryset):
+    condition = segment_condition(fltr.keys, fltr.position, fltr.backwards, fltr.inclusive, fltr.nulls_first, Q)
+    return queryset.none() if condition is None else queryset.filter(condition)
 ```
 
 `_as_queryset` returning None is how the backend notices that an earlier stage already fell back:
