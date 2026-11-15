@@ -45,6 +45,10 @@ releases at once, work from the bottom of the page upwards.
 - [ ] Handle Django's `ValidationError` as 422 `fastapi-viewsets.validation_failed` with `field_errors`. It was a 500
       (`fastapi-viewsets.unhandled_error`, `fastapi-viewsets.action_failed`). See
       [Django's ValidationError](./django-integration#django-s-validationerror).
+- [ ] In-memory lists sort strings case-insensitively, with digit runs by value; cursor pages follow the same order.
+      Set [`collation`](./python-mixins#text-order) to `get_collation("<locale>")` (the `icu` extra) for a language's
+      order, or override `collation_for` for another order per column. `DjangoORMViewSet` keeps the database's order in
+      SQL; its in-memory fallback compares strings by code point.
 
 ## Upgrading to v0.15.0 (from v0.14.x)
 

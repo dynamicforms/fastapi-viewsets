@@ -724,6 +724,69 @@ async def test_walking_a_multi_key_ordering_with_ties_visits_every_row_once():
     assert len(titles) == len(set(titles))
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+async def test_the_database_orders_and_pages_without_a_collation(direction):
+    """The sort and the cursor compile to SQL, so the database's collation applies."""
+
+    class Raising:
+        def sort_key(self, text):
+            raise AssertionError(f"sort_key called for {text!r}")
+
+    class Uncalled(CursorTrackViewSet):
+        async def collation_for(self, context, column_name):  # noqa: ARG002
+            return Raising()
+
+    pages = await _walk(Uncalled(), f"title:{direction}")
+    titles = [title for page in pages for title in page]
+    expected = [f"Track {n:03d}" for n in range(1, 31)]
+    assert titles == (expected if direction == "asc" else expected[::-1])
+
+
+@pytest.fixture
+def mixed_case_rows():
+    rows = [TrackModel.objects.create(title=title, artist="Mixed", year=2000) for title in "bBaAČcZ"]
+    yield
+    TrackModel.objects.filter(pk__in=[row.pk for row in rows]).delete()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("mixed_case_rows")
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+async def test_the_in_memory_fallback_keeps_the_order_of_the_sql_walk(direction):
+    """
+    An untranslatable filter moves the sort and the cursor to memory; strings compare by code point,
+    whatever `collation` says.
+    """
+    extended = make_filter_model(Track, {"title": ["endswith_demo"], "artist": ["exact"]})
+
+    class Folding:
+        def sort_key(self, text):
+            return text.casefold()
+
+    class Collated(CursorTrackViewSet):
+        collation = Folding()
+
+    async def walk(fltr):
+        titles, cursor = [], None
+        while True:
+            query = build_list_query(None, f"title:{direction}", limit=2)
+            query.fltr = fltr
+            query.cursor = cursor
+            page = await Collated().get_list(None, query)
+            titles += [record.title for record in page.results]
+            cursor = page.next
+            if not cursor:
+                return titles, query
+
+    in_sql, sql_query = await walk(TrackFilter(artist="Mixed"))
+    in_memory, memory_query = await walk(extended(artist="Mixed", title__endswith_demo=""))
+    assert "sort" in sql_query.applied
+    assert "filter" not in memory_query.applied
+    expected = sorted("bBaAČcZ")
+    assert in_sql == in_memory == (expected if direction == "asc" else expected[::-1])
+
+
 # ---------------------------------------------------------------------------
 # A primary key that is not called `id`
 # ---------------------------------------------------------------------------

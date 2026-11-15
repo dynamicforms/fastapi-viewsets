@@ -1,6 +1,8 @@
 import functools
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from contextvars import ContextVar
 from enum import Enum
 from typing import Annotated, Any, final, Generic, get_args, get_origin, Union
 
@@ -11,6 +13,7 @@ from pydantic.alias_generators import to_camel
 from starlette.exceptions import HTTPException
 from typing_extensions import TypeVar
 
+from fastapi_viewsets.collation import Collation, get_collation
 from fastapi_viewsets.conf import settings
 from fastapi_viewsets.context import Context
 from fastapi_viewsets.cursor import (
@@ -50,6 +53,9 @@ def _body_description(description: str) -> dict:
 
 BULK_UPDATE_BODY = _body_description('An object mapping each primary key to its record: `{"<pk>": {...}, ...}`.')
 TFilter = TypeVar("TFilter", default=None)
+
+_list_context: ContextVar[Context | None] = ContextVar("viewsets_list_context", default=None)
+"""The context of the running `get_list`; None outside it."""
 
 
 @functools.cache
@@ -362,6 +368,9 @@ class ListMixin(ViewSetBase, Generic[T, TFilter], ABC):
     with `check_declared_sort`.
     """
 
+    collation: Collation = get_collation()
+    """Text order of the in-memory sort and cursor; `collation_for` returns it for every column."""
+
     @property
     def nulls_first(self) -> bool:
         return self.nulls != "last"
@@ -418,11 +427,15 @@ class ListMixin(ViewSetBase, Generic[T, TFilter], ABC):
         if query.shape == "cursor":
             if query.limit is None:
                 query.limit = self.default_page_size
-            self._prepare_cursor(query)
-        records = await self.perform_list(context)
-        records = await self.apply_filter(context, query, records)
-        records = await self.apply_sort(context, query, records)
-        return await self.apply_pagination(context, query, records)
+            await self._prepare_cursor(context, query)
+        token = _list_context.set(context)
+        try:
+            records = await self.perform_list(context)
+            records = await self.apply_filter(context, query, records)
+            records = await self.apply_sort(context, query, records)
+            return await self.apply_pagination(context, query, records)
+        finally:
+            _list_context.reset(token)
 
     async def apply_filter(
         self: "ImplMixin[Any, T] | ListMixin[T]",
@@ -477,7 +490,7 @@ class ListMixin(ViewSetBase, Generic[T, TFilter], ABC):
             return self._to_records(materialized)
         return materialized
 
-    def _prepare_cursor(self, query: ListQuery) -> None:
+    async def _prepare_cursor(self, context: Context, query: ListQuery) -> None:
         """
         Rewrites the ordering to the cursor keys (client sort plus primary key), reversed when reading
         backwards, and adds the cursor predicate to the query's filters.
@@ -491,7 +504,10 @@ class ListMixin(ViewSetBase, Generic[T, TFilter], ABC):
             except CursorError as error:
                 # A client error (typically a stale cursor after a sort change), not a server one.
                 raise CursorRequestError(error) from None
-            query.extra_filters.append(make_predicate(state, keys, self.nulls_first))
+            values = {name: await self._sort_value(context, name) for name, _ in keys}
+            query.extra_filters.append(
+                make_predicate(state, keys, self.nulls_first, lambda name, value: values[name](value))
+            )
 
         backwards = bool(state and state.backwards)
         query.sort = [
@@ -623,25 +639,60 @@ class ListMixin(ViewSetBase, Generic[T, TFilter], ABC):
     async def filter_list(self, fltr: TFilter, records: list[T]) -> list[T]:
         """In-memory filter hook for a hand-made filter model. No default implementation (returns None)."""
 
+    async def collation_for(self, context: Context | None, column_name: str) -> Collation:  # noqa: ARG002
+        """
+        The collation of `column_name`'s strings in the in-memory sort and cursor. Returns `collation`;
+        override for an order per column or per request. `context` is None when `sort_list` runs outside
+        `get_list`.
+        """
+        return self.collation
+
+    async def _sort_value(self, context: Context | None, column_name: str) -> Callable[[Any], Any]:
+        """
+        Maps a non-NULL value of `column_name` to the value the in-memory sort and cursor compare: a string
+        to its collation key, anything else to itself. A primary key string keeps its raw value after the
+        key, so distinct primary keys never compare equal and the cursor's key tuples stay unique.
+        """
+        sort_key = (await self.collation_for(context, column_name)).sort_key
+        if column_name == getattr(self, "pk_field_name", None):
+            return lambda value: (sort_key(value), value) if isinstance(value, str) else value
+        return lambda value: sort_key(value) if isinstance(value, str) else value
+
     async def sort_list(self, sort: SortState, records: list[T]) -> list[T]:
         """
-        In-memory sort hook. The default is a stable multi-key sort using the cursor's comparison
-        (`compare_in_order`), so NULL placement matches the cursor's.
+        In-memory sort hook. The default is a stable multi-key sort in the order of the cursor's
+        `compare_in_order`, strings by `collation_for`, so the order and NULL placement match the cursor's.
         """
+        context = _list_context.get()
+        columns = [
+            (col.column_name, col.direction == SortDirection.desc, await self._sort_value(context, col.column_name))
+            for col in sort
+        ]
 
-        def compare(a: T, b: T) -> int:
-            for col in sort:
-                order = compare_in_order(
-                    getattr(a, col.column_name, None),
-                    getattr(b, col.column_name, None),
-                    col.direction == SortDirection.desc,
-                    self.nulls_first,
+        def key(name: str, sort_value: Callable[[Any], Any], record: T) -> Any:
+            value = getattr(record, name, None)
+            return None if value is None else sort_value(value)
+
+        decorated = [([key(name, value, record) for name, _, value in columns], record) for record in records]
+        try:
+            ordered = list(decorated)
+            # One stable pass per column, last column first; NULLs rank by `nulls_first`.
+            for index in reversed(range(len(columns))):
+                ordered.sort(
+                    key=lambda item, i=index: ((item[0][i] is None) != self.nulls_first, item[0][i]),
+                    reverse=columns[index][1],
                 )
-                if order != 0:
-                    return order
-            return 0
+        except TypeError:
+            # Incomparable values: compare_in_order treats them as equal.
+            def compare(a: tuple[list, T], b: tuple[list, T]) -> int:
+                for (_, descending, _), left, right in zip(columns, a[0], b[0], strict=True):
+                    order = compare_in_order(left, right, descending, self.nulls_first)
+                    if order != 0:
+                        return order
+                return 0
 
-        return sorted(records, key=functools.cmp_to_key(compare))
+            ordered = sorted(decorated, key=functools.cmp_to_key(compare))
+        return [record for _, record in ordered]
 
 
 class PaginatedListMixin(ListMixin[T, TFilter], ABC):

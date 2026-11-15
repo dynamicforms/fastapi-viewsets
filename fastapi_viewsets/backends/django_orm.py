@@ -20,6 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeVar
 
+from ..collation import Collation
 from ..context import Context
 from ..cursor import CursorPredicate, wants_greater
 from ..error_responses import _django_errors
@@ -56,6 +57,18 @@ if TYPE_CHECKING:
 
 K = TypeVar("K")
 T = TypeVar("T", bound=BaseModel)
+
+
+class _CodePointCollation:
+    """Strings compare by code point."""
+
+    __slots__ = ()
+
+    def sort_key(self, text: str) -> str:
+        return text
+
+
+_CODE_POINT = _CodePointCollation()
 
 
 class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
@@ -179,6 +192,13 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
     def _concrete_fields(self) -> set[str]:
         """The schema field names that map to a column: every concrete field's `name`."""
         return {field.name for field in _model_columns(self.model)}
+
+    async def collation_for(self, context: Context | None, column_name: str) -> Collation:  # noqa: ARG002
+        """
+        Code point order for the in-memory sort and cursor, which run when a filter or sort column has
+        no SQL translation; `collation` does not apply.
+        """
+        return _CODE_POINT
 
     async def apply_sort(self, context: Context, query: ListQuery, records: ListRecords) -> ListRecords:
         """Translates the sort into `.order_by(...)` with explicit NULL placement, matching the in-memory sort."""

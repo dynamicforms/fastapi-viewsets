@@ -30,7 +30,9 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --locked
+      # PyICU (the `icu` extra) builds against the system ICU
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libicu-dev pkg-config
+      - run: uv sync --locked --extra icu
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest
@@ -65,7 +67,8 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: '3.12'
-      - run: uv sync --locked
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libicu-dev pkg-config
+      - run: uv sync --locked --extra icu
       - name: Python tests with coverage
         run: |
           uv run coverage run -m pytest

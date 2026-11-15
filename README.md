@@ -49,6 +49,9 @@ pip install "dynamicforms-fastapi-viewsets[muxws]"
 
 # with the Django ORM backend (Django 4.2+ and asgiref)
 pip install "dynamicforms-fastapi-viewsets[django]"
+
+# with ICU collations for the in-memory sort (PyICU; builds from source: needs libicu-dev, pkg-config and g++)
+pip install "dynamicforms-fastapi-viewsets[icu]"
 ```
 
 Requires Python 3.10+, FastAPI and Pydantic 2.11+.

@@ -559,6 +559,9 @@ django = [
     { name = "django", version = "5.2.18", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "django", version = "6.1.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
+icu = [
+    { name = "pyicu" },
+]
 jwt = [
     { name = "pyjwt" },
 ]
@@ -598,11 +601,12 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.100" },
     { name = "muxws", extras = ["starlette"], marker = "extra == 'muxws'", specifier = ">=0.4.2" },
     { name = "pydantic", specifier = ">=2.11" },
+    { name = "pyicu", marker = "extra == 'icu'", specifier = ">=2.10" },
     { name = "pyjwt", marker = "extra == 'jwt'", specifier = ">=2.8" },
     { name = "redis", marker = "extra == 'celery'", specifier = ">=5.0" },
     { name = "typing-extensions", specifier = ">=4.10" },
 ]
-provides-extras = ["celery", "muxws", "django", "jwt"]
+provides-extras = ["celery", "muxws", "django", "jwt", "icu"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1182,6 +1186,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/49/2e/ced460408999b33da
 wheels = [
     { url = "https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl", hash = "sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9", size = 1250147, upload-time = "2026-08-17T08:02:44.912Z" },
 ]
+
+[[package]]
+name = "pyicu"
+version = "2.17"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b0/4e/e9537414644692b556b870716b47e43c54d9b8d314a2a004abca6f7492dd/pyicu-2.17.tar.gz", hash = "sha256:6138b95ac9592fa3983bf489e0c625e8fcfffd0c562a36a08269cecc4ffb48be", size = 270436, upload-time = "2026-10-23T12:25:55.596Z" }
 
 [[package]]
 name = "pyjwt"
