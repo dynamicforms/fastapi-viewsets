@@ -26,12 +26,12 @@ const VALIDATION_FAILED: ApiErrorBody = {
   field_errors: {
     name: [
       {
-        code: 'pydantic.string_too_short',
-        params: { min_length: 3 },
+        code: 'fastapi-viewsets.min_length',
+        params: { minLength: 3 },
         detail: 'String should have at least 3 characters',
       },
     ],
-    '': [{ code: 'pydantic.missing', params: {}, detail: 'Field required' }],
+    '': [{ code: 'fastapi-viewsets.required', params: {}, detail: 'Field required' }],
     'items.0': [
       { code: 'pydantic.a', params: {}, detail: 'first' },
       { code: 'pydantic.b', params: {}, detail: 'second' },
@@ -99,13 +99,13 @@ describe('toFieldErrors', () => {
     expect(toFieldErrors(VALIDATION_FAILED)).toEqual({
       name: [
         {
-          code: 'pydantic.string_too_short',
-          params: { min_length: 3 },
+          code: 'fastapi-viewsets.min_length',
+          params: { minLength: 3 },
           detail: 'String should have at least 3 characters',
           origin: 'server',
         },
       ],
-      '': [{ code: 'pydantic.missing', params: {}, detail: 'Field required', origin: 'server' }],
+      '': [{ code: 'fastapi-viewsets.required', params: {}, detail: 'Field required', origin: 'server' }],
       'items.0': [
         { code: 'pydantic.a', params: {}, detail: 'first', origin: 'server' },
         { code: 'pydantic.b', params: {}, detail: 'second', origin: 'server' },

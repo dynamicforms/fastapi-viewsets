@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
 
-from fastapi_viewsets import ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC
+from fastapi_viewsets import ERROR_NAMESPACE, ERROR_NAMESPACE_DJANGO, ERROR_NAMESPACE_PYDANTIC
 from fastapi_viewsets.cursor import CursorError
 from fastapi_viewsets.error_namespace import _DECLARED_CODES, _namespaced
 from fastapi_viewsets.exceptions import (
@@ -311,7 +311,11 @@ def test_the_declared_codes_are_the_codes_the_source_builds():
 
 
 def test_the_package_exports_the_namespaces_of_its_error_codes():
-    assert (ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC) == ("fastapi-viewsets", "pydantic")
+    assert (ERROR_NAMESPACE, ERROR_NAMESPACE_PYDANTIC, ERROR_NAMESPACE_DJANGO) == (
+        "fastapi-viewsets",
+        "pydantic",
+        "django",
+    )
 
 
 def test_every_error_this_module_defines_carries_a_full_code_of_the_package_namespace():

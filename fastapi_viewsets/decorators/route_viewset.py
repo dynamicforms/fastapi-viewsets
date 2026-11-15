@@ -27,6 +27,7 @@ from fastapi_viewsets.endpoint_docs import (
     register_tag,
     viewset_description,
 )
+from fastapi_viewsets.error_responses import FIELD_NAMES_ATTRIBUTE, FieldNames
 from fastapi_viewsets.middleware import (
     any_modifies_response_shape,
     Middleware,
@@ -34,8 +35,10 @@ from fastapi_viewsets.middleware import (
     unwrap_viewset_result_type,
 )
 from fastapi_viewsets.mixins import (
+    field_names_of,
     FilterParam,
     T as ITEM_TYPE_VAR,  # noqa: N811
+    ViewSetBase,
 )
 from fastapi_viewsets.mux_ws import register_viewset, resolve_register_muxws, resolve_register_rest
 from fastapi_viewsets.routing import MUXWS, openapi_endpoint, REST, transport_route_class
@@ -156,6 +159,27 @@ def _make_sub_viewset_gate(cls: type, mount: SubViewSet):
     gate = _with_security_scheme(_run)
     setattr(gate, SUB_VIEWSET_GATE_ATTRIBUTE, (cls, mount.path))
     return gate
+
+
+def _field_names_resolver(cls: type, instance: Any, action_name: str):
+    """
+    The async function giving a request's `FieldNames` for action `action_name` of `cls`: the singleton
+    `instance`, else a new instance, with the data of the request's shared context. Runs no context
+    processor: before the dependencies run (e.g. malformed JSON) the context data is empty. None while
+    `cls` keeps the default `error_field`.
+    """
+
+    async def resolve(request: Request) -> FieldNames | None:
+        if getattr(cls, "error_field", None) in (None, ViewSetBase.error_field):
+            return None
+        viewset = instance if instance is not None else cls()
+        action_configuration = resolve_action_configuration(cls, action_name)
+        cached = getattr(request.state, "_context", None)
+        data = cached.raw() if cached is not None else {}
+        context = Context(data, action_configuration=action_configuration, action_name=action_name)
+        return field_names_of(viewset, context)
+
+    return resolve
 
 
 async def _run_depends(request: Request, cls: type, action_configuration: dict, context: Context) -> None:
@@ -516,6 +540,7 @@ def _route(
         # handlers and dependencies; it matches only its transports and is documented only on REST.
         route_kwargs["endpoint"].__viewset_class__ = cls
         route_kwargs["endpoint"].__viewset_action__ = action_name
+        setattr(route_kwargs["endpoint"], FIELD_NAMES_ATTRIBUTE, _field_names_resolver(cls, instance, action_name))
         router.add_api_route(
             **{**route_kwargs, "include_in_schema": route_kwargs["include_in_schema"] and REST in transports},
             route_class_override=transport_route_class(router.route_class, frozenset(transports)),

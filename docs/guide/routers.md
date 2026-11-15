@@ -461,6 +461,7 @@ errors (see [Error Codes](./error-codes#executor-outcomes)):
 | The action returns | its result | `execute()` |
 | The action raises an `HTTPException` | that exception: a `DfViewSetError` of a class `fastapi_viewsets.exceptions` defines keeps its class, `code`, `params` and headers, any other one is rebuilt as `HTTPException` or `DfViewSetError` with the same fields | `execute()` |
 | The worker finds the request invalid (`RequestValidationError`, e.g. a filter value that does not convert) | that `RequestValidationError`, answered 422 `fastapi-viewsets.validation_failed` | `execute()` |
+| The action raises Django's `ValidationError` | a `RequestValidationError` with its [field errors](./django-integration#django-s-validationerror); the response is 422 `fastapi-viewsets.validation_failed` | `execute()` |
 | The action raises anything else (a Celery `Retry`, `Ignore` or `Reject` included), or an argument fails validation in the worker | `ActionFailedError` (500, reason `error`); the original error is logged in the worker | `execute()` |
 | The result cannot be serialized (see [Arguments and results](#arguments-and-results)), or deserialized by the caller | `ActionFailedError` (500, reason `result`) | — |
 | Soft time limit | `ActionInterruptedError` (504, reason `time_limit`) | `execute()` (`ActionInterruptedError` from `call_next()`) |

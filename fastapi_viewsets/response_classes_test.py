@@ -227,12 +227,12 @@ def test_the_package_entries_keep_their_examples():
         "field_errors": {
             "name": [
                 {
-                    "code": "pydantic.string_too_short",
-                    "params": {"min_length": 3},
+                    "code": "fastapi-viewsets.min_length",
+                    "params": {"minLength": 3},
                     "detail": "String should have at least 3 characters",
                 }
             ],
-            "": [{"code": "pydantic.missing", "params": {}, "detail": "Field required"}],
+            "": [{"code": "fastapi-viewsets.required", "params": {}, "detail": "Field required"}],
         },
     }
     assert examples(VIEWSET_ERROR_RESPONSES, "default")["http_error"]["value"]["detail_params"] == {"status": 403}

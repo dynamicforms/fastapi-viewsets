@@ -692,3 +692,42 @@ def test_celery_viewset_server_pushes_request_validation_error_as_422():
     assert payload["http_status_code"] == 422
     assert payload["http_detail"][0]["loc"] == ["query", "year__in", 1]
     assert payload["error"]["class"] == "RequestValidationError"
+
+
+def test_celery_viewset_server_pushes_a_django_validation_error_as_422():
+    import json
+
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    from fastapi_viewsets.error_responses import error_body
+    from fastapi_viewsets.exceptions import _error_from_jsonable
+
+    celery_app = MagicMock()
+    redis_mock = MagicMock()
+    registered_tasks = {}
+
+    def mock_task(name, **_kwargs):
+        def deck(func):
+            registered_tasks[name] = func
+            return func
+
+        return deck
+
+    celery_app.task.side_effect = mock_task
+
+    @celery_viewset_server(celery_app=celery_app, task_prefix="items", redis_client=redis_mock)
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self, _context) -> list[Item]:
+            raise DjangoValidationError(
+                {"name": DjangoValidationError("Too short", code="min_length", params={"limit_value": 3})}
+            )
+
+    result = registered_tasks["items.list_items"](
+        _correlation_id="corr", _result_queue_key="celery_viewset_results:items"
+    )
+    assert result is None
+    payload = json.loads(redis_mock.rpush.call_args[0][1])
+    assert (payload["http_status_code"], payload["error"]["class"]) == (422, "RequestValidationError")
+    assert error_body(_error_from_jsonable(payload["error"]))["field_errors"] == {
+        "name": [{"code": "fastapi-viewsets.min_length", "params": {"minLength": 3}, "detail": "Too short"}]
+    }

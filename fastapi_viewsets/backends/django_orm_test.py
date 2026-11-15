@@ -396,6 +396,161 @@ async def test_a_bulk_update_with_an_invalid_record_writes_none(dated_rows):
     ]
 
 
+def _full_clean_on_save(monkeypatch):
+    """`TrackModel.save()` raises Django's `ValidationError` for the title "Taken" and for a year below 1900."""
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    original = TrackModel.save
+
+    def save(self, *args, **kwargs):
+        errors = {}
+        if self.title == "Taken":
+            errors["title"] = DjangoValidationError("Title taken", code="unique", params={"unique_check": ("title",)})
+        if self.year < 1900:
+            errors["__all__"] = DjangoValidationError("Too old", code="app.too_old")
+        if errors:
+            raise DjangoValidationError(errors)
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(TrackModel, "save", save)
+
+
+@pytest.mark.asyncio
+async def test_a_bulk_update_reports_every_rows_django_validation_error_by_pk_and_writes_none(dated_rows, monkeypatch):
+    from ..error_responses import field_errors
+
+    _full_clean_on_save(monkeypatch)
+    viewset = DatedTrackViewSet()
+    first, second, modern = (row.pk for row in dated_rows)
+    with pytest.raises(RequestValidationError) as raised:
+        await viewset.perform_bulk_update(
+            None, {first: _patch(year=1800), second: _patch(title="Taken"), modern: _patch(title="Renamed")}
+        )
+    assert field_errors(raised.value.errors()) == {
+        f"{second}.title": [
+            {"code": "fastapi-viewsets.unique", "params": {"fields": ["title"]}, "detail": "Title taken"}
+        ],
+        f"{first}": [{"code": "app.too_old", "params": {}, "detail": "Too old"}],
+    }
+    assert (await TrackModel.objects.aget(pk=modern)).title == "Modern"
+
+
+@pytest.mark.asyncio
+async def test_a_bulk_update_saves_the_rows_after_a_validation_error_raised_inside_a_save(dated_rows, monkeypatch):
+    """A field's `pre_save` raises inside Django's `mark_for_rollback_on_error`; the next row's save still runs."""
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    from ..error_responses import field_errors
+
+    title = TrackModel._meta.get_field("title")
+    original = title.pre_save
+
+    def pre_save(instance, add):
+        if instance.title == "Taken":
+            raise DjangoValidationError("Title taken", code="app.taken")
+        return original(instance, add)
+
+    monkeypatch.setattr(title, "pre_save", pre_save)
+    first, second, _ = (row.pk for row in dated_rows)
+    with pytest.raises(RequestValidationError) as raised:
+        await DatedTrackViewSet().perform_bulk_update(
+            None, {first: _patch(title="Taken"), second: _patch(title="Fine")}
+        )
+    assert list(field_errors(raised.value.errors())) == [str(first)]
+    assert (await TrackModel.objects.aget(pk=second)).title == "Old"
+
+
+@pytest.mark.asyncio
+async def test_an_update_reports_the_django_validation_error_of_save_without_a_pk(dated_rows, monkeypatch):
+    from ..error_responses import field_errors
+
+    _full_clean_on_save(monkeypatch)
+    with pytest.raises(RequestValidationError) as raised:
+        await DatedTrackViewSet().perform_update(None, dated_rows[0].pk, _patch(title="Taken"))
+    assert list(field_errors(raised.value.errors())) == ["title"]
+    assert (await TrackModel.objects.aget(pk=dated_rows[0].pk)).title == "Old"
+
+
+@pytest.mark.asyncio
+async def test_a_bulk_destroy_reports_a_django_validation_error_for_its_key_and_destroys_the_others(
+    dated_rows, monkeypatch
+):
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    first, second, modern = (row.pk for row in dated_rows)
+    original = TrackModel.adelete
+
+    async def adelete(self, *args, **kwargs):
+        if self.pk == second:
+            raise DjangoValidationError("Still referenced", code="app.referenced")
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(TrackModel, "adelete", adelete)
+    results = await DatedTrackViewSet().perform_bulk_destroy(None, [first, second, modern])
+    assert (results[first], results[modern]) == (None, None)
+    assert results[second].detail_code == "fastapi-viewsets.validation_failed"
+    assert results[second].model_dump()["field_errors"] == {
+        "": [{"code": "app.referenced", "params": {}, "detail": "Still referenced"}]
+    }
+    assert [row.pk async for row in TrackModel.objects.filter(pk__in=[first, second, modern])] == [second]
+
+
+@pytest.mark.asyncio
+async def test_a_null_on_the_merged_row_is_required(dated_rows):
+    from ..error_responses import field_errors
+
+    pk = dated_rows[0].pk
+    record = DatedTrack.model_construct(_fields_set={"year"}, year=None)
+    with pytest.raises(RequestValidationError) as raised:
+        await DatedTrackViewSet().perform_bulk_update(None, {pk: record})
+    assert field_errors(raised.value.errors()) == {
+        f"{pk}.year": [{"code": "fastapi-viewsets.required", "params": {}, "detail": "Input should be a valid integer"}]
+    }
+
+
+def test_the_errors_of_an_update_over_http_are_named_by_error_field(dated_rows, monkeypatch):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+
+    from ..decorators import route_viewset
+    from ..mixins import BulkViewSetMixin
+
+    _full_clean_on_save(monkeypatch)
+    calls = []
+    router = APIRouter()
+
+    @route_viewset(router, "/tracks", pk_field_name="id")
+    class RenamingViewSet(DjangoORMViewSet[int, DatedTrack], BulkViewSetMixin[int, DatedTrack]):
+        model = TrackModel
+        schema = DatedTrack
+
+        def error_field(self, context, field, code):
+            calls.append((context.action_name, field, code))
+            if field == "title":
+                return "name"
+            return "year" if code in ("app.too_old", "pydantic.value_error") else field
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    first, second, modern = (row.pk for row in dated_rows)
+
+    bulk = client.patch("/tracks/bulk", json={str(first): {"year": 1800}, str(second): {"title": "Taken"}})
+    assert bulk.json()["field_errors"] == {
+        f"{second}.name": [
+            {"code": "fastapi-viewsets.unique", "params": {"fields": ["title"]}, "detail": "Title taken"}
+        ],
+        f"{first}.year": [{"code": "app.too_old", "params": {}, "detail": "Too old"}],
+    }
+    single = client.patch(f"/tracks/{modern}", json={"year": 1999})
+    assert list(single.json()["field_errors"]) == ["year"]
+    assert calls == [
+        ("bulk_partial_update", "", "app.too_old"),
+        ("bulk_partial_update", "title", "django.unique"),
+        ("partial_update", "", "pydantic.value_error"),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_a_bulk_update_with_a_missing_row_writes_none(dated_rows):
     from fastapi import HTTPException

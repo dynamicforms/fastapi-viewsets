@@ -1,8 +1,10 @@
 import { namespaced } from './error-namespace';
 
 /**
- * One validation failure: `code` is `pydantic.<type>` (unknown types `pydantic.custom_error` with
- * `params` `{ type, ctx }`), `params` pydantic's `ctx`, `detail` its English message.
+ * One validation failure. `code` is a `FieldErrorCode` with the params `FieldErrorParams` declares for
+ * it, `pydantic.<type>` with pydantic's `ctx`, `django.<code>` with Django's params, an application's
+ * namespaced code with its params, or `pydantic.custom_error` with `{ type, ctx }`. `detail` is
+ * pydantic's English message or Django's message in its active language.
  */
 export interface ApiFieldError {
   code: string;

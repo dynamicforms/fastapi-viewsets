@@ -6,10 +6,22 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.15.5] - 2026-11-14
+## [0.16.0] - 2026-11-15
 
 ### Added
 
+- `FIELD_ERROR_PARAMS` in `fastapi_viewsets` (and `fastapi_viewsets.error_responses`): the field error codes the
+  package declares, each with the names of its params.
+- `ERROR_NAMESPACE_DJANGO` (`"django"`) in `fastapi_viewsets`: the namespace of Django's validation codes in field
+  errors that have no field error code (`django.<code>`, with Django's params).
+- `DjangoORMViewSet` updates convert a Django `ValidationError` raised by `save()` to a `RequestValidationError`. A bulk
+  update reports the errors of every failing row under `<pk>.<field>`.
+- `error_field(context, field, code)` on `ViewSetBase`, the base of `ImplMixin`, of every operation mixin and of
+  `LookupMixin`: returns the key of each field error of the viewset's endpoints. It receives the error's key and its
+  code before the package's field error codes apply (`pydantic.<type>`, `django.<code>`, a namespaced type as it is).
+  The default returns the key; `''` puts the error on the form. In bulk actions the row's key stays in front.
+- TS: `FieldErrorParams` (the params of each field error code), `FieldErrorCode`, `FieldErrorOf<C>`,
+  `FIELD_ERROR_PARAM_NAMES`, `FIELD_ERROR_CODES`, `isFieldErrorCode(code)` and `ERROR_NAMESPACE_DJANGO`.
 - `LookupFilter.ids`: primary keys of the choices to return, read from a repeated key (`ids=1&ids=5`). The default
   `filter_lookup` keeps the items matching both `q` and `ids`, comparing each id as a string with `str(item.pk)`. The
   OpenAPI of every lookup with the default filter documents `ids` as an array of integers or strings.
@@ -35,12 +47,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** field errors use the package's field error codes (`fastapi-viewsets.<code>`, camelCase params) for
+  the pydantic types and Django codes that map to them. For example, `pydantic.string_too_short` `{min_length}` becomes
+  `fastapi-viewsets.min_length` `{minLength}`. A type or choice error whose input is null becomes
+  `fastapi-viewsets.required`. Other pydantic types remain `pydantic.<type>` with `ctx` as params. The
+  full list is in the [migration guide](./docs/guide/migration.md#upgrading-to-v0-16-0-from-v0-15-x).
+- **Breaking:** the field error code of a `PydanticCustomError` whose type has a namespace (`app.slug_taken`) is that
+  type, and its params are the error's `ctx`. The code was `pydantic.custom_error` with params `{type, ctx}`. A type
+  without a namespace still becomes `pydantic.custom_error`.
 - The package's own error `responses` entries (`NOT_FOUND_RESPONSE`, `VIEWSET_ERROR_RESPONSES`, …) are built with
   `error_entry()`: each example's summary is the error's `detail`. Example names and bodies are unchanged.
 - `@endpoint_docs` raises `ValueError` for a key of an entry outside `EndpointDoc`.
 
 ### Fixed
 
+- A Django `ValidationError` raised during a request returned 500 `unhandled_error` or `action_failed`. It now
+  returns 422 `fastapi-viewsets.validation_failed`, with `field_errors` keyed by Django field name, on viewset routes,
+  routes under `install_error_handlers`, muxws and `celery_viewset` actions. In `bulk_destroy` it becomes the failing
+  key's `ApiErrorBody`. An idempotent repeat returns the first call's 422.
 - `@endpoint_docs` `responses` replaced every response of the operation, the package's error responses and the
   mixin's 404 included; it merges with them now.
 - `@endpoint_docs` `openapi_extra` or `tags` raised `TypeError` (`got multiple values for keyword argument`) when the

@@ -67,7 +67,9 @@ def test_create_model_without_pk_applies_the_field_constraints_and_the_model_con
 @pytest.mark.parametrize("pk", [5, 0, "x", ""])
 def test_create_model_without_pk_rejects_a_pk_other_than_null(pk):
     without_pk = create_model_without_pk(Product, "id")
-    assert errors(without_pk, {"id": pk, "title": "abc", "price": 1}) == [(("id",), "pk_assigned_by_server")]
+    assert errors(without_pk, {"id": pk, "title": "abc", "price": 1}) == [
+        (("id",), "fastapi-viewsets.pk_assigned_by_server")
+    ]
 
 
 def test_create_model_without_pk_accepts_a_null_pk_without_running_its_validators():
@@ -84,7 +86,7 @@ def test_create_model_without_pk_reads_the_pk_by_its_alias():
 
     without_pk = create_model_without_pk(Aliased, "id")
     assert without_pk.model_validate({"pk": None, "name": "a"}).name == "a"
-    assert errors(without_pk, {"pk": 5, "name": "a"}) == [(("pk",), "pk_assigned_by_server")]
+    assert errors(without_pk, {"pk": 5, "name": "a"}) == [(("pk",), "fastapi-viewsets.pk_assigned_by_server")]
 
 
 def test_create_model_without_pk_accepts_alias_choices_on_the_pk():
@@ -95,7 +97,7 @@ def test_create_model_without_pk_accepts_alias_choices_on_the_pk():
     without_pk = create_model_without_pk(Choices, "id")
     assert without_pk.model_validate({"id": None, "name": "a"}).name == "a"
     assert without_pk.model_validate({"pk": None, "name": "a"}).name == "a"
-    assert errors(without_pk, {"pk": 5, "name": "a"}) == [(("pk",), "pk_assigned_by_server")]
+    assert errors(without_pk, {"pk": 5, "name": "a"}) == [(("pk",), "fastapi-viewsets.pk_assigned_by_server")]
 
 
 def test_create_model_without_pk_rejects_a_pk_with_a_default():
@@ -104,7 +106,7 @@ def test_create_model_without_pk_rejects_a_pk_with_a_default():
         name: str
 
     without_pk = create_model_without_pk(Defaulted, "id")
-    assert errors(without_pk, {"id": 5, "name": "a"}) == [(("id",), "pk_assigned_by_server")]
+    assert errors(without_pk, {"id": 5, "name": "a"}) == [(("id",), "fastapi-viewsets.pk_assigned_by_server")]
 
 
 def test_create_model_without_pk_runs_each_field_validator_once():
@@ -237,8 +239,8 @@ def test_a_create_validates_the_body_by_the_model():
     assert response.status_code == 422
     fields = response.json()["field_errors"]
     assert {error["code"] for errors in fields.values() for error in errors} == {
-        "pydantic.string_too_short",
-        "pydantic.greater_than_equal",
+        "fastapi-viewsets.min_length",
+        "fastapi-viewsets.min_value",
     }
 
     response = client.post("/products", json={"id": 7, "title": "abc", "price": 1})

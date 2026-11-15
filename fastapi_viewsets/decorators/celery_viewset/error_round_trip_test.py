@@ -62,7 +62,9 @@ class _Executor:
         future.get_loop().call_soon_threadsafe(result_reader._resolve, future, payload)
 
 
-def _client_for(monkeypatch, error: Exception, rewrite: Callable[[dict], dict] = lambda payload: payload):
+def _client_for(
+    monkeypatch, error: Exception, rewrite: Callable[[dict], dict] = lambda payload: payload, error_field=None
+):
     executor = _Executor(monkeypatch, rewrite)
 
     class Base:
@@ -71,6 +73,13 @@ def _client_for(monkeypatch, error: Exception, rewrite: Callable[[dict], dict] =
         @__router.post("")
         async def create(self, item: Item) -> Item:  # noqa: ARG002 - fails before reading it
             raise error
+
+        @__router.post("bulk")
+        async def bulk_create(self, items: list[Item]) -> list[Item]:  # noqa: ARG002 - fails before reading it
+            raise error
+
+    if error_field is not None:
+        Base.error_field = error_field
 
     celery_viewset_server(celery_app=executor.server_app, task_prefix="items", redis_client=executor.redis)(
         type("Worker", (Base,), {})
@@ -101,7 +110,9 @@ def _body(detail, code, params=None, fields=None):
             _body(
                 "The request failed validation",
                 "fastapi-viewsets.validation_failed",
-                fields={"year__in.1": [{"code": "pydantic.int_parsing", "params": {}, "detail": "not an int"}]},
+                fields={
+                    "year__in.1": [{"code": "fastapi-viewsets.invalid_integer", "params": {}, "detail": "not an int"}]
+                },
             ),
         ),
         (
@@ -135,3 +146,45 @@ def test_a_payload_a_0_11_worker_pushed_is_answered_with_the_error_body(monkeypa
     assert response.status_code == 422
     assert response.json()["detail_code"] == "fastapi-viewsets.http_error"
     assert response.json()["detail_params"]["status"] == 422
+
+
+def test_the_field_errors_of_the_worker_are_named_by_error_field_with_their_source_codes(monkeypatch):
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    calls = []
+
+    def error_field(_self, context, field, code):
+        calls.append((context.action_name, field, code))
+        return {"name": "title", "id": ""}.get(field, field)
+
+    error = DjangoValidationError(
+        {
+            "name": DjangoValidationError("Taken", code="unique", params={"unique_check": ("name",)}),
+            "id": DjangoValidationError("Too small", code="min_value", params={"limit_value": 1}),
+        }
+    )
+    response = _client_for(monkeypatch, error, error_field=error_field).post("/items", json={"id": 1, "name": "a"})
+    assert (response.status_code, response.json()["field_errors"]) == (
+        422,
+        {
+            "title": [{"code": "fastapi-viewsets.unique", "params": {"fields": ["name"]}, "detail": "Taken"}],
+            "": [{"code": "fastapi-viewsets.min_value", "params": {"minValue": 1}, "detail": "Too small"}],
+        },
+    )
+    assert calls == [("create", "name", "django.unique"), ("create", "id", "django.min_value")]
+
+
+def test_a_django_error_of_a_bulk_action_in_the_worker_is_passed_with_its_field_and_no_row_key(monkeypatch):
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    calls = []
+
+    def error_field(_self, context, field, code):
+        calls.append((context.action_name, field, code))
+        return {"name": "title"}.get(field, field)
+
+    error = DjangoValidationError({"name": DjangoValidationError("Taken", code="unique")})
+    client = _client_for(monkeypatch, error, error_field=error_field)
+    response = client.post("/items/bulk", json=[{"id": 1, "name": "a"}])
+    assert (response.status_code, list(response.json()["field_errors"])) == (422, ["title"])
+    assert calls == [("bulk_create", "name", "django.unique")]

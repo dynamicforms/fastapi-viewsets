@@ -1,0 +1,57 @@
+{
+  "fastapi-viewsets.required": [],
+  "fastapi-viewsets.min_length": [
+    "minLength"
+  ],
+  "fastapi-viewsets.max_length": [
+    "maxLength"
+  ],
+  "fastapi-viewsets.min_value": [
+    "minValue"
+  ],
+  "fastapi-viewsets.min_value_exclusive": [
+    "minValue"
+  ],
+  "fastapi-viewsets.max_value": [
+    "maxValue"
+  ],
+  "fastapi-viewsets.max_value_exclusive": [
+    "maxValue"
+  ],
+  "fastapi-viewsets.multiple_of": [
+    "multipleOf"
+  ],
+  "fastapi-viewsets.max_digits": [
+    "maxDigits"
+  ],
+  "fastapi-viewsets.max_decimal_places": [
+    "maxDecimalPlaces"
+  ],
+  "fastapi-viewsets.max_whole_digits": [
+    "maxWholeDigits"
+  ],
+  "fastapi-viewsets.pattern": [
+    "pattern"
+  ],
+  "fastapi-viewsets.in_allowed_values": [
+    "allowedAsText"
+  ],
+  "fastapi-viewsets.invalid_choice": [],
+  "fastapi-viewsets.invalid_integer": [],
+  "fastapi-viewsets.invalid_number": [],
+  "fastapi-viewsets.invalid_boolean": [],
+  "fastapi-viewsets.invalid_date": [],
+  "fastapi-viewsets.invalid_time": [],
+  "fastapi-viewsets.invalid_datetime": [],
+  "fastapi-viewsets.invalid_duration": [],
+  "fastapi-viewsets.invalid_url": [],
+  "fastapi-viewsets.invalid_uuid": [],
+  "fastapi-viewsets.past": [],
+  "fastapi-viewsets.future": [],
+  "fastapi-viewsets.invalid_type": [],
+  "fastapi-viewsets.unique": [
+    "fields"
+  ],
+  "fastapi-viewsets.invalid": [],
+  "fastapi-viewsets.pk_assigned_by_server": []
+}

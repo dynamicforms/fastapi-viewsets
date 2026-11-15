@@ -5,6 +5,47 @@ releases at once, work from the bottom of the page upwards.
 
 <!-- New releases go directly below this comment, above the previous one, as `## Upgrading to vX.Y.Z (from vA.B.x)`. -->
 
+## Upgrading to v0.16.0 (from v0.15.x)
+
+- [ ] In code comparisons and translation keys, replace the pydantic codes below with the package's
+      [field error codes](./error-codes#field-error-codes). The params of the new codes are camelCase:
+
+  | 0.15 | 0.16 |
+  |------|------|
+  | `pydantic.missing`, `pydantic.missing_argument`, `pydantic.missing_keyword_only_argument`, `pydantic.missing_positional_only_argument` | `fastapi-viewsets.required` |
+  | `pydantic.string_too_short`, `pydantic.too_short`, `pydantic.bytes_too_short` `{min_length}` | `fastapi-viewsets.min_length` `{minLength}` |
+  | `pydantic.string_too_long`, `pydantic.too_long`, `pydantic.bytes_too_long`, `pydantic.url_too_long` `{max_length}` | `fastapi-viewsets.max_length` `{maxLength}` |
+  | `pydantic.greater_than_equal` `{ge}` | `fastapi-viewsets.min_value` `{minValue}` |
+  | `pydantic.greater_than` `{gt}` | `fastapi-viewsets.min_value_exclusive` `{minValue}` |
+  | `pydantic.less_than_equal` `{le}` | `fastapi-viewsets.max_value` `{maxValue}` |
+  | `pydantic.less_than` `{lt}` | `fastapi-viewsets.max_value_exclusive` `{maxValue}` |
+  | `pydantic.multiple_of` `{multiple_of}` | `fastapi-viewsets.multiple_of` `{multipleOf}` |
+  | `pydantic.decimal_max_digits` `{max_digits}` | `fastapi-viewsets.max_digits` `{maxDigits}` |
+  | `pydantic.decimal_max_places` `{decimal_places}` | `fastapi-viewsets.max_decimal_places` `{maxDecimalPlaces}` |
+  | `pydantic.decimal_whole_digits` `{whole_digits}` | `fastapi-viewsets.max_whole_digits` `{maxWholeDigits}` |
+  | `pydantic.string_pattern_mismatch` `{pattern}` | `fastapi-viewsets.pattern` `{pattern}` |
+  | `pydantic.enum`, `pydantic.literal_error` `{expected}` | `fastapi-viewsets.in_allowed_values` `{allowedAsText}` |
+  | `pydantic.int_type`, `pydantic.int_parsing`, `pydantic.int_parsing_size`, `pydantic.int_from_float` | `fastapi-viewsets.invalid_integer` |
+  | `pydantic.float_*`, `pydantic.finite_number`, `pydantic.decimal_type`, `pydantic.decimal_parsing`, `pydantic.fraction_*` | `fastapi-viewsets.invalid_number` |
+  | `pydantic.bool_*` | `fastapi-viewsets.invalid_boolean` |
+  | `pydantic.date_type`, `pydantic.date_parsing`, `pydantic.date_from_datetime_*` | `fastapi-viewsets.invalid_date` |
+  | `pydantic.time_type`, `pydantic.time_parsing` | `fastapi-viewsets.invalid_time` |
+  | `pydantic.datetime_type`, `pydantic.datetime_parsing`, `pydantic.datetime_object_invalid`, `pydantic.datetime_from_date_parsing` | `fastapi-viewsets.invalid_datetime` |
+  | `pydantic.time_delta_*` | `fastapi-viewsets.invalid_duration` |
+  | `pydantic.url_type`, `pydantic.url_parsing`, `pydantic.url_syntax_violation` | `fastapi-viewsets.invalid_url` |
+  | `pydantic.uuid_type`, `pydantic.uuid_parsing` | `fastapi-viewsets.invalid_uuid` |
+  | `pydantic.date_past`, `pydantic.datetime_past` / `pydantic.date_future`, `pydantic.datetime_future` | `fastapi-viewsets.past` / `fastapi-viewsets.future` |
+  | `pydantic.string_type`, `pydantic.string_unicode`, `pydantic.bytes_type`, `pydantic.dict_type`, `pydantic.frozen_dict_type`, `pydantic.ordered_dict_type`, `pydantic.counter_type`, `pydantic.list_type`, `pydantic.tuple_type`, `pydantic.set_type`, `pydantic.frozen_set_type`, `pydantic.deque_type`, `pydantic.mapping_type`, `pydantic.iterable_type`, `pydantic.model_type`, `pydantic.model_attributes_type`, `pydantic.dataclass_type`, `pydantic.dataclass_exact_type`, `pydantic.named_tuple_type`, `pydantic.none_required`, `pydantic.arguments_type`, `pydantic.callable_type`, `pydantic.is_instance_of`, `pydantic.is_subclass_of` | `fastapi-viewsets.invalid_type` |
+  | `pydantic.value_error`, `pydantic.assertion_error` `{error}` | `fastapi-viewsets.invalid` `{}` (the text is in `detail`) |
+
+  An error from the `invalid_*`, `invalid_type` or `in_allowed_values` rows with a null input becomes
+  `fastapi-viewsets.required`. Other pydantic types remain `pydantic.<type>`.
+- [ ] Move translations of `pydantic.custom_error` with a namespaced `params.type` (`app.slug_taken`) to that code.
+      The field error's `code` is that type, and its `params` are the custom error's `ctx`.
+- [ ] Handle Django's `ValidationError` as 422 `fastapi-viewsets.validation_failed` with `field_errors`. It was a 500
+      (`fastapi-viewsets.unhandled_error`, `fastapi-viewsets.action_failed`). See
+      [Django's ValidationError](./django-integration#django-s-validationerror).
+
 ## Upgrading to v0.15.0 (from v0.14.x)
 
 - [ ] `perform_destroy` returns `{pk: None}`. A destroy that answered anything else, such as a record

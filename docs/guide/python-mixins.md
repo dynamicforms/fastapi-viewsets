@@ -166,9 +166,9 @@ async def perform_update(self, context: Context, pk: int, data: Item, partial: b
        "detail_params": {"pk": 9}, "field_errors": {}}}
 ```
 
-`ImplMixin.perform_bulk_destroy` implements this over `perform_destroy`: an `HTTPException` or
-`RequestValidationError` becomes that key's `ApiErrorBody`, any other exception propagates (500), and a
-repeated key is deleted once. Override it to delete in one statement or one transaction.
+`ImplMixin.perform_bulk_destroy` implements this over `perform_destroy`: an `HTTPException`, a
+`RequestValidationError` or Django's `ValidationError` becomes that key's `ApiErrorBody`, any other exception
+propagates (500), and a repeated key is deleted once. Override it to delete in one statement or one transaction.
 
 ### Lookup
 

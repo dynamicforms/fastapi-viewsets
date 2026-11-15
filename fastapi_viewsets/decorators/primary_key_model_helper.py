@@ -9,17 +9,19 @@ from pydantic.fields import FieldInfo
 from pydantic.json_schema import SkipJsonSchema
 from pydantic_core import core_schema, PydanticCustomError
 
+from ..error_namespace import _namespaced
+
 T = TypeVar("T", bound=BaseModel)
 
 
 class _AssignedByServer:
     """The type of the primary key in `create_model_without_pk`: every value given for it fails
-    validation with `pk_assigned_by_server`."""
+    validation with `fastapi-viewsets.pk_assigned_by_server`."""
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source, handler):
         def reject(_value):
-            raise PydanticCustomError("pk_assigned_by_server", "The primary key is assigned by the server")
+            raise PydanticCustomError(_namespaced("pk_assigned_by_server"), "The primary key is assigned by the server")
 
         return core_schema.no_info_plain_validator_function(reject)
 
