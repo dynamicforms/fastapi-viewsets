@@ -80,7 +80,6 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
     super(options);
     this.http = options.axiosInstance ?? axios;
     this.attemptTimeoutMs = options.attemptTimeoutMs ?? DEFAULT_ATTEMPT_TIMEOUT_MS;
-    this.initSchemaValidation();
   }
 
   /**

@@ -26,7 +26,7 @@ await api.create({ name: 'x' }); // TS2339: create was not declared
 ```
 
 The mixin list is written once, as values, and does three jobs: it decides which actions the class exposes to callers,
-it types them, and it is handed to the proxy so the startup schema check can compare it against the BE.
+it types them, and it is handed to the proxy so the schema check can compare it against the BE.
 
 ## Signatures
 
@@ -136,7 +136,7 @@ interface Options {
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `basePath` | `string` | — | Base path to the resource, e.g. `'/items'`. A trailing slash is stripped. |
-| `validateSchema` | `boolean` | `true` | Set `false` to skip the startup schema check (it is advisory and costs one request). |
+| `validateSchema` | `boolean` | `true` | Set `false` to skip the schema check on the first request (it is advisory and costs one request). |
 | `repeat` | [`RepeatOptions`](./idempotency#repeatoptions) | `{ withinMs: 600000, delayMs: 1000 }` | When a call whose attempt ended without an answer is repeated; see [Idempotent Calls](../guide/idempotency#repeats). |
 | `events` | `EventClient` | — | The event client [`watch()`](./vue-mixins#watch) subscribes on. Without it, a muxws ViewSet uses the client registered for its peer and a REST ViewSet throws from `watch()`. |
 | `topic` | `string` | `basePath` | The client topic `watch()` subscribes: the BE path relative to the application's `root_path`, without a Starlette `Mount` prefix. |
@@ -226,11 +226,15 @@ class ItemDbApi extends restViewSet<Item>()('id', [CursorListMixin, RetrieveMixi
 
 ## Schema check
 
-On construction, unless `validateSchema: false`, the ViewSet fetches `GET {basePath}/schema` over its own transport and
-compares the declaration against it, `console.warn`-ing any disagreement: an action declared that the BE does not serve,
+Unless `validateSchema: false`, the first call of a ViewSet instance that reaches the BE starts the check: the ViewSet
+fetches `GET {basePath}/schema` over its own transport, as a background call after that first call, and compares the
+declaration against it, `console.warn`-ing any disagreement: an action declared that the BE does not serve,
 an endpoint served that the ViewSet declares no action for, and a custom BE endpoint the ViewSet has no method for — the
-BE method's name (`x-viewset-action`) in camelCase, or the name itself. It is advisory — failures to fetch or parse are
-ignored.
+BE method's name (`x-viewset-action`) in camelCase, or the name itself. When `defaultSort()` is the first call, the check
+uses the `/schema` request `defaultSort()` sends, which is a foreground call repeated as any other call is. The check is
+advisory — failures to fetch or parse are ignored. It does not delay or fail the call that started it. It runs once per
+instance; when its `/schema` request fails with no response, or with status 401, 403, 502, 503 or 504, the next call
+starts it again. Constructing a ViewSet sends no request, so a ViewSet can be a module-level constant.
 
 ## Relation to route_rest / route_muxws
 

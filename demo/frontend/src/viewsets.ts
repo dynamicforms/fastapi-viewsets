@@ -97,7 +97,7 @@ export function muxwsPeer(): Promise<Peer> {
 export type MusicTrackViewSet =
   MusicTrackRestViewSet | MusicTrackDbRestViewSet | MusicTrackMuxwsViewSet | MusicTrackDbMuxwsViewSet;
 
-/** One proxy per (transport, backend) pair, built once - each does a schema check on construction. */
+/** One proxy per (transport, backend) pair, built once - each does a schema check on its first call. */
 const proxies = new Map<string, MusicTrackViewSet>();
 
 export function viewSetFor(transport: Transport, backend: Backend = 'memory') {

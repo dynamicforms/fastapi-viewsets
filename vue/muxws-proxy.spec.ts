@@ -327,13 +327,58 @@ describe('route_muxws', () => {
     }
     const mock = makeMockPeer();
     mock.reply({ paths: {} });
-    route_muxws<BulkViewSetMixin<number, Item, 'id'>>(Declared, {
+    const items = route_muxws<BulkViewSetMixin<number, Item, 'id'>>(Declared, {
       basePath: '/items',
       pkFieldName: 'id',
       peer: mock.peer,
     });
-    await vi.waitFor(() => expect(mock.opened.length).toBeGreaterThan(0));
-    expect(mock.last.headers[':path']).toBe('/items/schema');
+    await items.retrieve(1);
+    await vi.waitFor(() => expect(mock.opened).toHaveLength(2));
+    expect(mock.opened.map((stream) => stream.headers[':path'])).toEqual(['/items/1', '/items/schema']);
+  });
+
+  it('resolves no peer on construction; the first call resolves it once for the call and the check', async () => {
+    class Declared extends ItemViewSet {
+      static declares = [BulkViewSetMixin];
+    }
+    const mock = makeMockPeer();
+    mock.reply(MOCK_ITEM);
+    const source = vi.fn(() => Promise.resolve(mock.peer));
+    const items = route_muxws<BulkViewSetMixin<number, Item, 'id'>>(Declared, {
+      basePath: '/items',
+      pkFieldName: 'id',
+      peer: source,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(source).not.toHaveBeenCalled();
+    expect(mock.opened).toHaveLength(0);
+
+    await expect(items.retrieve(1)).resolves.toEqual(MOCK_ITEM);
+    await vi.waitFor(() => expect(mock.opened).toHaveLength(2));
+    expect(source).toHaveBeenCalledTimes(1);
+    expect(mock.opened[1].headers[':path']).toBe('/items/schema');
+  });
+
+  it('starts the check again after a first call whose peer source rejected', async () => {
+    class Declared extends ItemViewSet {
+      static declares = [BulkViewSetMixin];
+    }
+    const mock = makeMockPeer();
+    mock.reply(MOCK_ITEM);
+    let loggedIn = false;
+    const items = route_muxws<BulkViewSetMixin<number, Item, 'id'>>(Declared, {
+      basePath: '/items',
+      pkFieldName: 'id',
+      peer: () => (loggedIn ? Promise.resolve(mock.peer) : Promise.reject(new Error('not logged in'))),
+    });
+    await expect(items.retrieve(1)).rejects.toThrow('not logged in');
+    await new Promise((r) => setTimeout(r, 0));
+    loggedIn = true;
+    await items.retrieve(1);
+    await vi.waitFor(() => expect(mock.opened).toHaveLength(2));
+    await items.retrieve(2);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mock.opened.map((stream) => stream.headers[':path'])).toEqual(['/items/1', '/items/schema', '/items/2']);
   });
 
   it('rejects a factory-built ViewSet class', () => {

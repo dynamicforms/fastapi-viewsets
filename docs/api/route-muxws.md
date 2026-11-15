@@ -26,7 +26,7 @@ is. Passing a factory-built class fails to compile.
 interface MuxwsProxyOptions {
   basePath: string;
   pkFieldName: string;
-  /** Set false to skip the startup schema check (advisory, costs one request). */
+  /** Set false to skip the schema check on the first request (advisory, costs one request). */
   validateSchema?: boolean;
   /** The mixins the ViewSet declares, for the schema check. */
   declares?: readonly ViewSetMixinDeclaration[];
@@ -111,8 +111,18 @@ stream without `headers` leaves the repeat with the headers the proxy built.
 every standard action against the abstract `request()`, and [`watch()`](./vue-mixins#watch) against
 the protected `eventClient(): EventClient | Promise<EventClient>`. `eventClient()` answers
 `ProxyBaseOptions.events` and throws without it; `MuxwsProxyImpl` overrides it to fall back to
-`eventsOf(peer)`. A transport of one's own extends it,
-implements `request()`, and calls `initSchemaValidation()` as the last statement of its constructor.
+`eventsOf(peer)`. A transport of one's own extends it and implements `request()` as a method of the
+class. A `request` class field replaces the wrapper described below, and the instance gets no schema
+check.
+
+The constructor of `ViewSetProxyBase` wraps the instance's `request()`: the first call starts the
+schema check through the protected `ensureSchemaCheck(): Promise<void>`, after the caller's
+synchronous code; `watch()` starts it too. The check sends its `/schema` request as a background
+call, except when `defaultSort()` has sent that request first: the check then uses it. The check runs
+once per instance. When its `/schema` request fails with no response, or with status 401, 403, 502,
+503 or 504, the next call starts it again. A method that reaches the BE without `request()` calls
+`ensureSchemaCheck()` itself. `initSchemaValidation()` does nothing and is deprecated; a transport
+need not call it.
 
 `request()` returns a `ViewSetCall<R>`: it takes the key from `options.key` or `newCallKey()`, sends
 it as `Idempotency-Key: idempotencyKeyHeader(key)`, and returns

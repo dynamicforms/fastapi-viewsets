@@ -107,7 +107,6 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
     this.peerSource = options.peer;
     this.timeoutMs = options.timeoutMs;
     this.headers = options.headers ?? {};
-    this.initSchemaValidation();
   }
 
   /** The source's peer, re-resolved after a function source's peer closed for good or it threw/rejected. */
