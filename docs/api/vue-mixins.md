@@ -304,7 +304,9 @@ The order of reads and changes:
 - `reload()` drops the held changes. A read of an older generation calls nothing when it lands.
 - A failed read keeps `rows`; the held changes are applied to them.
 - A resync of the topic calls `reload()`. Its read, and that of an `apply` that returned `'reload'`
-  while applying a held change, are issued inside [`inBackground`](./idempotency#frontend).
+  while applying a change that arrived as an event, held or applied at once, or a change of the
+  caller held during a read, are issued inside [`inBackground`](./idempotency#frontend). The read of
+  a `'reload'` that `apply` returned for the caller's `apply()` is not.
 - What `apply`, `merge` or an option throws is rethrown in a microtask; following continues. A
   `reload()` or `close()` called from inside an option ends the step that called it.
 

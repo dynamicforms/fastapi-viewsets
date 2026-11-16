@@ -401,9 +401,11 @@ applies a change to the rows, must return the same rows for a change the rows al
 event arrives, before the change is held, so a held change can carry a record older than the read's
 answer, and `onRows` shows that record until the event of the later write is applied. Every write
 publishes an event and `watch()` passes them on in order, so the rows end with the latest record
-whatever the list read returned. A read started
-by a resync or by an `apply` that returned `'reload'` is issued inside `inBackground`, as `fetch` is;
-the first read and the caller's `reload()` are not.
+whatever the list read returned.
+
+A read started by a resync, or by an `apply` that returned `'reload'` for a change that arrived as
+an event, is issued inside `inBackground`, as `fetch` is. The first read, the caller's `reload()`
+and a `'reload'` that `apply` returned for the caller's `apply()` are not.
 
 `read` defaults to `list()` on a ViewSet that declares `list`; other ViewSets pass it. The options
 and the follower's members are in [`follow()`](../api/vue-mixins#follow).
