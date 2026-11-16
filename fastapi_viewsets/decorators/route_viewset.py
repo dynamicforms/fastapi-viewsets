@@ -658,7 +658,20 @@ def _route(
     return cls
 
 
-_WORD_BOUNDARY = re.compile(r"_+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+def _split_words(name: str) -> list[str]:
+    """`name` split at underscores and at case boundaries, with Unicode letter cases; empty words dropped."""
+    words = []
+    for part in name.split("_"):
+        start = 0
+        for i in range(1, len(part)):
+            previous, char, following = part[i - 1], part[i], part[i + 1 : i + 2]
+            if char.isupper() and (
+                previous.islower() or previous.isdigit() or (previous.isupper() and following.islower())
+            ):
+                words.append(part[start:i])
+                start = i
+        words.append(part[start:])
+    return [word for word in words if word]
 
 
 def default_tag_name(cls: type) -> str:
@@ -672,7 +685,7 @@ def default_tag_name(cls: type) -> str:
     an empty name.
     """
     name = cls.__name__.removesuffix("ViewSet")
-    words = [word for word in _WORD_BOUNDARY.split(name) if word]
+    words = _split_words(name)
     words = [word if sum(char.isupper() for char in word) >= 2 else word.lower() for word in words]
     text = " ".join(words)
     return text[:1].upper() + text[1:]

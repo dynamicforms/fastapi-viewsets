@@ -87,6 +87,10 @@ def operation_tags(document: dict, prefix: str) -> set[str]:
         ("__private__ViewSet", "Private"),
         ("Profile", "Profile"),
         ("ViewSet", ""),
+        ("MeritevČasaViewSet", "Meritev časa"),
+        ("URLČasaViewSet", "URL časa"),
+        ("ŽivalŠkodaViewSet", "Žival škoda"),
+        ("ΣigmaΘetaViewSet", "Σigma θeta"),
         # known limits: a mixed-case word or a plural acronym does not split as written
         ("IPv4AddressViewSet", "I pv4 address"),
         ("OAuthTokenViewSet", "O auth token"),
