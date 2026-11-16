@@ -55,8 +55,8 @@ class Settings:
         self.viewsets_tag_name: Callable[[type], str] | None = None
         """
         Returns the OpenAPI tag of a viewset class. The tag is used for the class's routes, the tag description and
-        the muxws registration; an empty string gives no tag. None uses the class name without its `ViewSet`
-        suffix. Read at decoration time.
+        the muxws registration; an empty string gives no tag. None uses `default_tag_name(cls)`
+        (`fastapi_viewsets.decorators`). Read at decoration time.
         """
         self.viewsets_security_scheme: SecurityBase | None = None
         """

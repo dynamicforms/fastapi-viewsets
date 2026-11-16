@@ -6,7 +6,7 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.16.0] - 2026-11-15
+## [0.16.0] - 2026-11-16
 
 ### Added
 
@@ -67,11 +67,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ChangeEvents.op_for(execution)`: the hook that returns the `op` an execution publishes, `None` for none.
 - `settings.viewsets_tag_name`: a function that returns the OpenAPI tag of a viewset class. Its result tags the
   viewset's routes and those of its sub-viewsets, the operations of `/schema`, the tag description and the muxws
-  registration. `None` (the default) keeps the class name without its `ViewSet` suffix. Read when a viewset is
-  decorated.
+  registration. `None` (the default) uses `default_tag_name(cls)`. Read when a viewset is decorated.
+- `default_tag_name(cls)` in `fastapi_viewsets.decorators`: the default OpenAPI tag of a viewset class. A
+  `settings.viewsets_tag_name` function returns it for the classes it does not name.
 
 ### Changed
 
+- **Breaking:** the default OpenAPI tag of a viewset is its class name without the `ViewSet` suffix split into words,
+  with acronyms kept and the other words lowercased: `ProfileEmailViewSet` → `Profile email`, `APIKeyViewSet` →
+  `API key`. It was the class name without the suffix (`ProfileEmail`). The new tag names the OpenAPI operation groups
+  and their tag descriptions, the Swagger UI deep-link anchors of their operations, the tags of `/schema`
+  and of the muxws registration, and the keys `apply_viewset_tags(extra=...)` matches. Single-word names (`Item`) are
+  unchanged.
 - **Breaking:** the in-memory sort and cursor compare strings case-insensitively, with digit runs by value
   (`apple, Banana, Cesta, cesta, file2, file10`). They compared by code point. Strings compare by the code points of
   their `str.casefold()` form, so accented letters sort after `z`. Ordering in the database is unchanged.

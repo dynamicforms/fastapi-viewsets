@@ -658,15 +658,34 @@ def _route(
     return cls
 
 
+_WORD_BOUNDARY = re.compile(r"_+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def default_tag_name(cls: type) -> str:
+    """
+    The default OpenAPI tag of `cls`'s routes: the class name without its `ViewSet` suffix, split into words.
+
+    Underscores separate words, as do a lowercase letter or digit followed by an uppercase letter and the last
+    uppercase letter of an uppercase run followed by a lowercase letter. A word with at least two uppercase letters
+    is kept as is, every other word is lowercased. The words are joined with spaces and the first character is
+    uppercased: `ProfileEmailViewSet` -> `Profile email`, `APIKeyViewSet` -> `API key`. An empty remainder gives
+    an empty name.
+    """
+    name = cls.__name__.removesuffix("ViewSet")
+    words = [word for word in _WORD_BOUNDARY.split(name) if word]
+    words = [word if sum(char.isupper() for char in word) >= 2 else word.lower() for word in words]
+    text = " ".join(words)
+    return text[:1].upper() + text[1:]
+
+
 def _tag_name(cls: type) -> str:
     """
-    The OpenAPI tag of `cls`'s routes: `settings.viewsets_tag_name(cls)` when set, else the class name without its
-    `ViewSet` suffix. An empty name gives no tag.
+    The OpenAPI tag of `cls`'s routes: `settings.viewsets_tag_name(cls)` when set, else `default_tag_name(cls)`.
+    An empty name gives no tag.
     """
     if settings.viewsets_tag_name is not None:
         return settings.viewsets_tag_name(cls)
-    name = cls.__name__
-    return name[: -len("ViewSet")] if name.endswith("ViewSet") else name
+    return default_tag_name(cls)
 
 
 @dataclass(frozen=True)

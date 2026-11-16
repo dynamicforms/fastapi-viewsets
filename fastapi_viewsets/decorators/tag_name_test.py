@@ -14,7 +14,7 @@ from ..conf import settings
 from ..endpoint_docs import apply_viewset_tags, viewset_tags
 from ..mixins import ViewSetMixin
 from ..mux_ws import registry
-from . import route_viewset, ViewSetRouter
+from . import default_tag_name, route_viewset, ViewSetRouter
 
 
 class Row(BaseModel):
@@ -70,10 +70,45 @@ def operation_tags(document: dict, prefix: str) -> set[str]:
     }
 
 
-def test_without_the_setting_the_tag_is_the_class_name_without_viewset():
+@pytest.mark.parametrize(
+    ("class_name", "tag"),
+    [
+        ("ProfileEmailViewSet", "Profile email"),
+        ("APIKeyViewSet", "API key"),
+        ("HTTPSProxyURLViewSet", "HTTPS proxy URL"),
+        ("ItemViewSet", "Item"),
+        ("MusicTrackViewSet", "Music track"),
+        ("SSLCertificateViewSet", "SSL certificate"),
+        ("URLViewSet", "URL"),
+        ("Item2DetailViewSet", "Item2 detail"),
+        ("X509CertViewSet", "X509 cert"),
+        ("profile_emailViewSet", "Profile email"),
+        ("API_KEYViewSet", "API KEY"),
+        ("__private__ViewSet", "Private"),
+        ("Profile", "Profile"),
+        ("ViewSet", ""),
+        # known limits: a mixed-case word or a plural acronym does not split as written
+        ("IPv4AddressViewSet", "I pv4 address"),
+        ("OAuthTokenViewSet", "O auth token"),
+        ("URLsViewSet", "UR ls"),
+    ],
+)
+def test_default_tag_name(class_name, tag):
+    assert default_tag_name(type(class_name, (), {})) == tag
+
+
+def test_without_the_setting_the_tag_is_the_default_tag_name():
     app, _cls = rows_app("/default-emails")
     document = TestClient(app).get("/openapi.json").json()
-    assert operation_tags(document, "/default-emails") == {"ProfileEmail"}
+    assert operation_tags(document, "/default-emails") == {"Profile email"}
+
+
+def test_the_setting_can_fall_back_to_the_default_tag_name():
+    names = {"ProfileEmailViewSet": "E-mail"}
+    settings.viewsets_tag_name = lambda cls: names.get(cls.__name__) or default_tag_name(cls)
+    app, _cls = rows_app("/fallback-emails")
+    document = TestClient(app).get("/openapi.json").json()
+    assert operation_tags(document, "/fallback-emails") == {"E-mail"}
 
 
 def test_every_consumer_of_the_tag_uses_the_name_the_setting_returns():
@@ -89,7 +124,7 @@ def test_every_consumer_of_the_tag_uses_the_name_the_setting_returns():
     # the tag description
     described = {tag["name"]: tag["description"] for tag in viewset_tags()}
     assert described["Profile Email"] == "The e-mail addresses of a profile."
-    assert "ProfileEmail" not in described
+    assert "Profile email" not in described
     app = apply_viewset_tags(app)
     root_tags = {tag["name"]: tag["description"] for tag in client.get("/openapi.json").json()["tags"]}
     assert root_tags["Profile Email"] == "The e-mail addresses of a profile."

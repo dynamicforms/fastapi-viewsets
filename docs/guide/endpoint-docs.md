@@ -35,7 +35,8 @@ apply_viewset_tags(app)
 ```
 
 Pass `extra=[{"name": ..., "description": ...}]` for groups the application owns itself; anything
-it defines overrides the viewset's docstring.
+it defines overrides the viewset's docstring. A viewset's group is named by its tag, `Music track` for
+`MusicTrackViewSet` (see [Automatic OpenAPI tags](./routers#automatic-openapi-tags)).
 
 ::: warning If you replace `app.openapi`
 `get_openapi(...)` does not read `app.openapi_tags` on its own. Pass `tags=app.openapi_tags`

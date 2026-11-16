@@ -134,7 +134,7 @@ class MusicTrackViewSet(
     list_shapes = ("cursor", "plain", "paginated")
     """All three, to show the choice in Swagger and ReDoc; one shape keeps the schema to a single model."""
 
-    @__router.get("count", tags=["MusicTrack"], summary="Return the total number of tracks")
+    @__router.get("count", tags=["Music track"], summary="Return the total number of tracks")
     async def count(self, context: Context) -> int:
         return len(await self.perform_list(context))
 

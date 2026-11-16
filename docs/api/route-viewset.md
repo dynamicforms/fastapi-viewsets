@@ -85,8 +85,8 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
   operation in it carries `x-viewset-action`, the name of the viewset method that
   serves it (`top_rated` for `GET {base_path}/top-rated`); the FE schema check matches a custom endpoint to a ViewSet
   method by it.
-- Tags the class's routes with `settings.viewsets_tag_name(cls)`, or, when that setting is `None`, with the class name
-  without its `ViewSet` suffix, and records the class's own docstring as that tag's description. The same tag goes to
+- Tags the class's routes with `settings.viewsets_tag_name(cls)`, or, when that setting is `None`, with
+  [`default_tag_name(cls)`](#default-tag-name), and records the class's own docstring as that tag's description. The same tag goes to
   the operations of `/schema` and to the muxws registration. An empty tag name gives the routes no tag.
 - Gives every route a dependency that runs each configured `Middleware`'s `depends()` before the request body is parsed,
   plus `settings.viewsets_security_scheme` when one is set. That dependency is the last entry of the route's
@@ -126,6 +126,31 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
   around the call of the viewset method, inside the command middleware chain, unless the action is a
   `celery_viewset_client` method, which executes in the worker.
 - Stores metadata on the class as `cls.__viewset_metadata__`.
+
+## default_tag_name
+
+```python
+from fastapi_viewsets.decorators import default_tag_name
+
+def default_tag_name(cls: type) -> str
+```
+
+Returns the default OpenAPI tag of a viewset class. The `ViewSet` suffix is removed and the remainder is split into
+words: underscores separate words, as do a lowercase letter or digit followed by an uppercase letter and the last
+uppercase letter of an uppercase run followed by a lowercase letter. A word with at least two uppercase letters is kept
+as it is, every other word is lowercased. The words are joined with single spaces and the first character is
+uppercased. An empty remainder returns `""`.
+
+| Class | Result |
+|-------|--------|
+| `ProfileEmailViewSet` | `"Profile email"` |
+| `APIKeyViewSet` | `"API key"` |
+| `HTTPSProxyURLViewSet` | `"HTTPS proxy URL"` |
+| `IPv4AddressViewSet` | `"I pv4 address"` |
+| `ViewSet` | `""` |
+
+A `settings.viewsets_tag_name` function returns it for the classes it does not name; see
+[Automatic OpenAPI tags](../guide/routers#automatic-openapi-tags).
 
 ## Lifecycle modes
 
