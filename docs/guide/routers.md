@@ -94,6 +94,7 @@ The decorator derives an OpenAPI tag from the class name with `default_tag_name(
 | `HTTPSProxyURLViewSet` | `HTTPS proxy URL` |
 | `IPv4AddressViewSet` | `I pv4 address` |
 | `OAuthTokenViewSet` | `O auth token` |
+| `URLsViewSet` | `UR ls` |
 
 A word that mixes cases within itself (`IPv4`, `OAuth`) or a plural acronym (`URLs`) is split at its case changes, as
 the last rows show.
