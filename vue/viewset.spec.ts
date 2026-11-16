@@ -309,6 +309,14 @@ describe('the type surface', () => {
     fetched.apply({ op: 'updated', changes: [{ pk: 1, record: { id: 1, label: 'one' } }] });
     // @ts-expect-error the pk is a number
     fetched.apply({ op: 'deleted', changes: [{ pk: '1' }] });
+    const listed = api.follow({
+      fetch: (pks) => api.list({ ids: pks.map(String) } as never),
+      onRows: (rows) => rows[0].name,
+      onLoadError() {},
+    });
+    void listed.rows?.[0].name;
+    // @ts-expect-error without read, the fetch function returns the list's rows
+    api.follow({ fetch: async (pks) => pks.map((id) => ({ id, label: '' })), onRows() {}, onLoadError() {} });
   }
 
   it('exposes the declared actions and nothing else, and types the pk from the model', () => {

@@ -101,7 +101,10 @@ export interface ViewSetFollow<T, K extends KeyType = KeyType> {
 /** `follow()` of a ViewSet with a `list` action: `read` defaults to `list()`. */
 export interface FollowList<T, K extends KeyType = KeyType> {
   follow(
-    options: Omit<FollowRowsOptions<T, K>, 'read' | 'fetch'> & { read?: () => Promise<T[]>; fetch?: boolean },
+    options: Omit<FollowRowsOptions<T, K>, 'read' | 'fetch'> & {
+      read?: () => Promise<T[]>;
+      fetch?: boolean | FetchRows<T, K>;
+    },
   ): ListFollower<T[], T, K>;
 }
 

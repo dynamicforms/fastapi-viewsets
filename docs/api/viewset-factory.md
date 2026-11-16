@@ -157,7 +157,8 @@ subscribes `basePath` to `records_changed` on the `events` client of the options
 
 Every class also has `follow(options)`, typed as `ViewSetFollow<T, PkType<T, PK>>`, which reads a
 list and keeps it current with `watch()`. With `list` in `declares`, its `read` option is optional
-and defaults to `list()`. See [`follow()`](./vue-mixins#follow).
+and defaults to `list()`, unless a `fetch` function returns rows of another type than `T`. See
+[`follow()`](./vue-mixins#follow).
 
 ## Inside the class body
 

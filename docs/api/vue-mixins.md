@@ -232,7 +232,10 @@ interface ViewSetFollow<T, K extends KeyType = KeyType> {
 /** Added to a ViewSet with a `list` action: `read` defaults to `list()`. */
 interface FollowList<T, K extends KeyType = KeyType> {
   follow(
-    options: Omit<FollowRowsOptions<T, K>, 'read' | 'fetch'> & { read?: () => Promise<T[]>; fetch?: boolean },
+    options: Omit<FollowRowsOptions<T, K>, 'read' | 'fetch'> & {
+      read?: () => Promise<T[]>;
+      fetch?: boolean | FetchRows<T, K>;
+    },
   ): ListFollower<T[], T, K>;
 }
 
@@ -268,7 +271,7 @@ interface ListFollower<R, Row, K extends KeyType = KeyType> {
 
 | Option | Meaning |
 |--------|---------|
-| `read` | Reads the rows. Default `list()` on a ViewSet that declares `list`; required otherwise, and when `R` is not `Row[]` |
+| `read` | Reads the rows. Default `list()` on a ViewSet that declares `list`, also with a `fetch` function that returns `T` rows; required otherwise: without `list`, when `R` is not `Row[]`, and with a `fetch` function that returns rows of another type |
 | `apply` | Returns `rows` with `change` applied, or `'reload'` to read the rows anew. Must return the same rows for a change `rows` already contain. For `Row[]` the default is `'reload'` for a `created` or `updated` change with an item without `record`, otherwise [`applyChanges(rows, change, pkFieldName)`](./vue-events#records-changed); required when `R` is not `Row[]` |
 | `onRows` | Required. Called with the rows of the latest read once the changes held during it are applied, after each change applied later, and after `apply()` |
 | `onLoadError` | Required. Called with the error of a failed read of the latest generation, a `read` that throws included |
