@@ -180,9 +180,10 @@ a description, and `/schema` answers the named schema `OpenAPIDocument`
 
 ## Across the whole schema: post-processing
 
-The names of the tag groups come from `settings.viewsets_tag_name`; see
-[Automatic OpenAPI tags](./routers#automatic-openapi-tags). The setting names a viewset's group
-everywhere it appears: the operations, the tag description, `/schema` and the muxws registration.
+The names of the tag groups come from `default_tag_name(cls)`, or from `settings.viewsets_tag_name`
+when it is set; see [Automatic OpenAPI tags](./routers#automatic-openapi-tags). The name applies to a
+viewset's group everywhere it appears: the operations, the tag description, `/schema` and the muxws
+registration.
 
 For edits that apply to the document as a whole — adding the same error responses everywhere,
 appending the same link to every operation — replace `app.openapi`:
@@ -213,7 +214,7 @@ cannot execute requests — links to the page that can. See `demo/backend/openap
 
 | scope | mechanism |
 |---|---|
-| what a group of endpoints is called | `settings.viewsets_tag_name` |
+| what a group of endpoints is called | `settings.viewsets_tag_name` (default `default_tag_name`) |
 | what a group of endpoints is | the viewset's docstring |
 | what one endpoint does | `@endpoint_docs` |
 | the document as a whole | post-processing `app.openapi` |
