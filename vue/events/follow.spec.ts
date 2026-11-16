@@ -514,6 +514,23 @@ describe('followRecords: extend()', () => {
     expect(h.onLoadError).toHaveBeenCalledWith(error);
     expect(f.rows).toEqual({ pages: [[item(5)]] });
   });
+
+  it('does nothing while the read of a new generation is in flight, also when the rows are kept', async () => {
+    const h = harness();
+    const f = h.follow();
+    await h.answer();
+    h.reads[0].resolve([item(0), item(1), item(2), item(3)]);
+    await f.settled();
+    void f.reload();
+    const page = vi.fn(() => Promise.resolve([item(4), item(5)]));
+    await f.extend(page, (rows, more) => [...rows, ...more]);
+    expect(page).not.toHaveBeenCalled();
+    h.reads[1].resolve([item(0), item(1)]);
+    await f.settled();
+    expect(f.rows).toEqual([item(0), item(1)]);
+    await f.extend(page, (rows, more) => [...rows, ...more]);
+    expect(f.rows).toEqual([item(0), item(1), item(4), item(5)]);
+  });
 });
 
 describe('followRecords: settled() and onLoading', () => {

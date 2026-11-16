@@ -68,7 +68,8 @@ export interface ListFollower<R, Row, K extends KeyType = KeyType> {
   reload(options?: { reset?: boolean }): Promise<void>;
   /**
    * A further read of the current generation, e.g. the next page: `merge` combines its value into `rows`
-   * when it lands while the generation is current. Does nothing while `rows` is `undefined`. Never rejects.
+   * when it lands while the generation is current. Does nothing while `rows` is `undefined` and while the
+   * read that started the generation is in flight. Never rejects.
    */
   extend<V>(read: () => Promise<V>, merge: (rows: R, value: V) => R): Promise<void>;
   /** Resolves once no read of the current generation is in flight and the held changes are applied. */
@@ -142,6 +143,8 @@ export function followRecords<R, Row, K extends KeyType>(
   let generation = 0;
   /** The reads of the current generation in flight. */
   let inFlight = 0;
+  /** The read that started the current generation is in flight; `rows` may be of an older one. */
+  let baseInFlight = false;
   /** The changes that arrived while a read of the current generation was in flight, in arrival order. */
   let held: RecordsChanged<Row, K>[] = [];
   let rows: R | undefined;
@@ -200,8 +203,17 @@ export function followRecords<R, Row, K extends KeyType>(
     for (const resolve of resolved) resolve();
   };
 
-  /** Runs `fn` as a read of generation `run`; `land` takes its value while the generation is current. */
-  const runRead = <V>(run: number, fn: () => Promise<V>, land: (value: V) => void, background: boolean) => {
+  /**
+   * Runs `fn` as a read of generation `run`; `land` takes its value while the generation is current.
+   * `base` marks the read that started the generation.
+   */
+  const runRead = <V>(
+    run: number,
+    fn: () => Promise<V>,
+    land: (value: V) => void,
+    background: boolean,
+    base = false,
+  ) => {
     inFlight += 1;
     setLoading(true);
     let promise: Promise<V>;
@@ -229,6 +241,7 @@ export function followRecords<R, Row, K extends KeyType>(
         .then(() => {
           pending.delete(resolve);
           if (current(run)) {
+            if (base) baseInFlight = false;
             inFlight -= 1;
             if (inFlight === 0) drain();
           }
@@ -243,6 +256,7 @@ export function followRecords<R, Row, K extends KeyType>(
     generation += 1;
     inFlight = 0;
     held = [];
+    baseInFlight = true;
     if (reset) {
       rows = undefined;
       fresh = false;
@@ -255,6 +269,7 @@ export function followRecords<R, Row, K extends KeyType>(
         fresh = true;
       },
       background,
+      true,
     );
   };
 
@@ -296,7 +311,7 @@ export function followRecords<R, Row, K extends KeyType>(
       return reloadFrom(false, reloadOptions?.reset === true);
     },
     extend<V>(fn: () => Promise<V>, merge: (rows: R, value: V) => R) {
-      if (phase === 'closed' || rows === undefined) return Promise.resolve();
+      if (phase === 'closed' || rows === undefined || baseInFlight) return Promise.resolve();
       return runRead(
         generation,
         fn,

@@ -487,7 +487,8 @@ change twice in quick succession, the page of the first change is dropped if it 
 A list that reads its next page when the user scrolls to the end reads the first page with `read`,
 and each further page with `extend(read, merge)`. A page read by `extend()` belongs to the current
 generation: changes that arrive during it are held, and after `reload()` the page is dropped when it
-lands. `rows` gives the offset of the next page:
+lands. `extend()` does nothing while the read that started the generation is in flight, also when
+`rows` still holds the rows of the previous generation, so `rows` gives the offset of the next page:
 
 ```ts
 import { applyChanges } from '@dynamicforms/fastapi-viewsets';
@@ -512,14 +513,28 @@ const follower = pages.follow<Pages>({
   fetch: true,
 });
 
+let more: Promise<void> | undefined;
+
 function loadMore(): Promise<void> {
-  return follower.extend(
-    () => pages.listPage({ offset: follower.rows!.rows.length, limit }),
-    (state, page) => ({ rows: [...state.rows, ...page.results], total: page.count ?? state.total }),
-  );
+  const state = follower.rows;
+  if (state === undefined || state.rows.length >= state.total) return Promise.resolve();
+  more ??= follower
+    .extend(
+      () => pages.listPage({ offset: state.rows.length, limit }),
+      (current, page) => {
+        const read = new Set(current.rows.map((row) => String(row.id)));
+        const added = page.results.filter((row) => !read.has(String(row.id)));
+        return { rows: [...current.rows, ...added], total: page.count ?? current.total };
+      },
+    )
+    .finally(() => {
+      more = undefined;
+    });
+  return more;
 }
 ```
 
 `apply` changes only the rows already read, and lowers `total` by the rows a `deleted` change
 removed, so a change applied a second time leaves both as they are. A `created` change reads the
-first page anew.
+first page anew. `loadMore()` reads one page at a time, and `merge` skips a row already read, such as
+a row that moved to a later page.
