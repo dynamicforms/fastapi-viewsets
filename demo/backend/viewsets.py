@@ -120,7 +120,7 @@ class MusicTrackViewSet(
     """
     The music library, held in memory.
 
-    Served from a Python dict by `CollectionViewSet`; **Music Track Db** exposes the same API over SQLite.
+    Served from a Python dict by `CollectionViewSet`; **Music track db** exposes the same API over SQLite.
     Listing is cursor-paged by default; send `X-List-Shape: plain` or `paginated` for the other shapes.
     Filters such as `year__gte`, `title__icontains` and `genres__overlaps` are declared, not coded.
     """
