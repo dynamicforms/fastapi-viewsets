@@ -1,5 +1,5 @@
 /**
- * The frontend side of the events API: the event client, `watch()` support for ViewSets and the
+ * The frontend side of the events API: the event client, `watch()` and `follow()` support for ViewSets and the
  * polling ladder the client schedules its polls with.
  */
 
@@ -27,6 +27,8 @@ export {
 
 export type { Change, FetchRows, KeyOf, RecordOf, RecordsChanged, ViewSetWatch, WatchOptions } from './changes';
 export { applyChanges, RECORDS_CHANGED } from './changes';
+
+export type { FollowList, FollowOptions, FollowRowsOptions, ListFollower, ViewSetFollow } from './follow';
 
 export type { Draw, PollLadderState, PollSettings } from './poll';
 export { DEFAULT_POLL_SETTINGS, jitterMultiplier, ladderInterval, nextDelay, PollLadder } from './poll';

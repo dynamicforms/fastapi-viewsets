@@ -9,6 +9,7 @@
  */
 
 import type { ViewSetWatch } from './events/changes';
+import type { FollowListOf, ViewSetFollow } from './events/follow';
 import type { ActionName, ActionSurface, DefaultSortOf, KeyType, LookupItem } from './mixins';
 import { MuxwsProxyImpl, type MuxwsProxyOptions } from './muxws-proxy';
 import { FACTORY_BUILT, type ProxyBaseOptions, ViewSetInternals, type ViewSetMixinDeclaration } from './proxy-base';
@@ -41,8 +42,9 @@ type FactoryDeclares<D extends readonly ViewSetMixinClass[]> = { readonly [FACTO
 /**
  * What the factory hands back: a class to extend. `[]` builds a ViewSet with custom endpoints only.
  * A list annotated `ViewSetMixinClass[]` names no action; this type then resolves to a string stating
- * the fix, which TS2507 prints. `pkFieldName`, `watch()` and, with a list action, `defaultSort()` are
- * added on top of the narrow `ViewSetInternals`.
+ * the fix, which TS2507 prints. `pkFieldName`, `watch()`, `follow()` and, with a list action,
+ * `defaultSort()` are added on top of the narrow `ViewSetInternals`; with `list`, `follow()` reads by
+ * `list()` by default.
  */
 export type ViewSetClass<
   T,
@@ -62,7 +64,9 @@ type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[
   ): ViewSetInternals &
     ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>, L> &
     DefaultSortOf<ActionsOf<D[number]>> &
-    ViewSetWatch<T, PkType<T, PK>> & { readonly pkFieldName: PK };
+    ViewSetWatch<T, PkType<T, PK>> &
+    ViewSetFollow<T, PkType<T, PK>> &
+    FollowListOf<ActionsOf<D[number]>, T, PkType<T, PK>> & { readonly pkFieldName: PK };
   readonly declares: FactoryDeclares<D>;
 };
 

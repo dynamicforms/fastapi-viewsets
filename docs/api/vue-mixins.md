@@ -211,6 +211,104 @@ factory-built ViewSet as `ViewSetWatch<T, PkType<T, PK>>` ([`PkType`](./viewset-
 Applying the changes to a list of rows is [`applyChanges`](./vue-events#records-changed); the guide
 is [`watch()` on a ViewSet](../guide/vue-events#watch-on-a-viewset).
 
+## follow()
+
+Every ViewSet that has [`watch()`](#watch) has `follow(options)`: it reads a list, keeps it current
+with `watch()`, and drops reads that a newer one superseded. The guide is
+[`follow()` on a ViewSet](../guide/vue-events#follow-on-a-viewset).
+
+```ts
+interface ViewSetFollow<T, K extends KeyType = KeyType> {
+  follow<Row>(
+    options: Omit<FollowRowsOptions<NoInfer<Row>, K>, 'fetch'> & { fetch: FetchRows<Row, K> },
+  ): ListFollower<Row[], Row, K>;
+  follow<R, Row>(
+    options: Omit<FollowOptions<R, NoInfer<Row>, K>, 'fetch'> & { fetch: FetchRows<Row, K> },
+  ): ListFollower<R, Row, K>;
+  follow(options: FollowRowsOptions<T, K> & { fetch?: boolean }): ListFollower<T[], T, K>;
+  follow<R>(options: FollowOptions<R, T, K> & { fetch?: boolean }): ListFollower<R, T, K>;
+}
+
+/** Added to a ViewSet with a `list` action: `read` defaults to `list()`. */
+interface FollowList<T, K extends KeyType = KeyType> {
+  follow(
+    options: Omit<FollowRowsOptions<T, K>, 'read' | 'fetch'> & { read?: () => Promise<T[]>; fetch?: boolean },
+  ): ListFollower<T[], T, K>;
+}
+
+interface FollowOptions<R, Row, K extends KeyType = KeyType> {
+  read: () => Promise<R>;
+  apply: (rows: R, change: RecordsChanged<Row, K>) => R | 'reload';
+  onRows: (rows: R) => void;
+  onLoadError: (error: unknown) => void;
+  onLoading?: (loading: boolean) => void;
+  onError?: (error: unknown) => void;
+  fetch?: boolean | FetchRows<Row, K>;
+  topic?: string;
+}
+
+type FollowRowsOptions<Row, K extends KeyType = KeyType> = Omit<FollowOptions<Row[], Row, K>, 'read' | 'apply'> & {
+  read: () => Promise<Row[]>;
+  apply?: FollowOptions<Row[], Row, K>['apply'];
+};
+
+interface ListFollower<R, Row, K extends KeyType = KeyType> {
+  readonly ready: Promise<void>;
+  readonly rows: R | undefined;
+  reload(options?: { reset?: boolean }): Promise<void>;
+  extend<V>(read: () => Promise<V>, merge: (rows: R, value: V) => R): Promise<void>;
+  settled(): Promise<void>;
+  apply(change: RecordsChanged<Row, K>): void;
+  close(): void;
+}
+```
+
+`R` is the type of the rows: `Row[]` for a list, or any other value, e.g. a page with its total.
+`Row` is the record type the changes carry: `T`, or the rows a `fetch` function returns.
+
+| Option | Meaning |
+|--------|---------|
+| `read` | Reads the rows. Default `list()` on a ViewSet that declares `list`; required otherwise, and when `R` is not `Row[]` |
+| `apply` | Returns `rows` with `change` applied, or `'reload'` to read the rows anew. Must return the same rows for a change `rows` already contain. For `Row[]` the default is `'reload'` for a `created` or `updated` change with an item without `record`, otherwise [`applyChanges(rows, change, pkFieldName)`](./vue-events#records-changed); required when `R` is not `Row[]` |
+| `onRows` | Required. Called with the rows of the latest read once the changes held during it are applied, after each change applied later, and after `apply()` |
+| `onLoadError` | Required. Called with the error of a failed read of the latest generation, a `read` that throws included |
+| `onLoading` | Called with `true` when a read starts while none of the current generation is in flight, and with `false` once none is in flight and the held changes are applied |
+| `onError` | Passed to `watch()`: called with the error of a refused subscription and of a failed `fetch` |
+| `fetch` | Passed to `watch()`. Default `false` |
+| `topic` | Passed to `watch()` |
+
+| Member | Meaning |
+|--------|---------|
+| `ready` | Resolves once the first read has settled, with rows or a load error, and the changes held during it are applied; when applying them starts a new read, once that read has. Resolves at `close()`. Never rejects |
+| `rows` | The rows of the latest read with the changes applied; `undefined` before it, and after `reload({ reset: true })` until its read lands |
+| `reload(options?)` | Starts a new generation and reads the rows. `reset: true` sets `rows` to `undefined` until the read lands. The subscription is kept. Resolves once the read has settled, or at `close()`; never rejects |
+| `extend(read, merge)` | A further read of the current generation: when it lands while the generation is current, `rows` becomes `merge(rows, value)`; a failure calls `onLoadError`. Does nothing while `rows` is `undefined`. Never rejects |
+| `settled()` | Resolves once no read of the current generation is in flight and the held changes are applied, also for a read started while it waits; before the first read, once that read has settled |
+| `apply(change)` | Applies the caller's own change to `rows` and calls `onRows`, also while a read is in flight; `'reload'` from `apply` starts a read. Does nothing while `rows` is `undefined` |
+| `close()` | Unsubscribes, drops the reads in flight and the held changes, and resolves `ready`, `settled()` and the pending `reload()` and `extend()` promises. No option is called afterwards; `reload`, `extend` and `settled` resolve at once and `apply` does nothing |
+
+The order of reads and changes:
+
+- `follow()` calls `watch()` at once. The first read starts once the subscription's `ready`
+  settles, resolved or rejected; a change that arrives before it starts is dropped. A `reload()`
+  called before that is the first read.
+- A change that arrives while a read of the current generation is in flight, `reload()` or
+  `extend()`, is held. Once none is in flight, the held changes are applied in arrival order and
+  `onRows` is called once. An `apply` that returns `'reload'` ends this, drops the remaining held
+  changes and starts a read.
+- A change that arrives with no read in flight is applied at once. A change that arrives while
+  `rows` is `undefined` and no read is in flight, after a failed first read, is dropped.
+- `reload()` drops the held changes. A read of an older generation calls nothing when it lands.
+- A failed read keeps `rows`; the held changes are applied to them.
+- A resync of the topic calls `reload()`. Its read, and that of an `apply` that returned `'reload'`
+  while applying a held change, are issued inside [`inBackground`](./idempotency#frontend).
+- What `apply`, `merge` or an option throws is rethrown in a microtask; following continues. A
+  `reload()` or `close()` called from inside an option ends the step that called it.
+
+`follow()` throws what [`watch()`](#watch) throws. `RestProxy<M>` and `MuxwsProxy<M>` carry it as
+`ViewSetFollow<RecordOf<M>, KeyOf<M>>`, with `FollowList` when `M` has `list`; a factory-built
+ViewSet as `ViewSetFollow<T, PkType<T, PK>>`, with `FollowList` when `declares` names `list`.
+
 ## Errors
 
 ```ts

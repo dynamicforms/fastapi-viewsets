@@ -386,6 +386,8 @@ ViewSet's `topic` option, else its `basePath`). The backend's
 Pks compare by their string form, so `7` and `'7'` name one row. Applying one change twice gives
 the same rows as applying it once.
 
+[`follow()`](./vue-mixins#follow) applies the changes with `applyChanges` by default.
+
 ## Polling ladder
 
 The cadence of the client's polls, as pure functions: nothing here touches a timer, a clock or a

@@ -365,71 +365,161 @@ const watching = members.watch({
 One list call per event reads the rows the way the list endpoint shows them, under the same
 `get_queryset` scoping; a row the list no longer shows to the reader is removed.
 
-### A grid that holds every row
+## `follow()` on a ViewSet
 
 `applyChanges(rows, change, pkFieldName)` returns `rows` with the change applied: `deleted` removes
 the rows with the changed pks, `created` and `updated` replace the row with the same pk or append
-the record. A grid that holds the whole data set and sorts and filters it locally needs nothing
-else:
+the record. Keeping a list current with `watch()` and `applyChanges` also needs an order between the
+reads and the changes; every ViewSet has `follow(options)`, which provides it:
+
+- It subscribes with `watch()` at once and starts the first read once the subscription is answered,
+  also when it is refused (the refusal goes to `onError`), so every change is either in the read's
+  answer or arrives as an event. A change that arrives before the first read starts is dropped, as
+  the read contains it. While the subscription is not answered, no read starts; `reload()` starts one
+  at any time.
+- A change that arrives while a read is in flight is held and applied once no read is in flight, in
+  the order the changes arrived. `onRows` is then called once, with the read's rows and the held
+  changes applied.
+- A change that arrives with no read in flight is applied at once and calls `onRows`.
+- Each `reload()` starts a new generation: the changes held so far are dropped, as the new read
+  contains them, and a read of an older generation is dropped when it lands, with its rows or its
+  error. Only the latest read calls `onRows` or `onLoadError`.
+- A resync of the topic calls `reload()`.
+- `settled()` resolves once no read of the current generation is in flight and the held changes are
+  applied, also for a read started while it waited; `ready` resolves once the first read has settled.
+- `close()` unsubscribes; after it, no callback is called, also for a read in flight.
+
+A change that arrives during a read may or may not be in the read's answer, so `apply`, which
+applies a change to the rows, must return the same rows for a change the rows already contain.
+`applyChanges` does. For rows held as an array, `apply` defaults to `applyChanges` by the ViewSet's
+`pkFieldName`, and to `'reload'` for a `created` or `updated` change without `record`: without
+`fetch`, every such change reads the list anew. With `fetch`, the record is read when the change is
+applied, so the rows end with the latest record whatever the list read returned. A read started
+by a resync or by an `apply` that returned `'reload'` is issued inside `inBackground`, as `fetch` is;
+the first read and the caller's `reload()` are not.
+
+`read` defaults to `list()` on a ViewSet that declares `list`; other ViewSets pass it. The options
+and the follower's members are in [`follow()`](../api/vue-mixins#follow).
+
+### A grid that holds every row
+
+A grid that holds the whole data set and sorts and filters it locally:
 
 ```ts
-import { onMounted, onUnmounted, ref } from 'vue';
-import { applyChanges, BulkViewSetMixin, muxwsViewSet } from '@dynamicforms/fastapi-viewsets';
+import { onUnmounted, shallowRef } from 'vue';
+import { BulkViewSetMixin, muxwsViewSet } from '@dynamicforms/fastapi-viewsets';
 
 class TrackViewSet extends muxwsViewSet<Track>()('id', [BulkViewSetMixin]) {}
 
 const tracks = new TrackViewSet({ basePath: '/api/music', peer });
-const rows = ref<Track[]>([]);
+const rows = shallowRef<Track[]>([]);
+const loading = shallowRef(false);
 
-let loaded: Promise<void> = Promise.resolve();
-function reload(): Promise<void> {
-  loaded = tracks.list().then((all) => { rows.value = all; });
-  return loaded;
-}
-
-const watching = tracks.watch({
+const follower = tracks.follow({
   fetch: true,
-  onChange(change) {
-    void loaded.then(() => { rows.value = applyChanges(rows.value, change, tracks.pkFieldName); });
-  },
-  onResync() { void reload(); },
+  onRows(all) { rows.value = all; },
+  onLoadError(error) { console.warn('tracks: read failed', error); },
+  onLoading(value) { loading.value = value; },
 });
-
-onMounted(async () => {
-  await watching.ready;
-  await reload();
-});
-onUnmounted(() => watching.unsubscribe());
+onUnmounted(() => follower.close());
 ```
 
-The subscription is made before the first read, so no change published between the read and the
-subscription is lost. `onChange` applies each change after the load in flight, so a load answered
-after the event does not overwrite it; a change the load already contains is applied a second time
-with the same result.
+A change the grid makes itself is shown at once with `apply()`, before its event arrives:
+
+```ts
+const saved = await tracks.update(track.id, track);
+follower.apply({ op: 'updated', changes: [{ pk: saved.id, record: saved }] });
+```
+
+`apply()` does nothing while no rows have been read. During a read it changes the current rows,
+and the read's answer replaces them; the change's own event, held during the read, is applied after
+it. A change of the caller is not held itself.
+
+When the rows belong to a [scope](#scoped-topics) and the scope changes, the application moves the
+subscription with `events.refresh()` and reads the rows of the new scope with
+`reload({ reset: true })`, which sets `rows` to `undefined` until the read lands, so that `apply()`
+does not change the rows of the old scope:
+
+```ts
+watch(() => session.orgSlug, () => {
+  events.refresh?.();
+  void follower.reload({ reset: true });
+});
+```
+
+An answer under another key resyncs the topic, which starts one more read; it supersedes the first.
 
 ### A grid that pages on the server
 
-A grid that shows one page of a sorted, filtered server list cannot place a change itself. It
-re-reads its page on every event and on every resync:
+A grid that shows one page of a sorted, filtered server list cannot place a change itself. Its rows
+are the page, and every change reads the page anew:
 
 ```ts
-import { muxwsViewSet, PaginatedListMixin, type PageParams, type PaginatedList } from '@dynamicforms/fastapi-viewsets';
+import { onUnmounted, ref, shallowRef, watch } from 'vue';
+import {
+  muxwsViewSet,
+  PaginatedListMixin,
+  type PageParams,
+  type PaginatedList,
+} from '@dynamicforms/fastapi-viewsets';
 
 class TrackPageViewSet extends muxwsViewSet<Track>()('id', [PaginatedListMixin]) {}
 
 const pages = new TrackPageViewSet({ basePath: '/api/music', peer });
-const page = ref<PaginatedList<Track> | null>(null);
+const page = shallowRef<PaginatedList<Track> | null>(null);
 const params = ref<PageParams>({ offset: 0, limit: 50, sort: 'title:asc' });
 
-async function loadPage(): Promise<void> {
-  page.value = await pages.listPage(params.value);
-}
-
-const watching = pages.watch({
-  onChange() { void loadPage(); },
-  onResync() { void loadPage(); },
+const follower = pages.follow({
+  read: () => pages.listPage(params.value),
+  apply: () => 'reload',
+  onRows(rows) { page.value = rows; },
+  onLoadError(error) { console.warn('tracks: read failed', error); },
 });
-onUnmounted(() => watching.unsubscribe());
+watch(params, () => void follower.reload(), { deep: true });
+onUnmounted(() => follower.close());
 ```
 
-`fetch` is left `false` here: the re-read of the page carries the records.
+`fetch` is left `false` here: the re-read of the page carries the records. When the parameters
+change twice in quick succession, the page of the first change is dropped if it lands last.
+
+### Loading pages on demand
+
+A list that reads its next page when the user scrolls to the end reads the first page with `read`,
+and each further page with `extend(read, merge)`. A page read by `extend()` belongs to the current
+generation: changes that arrive during it are held, and after `reload()` the page is dropped when it
+lands. `rows` gives the offset of the next page:
+
+```ts
+import { applyChanges } from '@dynamicforms/fastapi-viewsets';
+
+interface Pages { rows: Track[]; total: number }
+const limit = 30;
+
+const follower = pages.follow<Pages>({
+  read: async () => {
+    const page = await pages.listPage({ offset: 0, limit });
+    return { rows: page.results, total: page.count ?? 0 };
+  },
+  apply(state, change) {
+    if (change.op === 'created') return 'reload';
+    const read = new Set(state.rows.map((row) => String(row.id)));
+    const changes = change.changes.filter((item) => read.has(String(item.pk)));
+    const rows = applyChanges(state.rows, { ...change, changes }, pages.pkFieldName);
+    return { rows, total: state.total - (state.rows.length - rows.length) };
+  },
+  onRows(state) { list.value = state; },
+  onLoadError(error) { console.warn('tracks: read failed', error); },
+  fetch: true,
+});
+
+function loadMore(): Promise<void> {
+  return follower.extend(
+    () => pages.listPage({ offset: follower.rows!.rows.length, limit }),
+    (state, page) => ({ rows: [...state.rows, ...page.results], total: page.count ?? state.total }),
+  );
+}
+```
+
+`apply` changes only the rows already read, and lowers `total` by the rows a `deleted` change
+removed, so a change applied a second time leaves both as they are. A `created` change reads the
+first page anew.

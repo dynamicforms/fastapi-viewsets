@@ -7,6 +7,7 @@
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { EventClient } from './events/client';
 import { muxwsViewSet, restViewSet, type ViewSetMixinClass } from './viewset';
 
 import {
@@ -273,8 +274,45 @@ describe('the type surface', () => {
     void tags.defaultSort;
   }
 
+  class CursorApi extends restViewSet<Item>()('id', [CursorListMixin]) {}
+
+  interface ItemRow {
+    id: number;
+    label: string;
+  }
+
+  function _follow(api: ItemApi, cursor: CursorApi) {
+    const all = api.follow({ topic: '/t', onRows: (rows) => rows[0].name, onLoadError() {} });
+    void all.rows?.[0].name;
+    // @ts-expect-error onRows receives Item[]
+    api.follow({ onRows: (rows: string[]) => rows, onLoadError() {} });
+    // @ts-expect-error without a list action follow() needs read
+    cursor.follow({ onRows() {}, onLoadError() {} });
+    cursor.follow({
+      read: async () => (await cursor.listCursor()).results,
+      onRows: (rows) => rows[0].name,
+      onLoadError() {},
+    });
+    const paged = cursor.follow({
+      read: () => cursor.listCursor(),
+      apply: () => 'reload',
+      onRows: (page) => page.results[0].name,
+      onLoadError() {},
+    });
+    void paged.rows?.next;
+    const fetched = api.follow({
+      read: async (): Promise<ItemRow[]> => [],
+      fetch: async (pks) => pks.map((id) => ({ id, label: String(id) })),
+      onRows: (rows) => rows[0].label,
+      onLoadError() {},
+    });
+    fetched.apply({ op: 'updated', changes: [{ pk: 1, record: { id: 1, label: 'one' } }] });
+    // @ts-expect-error the pk is a number
+    fetched.apply({ op: 'deleted', changes: [{ pk: '1' }] });
+  }
+
   it('exposes the declared actions and nothing else, and types the pk from the model', () => {
-    expect([_surface, _pkType, _lookupItemType, _defaultSortOnlyWithAList]).toHaveLength(4);
+    expect([_surface, _pkType, _lookupItemType, _defaultSortOnlyWithAList, _follow]).toHaveLength(5);
   });
 
   it('lets a declared action be overridden with a method', () => {
@@ -499,5 +537,34 @@ describe('a ViewSet with custom endpoints only', () => {
     // @ts-expect-error the annotation erases the mixins: the factory cannot tell which actions there are
     class Hidden extends restViewSet<Report>()('id', declares) {}
     expect(Hidden).toBeDefined();
+  });
+});
+
+describe('follow() on a factory-built ViewSet', () => {
+  it('reads with list() by default and subscribes the topic option', async () => {
+    class ItemApi extends restViewSet<Item>()('id', [ReadOnlyViewSetMixin]) {}
+    const topics: string[] = [];
+    const events: EventClient = {
+      basePath: '/events',
+      subscribe(topic) {
+        topics.push(topic);
+        return { ready: Promise.resolve(), unsubscribe: vi.fn() };
+      },
+      close: vi.fn(),
+    };
+    const get = vi.fn(() => Promise.resolve({ data: MOCK_ITEMS }));
+    const api = new ItemApi({
+      basePath: '/items',
+      validateSchema: false,
+      axiosInstance: { get } as unknown as typeof axios,
+      events,
+    });
+    const onRows = vi.fn();
+    const follower = api.follow({ topic: '/api/items', onRows, onLoadError: vi.fn() });
+    await follower.ready;
+    expect(topics).toEqual(['/api/items']);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(onRows).toHaveBeenCalledWith(MOCK_ITEMS);
+    follower.close();
   });
 });

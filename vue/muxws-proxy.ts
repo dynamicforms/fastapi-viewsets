@@ -15,6 +15,7 @@ import {
 } from './call';
 import type { KeyOf, RecordOf, ViewSetWatch } from './events/changes';
 import { type EventClient, eventsOf } from './events/client';
+import type { FollowListOf, ViewSetFollow } from './events/follow';
 import type { DefaultSortOf, KeyType } from './mixins';
 import { readHeaders, readStatus } from './muxws-reply';
 import {
@@ -60,7 +61,11 @@ export interface MuxwsPeerLike {
 export type MuxwsPeerSource = MuxwsPeerLike | (() => MuxwsPeerLike | Promise<MuxwsPeerLike>);
 
 /** `M` with every method returning a `ViewSetCall`, plus `watch()`, and `defaultSort()` when `M` lists. */
-export type MuxwsProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>> & DefaultSortOf<keyof M>;
+export type MuxwsProxy<M> = ViewSetCalls<M> &
+  ViewSetWatch<RecordOf<M>, KeyOf<M>> &
+  ViewSetFollow<RecordOf<M>, KeyOf<M>> &
+  FollowListOf<keyof M, RecordOf<M>, KeyOf<M>> &
+  DefaultSortOf<keyof M>;
 
 type ViewSetClass = abstract new (...args: any[]) => any;
 

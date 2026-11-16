@@ -155,6 +155,10 @@ subscribes `basePath` to `records_changed` on the `events` client of the options
 `fetch: true` it calls `retrieve(pk)` of the proxy underneath, whether or not `declares` names
 `RetrieveMixin`. See [`watch()`](./vue-mixins#watch).
 
+Every class also has `follow(options)`, typed as `ViewSetFollow<T, PkType<T, PK>>`, which reads a
+list and keeps it current with `watch()`. With `list` in `declares`, its `read` option is optional
+and defaults to `list()`. See [`follow()`](./vue-mixins#follow).
+
 ## Inside the class body
 
 A ViewSet's own methods reach `this.request()` and `this.basePath`, inherited from `ViewSetInternals`:

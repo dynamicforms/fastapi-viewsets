@@ -214,9 +214,10 @@ onUnmounted(() => watching.unsubscribe());
 ```
 
 A `restViewSet` needs an event client in its options, `new ItemApi({ basePath: '/items', events })`;
-a `muxwsViewSet` uses the one created for its peer. The event client, the options and complete
-grid examples are in [Events (Vue)](./vue-events#watch-on-a-viewset); the reference is
-[`watch()`](../api/vue-mixins#watch).
+a `muxwsViewSet` uses the one created for its peer. The event client and the options are in
+[Events (Vue)](./vue-events#watch-on-a-viewset); the reference is [`watch()`](../api/vue-mixins#watch).
+`follow()` reads a list and keeps it current on top of `watch()`; the grid examples are in
+[`follow()` on a ViewSet](./vue-events#follow-on-a-viewset).
 
 ### Default ordering: defaultSort()
 

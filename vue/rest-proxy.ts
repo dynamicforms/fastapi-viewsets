@@ -18,6 +18,7 @@ import {
 } from './call';
 import { isApiErrorBody } from './errors';
 import type { KeyOf, RecordOf, ViewSetWatch } from './events/changes';
+import type { FollowListOf, ViewSetFollow } from './events/follow';
 import type { DefaultSortOf, KeyType } from './mixins';
 import {
   FACTORY_BUILT,
@@ -53,7 +54,11 @@ declare const FACTORY_BUILT_REJECTION: 'route_rest cannot take a factory-built c
  * The mixin interface `M` the caller declares, with every method returning a `ViewSetCall`, plus
  * `watch()`, and `defaultSort()` when `M` has a list action.
  */
-export type RestProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>> & DefaultSortOf<keyof M>;
+export type RestProxy<M> = ViewSetCalls<M> &
+  ViewSetWatch<RecordOf<M>, KeyOf<M>> &
+  ViewSetFollow<RecordOf<M>, KeyOf<M>> &
+  FollowListOf<keyof M, RecordOf<M>, KeyOf<M>> &
+  DefaultSortOf<keyof M>;
 
 /** Options of a ViewSet proxy over HTTP. */
 export interface RestProxyOptions extends ProxyBaseOptions {

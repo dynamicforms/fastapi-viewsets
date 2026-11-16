@@ -108,5 +108,7 @@ export {
 export type { Change, FetchRows, KeyOf, RecordOf, RecordsChanged, ViewSetWatch, WatchOptions } from './events';
 export { applyChanges, RECORDS_CHANGED } from './events';
 
+export type { FollowList, FollowOptions, FollowRowsOptions, ListFollower, ViewSetFollow } from './events';
+
 export type { Draw, PollLadderState, PollSettings } from './events';
 export { DEFAULT_POLL_SETTINGS, jitterMultiplier, ladderInterval, nextDelay, PollLadder } from './events';

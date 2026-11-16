@@ -10,6 +10,7 @@
 import { bindCallKeys, type RepeatOptions, type ViewSetActionCall, type ViewSetCall } from './call';
 import { type ViewSetWatch, watchRecords, type WatchOptions } from './events/changes';
 import type { EventClient, EventSubscription } from './events/client';
+import { type FollowAnyOptions, followRecords, type ListFollower, type ViewSetFollow } from './events/follow';
 import type {
   ActionName,
   BulkDestroyReturnData,
@@ -264,7 +265,8 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
     PaginatedListMixin<T>,
     LookupMixin,
     ListDefaultSort,
-    ViewSetWatch<T, K>
+    ViewSetWatch<T, K>,
+    ViewSetFollow<T, K>
 {
   /**
    * The mixins this ViewSet is composed of, e.g. `[ReadOnlyViewSetMixin, LookupMixin]`. Left undefined,
@@ -489,6 +491,18 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
         retrieve: (pk) => this.retrieve(pk),
       },
       client,
+      options,
+    );
+  }
+
+  /**
+   * Follows the rows `options.read` reads, by default `list()`, with `watch()`: subscribes before the
+   * first read, holds a change that arrives during a read and applies it after, and drops a read a
+   * newer one superseded.
+   */
+  follow<R, Row>(options: FollowAnyOptions<R, Row, K>): ListFollower<R, Row, K> {
+    return followRecords<R, Row, K>(
+      { pkFieldName: this.pkFieldName, watch: (watchOptions) => this.watch(watchOptions), list: () => this.list() },
       options,
     );
   }

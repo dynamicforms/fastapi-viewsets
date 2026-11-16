@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- TS: `follow(options)` on every ViewSet: reads a list and keeps it current with `watch()`. It subscribes before the
+  first read, holds the changes that arrive during a read and applies them after it, and drops a read a newer one
+  superseded; `apply` (default `applyChanges()`, or a new read for a change without `record`) and `read` (default
+  `list()` with a `list` action) take any rows type. The follower has `ready`, `rows`, `reload({ reset })`,
+  `extend(read, merge)`, `settled()`, `apply(change)` and `close()`. Types `FollowOptions`, `FollowRowsOptions`,
+  `ListFollower`, `ViewSetFollow`, `FollowList`.
 - `FIELD_ERROR_PARAMS` in `fastapi_viewsets` (and `fastapi_viewsets.error_responses`): the field error codes the
   package declares, each with the names of its params.
 - `ERROR_NAMESPACE_DJANGO` (`"django"`) in `fastapi_viewsets`: the namespace of Django's validation codes in field
