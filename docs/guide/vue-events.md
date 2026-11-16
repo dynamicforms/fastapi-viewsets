@@ -431,14 +431,15 @@ const saved = await tracks.update(track.id, track);
 follower.apply({ op: 'updated', changes: [{ pk: saved.id, record: saved }] });
 ```
 
-`apply()` does nothing while no rows have been read. During a read it changes the current rows,
-and the read's answer replaces them; the change's own event, held during the read, is applied after
-it. A change of the caller is not held itself.
+`apply()` does nothing while no rows have been read and no read is in flight. During a read it
+changes the current rows and also holds the change, which is applied again to the read's answer, as
+the read may have been answered before the change was made. This holds also when the change's event
+never arrives.
 
 When the rows belong to a [scope](#scoped-topics) and the scope changes, the application moves the
 subscription with `events.refresh()` and reads the rows of the new scope with
-`reload({ reset: true })`, which sets `rows` to `undefined` until the read lands, so that `apply()`
-does not change the rows of the old scope:
+`reload({ reset: true })`, which sets `rows` to `undefined` until the read lands; `apply()` then
+holds the change for the rows of the new scope and does not change the rows of the old one:
 
 ```ts
 watch(() => session.orgSlug, () => {

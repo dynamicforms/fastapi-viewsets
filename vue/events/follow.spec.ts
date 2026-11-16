@@ -340,7 +340,7 @@ describe('followRecords: changes', () => {
 });
 
 describe('followRecords: apply()', () => {
-  it("applies the caller's change during a read; the read's answer replaces it, its event follows", async () => {
+  it("applies the caller's change during a read, and again after the read's answer with its event", async () => {
     const h = harness();
     const f = h.follow();
     await h.answer();
@@ -354,6 +354,26 @@ describe('followRecords: apply()', () => {
     h.reads[1].resolve([item(1)]);
     await f.settled();
     expect(f.rows).toEqual([item(1, 'own')]);
+  });
+
+  it('is held during a read and applied again after it, with no event and with a reset read', async () => {
+    const h = harness();
+    const f = h.follow();
+    await h.refuse(new Error('refused'));
+    h.reads[0].resolve([item(1, 'old')]);
+    await f.settled();
+    void f.reload();
+    f.apply(updated(item(1, 'mine')));
+    h.reads[1].resolve([item(1, 'old')]);
+    await f.settled();
+    expect(f.rows).toEqual([item(1, 'mine')]);
+    expect(h.onRows.mock.calls.map(([rows]) => rows[0].name)).toEqual(['old', 'mine', 'mine']);
+
+    void f.reload({ reset: true });
+    f.apply(updated(item(1, 'again')));
+    h.reads[2].resolve([item(1, 'mine')]);
+    await f.settled();
+    expect(f.rows).toEqual([item(1, 'again')]);
   });
 
   it('is ignored without rows, and a returned reload starts a new read', async () => {
@@ -371,7 +391,7 @@ describe('followRecords: apply()', () => {
     expect(h.list).toHaveBeenCalledTimes(2);
   });
 
-  it('reload({ reset: true }) clears rows and apply() is ignored until the read lands', async () => {
+  it('reload({ reset: true }) clears rows; apply() then only holds the change until the read lands', async () => {
     const h = harness();
     const f = h.follow();
     await h.answer();
@@ -381,10 +401,12 @@ describe('followRecords: apply()', () => {
     void f.reload({ reset: true });
     expect(f.rows).toBeUndefined();
     f.apply(updated(item(1, 'x')));
+    expect(f.rows).toBeUndefined();
     expect(h.onRows).toHaveBeenCalledTimes(calls);
     h.reads[1].resolve([item(7)]);
     await f.settled();
-    expect(f.rows).toEqual([item(7)]);
+    expect(f.rows).toEqual([item(7), item(1, 'x')]);
+    expect(h.onRows).toHaveBeenCalledTimes(calls + 1);
   });
 });
 

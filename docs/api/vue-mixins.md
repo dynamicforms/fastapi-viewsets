@@ -284,7 +284,7 @@ interface ListFollower<R, Row, K extends KeyType = KeyType> {
 | `reload(options?)` | Starts a new generation and reads the rows. `reset: true` sets `rows` to `undefined` until the read lands. The subscription is kept. Resolves once the read has settled, or at `close()`; never rejects |
 | `extend(read, merge)` | A further read of the current generation: when it lands while the generation is current, `rows` becomes `merge(rows, value)`; a failure calls `onLoadError`. Does nothing while `rows` is `undefined` and while the read that started the current generation is in flight, as `rows` may then be of an older generation. Never rejects |
 | `settled()` | Resolves once no read of the current generation is in flight and the held changes are applied, also for a read started while it waits; before the first read, once that read has settled |
-| `apply(change)` | Applies the caller's own change to `rows` and calls `onRows`, also while a read is in flight; `'reload'` from `apply` starts a read. Does nothing while `rows` is `undefined` |
+| `apply(change)` | Applies the caller's own change to `rows` and calls `onRows`; `'reload'` from `apply` starts a read. While a read of the current generation is in flight, the change is also held and applied again after the read; while `rows` is `undefined`, it is only held. Does nothing while `rows` is `undefined` and no read is in flight |
 | `close()` | Unsubscribes, drops the reads in flight and the held changes, and resolves `ready`, `settled()` and the pending `reload()` and `extend()` promises. No option is called afterwards; `reload`, `extend` and `settled` resolve at once and `apply` does nothing |
 
 The order of reads and changes:

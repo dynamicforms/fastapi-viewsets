@@ -74,7 +74,11 @@ export interface ListFollower<R, Row, K extends KeyType = KeyType> {
   extend<V>(read: () => Promise<V>, merge: (rows: R, value: V) => R): Promise<void>;
   /** Resolves once no read of the current generation is in flight and the held changes are applied. */
   settled(): Promise<void>;
-  /** Applies the caller's own change to `rows` at once; does nothing while `rows` is `undefined`. */
+  /**
+   * Applies the caller's own change to `rows` at once and calls `onRows`. During a read the change is
+   * also held and applied again after the read; while `rows` is `undefined` it is only held then. Does
+   * nothing while `rows` is `undefined` and no read is in flight.
+   */
   apply(change: RecordsChanged<Row, K>): void;
   /** Unsubscribes and drops the reads in flight and the held changes; no callback is called afterwards. */
   close(): void;
@@ -327,7 +331,13 @@ export function followRecords<R, Row, K extends KeyType>(
       return new Promise<void>((resolve) => waiters.push(resolve));
     },
     apply(change: RecordsChanged<Row, K>) {
-      if (phase === 'closed' || rows === undefined) return;
+      if (phase === 'closed') return;
+      // Held too, so that the answer of a read in flight does not replace it.
+      if (inFlight > 0 && rows === undefined) {
+        held.push(change);
+        return;
+      }
+      if (rows === undefined) return;
       const run = generation;
       let next: R | 'reload';
       try {
@@ -341,6 +351,7 @@ export function followRecords<R, Row, K extends KeyType>(
         void reloadFrom(false);
         return;
       }
+      if (inFlight > 0) held.push(change);
       rows = next;
       fresh = false;
       invoke(options.onRows, next);
