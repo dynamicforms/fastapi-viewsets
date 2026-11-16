@@ -62,7 +62,8 @@ export interface ListFollower<R, Row, K extends KeyType = KeyType> {
   readonly rows: R | undefined;
   /**
    * Starts a new generation: drops the held changes and the reads in flight, and reads the rows.
-   * `reset` sets `rows` to `undefined` until the read lands. Resolves once the read has settled, or at
+   * `reset` sets `rows` to `undefined` until the read lands. Before the subscription is answered, it
+   * starts no read and returns the first read's promise. Resolves once the read has settled, or at
    * `close()`. Never rejects.
    */
   reload(options?: { reset?: boolean }): Promise<void>;
@@ -159,6 +160,11 @@ export function followRecords<R, Row, K extends KeyType>(
   let waiters: (() => void)[] = [];
   /** The resolvers of the `reload()` and `extend()` promises whose read is in flight. */
   const pending = new Set<() => void>();
+  /** Settles with the first read, or at `close()`; what `reload()` returns while subscribing. */
+  let firstResolve!: (read: Promise<void>) => void;
+  const first = new Promise<void>((resolve) => {
+    firstResolve = resolve;
+  });
   let readyResolve!: () => void;
   const ready = new Promise<void>((resolve) => {
     readyResolve = resolve;
@@ -302,7 +308,7 @@ export function followRecords<R, Row, K extends KeyType>(
   });
 
   const start = (): void => {
-    if (phase === 'subscribing') void reloadFrom(false);
+    if (phase === 'subscribing') firstResolve(reloadFrom(false));
   };
   void subscription.ready.then(start, start);
 
@@ -312,6 +318,8 @@ export function followRecords<R, Row, K extends KeyType>(
       return rows;
     },
     reload(reloadOptions?: { reset?: boolean }) {
+      // Before the subscription is answered `rows` is `undefined`, and the first read is still to come.
+      if (phase === 'subscribing') return first;
       return reloadFrom(false, reloadOptions?.reset === true);
     },
     extend<V>(fn: () => Promise<V>, merge: (rows: R, value: V) => R) {
@@ -363,6 +371,7 @@ export function followRecords<R, Row, K extends KeyType>(
       inFlight = 0;
       held = [];
       subscription.unsubscribe();
+      firstResolve(Promise.resolve());
       readyResolve();
       const resolved = [...waiters, ...pending];
       waiters = [];

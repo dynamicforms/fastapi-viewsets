@@ -375,8 +375,8 @@ reads and the changes; every ViewSet has `follow(options)`, which provides it:
 - It subscribes with `watch()` at once and starts the first read once the subscription is answered,
   also when it is refused (the refusal goes to `onError`), so every change is either in the read's
   answer or arrives as an event. A change that arrives before the first read starts is dropped, as
-  the read contains it. While the subscription is not answered, no read starts; `reload()` starts one
-  at any time.
+  the read contains it. While the subscription is not answered, no read starts, also on `reload()`,
+  which then returns the first read's promise.
 - A change that arrives while a read is in flight is held and applied once no read is in flight, in
   the order the changes arrived. `onRows` is then called once, with the read's rows and the held
   changes applied.

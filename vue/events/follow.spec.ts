@@ -160,16 +160,31 @@ describe('followRecords: subscription and first read', () => {
     expect(f.rows).toBeUndefined();
   });
 
-  it('a reload() before the subscription is answered is the first read', async () => {
+  it('a reload() before the subscription is answered reads once it is answered, as the first read', async () => {
     const h = harness();
     const f = h.follow();
-    void f.reload();
-    expect(h.list).toHaveBeenCalledTimes(1);
+    let reloaded = false;
+    void f.reload({ reset: true }).then(() => (reloaded = true));
+    await flush();
+    expect(h.list).not.toHaveBeenCalled();
     await h.answer();
     expect(h.list).toHaveBeenCalledTimes(1);
+    expect(reloaded).toBe(false);
     h.reads[0].resolve([item(1)]);
     await f.ready;
+    await flush();
+    expect(reloaded).toBe(true);
     expect(f.rows).toEqual([item(1)]);
+  });
+
+  it('a reload() before the subscription is answered resolves at close()', async () => {
+    const h = harness();
+    const f = h.follow();
+    const reloaded = f.reload();
+    f.close();
+    await reloaded;
+    await h.answer();
+    expect(h.list).not.toHaveBeenCalled();
   });
 });
 

@@ -281,7 +281,7 @@ interface ListFollower<R, Row, K extends KeyType = KeyType> {
 |--------|---------|
 | `ready` | Resolves once the first read has settled, with rows or a load error, and the changes held during it are applied; when applying them starts a new read, once that read has. Resolves at `close()`. Never rejects |
 | `rows` | The rows of the latest read with the changes applied; `undefined` before it, and after `reload({ reset: true })` until its read lands |
-| `reload(options?)` | Starts a new generation and reads the rows. `reset: true` sets `rows` to `undefined` until the read lands. The subscription is kept. Resolves once the read has settled, or at `close()`; never rejects |
+| `reload(options?)` | Starts a new generation and reads the rows. `reset: true` sets `rows` to `undefined` until the read lands. The subscription is kept. Before the subscription is answered, it starts no read and resolves once the first read has settled. Resolves once the read has settled, or at `close()`; never rejects |
 | `extend(read, merge)` | A further read of the current generation: when it lands while the generation is current, `rows` becomes `merge(rows, value)`; a failure calls `onLoadError`. Does nothing while `rows` is `undefined` and while the read that started the current generation is in flight, as `rows` may then be of an older generation. Never rejects |
 | `settled()` | Resolves once no read of the current generation is in flight and the held changes are applied, also for a read started while it waits; before the first read, once that read has settled |
 | `apply(change)` | Applies the caller's own change to `rows` and calls `onRows`; `'reload'` from `apply` starts a read. While a read of the current generation is in flight, the change is also held and applied again after the read; while `rows` is `undefined`, it is only held. Does nothing while `rows` is `undefined` and no read is in flight |
@@ -291,7 +291,7 @@ The order of reads and changes:
 
 - `follow()` calls `watch()` at once. The first read starts once the subscription's `ready`
   settles, resolved or rejected; a change that arrives before it starts is dropped. A `reload()`
-  called before that is the first read.
+  called before that starts no read and resolves with the first read.
 - A change that arrives while a read of the current generation is in flight, `reload()` or
   `extend()`, is held. Once none is in flight, the held changes are applied in arrival order and
   `onRows` is called once. An `apply` that returns `'reload'` ends this, drops the remaining held
