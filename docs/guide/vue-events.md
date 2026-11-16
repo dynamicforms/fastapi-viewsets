@@ -373,9 +373,10 @@ the record. Keeping a list current with `watch()` and `applyChanges` also needs 
 reads and the changes; every ViewSet has `follow(options)`, which provides it:
 
 - It subscribes with `watch()` at once and starts the first read once the subscription is answered,
-  also when it is refused (the refusal goes to `onError`), so every change is either in the read's
-  answer or arrives as an event. A change that arrives before the first read starts is dropped, as
-  the read contains it. While the subscription is not answered, no read starts, also on `reload()`,
+  so every change is either in the read's answer or arrives as an event. A change that arrives
+  before the first read starts is dropped, as the read contains it. A refused subscription also
+  starts the first read, and the refusal goes to `onError` when it is given; no change arrives after
+  a refusal, so the rows then change only by the caller's `apply()` and `reload()`. While the subscription is not answered, no read starts, also on `reload()`,
   which then returns the first read's promise.
 - A change that arrives while a read is in flight is held and applied once no read is in flight, in
   the order the changes arrived. `onRows` is then called once, with the read's rows and the held
