@@ -133,6 +133,20 @@ function invoke<A>(callback: ((arg: A) => void) | undefined, arg: A): void {
   }
 }
 
+/**
+ * The default `apply` of `follow()` for rows held as an array: `'reload'` for a `created` or `updated`
+ * change with an item without `record`, otherwise `applyChanges(rows, change, pkFieldName)`.
+ */
+export function applyChangesOrReload<T, K extends KeyType = KeyType>(
+  rows: readonly T[],
+  change: RecordsChanged<T, K>,
+  pkFieldName: string,
+): T[] | 'reload' {
+  if (change.op !== 'deleted' && change.changes.some((item) => item.record === undefined || item.record === null))
+    return 'reload';
+  return applyChanges(rows, change, pkFieldName);
+}
+
 /** `follow()` of a ViewSet. */
 export function followRecords<R, Row, K extends KeyType>(
   target: FollowTarget<K>,
@@ -141,11 +155,8 @@ export function followRecords<R, Row, K extends KeyType>(
   const read = options.read ?? (() => target.list() as Promise<R>);
   const apply =
     options.apply ??
-    ((rows: R, change: RecordsChanged<Row, K>): R | 'reload' => {
-      if (change.op !== 'deleted' && change.changes.some((item) => item.record === undefined || item.record === null))
-        return 'reload';
-      return applyChanges(rows as Row[], change, target.pkFieldName) as R;
-    });
+    ((rows: R, change: RecordsChanged<Row, K>) =>
+      applyChangesOrReload(rows as Row[], change, target.pkFieldName) as R | 'reload');
 
   /** Each `reload()` and `close()` starts a new one; a read of an older one is dropped when it lands. */
   let generation = 0;

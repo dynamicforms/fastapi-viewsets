@@ -106,7 +106,7 @@ export {
 } from './events';
 
 export type { Change, FetchRows, KeyOf, RecordOf, RecordsChanged, ViewSetWatch, WatchOptions } from './events';
-export { applyChanges, RECORDS_CHANGED } from './events';
+export { applyChanges, applyChangesOrReload, RECORDS_CHANGED } from './events';
 
 export type { FollowList, FollowOptions, FollowRowsOptions, ListFollower, ViewSetFollow } from './events';
 

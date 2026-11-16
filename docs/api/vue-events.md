@@ -3,7 +3,7 @@
 ```ts
 import {
   attachEvents, createEventClient, DEFAULT_CHECK_INTERVAL_MS, defineEvent, eventsOf, handleEventStream,
-  applyChanges, RECORDS_CHANGED,
+  applyChanges, applyChangesOrReload, RECORDS_CHANGED,
   DEFAULT_POLL_SETTINGS, jitterMultiplier, ladderInterval, nextDelay, PollLadder,
 } from '@dynamicforms/fastapi-viewsets';
 ```
@@ -369,6 +369,12 @@ function applyChanges<T, K extends KeyType = KeyType>(
   change: RecordsChanged<T, K>,
   pkFieldName: string,
 ): T[];
+
+function applyChangesOrReload<T, K extends KeyType = KeyType>(
+  rows: readonly T[],
+  change: RecordsChanged<T, K>,
+  pkFieldName: string,
+): T[] | 'reload';
 ```
 
 `RECORDS_CHANGED` is `defineEvent('records_changed')`, the event
@@ -386,7 +392,10 @@ ViewSet's `topic` option, else its `basePath`). The backend's
 Pks compare by their string form, so `7` and `'7'` name one row. Applying one change twice gives
 the same rows as applying it once.
 
-[`follow()`](./vue-mixins#follow) applies the changes with `applyChanges` by default.
+`applyChangesOrReload(rows, change, pkFieldName)` returns `'reload'` for a `created` or `updated`
+change with an item without `record`, otherwise `applyChanges(rows, change, pkFieldName)`. It is
+the default `apply` of [`follow()`](./vue-mixins#follow) for rows held as an array; an `apply` of
+the application that wraps it, e.g. to observe each applied change, keeps that default.
 
 ## Polling ladder
 

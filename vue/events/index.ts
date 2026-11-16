@@ -28,6 +28,7 @@ export {
 export type { Change, FetchRows, KeyOf, RecordOf, RecordsChanged, ViewSetWatch, WatchOptions } from './changes';
 export { applyChanges, RECORDS_CHANGED } from './changes';
 
+export { applyChangesOrReload } from './follow';
 export type { FollowList, FollowOptions, FollowRowsOptions, ListFollower, ViewSetFollow } from './follow';
 
 export type { Draw, PollLadderState, PollSettings } from './poll';

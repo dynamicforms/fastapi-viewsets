@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   superseded; `apply` (default `applyChanges()`, or a new read for a change without `record`) and `read` (default
   `list()` with a `list` action) take any rows type. The follower has `ready`, `rows`, `reload({ reset })`,
   `extend(read, merge)`, `settled()`, `apply(change)` and `close()`. Types `FollowOptions`, `FollowRowsOptions`,
-  `ListFollower`, `ViewSetFollow`, `FollowList`.
+  `ListFollower`, `ViewSetFollow`, `FollowList`. `applyChangesOrReload(rows, change, pkFieldName)` is the default
+  `apply` for rows held as an array.
 - `FIELD_ERROR_PARAMS` in `fastapi_viewsets` (and `fastapi_viewsets.error_responses`): the field error codes the
   package declares, each with the names of its params.
 - `ERROR_NAMESPACE_DJANGO` (`"django"`) in `fastapi_viewsets`: the namespace of Django's validation codes in field

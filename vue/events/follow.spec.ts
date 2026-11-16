@@ -11,7 +11,7 @@ import { RestProxyImpl } from '../rest-proxy';
 
 import type { RecordsChanged, WatchOptions } from './changes';
 import type { EventClient, EventHandlers, EventSubscription } from './client';
-import { type FollowAnyOptions, followRecords } from './follow';
+import { applyChangesOrReload, type FollowAnyOptions, followRecords } from './follow';
 
 interface Item {
   id: number;
@@ -351,6 +351,24 @@ describe('followRecords: changes', () => {
     h.resync();
     await h.answer();
     expect(h.list).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('applyChangesOrReload', () => {
+  it("is the default apply: 'reload' for a change without record, applyChanges() otherwise", async () => {
+    const rows = [item(1), item(2)];
+    expect(applyChangesOrReload(rows, { op: 'updated', changes: [{ pk: 1 }] }, 'id')).toBe('reload');
+    expect(applyChangesOrReload(rows, { op: 'created', changes: [{ pk: 3, record: null }] }, 'id')).toBe('reload');
+    expect(applyChangesOrReload(rows, deleted(2), 'id')).toEqual([item(1)]);
+    expect(applyChangesOrReload(rows, updated(item(1, 'x')), 'id')).toEqual([item(1, 'x'), item(2)]);
+    const h = harness();
+    const wrapped = vi.fn(applyChangesOrReload<Item, number>);
+    const f = h.follow({ apply: (r, change) => wrapped(r, change, 'id') });
+    await h.answer();
+    h.reads[0].resolve([item(1)]);
+    await f.settled();
+    h.emit({ op: 'updated', changes: [{ pk: 1 }] });
+    expect(h.list).toHaveBeenCalledTimes(2);
   });
 });
 
