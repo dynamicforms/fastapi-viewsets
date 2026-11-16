@@ -584,7 +584,7 @@ never retried or delivered to the worker twice (see [Outcomes of a call](./route
 | [`Authorization`](./authorization) | Checks the action's authorization configuration |
 | [`RateLimiter`](./rate-limiter) | Fixed-window request counting |
 | [`Idempotency`](./idempotency) | Answers a repeated call with the outcome of the first one; placed first in the list |
-| [`ChangeEvents`](./events#changeevents) | Publishes one `RecordsChanged` event to the viewset's topic after each create, update and destroy action, from `execute()` |
+| [`ChangeEvents`](./events#changeevents) | Publishes one `RecordsChanged` event to the viewset's topic after each create, update and destroy action and each action configured with an `op`, from `execute()` |
 
 ## Known limitations
 

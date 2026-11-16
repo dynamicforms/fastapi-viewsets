@@ -301,9 +301,9 @@ ViewSet built on the same peer source passes the client in its `events` option.
 ## `watch()` on a ViewSet
 
 Every ViewSet has `watch(options)`. It subscribes the ViewSet's topic to `records_changed`, the
-event the backend's `ChangeEvents` middleware publishes after each create,
-update and destroy action, and returns the `EventSubscription`. The topic is `options.topic`, else
-the ViewSet's `topic` option, else its `basePath`. The topic is the backend path relative to the
+event the backend's `ChangeEvents` middleware publishes after each create, update and destroy action
+and each action configured with an `op`, and returns the `EventSubscription`. The topic is
+`options.topic`, else the ViewSet's `topic` option, else its `basePath`. The topic is the backend path relative to the
 application's `root_path`, without a Starlette `Mount` prefix, so a ViewSet whose `basePath` carries
 such a prefix sets `topic`:
 

@@ -663,7 +663,7 @@ drop_subscriptions(lambda s: s.scope == str(org_id) and s.context.raw().get("use
 | Scope change of a client (header, domain) | the client calls `refresh()`; it refreshes a topic itself on a push after its `headers()` changed; a poll's `scopes` that differ resync the topic and subscribe it again |
 | Client sends `@...` | 422, or poll `fastapi-viewsets.event_topic_invalid` |
 | Action configuration differs between the gate action and a write | the keys can differ, and the event goes to a store topic no subscriber holds; the resolver's inputs are set for both the gate action and the write actions |
-| Endpoint that writes outside the eight actions | publishes to `await write_topic(self, request, context)` (see [Custom endpoints](#custom-endpoints)) |
+| Endpoint that writes outside the eight actions, without an `op` | publishes to `await write_topic(self, request, context)` (see [Custom endpoints](#custom-endpoints)) |
 | Write outside a request | `await publish(scope_of(TagsViewSet).topic(key), RecordsChanged(...))` |
 | Unscoped viewsets, custom sources | the client topic is its own store topic; no gate run |
 
@@ -790,7 +790,7 @@ settings.viewsets_event_authorizers = [ViewsetTopics()]
 ```
 
 `ChangeEvents()` is a command middleware that publishes one `RecordsChanged` to a viewset's topic
-after each of its write actions:
+after each of its write actions, and after each action [configured with an `op`](#the-op-of-an-action):
 
 | `execution.action` | `op` | `changes` |
 |--------------------|------|-----------|
@@ -813,8 +813,8 @@ class RecordsChanged(Event):
     changes: list[Change]
 ```
 
-One event per action, however many records it touched. Any other action publishes nothing; an
-action that raises publishes nothing. A `ViewSetResult` returned by the action contributes its
+One event per action, however many records it touched. Any other action without an `op` publishes
+nothing; an action that raises publishes nothing. A `ViewSetResult` returned by the action contributes its
 `body`.
 
 A change carries the pk only. A frontend reads a changed record through the viewset's own
@@ -827,9 +827,10 @@ The pk of a returned record, a model or a dict, is read from the field named by
 `__viewset_metadata__["pk_field_name"]` (the `pk_field_name` argument of `route_viewset`); without
 it, by the viewset's `pk_field_name` attribute, else its `pk_field` attribute. A `CollectionViewSet`'s
 `pk_field_name` is its `pk_field`; a `DjangoORMViewSet`'s is the model's primary key. A viewset with none of
-the three raises `TypeError` naming the viewset, before a `created` or `updated` action runs. A record
-without that field raises `TypeError` after the action has run. The pk of a destroy is the `pk`
-argument, passed by keyword or by position, and needs no pk field.
+the three raises `TypeError` naming the viewset, before an action that reads the pk of a returned
+record runs. A record without that field raises `TypeError` after the action has run. The pk of
+`destroy`, `bulk_destroy` and a custom action that declares a `pk` parameter is the `pk` argument,
+passed by keyword or by position, whatever the `op`, and needs no pk field.
 
 ### Topic
 
@@ -884,16 +885,19 @@ For a class with [`@event_scope`](#scoped-topics):
 
 ### Configuration
 
-[`@action_configuration`](./action-configuration) on a viewset class or on a `perform_*` method:
+[`@action_configuration`](./action-configuration) on a viewset class, on an action method or on a
+`perform_*` method:
 
 | Key | Value | Effect |
 |-----|-------|--------|
 | `ChangeEvents` | `False` | No event for that viewset or action |
 | `ChangeEvents` | `True` or absent | The defaults |
 | `ChangeEvents` | `{"topic": "..."}` | A `str`, or a `Callable[[ActionExecution], str]`, the topic to publish to instead of the routed base path |
+| `ChangeEvents` | `{"op": "created" \| "updated" \| "deleted"}` | On an action method or its `perform_*` method only: the `op` the action publishes (below); may be combined with `topic` in the same dict |
 | `ChangeEvents()` | `None`, `True` or a dict as above | Injects an instance for that viewset or action only; the instance reads the value under its own key, else under its class |
 
-Any other value, or a dict with a key other than `topic`, raises `TypeError`. A class
+Any other value, a dict with a key other than `topic` and `op`, or an `op` of another value raises
+`TypeError`. A class
 key requires a `ChangeEvents` instance in `settings.viewsets_command_middleware`; without one it
 raises `ValueError` at request time (see
 [Configuring an existing middleware](./action-configuration#configuring-an-existing-middleware)).
@@ -901,17 +905,59 @@ An injected instance replaces the `ChangeEvents` of the global list for its view
 the action configuration has a `ChangeEvents` instance as a key, a `ChangeEvents` that is not one
 of its keys publishes nothing, so the action publishes one event.
 
+#### The op of an action
+
+An `op` makes an action publish one `RecordsChanged` with that `op`: a custom action that writes a
+record, or a built-in action whose write has another meaning, such as a `destroy` that resets a
+record to its defaults:
+
+```python
+@route_viewset(router, "/settings", pk_field_name="id")
+class SettingsViewSet(DjangoORMViewSet[int, Setting], RetrieveMixin, DestroyMixin):
+    __router = APIRouter()
+
+    @__router.post("{pk}/confirm")
+    @action_configuration({ChangeEvents: {"op": "updated"}})
+    async def confirm(self, context: Context, pk: int) -> Setting:
+        return await self.perform_confirm(context, pk)
+
+    @action_configuration({ChangeEvents: {"op": "updated"}})
+    async def perform_destroy(self, context: Context, pk: int) -> dict[int, None]:
+        await self.perform_reset(context, pk)
+        return {pk: None}
+```
+
+| Action | `changes` |
+|--------|-----------|
+| `destroy`, `bulk_destroy`, a custom action with a `pk` parameter | the `pk` argument, as in the table above |
+| any other | the pk of the returned record |
+
+- An `op` at class level, or in `settings.default_action_configuration`, raises `TypeError` on every
+  action of the class, before it runs. A `ByAction` value there is resolved for the action first; an
+  `op` it answers for that action raises too.
+- An `op` configured on a `perform_*` method applies to the actions whose method layer it is (see
+  [`@action_configuration`](./action-configuration)): on `perform_destroy` it applies to `destroy`,
+  not to `bulk_destroy`, which reads `bulk_destroy` and `perform_bulk_destroy`.
+- A custom action without a `pk` parameter publishes the pk of one returned record, a model or a dict.
+  One whose return annotation is a list, tuple or set type, alone or in a union such as
+  `list[Track] | None`, raises `TypeError` before it runs. A string annotation is evaluated first; one
+  that does not evaluate is checked as written. A custom action that returns a collection without such
+  an annotation raises `TypeError` after it has run, as a record without the pk field does. A custom
+  action that writes several records publishes itself ([Custom endpoints](#custom-endpoints)).
+
 ### Subclass hooks
 
 ```python
 class ChangeEvents(Middleware):
     def topic_for(self, execution: ActionExecution) -> str: ...
+    def op_for(self, execution: ActionExecution) -> Literal["created", "updated", "deleted"] | None: ...
     def changes_for(self, execution: ActionExecution, op: str, result: Any) -> list[Change]: ...
 ```
 
 `topic_for` returns the topic per the order above for a class without `@event_scope`; an override in
 a subclass is used for every class, scoped ones included, and may return a scoped topic.
-`changes_for` returns the changes of one execution per the table above.
+`op_for` returns the configured `op`, else the `op` of the table above; `None` publishes nothing.
+`changes_for` returns the changes of one execution per the tables above.
 
 ### Where it runs
 
@@ -938,19 +984,20 @@ from the store. With `Idempotency` in the chain, a repeat of the call with the s
 
 ### Custom endpoints
 
-An endpoint that writes outside the eight actions publishes itself, to the topic `write_topic`
-answers:
+A custom action that writes one record declares an [`op`](#the-op-of-an-action). An endpoint that
+writes several records in one call, such as a bulk action that takes a list of keys, or an event
+other than `RecordsChanged`, publishes itself, to the topic `write_topic` answers:
 
 ```python
 from fastapi_viewsets.events import Change, RecordsChanged, publish, write_topic
 
 
-@__router.post("/{pk}/archive")
-async def archive(self, request: Request, context: Context, pk: int) -> None:
-    await self.perform_archive(context, pk)
+@__router.post("archive")
+async def archive(self, request: Request, context: Context, keys: list[int]) -> None:
+    await self.perform_archive(context, keys)
     topic = await write_topic(self, request, context)
     if topic is not None:
-        await publish(topic, RecordsChanged(op="deleted", changes=[Change(pk=pk)]))
+        await publish(topic, RecordsChanged(op="deleted", changes=[Change(pk=pk) for pk in keys]))
 ```
 
 `await write_topic(viewset, request, context)`, `viewset` a class or an instance:

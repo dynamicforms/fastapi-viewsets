@@ -1,19 +1,21 @@
 """
 `ChangeEvents`, the command middleware that publishes one `RecordsChanged` (`created`, `updated` or
-`deleted`, with the affected pks) to a viewset's topic after each of its eight write actions, and
-`write_topic`, the topic of a call for an endpoint that publishes itself.
+`deleted`, with the affected pks) to a viewset's topic after each of its eight write actions and each
+action configured with an `op`, and `write_topic`, the topic of a call for an endpoint that publishes itself.
 """
 
 import inspect
 import logging
 
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Literal, TYPE_CHECKING
+from types import UnionType
+from typing import Any, get_args, get_origin, Literal, TYPE_CHECKING, Union
 
 from pydantic import BaseModel, ConfigDict
 
 from ..action_configuration import resolve_action_configuration
-from ..context import _Deferred, Context
+from ..conf import settings
+from ..context import _Deferred, _resolve_config_value, Context
 from ..decorators.lifecycle_runner import execution_translator
 from ..middleware import ActionExecution, Middleware, ViewSetResult
 from .event import Event
@@ -29,7 +31,9 @@ logger = logging.getLogger(__name__)
 TOPIC_CONTEXT_KEY = "fastapi_viewsets.events.topic"
 """The context key holding the routed base path of the call's viewset; it also reaches a `celery_viewset` worker."""
 
-_OPS: dict[str, Literal["created", "updated", "deleted"]] = {
+_Op = Literal["created", "updated", "deleted"]
+
+_OPS: dict[str, _Op] = {
     "create": "created",
     "bulk_create": "created",
     "update": "updated",
@@ -42,7 +46,13 @@ _OPS: dict[str, Literal["created", "updated", "deleted"]] = {
 
 _BULK_ACTIONS = frozenset({"bulk_create", "bulk_update", "bulk_partial_update", "bulk_destroy"})
 
-_OPTIONS = frozenset({"topic"})
+_OPTIONS = frozenset({"topic", "op"})
+
+_OP_VALUES = frozenset(get_args(_Op))
+
+_PK_ARGUMENT_ACTIONS = frozenset({"destroy", "bulk_destroy"})
+
+_COLLECTION_TYPES = (list, tuple, set, frozenset)
 
 
 class Change(BaseModel):
@@ -61,7 +71,7 @@ class RecordsChanged(Event):
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    op: Literal["created", "updated", "deleted"]
+    op: _Op
     """What the action did to the records."""
     changes: list[Change]
     """The records the action touched."""
@@ -97,13 +107,14 @@ def _path_below_root(scope: Mapping[str, Any]) -> str:
 
 class ChangeEvents(Middleware):
     """
-    Publishes one `RecordsChanged` after each successful write action of a viewset. `__call__` stores
-    the routed base path (and, for an `@event_scope` class, the deferred scope key) in the context in
-    the web process; `execute()` publishes where the action executes. The topic and pk field are
-    resolved before the action runs, so a missing one raises first; a failing publish propagates after
-    it has run. Configured per viewset or action with `{ChangeEvents: False | {"topic": ...}}`, or with
-    a `ChangeEvents()` instance as the key. `topic_for` and `changes_for` are the subclass hooks.
-    See docs/guide/events.md.
+    Publishes one `RecordsChanged` after each successful write action of a viewset and each action
+    configured with an `op`. `__call__` stores the routed base path (and, for an `@event_scope` class,
+    the deferred scope key) in the context in the web process; `execute()` publishes where the action
+    executes. The topic and pk field are resolved before the action runs, so a missing one raises first;
+    a failing publish propagates after it has run. Configured per viewset or action with
+    `{ChangeEvents: False | {"topic": ...}}`, per action also with `{"op": ...}`, or with a
+    `ChangeEvents()` instance as the key. `topic_for`, `op_for` and `changes_for` are the subclass
+    hooks. See docs/guide/events.md.
     """
 
     async def __call__(
@@ -145,13 +156,18 @@ class ChangeEvents(Middleware):
         if not isinstance(config, dict):
             raise TypeError(
                 f"{type(self).__name__} is configured with {config!r}; it takes False, True or a dict with "
-                f"the key 'topic'"
+                f"the keys 'topic' and 'op'"
             )
         unknown = set(config) - _OPTIONS
         if unknown:
             raise TypeError(
                 f"{type(self).__name__} is configured with unknown option(s) {', '.join(sorted(map(repr, unknown)))}; "
-                f"it takes 'topic' only"
+                f"it takes 'topic' and 'op' only"
+            )
+        if "op" in config and config["op"] not in _OP_VALUES:
+            raise TypeError(
+                f"{type(self).__name__} is configured with op {config['op']!r}; it takes 'created', 'updated' "
+                f"or 'deleted'"
             )
         return config
 
@@ -164,8 +180,34 @@ class ChangeEvents(Middleware):
         ]
         return bool(injected) and not any(key is self for key in injected)
 
+    def op_for(self, execution: ActionExecution) -> _Op | None:
+        """
+        The op an execution publishes, and the hook a subclass overrides: the configured `op`, else the
+        op of one of the eight write actions; None publishes nothing. Raises `TypeError` for an `op`
+        configured on a class or in `settings.default_action_configuration`.
+        """
+        self._reject_class_op(execution)
+        op = (self.options_for(execution.context) or {}).get("op")
+        return op if op is not None else _OPS.get(execution.action)
+
+    def _reject_class_op(self, execution: ActionExecution) -> None:
+        """Raises `TypeError` when an `op` for this instance is configured outside the action's methods."""
+        layers = (
+            settings.default_action_configuration,
+            getattr(execution.viewset_class, "__action_configuration__", {}),
+        )
+        for layer in layers:
+            for key in (self, type(self)):
+                value = _resolve_config_value(layer.get(key), execution.action)
+                if isinstance(value, dict) and "op" in value:
+                    raise TypeError(
+                        f"{execution.viewset_class.__qualname__}: the {type(self).__name__} option 'op' is "
+                        f"configured on the class or in default_action_configuration; it is accepted only in "
+                        f"@action_configuration on an action method or its perform_* method"
+                    )
+
     async def execute(self, execution: ActionExecution, call_next: Callable[[], Awaitable[Any]]) -> Any:
-        op = _OPS.get(execution.action)
+        op = self.op_for(execution)
         options = self.options_for(execution.context) if op is not None else None
         if options is None or self.replaced_for(execution):
             return await call_next()
@@ -180,8 +222,15 @@ class ChangeEvents(Middleware):
                 RecordsChanged.event_name,
             )
             return await call_next()
-        if op != "deleted":
+        if not _pk_from_argument(execution):
             self.pk_field_for(execution)
+            if execution.action not in _OPS and _returns_collection(execution):
+                raise TypeError(
+                    f"{execution.viewset_class.__qualname__}.{execution.action} is configured with op {op!r}, "
+                    f"declares no 'pk' parameter and returns a collection; {type(self).__name__} publishes one "
+                    f"record of a custom action, so a custom action that writes several records publishes "
+                    f"through write_topic"
+                )
         result = await call_next()
         await publish(topic, RecordsChanged(op=op, changes=self.changes_for(execution, op, result)))
         return result
@@ -247,14 +296,20 @@ class ChangeEvents(Middleware):
             )
         return name
 
-    def changes_for(self, execution: ActionExecution, op: str, result: Any) -> list[Change]:
+    def changes_for(
+        self,
+        execution: ActionExecution,
+        op: str,  # noqa: ARG002 - part of the hook signature, for overrides to use
+        result: Any,
+    ) -> list[Change]:
         """
-        For `deleted`, one change per pk of the `pk` argument; of a bulk, only the pks the result maps to None
-        (destroyed). Otherwise one per returned record. A `ViewSetResult` contributes its `body`.
+        For `destroy` and a custom action with a `pk` parameter, one change of the `pk` argument; for
+        `bulk_destroy`, one per pk of the `pk` argument that the result maps to None. Otherwise one per
+        returned record. A `ViewSetResult` contributes its `body`.
         """
         bulk = execution.action in _BULK_ACTIONS
         body = result.body if isinstance(result, ViewSetResult) else result
-        if op == "deleted":
+        if _pk_from_argument(execution):
             pk = _argument(execution, "pk")
             if not bulk:
                 return [Change(pk=pk)]
@@ -328,6 +383,34 @@ def _argument(execution: ActionExecution, name: str) -> Any:
     method = getattr(execution.viewset_class, execution.action)
     bound = inspect.signature(method).bind_partial(execution.viewset, *execution.args, **execution.kwargs)
     return bound.arguments[name]
+
+
+def _pk_from_argument(execution: ActionExecution) -> bool:
+    """Whether the changed pks are the `pk` argument: of `destroy`, `bulk_destroy` and a custom action with `pk`."""
+    if execution.action in _PK_ARGUMENT_ACTIONS:
+        return True
+    if execution.action in _OPS:
+        return False
+    method = getattr(execution.viewset_class, execution.action, None)
+    return method is not None and "pk" in inspect.signature(method).parameters
+
+
+def _returns_collection(execution: ActionExecution) -> bool:
+    """Whether the action's return annotation, or a member of its union, is a list, tuple or set type."""
+    method = getattr(execution.viewset_class, execution.action)
+    try:
+        annotation = inspect.signature(method, eval_str=True).return_annotation
+    except Exception:  # noqa: BLE001 - an annotation that does not evaluate is checked as written
+        annotation = inspect.signature(method).return_annotation
+    return _is_collection(annotation)
+
+
+def _is_collection(annotation: Any) -> bool:
+    origin = get_origin(annotation)
+    if origin is Union or origin is UnionType:
+        return any(_is_collection(member) for member in get_args(annotation) if member is not type(None))
+    origin = origin or annotation
+    return isinstance(origin, type) and issubclass(origin, _COLLECTION_TYPES)
 
 
 def _read_pk(execution: ActionExecution, record: Any, field: str) -> Any:
