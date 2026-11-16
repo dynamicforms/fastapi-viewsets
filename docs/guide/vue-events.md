@@ -376,8 +376,11 @@ reads and the changes; every ViewSet has `follow(options)`, which provides it:
   so every change is either in the read's answer or arrives as an event. A change that arrives
   before the first read starts is dropped, as the read contains it. A refused subscription also
   starts the first read, and the refusal goes to `onError` when it is given; no change arrives after
-  a refusal, so the rows then change only by the caller's `apply()` and `reload()`. While the subscription is not answered, no read starts, also on `reload()`,
-  which then returns the first read's promise.
+  a refusal, so the rows then change only by the caller's `apply()` and `reload()`.
+- While the subscription is not answered, no read starts, also on `reload()`, which then returns
+  the first read's promise, and `ready` is pending. An event client without `axios` does not answer
+  a subscription while its peer is not open, so until the peer opens `follow()` reads nothing, also
+  for a ViewSet that reads over REST.
 - A change that arrives while a read is in flight is held and applied once no read is in flight, in
   the order the changes arrived. `onRows` is then called once, with the read's rows and the held
   changes applied.
