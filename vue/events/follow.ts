@@ -22,7 +22,10 @@ export interface FollowOptions<R, Row, K extends KeyType = KeyType> {
    * for a change `rows` already contain: a change that arrives during a read may be in its answer.
    */
   apply: (rows: R, change: RecordsChanged<Row, K>) => R | 'reload';
-  /** Called with the rows of the latest read, with the changes applied, and after each change applied later. */
+  /**
+   * Called with the rows of the latest read once the held changes are applied, after an `extend()` read
+   * merged into them, after each change applied later, and after `apply()`.
+   */
   onRows: (rows: R) => void;
   /** Called with the error of a failed read of the latest generation. */
   onLoadError: (error: unknown) => void;

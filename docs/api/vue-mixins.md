@@ -273,7 +273,7 @@ interface ListFollower<R, Row, K extends KeyType = KeyType> {
 |--------|---------|
 | `read` | Reads the rows. Default `list()` on a ViewSet that declares `list`, also with a `fetch` function that returns `T` rows; required otherwise: without `list`, when `R` is not `Row[]`, and with a `fetch` function that returns rows of another type |
 | `apply` | Returns `rows` with `change` applied, or `'reload'` to read the rows anew. Must return the same rows for a change `rows` already contain. For `Row[]` the default is [`applyChangesOrReload(rows, change, pkFieldName)`](./vue-events#records-changed): `'reload'` for a `created` or `updated` change with an item without `record`, otherwise `applyChanges(rows, change, pkFieldName)`; required when `R` is not `Row[]` |
-| `onRows` | Required. Called with the rows of the latest read once the changes held during it are applied, after each change applied later, and after `apply()` |
+| `onRows` | Required. Called with the rows of the latest read once the changes held during it are applied, after an `extend()` read is merged into them (with the changes held during it applied), after each change applied later, and after `apply()` |
 | `onLoadError` | Required. Called with the error of a failed read of the latest generation, a `read` that throws included |
 | `onLoading` | Called with `true` when a read starts while none of the current generation is in flight, and with `false` once none is in flight and the held changes are applied |
 | `onError` | Passed to `watch()`: called with the error of a refused subscription and of a failed `fetch` |
