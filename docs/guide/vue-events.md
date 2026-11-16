@@ -397,8 +397,11 @@ A change that arrives during a read may or may not be in the read's answer, so `
 applies a change to the rows, must return the same rows for a change the rows already contain.
 `applyChanges` does. For rows held as an array, `apply` defaults to `applyChanges` by the ViewSet's
 `pkFieldName`, and to `'reload'` for a `created` or `updated` change without `record`: without
-`fetch`, every such change reads the list anew. With `fetch`, the record is read when the change is
-applied, so the rows end with the latest record whatever the list read returned. A read started
+`fetch`, every such change reads the list anew. With `fetch`, `watch()` reads the record when the
+event arrives, before the change is held, so a held change can carry a record older than the read's
+answer, and `onRows` shows that record until the event of the later write is applied. Every write
+publishes an event and `watch()` passes them on in order, so the rows end with the latest record
+whatever the list read returned. A read started
 by a resync or by an `apply` that returned `'reload'` is issued inside `inBackground`, as `fetch` is;
 the first read and the caller's `reload()` are not.
 
