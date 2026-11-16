@@ -374,38 +374,54 @@ else:
 
 ```ts
 import { onMounted, onUnmounted, ref } from 'vue';
-import { applyChanges, BulkViewSetMixin, muxwsViewSet } from '@dynamicforms/fastapi-viewsets';
+import { applyChanges, BulkViewSetMixin, muxwsViewSet, type RecordsChanged } from '@dynamicforms/fastapi-viewsets';
 
 class TrackViewSet extends muxwsViewSet<Track>()('id', [BulkViewSetMixin]) {}
 
 const tracks = new TrackViewSet({ basePath: '/api/music', peer });
 const rows = ref<Track[]>([]);
 
-let loaded: Promise<void> = Promise.resolve();
-function reload(): Promise<void> {
-  loaded = tracks.list().then((all) => { rows.value = all; });
-  return loaded;
+let generation = 0;
+let held: RecordsChanged<Track>[] | null = null;
+
+async function reload(): Promise<void> {
+  const mine = ++generation;
+  held = [];
+  let all: Track[] | undefined;
+  try {
+    all = await tracks.list();
+  } finally {
+    if (mine === generation) {
+      let next = all ?? rows.value;
+      for (const change of held ?? []) next = applyChanges(next, change, tracks.pkFieldName);
+      rows.value = next;
+      held = null;
+    }
+  }
 }
 
 const watching = tracks.watch({
   fetch: true,
   onChange(change) {
-    void loaded.then(() => { rows.value = applyChanges(rows.value, change, tracks.pkFieldName); });
+    if (held) held.push(change);
+    else rows.value = applyChanges(rows.value, change, tracks.pkFieldName);
   },
   onResync() { void reload(); },
 });
 
-onMounted(async () => {
-  await watching.ready;
-  await reload();
+onMounted(() => {
+  void watching.ready.catch(() => {}).then(reload);
 });
 onUnmounted(() => watching.unsubscribe());
 ```
 
-The subscription is made before the first read, so no change published between the read and the
-subscription is lost. `onChange` applies each change after the load in flight, so a load answered
-after the event does not overwrite it; a change the load already contains is applied a second time
-with the same result.
+The first read starts once the subscription is settled, so no change published between the read and
+the subscription is lost; a refused subscription still gets the read. Only the latest `reload()` sets
+`rows`, and the changes that arrive while it is in flight are held and applied in arrival order to
+its answer, or to the current `rows` when it fails. Each `reload()` drops the changes held before it
+starts, since its read already contains them. A held change the answer already contains is applied
+again with the same result, and `fetch: true` reads each changed record after its change, so the
+last change of a row carries its latest state.
 
 ### A grid that pages on the server
 
@@ -421,8 +437,12 @@ const pages = new TrackPageViewSet({ basePath: '/api/music', peer });
 const page = ref<PaginatedList<Track> | null>(null);
 const params = ref<PageParams>({ offset: 0, limit: 50, sort: 'title:asc' });
 
+let generation = 0;
+
 async function loadPage(): Promise<void> {
-  page.value = await pages.listPage(params.value);
+  const mine = ++generation;
+  const answer = await pages.listPage(params.value);
+  if (mine === generation) page.value = answer;
 }
 
 const watching = pages.watch({
@@ -432,4 +452,5 @@ const watching = pages.watch({
 onUnmounted(() => watching.unsubscribe());
 ```
 
-`fetch` is left `false` here: the re-read of the page carries the records.
+`fetch` is left `false` here: the re-read of the page carries the records. Only the latest
+`loadPage()` sets `page`, so an earlier read that is answered later does not replace it.
