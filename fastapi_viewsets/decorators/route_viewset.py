@@ -312,13 +312,11 @@ def _route(
     type_map = build_type_map(cls)
 
     if parent is None:
-        # Tag: the class name without its "ViewSet" suffix; its description is the viewset's docstring.
-        cls_name = cls.__name__
-        if cls_name.endswith("ViewSet"):
-            cls_name = cls_name[: -len("ViewSet")]
-        default_tags = [cls_name] if cls_name else None
-        if cls_name:
-            register_tag(cls_name, viewset_description(cls))
+        # The tag's description is the viewset's docstring.
+        tag = _tag_name(cls)
+        default_tags = [tag] if tag else None
+        if tag:
+            register_tag(tag, viewset_description(cls))
     else:
         # A sub-viewset's endpoints are listed in the group of the viewset at the top of its mounts.
         default_tags = parent.tags
@@ -658,6 +656,49 @@ def _route(
     }
 
     return cls
+
+
+def _split_words(name: str) -> list[str]:
+    """`name` split at underscores and at case boundaries, with Unicode letter cases; empty words dropped."""
+    words = []
+    for part in name.split("_"):
+        start = 0
+        for i in range(1, len(part)):
+            previous, char, following = part[i - 1], part[i], part[i + 1 : i + 2]
+            if char.isupper() and (
+                previous.islower() or previous.isdigit() or (previous.isupper() and following.islower())
+            ):
+                words.append(part[start:i])
+                start = i
+        words.append(part[start:])
+    return [word for word in words if word]
+
+
+def default_tag_name(cls: type) -> str:
+    """
+    The default OpenAPI tag of `cls`'s routes: the class name without its `ViewSet` suffix, split into words.
+
+    Underscores separate words, as do a lowercase letter or digit followed by an uppercase letter and the last
+    uppercase letter of an uppercase run followed by a lowercase letter. A word with at least two uppercase letters
+    is kept as is, every other word is lowercased. The words are joined with spaces and the first character is
+    uppercased: `ProfileEmailViewSet` -> `Profile email`, `APIKeyViewSet` -> `API key`. An empty remainder gives
+    an empty name.
+    """
+    name = cls.__name__.removesuffix("ViewSet")
+    words = _split_words(name)
+    words = [word if sum(char.isupper() for char in word) >= 2 else word.lower() for word in words]
+    text = " ".join(words)
+    return text[:1].upper() + text[1:]
+
+
+def _tag_name(cls: type) -> str:
+    """
+    The OpenAPI tag of `cls`'s routes: `settings.viewsets_tag_name(cls)` when set, else `default_tag_name(cls)`.
+    An empty name gives no tag.
+    """
+    if settings.viewsets_tag_name is not None:
+        return settings.viewsets_tag_name(cls)
+    return default_tag_name(cls)
 
 
 @dataclass(frozen=True)

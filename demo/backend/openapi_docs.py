@@ -5,9 +5,8 @@ UI's sanitiser strips `class` from anchors. Both pages are served by hand, as Fa
 and `redoc_url` take no extra `<head>` content.
 """
 
-import re
-
 from typing import Any
+from urllib.parse import quote
 
 TRY_BUTTON_CLASS = "api-try-button"
 
@@ -39,9 +38,8 @@ SWAGGER_HEAD = """
 
 
 def _anchor(tag: str, operation_id: str) -> str:
-    """Swagger UI's deep link: a tag character other than a word character or hyphen becomes `_`."""
-    slug = re.sub(r"[^\w-]", "_", tag)
-    return f"/docs#/{slug}/{operation_id}"
+    """Swagger UI's deep link to an operation: the tag percent-encoded, a space as `%20`."""
+    return f"/docs#/{quote(tag, safe='')}/{operation_id}"
 
 
 def add_try_links(schema: dict[str, Any]) -> dict[str, Any]:

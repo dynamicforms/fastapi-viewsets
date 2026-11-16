@@ -49,6 +49,15 @@ releases at once, work from the bottom of the page upwards.
       Set [`collation`](./python-mixins#text-order) to `get_collation("<locale>")` (the `icu` extra) for a language's
       order, or override `collation_for` for another order per column. `DjangoORMViewSet` keeps the database's order in
       SQL; its in-memory fallback compares strings by code point.
+- [ ] A viewset whose class name has several words gets a tag with spaces and lowercased words
+      (`ProfileEmailViewSet` → `Profile email`; see [Automatic OpenAPI tags](./routers#automatic-openapi-tags)).
+      Rename the tag in custom routes' `tags=[...]`, in the `name` of `apply_viewset_tags(extra=...)` entries and in
+      links to the group's Swagger UI deep-link anchors, or set `settings.viewsets_tag_name` to keep the
+      previous names:
+
+  ```python
+  settings.viewsets_tag_name = lambda cls: cls.__name__.removesuffix("ViewSet")
+  ```
 
 ## Upgrading to v0.15.0 (from v0.14.x)
 

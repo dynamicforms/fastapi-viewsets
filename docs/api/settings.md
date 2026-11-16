@@ -19,6 +19,7 @@ attributes once, before any viewset class is decorated with `route_viewset`.
 | `default_action_configuration` | `dict[Any, Any]` | `{}` | The configuration every action starts from; see [Action Configuration](../guide/action-configuration) |
 | `default_list_shape` | `str` | `"plain"` | The list shape of a viewset that states none: `"plain"`, `"paginated"` or `"cursor"` |
 | `viewsets_register_muxws` | `bool` | `True` | Whether a viewset is published on muxws when neither it nor its endpoint says; see [muxws](../guide/muxws#choosing-which-viewsets-are-published) |
+| `viewsets_tag_name` | `Callable[[type], str] \| None` | `None` | Returns the OpenAPI tag of a viewset class; an empty string gives no tag. `None` uses `default_tag_name(cls)` (`ProfileEmailViewSet` → `Profile email`); see [Automatic OpenAPI tags](../guide/routers#automatic-openapi-tags) |
 | `viewsets_security_scheme` | `SecurityBase \| None` | `None` | A FastAPI security scheme added to every route, for the OpenAPI "Authorize" flow only |
 | `viewsets_event_store` | `EventStore \| None` | `None` | The event store; `None` is one `MemoryEventStore` per process. A deployment of more than one process sets a `RedisEventStore` in every process; see [Events](../guide/events#the-store) |
 | `viewsets_event_authorizers` | `list[EventAuthorizer]` | `[]` | Decide whether a caller may follow a topic, in list order; the first `True` admits, the first `False` refuses, no decision refuses |
@@ -34,7 +35,7 @@ attributes once, before any viewset class is decorated with `route_viewset`.
 `ContextProcessor` is `Callable[[Request, Any], Awaitable[dict[str, Any]]]`; a processor may also
 take a `config` keyword, see [Action Configuration](../guide/action-configuration).
 
-`viewsets_register_muxws` and `viewsets_security_scheme` are read when a viewset is decorated, and
+`viewsets_register_muxws`, `viewsets_tag_name` and `viewsets_security_scheme` are read when a viewset is decorated, and
 so are the `modifies_response_shape` and `openapi_parameters` of the entries of `viewsets_command_middleware`: changed
 later, they do not reach viewsets already decorated. The middleware list itself, the processors,
 the auth backends, the idempotency TTLs and the `viewsets_event_*` settings are read on every use.

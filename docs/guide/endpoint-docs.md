@@ -35,7 +35,8 @@ apply_viewset_tags(app)
 ```
 
 Pass `extra=[{"name": ..., "description": ...}]` for groups the application owns itself; anything
-it defines overrides the viewset's docstring.
+it defines overrides the viewset's docstring. A viewset's group is named by its tag, `Music track` for
+`MusicTrackViewSet` (see [Automatic OpenAPI tags](./routers#automatic-openapi-tags)).
 
 ::: warning If you replace `app.openapi`
 `get_openapi(...)` does not read `app.openapi_tags` on its own. Pass `tags=app.openapi_tags`
@@ -179,21 +180,27 @@ a description, and `/schema` answers the named schema `OpenAPIDocument`
 
 ## Across the whole schema: post-processing
 
-For edits that apply to the document as a whole — renaming tag groups, adding the same error
-responses everywhere, appending the same link to every operation — replace `app.openapi`:
+The names of the tag groups come from `default_tag_name(cls)`, or from `settings.viewsets_tag_name`
+when it is set; see [Automatic OpenAPI tags](./routers#automatic-openapi-tags). The name applies to a
+viewset's group everywhere it appears: the operations, the tag description, `/schema` and the muxws
+registration.
+
+For edits that apply to the document as a whole — adding the same error responses everywhere,
+appending the same link to every operation — replace `app.openapi`:
 
 ```python
 from fastapi.openapi.utils import get_openapi
 
-TAG_DESCRIPTIONS = {"MusicTrack": "The catalogue. Everything here needs a session."}
-
 def custom_openapi():
     if not app.openapi_schema:
-        schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
-        schema["tags"] = [
-            {"name": name, "description": description}
-            for name, description in TAG_DESCRIPTIONS.items()
-        ]
+        schema = get_openapi(
+            title=app.title, version=app.version, routes=app.routes, tags=app.openapi_tags
+        )
+        for item in schema["paths"].values():
+            for operation in item.values():
+                operation["description"] = (
+                    operation.get("description", "") + "\n\nEverything here needs a session."
+                )
         app.openapi_schema = schema
     return app.openapi_schema
 
@@ -207,11 +214,12 @@ cannot execute requests — links to the page that can. See `demo/backend/openap
 
 | scope | mechanism |
 |---|---|
+| what a group of endpoints is called | `settings.viewsets_tag_name` (default `default_tag_name`) |
 | what a group of endpoints is | the viewset's docstring |
 | what one endpoint does | `@endpoint_docs` |
 | the document as a whole | post-processing `app.openapi` |
 
-They compose; using all three is normal.
+They compose; using all of them is normal.
 
 ## Response examples
 

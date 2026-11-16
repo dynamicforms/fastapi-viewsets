@@ -120,7 +120,7 @@ class MusicTrackViewSet(
     """
     The music library, held in memory.
 
-    Served from a Python dict by `CollectionViewSet`; **Music Track Db** exposes the same API over SQLite.
+    Served from a Python dict by `CollectionViewSet`; **Music track db** exposes the same API over SQLite.
     Listing is cursor-paged by default; send `X-List-Shape: plain` or `paginated` for the other shapes.
     Filters such as `year__gte`, `title__icontains` and `genres__overlaps` are declared, not coded.
     """
@@ -134,7 +134,7 @@ class MusicTrackViewSet(
     list_shapes = ("cursor", "plain", "paginated")
     """All three, to show the choice in Swagger and ReDoc; one shape keeps the schema to a single model."""
 
-    @__router.get("count", tags=["MusicTrack"], summary="Return the total number of tracks")
+    @__router.get("count", tags=["Music track"], summary="Return the total number of tracks")
     async def count(self, context: Context) -> int:
         return len(await self.perform_list(context))
 

@@ -77,10 +77,50 @@ the full picture.
 
 ### Automatic OpenAPI tags
 
-The decorator derives an OpenAPI tag from the class name by stripping the `ViewSet` suffix:
+The decorator derives an OpenAPI tag from the class name with `default_tag_name(cls)`
+(`fastapi_viewsets.decorators`):
 
-- `ItemViewSet` → tag `Item`
-- `UserProfileViewSet` → tag `UserProfile`
+1. The `ViewSet` suffix is removed. An empty remainder gives the routes no tag.
+2. The remainder is split into words. Underscores separate words, as do a lowercase letter or digit followed by an
+   uppercase letter and the last uppercase letter of an uppercase run followed by a lowercase letter.
+3. A word with at least two uppercase letters is an acronym and stays as it is; every other word is lowercased.
+4. The words are joined with single spaces and the first character is uppercased.
+
+| Class | Tag |
+|-------|-----|
+| `ItemViewSet` | `Item` |
+| `UserProfileViewSet` | `User profile` |
+| `APIKeyViewSet` | `API key` |
+| `HTTPSProxyURLViewSet` | `HTTPS proxy URL` |
+| `IPv4AddressViewSet` | `I pv4 address` |
+| `OAuthTokenViewSet` | `O auth token` |
+| `URLsViewSet` | `UR ls` |
+
+A word that mixes cases within itself (`IPv4`, `OAuth`) or a plural acronym (`URLs`) is split at its case changes, as
+the last rows show.
+
+`settings.viewsets_tag_name` replaces this rule. It receives the viewset class and returns the tag; an empty string
+gives the routes no tag. The tag is used for the routes, for the operations of `/schema`, for the tag description
+and for the muxws registration. A function that names only some classes returns `default_tag_name(cls)` for the
+others:
+
+```python
+from fastapi_viewsets.conf import settings
+from fastapi_viewsets.decorators import default_tag_name
+
+TAG_NAMES = {"IPv4AddressViewSet": "IPv4 address", "OAuthTokenViewSet": "OAuth token"}
+
+def tag_name(cls: type) -> str:
+    return TAG_NAMES.get(cls.__name__) or default_tag_name(cls)
+
+settings.viewsets_tag_name = tag_name
+```
+
+The tag is also part of the Swagger UI deep-link anchors of the group's operations, the key of the group in
+`apply_viewset_tags(app, extra=...)` and the tag a custom route passes in `tags=[...]` to join the group.
+
+The setting is read when a viewset is decorated, so it is assigned before the modules that declare the viewsets are
+imported.
 
 A [sub-viewset](./nested-viewsets#openapi) takes the tag of the viewset at the top of its mounts.
 

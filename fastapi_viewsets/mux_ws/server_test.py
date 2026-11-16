@@ -373,7 +373,7 @@ async def test_transports_can_keep_an_endpoint_off_muxws():
         __router = APIRouter()
 
         @transports(muxws=False)
-        @__router.get("secret", tags=["RestOnly"])
+        @__router.get("secret", tags=["Rest only"])
         async def secret(self, context: Context) -> int:  # noqa: ARG002 - context is the hook, unused here
             return 42
 
@@ -447,7 +447,7 @@ async def test_an_endpoint_may_still_opt_back_into_rest():
         __router = APIRouter()
 
         @transports(rest=True)
-        @__router.get("health", tags=["MostlyWs"])
+        @__router.get("health", tags=["Mostly ws"])
         async def health(self, context: Context) -> int:  # noqa: ARG002 - context is the hook
             return 1
 
