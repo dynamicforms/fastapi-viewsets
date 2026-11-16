@@ -229,6 +229,9 @@ interface ViewSetFollow<T, K extends KeyType = KeyType> {
   follow<R>(options: FollowOptions<R, T, K> & { fetch?: boolean }): ListFollower<R, T, K>;
 }
 
+/** `FollowList` when the action names `A` include `list`. */
+type FollowListOf<A, T, K extends KeyType> = [Extract<A, 'list'>] extends [never] ? unknown : FollowList<T, K>;
+
 /** Added to a ViewSet with a `list` action: `read` defaults to `list()`. */
 interface FollowList<T, K extends KeyType = KeyType> {
   follow(

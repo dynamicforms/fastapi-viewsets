@@ -196,7 +196,7 @@ The difference between the two approaches:
 | Typical use | Application code | Tests / advanced use |
 | Type inference | Via generic `M` parameter | Via generic type parameters on class |
 | ViewSet class argument | Required (type token) | Not needed |
-| Result | `RestProxy<M>` (typed as `M`, methods returning `ViewSetCall`, and `watch()`); `ViewSetCalls<M>`, without `watch()`, from the positional form | `RestProxyImpl` instance |
+| Result | `RestProxy<M>` (typed as `M`, methods returning `ViewSetCall`, with `watch()` and `follow()`); `ViewSetCalls<M>`, without them, from the positional form | `RestProxyImpl` instance |
 
 Both produce the same underlying object — `route_rest` simply wraps `new RestProxyImpl(options)`.
 

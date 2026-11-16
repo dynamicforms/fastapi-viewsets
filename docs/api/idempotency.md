@@ -112,7 +112,7 @@ type ViewSetCalls<M> = {
 |-------|-------------|
 | `request()` (protected) | `ViewSetCall<R>` |
 | the actions of the mixin interfaces, `ViewSetProxyBase`, `RestProxyImpl`, `MuxwsProxyImpl` and factory-built ViewSets | `ViewSetActionCall<R>` |
-| `route_rest<M>()` with an options object, `route_muxws<M>()` | `RestProxy<M>`, `MuxwsProxy<M>`: `ViewSetCalls<M>` and `watch()` |
+| `route_rest<M>()` with an options object, `route_muxws<M>()` | `RestProxy<M>`, `MuxwsProxy<M>`: `ViewSetCalls<M>` with `watch()` and `follow()` |
 | `route_rest<M>()` with positional arguments | `ViewSetCalls<M>` |
 | a ViewSet's own method | as declared; `key` is set at run time when the method issues a request before its first `await` |
 

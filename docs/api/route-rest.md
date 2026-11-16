@@ -59,9 +59,11 @@ interface RestProxyOptions {
 ## Return value
 
 The options form returns a `RestProxy<M>`, which is `ViewSetCalls<M>` — `M` with every method
-returning a [`ViewSetCall`](./idempotency#frontend) — and [`watch()`](./vue-mixins#watch), typed as
-`ViewSetWatch<RecordOf<M>, KeyOf<M>>`: the record and pk types read off `M`'s actions. The
-positional form takes no `events` and returns `ViewSetCalls<M>`, without `watch()`. Either is an
+returning a [`ViewSetCall`](./idempotency#frontend) — with [`watch()`](./vue-mixins#watch), typed as
+`ViewSetWatch<RecordOf<M>, KeyOf<M>>`, [`follow()`](./vue-mixins#follow), typed as
+`ViewSetFollow<RecordOf<M>, KeyOf<M>>` and `FollowListOf<keyof M, RecordOf<M>, KeyOf<M>>`, and
+`DefaultSortOf<keyof M>`: the record and pk types read off `M`'s actions. The positional form takes
+no `events` and returns `ViewSetCalls<M>`, without `watch()` and `follow()`. Either is an
 instance of `RestProxyImpl` cast to it. The cast is unchecked: `M` is
 whatever the caller wrote, and nothing compares it with the object. The standard actions listed under [HTTP
 mapping](#http-mapping) are implemented by `RestProxyImpl` and are therefore really there; anything else named in `M` —

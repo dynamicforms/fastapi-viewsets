@@ -77,7 +77,10 @@ type ViewSetClass<
 type ViewSetClassOf<T, PK extends keyof T, D extends readonly ViewSetMixinClass[], O extends ProxyBaseOptions, L> = {
   new (options: Omit<O, 'pkFieldName' | 'declares'>): ViewSetInternals &
     ActionSurface<PkType<T, PK>, T, PK, ActionsOf<D[number]>, L> &
-    ViewSetWatch<T, PkType<T, PK>> & { readonly pkFieldName: PK };
+    DefaultSortOf<ActionsOf<D[number]>> &
+    ViewSetWatch<T, PkType<T, PK>> &
+    ViewSetFollow<T, PkType<T, PK>> &
+    FollowListOf<ActionsOf<D[number]>, T, PkType<T, PK>> & { readonly pkFieldName: PK };
   readonly declares: FactoryDeclares<D>;
 };
 

@@ -81,7 +81,11 @@ interface MuxwsPeerLike {
 
 type MuxwsPeerSource = MuxwsPeerLike | (() => MuxwsPeerLike | Promise<MuxwsPeerLike>);
 
-type MuxwsProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>>;
+type MuxwsProxy<M> = ViewSetCalls<M> &
+  ViewSetWatch<RecordOf<M>, KeyOf<M>> &
+  ViewSetFollow<RecordOf<M>, KeyOf<M>> &
+  FollowListOf<keyof M, RecordOf<M>, KeyOf<M>> &
+  DefaultSortOf<keyof M>;
 ```
 
 A muxws `Peer` satisfies `MuxwsPeerLike`. A repeat after a lost connection waits for the peer while

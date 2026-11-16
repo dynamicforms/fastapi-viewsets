@@ -52,7 +52,7 @@ declare const FACTORY_BUILT_REJECTION: 'route_rest cannot take a factory-built c
 
 /**
  * The mixin interface `M` the caller declares, with every method returning a `ViewSetCall`, plus
- * `watch()`, and `defaultSort()` when `M` has a list action.
+ * `watch()`, `follow()`, and `defaultSort()` when `M` has a list action.
  */
 export type RestProxy<M> = ViewSetCalls<M> &
   ViewSetWatch<RecordOf<M>, KeyOf<M>> &

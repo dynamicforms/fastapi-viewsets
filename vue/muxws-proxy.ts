@@ -60,7 +60,7 @@ export interface MuxwsPeerLike {
  */
 export type MuxwsPeerSource = MuxwsPeerLike | (() => MuxwsPeerLike | Promise<MuxwsPeerLike>);
 
-/** `M` with every method returning a `ViewSetCall`, plus `watch()`, and `defaultSort()` when `M` lists. */
+/** `M` with every method returning a `ViewSetCall`, plus `watch()`, `follow()`, and `defaultSort()` when `M` lists. */
 export type MuxwsProxy<M> = ViewSetCalls<M> &
   ViewSetWatch<RecordOf<M>, KeyOf<M>> &
   ViewSetFollow<RecordOf<M>, KeyOf<M>> &
