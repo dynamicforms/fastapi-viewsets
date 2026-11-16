@@ -77,8 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with acronyms kept and the other words lowercased: `ProfileEmailViewSet` → `Profile email`, `APIKeyViewSet` →
   `API key`. It was the class name without the suffix (`ProfileEmail`). The new tag names the OpenAPI operation groups
   and their tag descriptions, the Swagger UI deep-link anchors of their operations, the tags of `/schema`
-  and of the muxws registration, and the keys `apply_viewset_tags(extra=...)` matches. Single-word names (`Item`) are
-  unchanged.
+  and of the muxws registration, and the keys `apply_viewset_tags(extra=...)` matches. A custom route that passes the
+  old tag in `tags=[...]` (`tags=["ProfileEmail"]`) forms a group of its own; to join its viewset's group it passes
+  the new tag. Single-word names (`Item`) are unchanged.
 - **Breaking:** the in-memory sort and cursor compare strings case-insensitively, with digit runs by value
   (`apple, Banana, Cesta, cesta, file2, file10`). They compared by code point. Strings compare by the code points of
   their `str.casefold()` form, so accented letters sort after `z`. Ordering in the database is unchanged.
