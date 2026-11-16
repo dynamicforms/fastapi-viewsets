@@ -86,8 +86,8 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
   serves it (`top_rated` for `GET {base_path}/top-rated`); the FE schema check matches a custom endpoint to a ViewSet
   method by it.
 - Tags the class's routes with `settings.viewsets_tag_name(cls)`, or, when that setting is `None`, with
-  [`default_tag_name(cls)`](#default-tag-name), and records the class's own docstring as that tag's description. The same tag goes to
-  the operations of `/schema` and to the muxws registration. An empty tag name gives the routes no tag.
+  [`default_tag_name(cls)`](#default-tag-name), and records the class's own docstring as that tag's description.
+  The same tag goes to the operations of `/schema` and to the muxws registration. An empty tag name gives the routes no tag.
 - Gives every route a dependency that runs each configured `Middleware`'s `depends()` before the request body is parsed,
   plus `settings.viewsets_security_scheme` when one is set. That dependency is the last entry of the route's
   `dependencies` and carries the attribute named by `MIDDLEWARE_DEPENDS_ATTRIBUTE`
