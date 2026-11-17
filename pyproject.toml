@@ -59,6 +59,8 @@ dev = [
     "muxws[starlette,websockets]>=0.4.2",
     "ruff",
     "uvicorn",
+    "uvloop>=0.23.0 ; sys_platform != 'win32'",
+    "httptools>=0.9.0",
 ]
 
 [project.urls]

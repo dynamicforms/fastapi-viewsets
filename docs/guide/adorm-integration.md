@@ -360,15 +360,26 @@ replaces a broken connection for the next request.
 
 ## Demo
 
-The demo serves the music library from PostgreSQL through `AdormViewSet` at `/music-adorm`, next to the in-memory and
-SQLite ones, on Python 3.11+ (where the dev dependencies include adorm) with a PostgreSQL server named:
+With a PostgreSQL server named, the demo serves the music library from PostgreSQL through `AdormViewSet` at
+`/music-adorm` and through `DjangoORMViewSet` at `/music-db`, both on the same table, next to the in-memory one, on
+Python 3.11+ (where the dev dependencies include adorm):
 
 ```bash
-uv run python demo.py --adorm-db postgres://user:password@localhost:5432/
-uv run python demo.py --adorm-db postgres://user:password@localhost:5432/ --adorm-driver django
+uv run python demo.py --db postgres://user:password@localhost:5432/
+uv run python demo.py --db postgres://user:password@localhost:5432/ --adorm-driver django
+uv run python demo.py --db postgres://user:password@localhost:5432/ --benchmark
 ```
 
 It creates and fills the database `adorm_fastapi_viewsets_demo` on that server. The records are the generated adorm
-model of `demo/backend/adorm_tables.py`, whose array columns are the records' lists. Without adorm or a server the
-grid's **PostgreSQL (adorm)** button is disabled and `GET /backends` says why; a server that cannot be used at
-startup turns it off the same way, and `/music-adorm` answers 503.
+model of `demo/backend/adorm_tables.py`, whose array columns are the records' lists. Without a server `/music-db`
+serves SQLite and the grid's **PostgreSQL (adorm)** button is disabled; without adorm only that button is disabled.
+`GET /backends` says why. A server that cannot be reached at startup leaves `/music-db` on SQLite and the adorm button
+disabled, as without a server. A server that is reachable but whose database cannot be set up turns both PostgreSQL
+data sources off, and they answer 503.
+
+The demo's **Benchmark** tab compares the two DB APIs on that table under load. The benchmark's viewsets read through
+the Django alias and the adorm profile `bench`, which connect through a proxy that adds a round-trip time to every
+query (`--db-latency`, 10 ms by default). The adorm viewset runs with `@action_configuration({AdormSession: False})`,
+so a read is one query outside a transaction, as the Django ORM's autocommit read is; its pool holds
+`DEMO_ADORM_POOL` connections (40) per process. The Django viewset's alias keeps its connections (`CONN_MAX_AGE =
+None`). `--benchmark` adds the Celery executors: a classic worker and one with async processes (Redis needed).

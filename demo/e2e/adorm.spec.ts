@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 /**
  * The PostgreSQL (adorm) data source. `GET /backends` decides it: with adorm, its driver and a PostgreSQL server
- * (`DEMO_ADORM_DATABASE_URL`) the toggle is enabled and the grid lists, sorts and pages `/music-adorm`; otherwise the
+ * (`DEMO_DATABASE_URL`) the toggle is enabled and the grid lists, sorts and pages `/music-adorm`; otherwise the
  * toggle is disabled and its title is the reason.
  */
 
@@ -10,6 +10,7 @@ const PAGE_SIZE = 50;
 
 interface DemoBackend {
   name: string;
+  label: string;
   available: boolean;
   reason: string | null;
 }
@@ -57,6 +58,14 @@ test('the adorm toggle is disabled with the reason when adorm is not available',
   const toggle = page.getByTestId('backend-adorm');
   await expect(toggle).toBeDisabled();
   await expect(toggle).toHaveAttribute('title', adorm.reason!);
+});
+
+test('each data-source toggle shows its label from GET /backends', async ({ page }) => {
+  const response = await page.request.get('/backends');
+  expect(response.ok()).toBe(true);
+  for (const backend of (await response.json()) as DemoBackend[]) {
+    await expect(page.getByTestId(`backend-${backend.name}`)).toContainText(backend.label);
+  }
 });
 
 test('the adorm backend serves the same records as the in-memory one, sorted and paged', async ({ page }) => {

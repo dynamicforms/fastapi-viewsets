@@ -1,7 +1,8 @@
 """
 A minimal Django ORM setup for the demo, backed by SQLite: `settings.configure()` plus
 `django.setup()`, with no Django project. Import this module before anything that touches the models.
-With the adorm demo on (`demo.backend.adorm_demo`), Django also gets the PostgreSQL alias `adorm` and its table.
+With PostgreSQL on (`demo.backend.postgres_demo`), Django also gets the PostgreSQL aliases `postgres` and `bench` and
+their table.
 """
 
 import os
@@ -10,18 +11,19 @@ from pathlib import Path
 
 from django.conf import settings
 
-from demo.backend import adorm_demo
+from demo.backend import postgres_demo
 
 DB_PATH = Path(os.environ.get("DEMO_DB_PATH", Path(__file__).parent / "demo.sqlite3"))
 
 if not settings.configured:
     databases = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": str(DB_PATH)}}
-    if adorm_demo.ENABLED:
-        databases[adorm_demo.DATABASE_ALIAS] = adorm_demo.django_database()
+    if postgres_demo.ENABLED:
+        databases[postgres_demo.DATABASE_ALIAS] = postgres_demo.django_database()
+        databases[postgres_demo.BENCH_ALIAS] = postgres_demo.bench_database()
     settings.configure(
         INSTALLED_APPS=["demo.backend"],
         DATABASES=databases,
-        DATABASE_ROUTERS=[adorm_demo.TablesRouter()] if adorm_demo.ENABLED else [],
+        DATABASE_ROUTERS=[postgres_demo.TablesRouter()] if postgres_demo.ENABLED else [],
         USE_TZ=True,
         DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
     )
@@ -29,7 +31,7 @@ if not settings.configured:
 
     django.setup()
 
-    if adorm_demo.ENABLED:
+    if postgres_demo.ENABLED:
         import demo.backend.adorm_tables  # noqa: F401 - registers the PostgreSQL table with Django
 
 

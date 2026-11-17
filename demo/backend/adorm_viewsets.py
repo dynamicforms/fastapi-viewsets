@@ -1,10 +1,10 @@
-"""The music library on PostgreSQL through adorm; imported only when `adorm_demo.ENABLED`."""
+"""The music library on PostgreSQL through adorm; imported only when `postgres_demo.ADORM_ENABLED`."""
 
 import adorm
 
 from fastapi import APIRouter, HTTPException
 
-from demo.backend import adorm_demo
+from demo.backend import postgres_demo
 from demo.backend.adorm_models.backend import MusicTrackRecord
 from demo.backend.viewsets import LIST_ITEMS_DESCRIPTION
 from fastapi_viewsets.backends.adorm import AdormViewSet
@@ -64,8 +64,8 @@ class MusicTrackAdormViewSet(
 
     async def get_session(self, context: Context) -> adorm.Session:
         """The current session; 503 when the PostgreSQL server could not be set up at startup."""
-        if not adorm_demo.ENABLED:
-            raise HTTPException(503, f"The adorm demo is off: {adorm_demo.UNAVAILABLE}")
+        if not postgres_demo.ADORM_ENABLED:
+            raise HTTPException(503, f"The adorm data source is off: {postgres_demo.ADORM_UNAVAILABLE}")
         return await super().get_session(context)
 
     @__router.get("count", summary="Return the total number of tracks")

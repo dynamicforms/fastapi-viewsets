@@ -13,8 +13,14 @@ from fastapi.responses import HTMLResponse
 from muxws import accept, Stream
 from pydantic import BaseModel, Field
 
-from demo.backend import adorm_demo
-from demo.backend.django_setup import ensure_database
+from demo.backend import benchmark, postgres_demo
+from demo.backend.benchmark.api import (
+    BenchInFlightMiddleware,
+    READER_IDLE_POLL_S,
+    router as benchmark_router,
+    start_result_readers as start_bench_result_readers,
+)
+from demo.backend.django_setup import ensure_database, MusicTrackRow
 from demo.backend.openapi_docs import add_try_links, REDOC_HEAD, SWAGGER_HEAD
 from demo.backend.viewsets import (
     DB_TASK_PREFIX,
@@ -33,29 +39,28 @@ from fastapi_viewsets.mux_ws import process_command
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAPI
-    # In a thread: Django refuses synchronous queries inside a running event loop.
-    await sync_to_async(ensure_database, thread_sensitive=False)(records)
-    if adorm_demo.ENABLED:
+    if postgres_demo.ENABLED:
         import psycopg
 
         try:
-            await asyncio.to_thread(adorm_demo.ensure_database, records)
+            await asyncio.to_thread(postgres_demo.ensure_database, records)
         except psycopg.Error as error:
-            # The other data sources still start; the adorm one reports why it is off.
-            adorm_demo.disable(f"the PostgreSQL server cannot be used: {error}")
+            # The in-memory data source still starts; the others report why they are off.
+            postgres_demo.disable(f"the PostgreSQL server cannot be used: {error}")
         else:
-            adorm_demo.configure_adorm()
+            if postgres_demo.ADORM_ENABLED:
+                postgres_demo.configure_adorm()
+    else:
+        # In a thread: Django refuses synchronous queries inside a running event loop.
+        await sync_to_async(ensure_database, thread_sensitive=False)(records)
     await start_events()
     check_events()
     try:
-        if USE_CELERY:
-            async with _result_readers():
-                yield
-        else:
+        async with _result_readers():
             yield
     finally:
         await stop_events()
-        if adorm_demo.ENABLED:
+        if postgres_demo.ADORM_ENABLED:
             from adorm.settings import close_pools
 
             await close_pools()
@@ -64,6 +69,12 @@ async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAP
 @asynccontextmanager
 async def _result_readers():
     """The readers of the Celery viewsets' results, for the lifespan."""
+    prefixes = (MEMORY_TASK_PREFIX, DB_TASK_PREFIX) if USE_CELERY else ()
+    bench = postgres_demo.ENABLED and benchmark.CELERY_ENABLED
+    if not prefixes and not bench:
+        yield
+        return
+
     from demo.backend.celery_app import redis_async
     from fastapi_viewsets.decorators.celery_viewset import (
         check_result_readers,
@@ -72,8 +83,10 @@ async def _result_readers():
         stop_result_reader,
     )
 
-    for task_prefix in (MEMORY_TASK_PREFIX, DB_TASK_PREFIX):
-        await start_result_reader(redis_async, get_result_queue_key(task_prefix))
+    for prefix in prefixes:
+        await start_result_reader(redis_async, get_result_queue_key(prefix), 0.05)
+    # Polled faster only during a run of their executor (POST /benchmark/runs).
+    await start_bench_result_readers(READER_IDLE_POLL_S)
     check_result_readers()
     yield
     await stop_result_reader()
@@ -84,6 +97,8 @@ async def _result_readers():
 app = FastAPI(title="Demo ViewSet App", lifespan=lifespan, docs_url=None, redoc_url=None)
 # the errors of the routes outside the viewsets, and of a path no route matches, in the viewsets' body
 install_error_handlers(app)
+# Counts the benchmark requests in progress, so a run starts after those of the previous one have ended.
+app.add_middleware(BenchInFlightMiddleware)
 
 
 def custom_openapi():
@@ -120,11 +135,17 @@ router = APIRouter()
 route_viewset(router, base_path="/music", pk_field_name="id")(MusicTrackViewSet)
 # The same API over SQLite via the Django ORM, for comparing the two backends on the same data.
 route_viewset(router, base_path="/music-db", pk_field_name="id")(MusicTrackDbViewSet)
-if adorm_demo.ENABLED:
+if postgres_demo.ADORM_ENABLED:
     from demo.backend.adorm_viewsets import MusicTrackAdormViewSet
 
     # The same API on PostgreSQL through adorm, with the generated adorm model as its records.
     route_viewset(router, base_path="/music-adorm", pk_field_name="id")(MusicTrackAdormViewSet)
+if postgres_demo.ENABLED:
+    from demo.backend.benchmark.viewsets import VIEWSETS as BENCH_VIEWSETS
+
+    # The benchmark's read-only viewsets, one per DB API and executor.
+    for (db_api, executor), bench_viewset in BENCH_VIEWSETS.items():
+        route_viewset(router, base_path=f"/bench/{db_api}/{executor}", pk_field_name="id")(bench_viewset)
 # subscribe, unsubscribe and poll of the viewsets' topics, under /events
 register_events(router, base_path="/events")
 
@@ -133,6 +154,7 @@ class DemoBackend(BaseModel):
     """A data source of the demo's music library."""
 
     name: str = Field(description="`memory`, `db` or `adorm`: the value the frontend selects it by.")
+    label: str = Field(description="Its name for people: the database and the library that reads it.")
     base_path: str = Field(description="Where its viewset is routed.")
     available: bool = Field(description="Whether the viewset is routed.")
     reason: str | None = Field(None, description="Why it is not available; null when it is.")
@@ -140,17 +162,32 @@ class DemoBackend(BaseModel):
 
 @router.get("/backends", tags=["demo"], summary="Data sources of the demo")
 async def backends() -> list[DemoBackend]:
-    """The demo's three data sources; the adorm one is available with adorm installed and a PostgreSQL server."""
+    """
+    The demo's three data sources. With a PostgreSQL server the Django ORM one reads PostgreSQL instead of SQLite, and
+    the adorm one is available with adorm installed.
+    """
+    on_postgres = MusicTrackDbViewSet.model is not MusicTrackRow
     return [
-        DemoBackend(name="memory", base_path="/music", available=True),
-        DemoBackend(name="db", base_path="/music-db", available=True),
+        DemoBackend(name="memory", label="in-memory", base_path="/music", available=True),
         DemoBackend(
-            name="adorm", base_path="/music-adorm", available=adorm_demo.ENABLED, reason=adorm_demo.UNAVAILABLE
+            name="db",
+            label="PostgreSQL (Django ORM)" if on_postgres else "SQLite (Django ORM)",
+            base_path="/music-db",
+            available=not on_postgres or postgres_demo.ENABLED,
+            reason=postgres_demo.UNAVAILABLE if on_postgres else None,
+        ),
+        DemoBackend(
+            name="adorm",
+            label="PostgreSQL (adorm)",
+            base_path="/music-adorm",
+            available=postgres_demo.ADORM_ENABLED,
+            reason=postgres_demo.ADORM_UNAVAILABLE,
         ),
     ]
 
 
 app.include_router(router)
+app.include_router(benchmark_router)
 
 # The viewsets' docstrings become the tag group descriptions; must run after they are decorated.
 apply_viewset_tags(app)
@@ -177,11 +214,15 @@ def _local_origin(origin: str | None) -> bool:
     return hostname in ("127.0.0.1", "localhost") or bool(_CODESPACE_HOST and _CODESPACE_HOST.fullmatch(hostname))
 
 
+MUXWS_MAX_STREAMS = 2000
+
+
 @app.websocket("/ws")
 async def muxws_endpoint(websocket: WebSocket) -> None:
     """The same viewsets over one WebSocket; muxws accepts it, selecting the codec subprotocol."""
     # Origin check against cross-site WebSocket hijacking: other origins get HTTP 403.
-    peer = await accept(websocket, allowed_origins=_local_origin)
+    # Streams at a time per socket: the benchmark's load generator sends up to 1000 over one.
+    peer = await accept(websocket, allowed_origins=_local_origin, max_concurrent_streams=MUXWS_MAX_STREAMS)
 
     async def on_stream(payload, stream: Stream) -> None:
         # peer= is the socket `subscribe` registers the subscription on.

@@ -2,10 +2,10 @@ import os
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from demo.backend import adorm_demo
+from demo.backend import postgres_demo
 from demo.backend.data_generator import generate_music_library
 from demo.backend.django_setup import MusicTrackRow
 from fastapi_viewsets.backends.django_orm import DjangoORMViewSet
@@ -24,6 +24,9 @@ from fastapi_viewsets.mixins import (
     UpdateMixin,
 )
 
+if postgres_demo.ENABLED:
+    from demo.backend.adorm_tables import MusicTrackRecord
+
 USE_CELERY = os.environ.get("DEMO_CELERY", "").lower() in ("1", "true", "yes")
 """
 DEMO_CELERY=1 (with a running worker) dispatches every call through Celery. Off by default: the Redis round trip
@@ -33,7 +36,7 @@ would dominate the HTTP/WebSocket difference the benchmark measures.
 # Writes publish `records_changed` to the viewset's base path topic. Set before any viewset is decorated, in
 # both processes: with Celery, the worker publishes.
 settings.viewsets_command_middleware = [ChangeEvents()]
-if adorm_demo.ENABLED:
+if postgres_demo.ADORM_ENABLED:
     from fastapi_viewsets.backends.adorm import AdormSession
 
     # Each action of the adorm viewset in one transaction of its session, committed before ChangeEvents publishes.
@@ -162,16 +165,22 @@ class MusicTrackDbViewSet(
     UpdateMixin[int, MusicTrack],
 ):
     """
-    The same music library, over SQLite through the Django ORM.
+    The same music library, through the Django ORM: on SQLite, or on PostgreSQL when the demo has a database server.
 
     Filters, sorts and the page are translated into `WHERE`, `ORDER BY` and `LIMIT`; anything it cannot
     translate falls back to the in-memory pipeline. The cursor seeks with a row-value comparison on the
     (year, id) index.
     """
 
-    model = MusicTrackRow
+    model = MusicTrackRecord if postgres_demo.ENABLED else MusicTrackRow
     schema = MusicTrack
     default_page_size = 50
+
+    def get_queryset(self, context: Context):
+        """The table's rows; 503 when the PostgreSQL server could not be set up at startup."""
+        if self.model is not MusicTrackRow and not postgres_demo.ENABLED:
+            raise HTTPException(503, f"PostgreSQL is off: {postgres_demo.UNAVAILABLE}")
+        return super().get_queryset(context)
 
     def to_record(self, raw: Any) -> MusicTrack:
         if isinstance(raw, MusicTrack):
@@ -182,13 +191,20 @@ class MusicTrackDbViewSet(
             artist=raw.artist,
             year=raw.year,
             duration=raw.duration,
-            genres=raw.genres.split(",") if raw.genres else [],
+            genres=as_list(raw.genres),
             rating=raw.rating,
             favorite=raw.favorite,
             play_count=raw.play_count,
-            moods=raw.moods.split(",") if raw.moods else [],
+            moods=as_list(raw.moods),
             language=raw.language,
         )
+
+
+def as_list(value: str | list[str]) -> list[str]:
+    """A list column as it is; a comma-separated TEXT column split."""
+    if isinstance(value, list):
+        return value
+    return value.split(",") if value else []
 
 
 if USE_CELERY:
