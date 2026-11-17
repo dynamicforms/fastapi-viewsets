@@ -117,7 +117,7 @@ grid). Click a Favorite cell to toggle it: every tab showing the library applies
 muxws as a push, over REST on its next poll. A sorted or filtered grid reloads its list on the
 change: the row may have moved or left it.
 
-`--celery` needs Redis on localhost:6379. The worker runs the viewset calls of both backends and
+With `--celery` the worker runs the viewset calls of both backends and
 publishes their events through Redis. It runs as one process, because the in-memory library is a
 dict held by each process; the SQLite library is one file shared by every process. The end-to-end
 suite starts its own backend and dev server on their own ports.
