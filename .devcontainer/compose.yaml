@@ -1,0 +1,15 @@
+services:
+  app:
+    image: mcr.microsoft.com/devcontainers/python:3.12
+    volumes:
+      - ..:/workspaces/fastapi-viewsets:cached
+    command: sleep infinity
+    environment:
+      # Celery broker, result queue and event store of `demo.py --celery`
+      DEMO_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+
+  redis:
+    image: valkey/valkey:8
+    restart: unless-stopped

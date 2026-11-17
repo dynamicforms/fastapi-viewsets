@@ -56,7 +56,7 @@ def main() -> int:
     parser.add_argument(
         "--celery",
         action="store_true",
-        help="route viewset calls through a Celery worker (needs Redis on localhost:6379)",
+        help="route viewset calls through a Celery worker (needs Redis at DEMO_REDIS_URL, default redis://localhost:6379/0)",
     )
     args = parser.parse_args()
 

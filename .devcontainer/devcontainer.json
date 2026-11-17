@@ -1,0 +1,22 @@
+{
+  "name": "fastapi-viewsets demo",
+  "dockerComposeFile": "compose.yaml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/fastapi-viewsets",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" }
+  },
+  "hostRequirements": { "cpus": 2 },
+  "postCreateCommand": "pipx install uv && uv sync --locked && npm ci",
+  "postStartCommand": "nohup uv run python demo.py > /tmp/demo.log 2>&1 &",
+  "forwardPorts": [5173, 8000],
+  "portsAttributes": {
+    "5173": { "label": "Demo", "onAutoForward": "openBrowser" },
+    "8000": { "label": "Demo API", "onAutoForward": "silent" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "charliermarsh.ruff", "Vue.volar"]
+    }
+  }
+}
