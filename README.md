@@ -102,6 +102,11 @@ grid). Click a Favorite cell to toggle it: every tab showing the library applies
 muxws as a push, over REST on its next poll. A sorted or filtered grid reloads its list on the
 change: the row may have moved or left it.
 
+With `--celery` the worker runs the viewset calls of both backends and publishes their events
+through Redis. It runs as one process, because the in-memory library is a dict held by each process;
+the SQLite library is one file shared by every process. The end-to-end suite starts its own backend
+and dev server on their own ports.
+
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/dynamicforms/fastapi-viewsets?quickstart=1)
 
 ### Run locally
@@ -116,11 +121,6 @@ uv run python demo.py                # backend on :8000, frontend on :5173
 uv run python demo.py --celery       # ... with every viewset call routed through a Celery worker
 npm run test:e2e                     # drives the demo in a browser
 ```
-
-With `--celery` the worker runs the viewset calls of both backends and
-publishes their events through Redis. It runs as one process, because the in-memory library is a
-dict held by each process; the SQLite library is one file shared by every process. The end-to-end
-suite starts its own backend and dev server on their own ports.
 
 ## License
 
