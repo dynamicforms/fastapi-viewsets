@@ -10,7 +10,7 @@ import { RECORDS_CHANGED, type RecordsChanged } from '../../vue/events';
 import { createEventClient, handleEventStream } from '../../vue/events';
 
 /**
- * The demo's Celery path end to end; skipped without Redis on localhost.
+ * The demo's Celery path end to end; skipped without Redis at `DEMO_REDIS_URL`.
  *
  * The worker uses the default prefork pool, so consecutive calls may hit different processes. Backend and
  * worker use their own SQLite file, so the 200-track seed does not replace the main suite's library.
@@ -20,7 +20,11 @@ const API_PORT = 8124;
 
 function redisIsUp(): boolean {
   try {
-    execFileSync('python', ['-c', 'import redis; redis.Redis().ping()'], { stdio: 'ignore' });
+    execFileSync(
+      'python',
+      ['-c', 'import os, redis; redis.Redis.from_url(os.environ.get("DEMO_REDIS_URL", "redis://localhost:6379/0")).ping()'],
+      { stdio: 'ignore' },
+    );
     return true;
   } catch {
     return false;
@@ -28,7 +32,7 @@ function redisIsUp(): boolean {
 }
 
 test.describe('the Celery-backed demo', () => {
-  test.skip(!redisIsUp(), 'needs Redis on localhost:6379');
+  test.skip(!redisIsUp(), 'needs Redis at DEMO_REDIS_URL (default redis://localhost:6379/0)');
 
   let backend: ReturnType<typeof import('node:child_process').spawn>;
   let worker: ReturnType<typeof import('node:child_process').spawn>;

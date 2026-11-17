@@ -1,3 +1,6 @@
+import os
+import re
+
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
@@ -103,9 +106,25 @@ app.include_router(router)
 apply_viewset_tags(app)
 
 
+# In GitHub Codespaces a forwarded port is served at https://<codespace name>-<port>.<forwarding domain>.
+_CODESPACE_NAME = os.environ.get("CODESPACE_NAME")
+_FORWARDING_DOMAIN = os.environ.get("GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN")
+_CODESPACE_HOST = (
+    re.compile(rf"{re.escape(_CODESPACE_NAME)}-\d+\.{re.escape(_FORWARDING_DOMAIN)}")
+    if _CODESPACE_NAME and _FORWARDING_DOMAIN
+    else None
+)
+
+
 def _local_origin(origin: str | None) -> bool:
-    """Admit a page from this machine (any port) or a non-browser client without an Origin."""
-    return origin is None or urlsplit(origin).hostname in ("127.0.0.1", "localhost")
+    """
+    Admit a page from this machine (any port), from this codespace's forwarded ports, or a non-browser
+    client without an Origin.
+    """
+    if origin is None:
+        return True
+    hostname = urlsplit(origin).hostname or ""
+    return hostname in ("127.0.0.1", "localhost") or bool(_CODESPACE_HOST and _CODESPACE_HOST.fullmatch(hostname))
 
 
 @app.websocket("/ws")
