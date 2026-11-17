@@ -37,20 +37,17 @@ Requirements: Vue 3.4+, axios.
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/dynamicforms/fastapi-viewsets?quickstart=1)
 
-The codespace installs the dependencies, starts the backend and the frontend and opens the demo in
-a new browser tab: an infinite-scrolling grid over a 5000-track library that switches between the
-REST and muxws transports and between the in-memory and SQLite backends. It runs on your own GitHub
-account's Codespaces quota. To run the same demo locally, in a clone of the
-[repository](https://github.com/dynamicforms/fastapi-viewsets):
+### Run locally
+
+Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node 22+; Redis for `--celery`, at
+`DEMO_REDIS_URL` (default `redis://localhost:6379/0`).
 
 ```bash
+git clone https://github.com/dynamicforms/fastapi-viewsets.git && cd fastapi-viewsets
 uv sync && npm ci
 uv run python demo.py                # backend on :8000, frontend on :5173
 uv run python demo.py --celery       # ... with every viewset call routed through a Celery worker
 ```
-
-`--celery` needs Redis at `DEMO_REDIS_URL` (default `redis://localhost:6379/0`); the codespace
-provides one, and `pkill -f demo.py` in its terminal stops the demo it started.
 
 ## Quick Start
 

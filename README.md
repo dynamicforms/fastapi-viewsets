@@ -93,21 +93,6 @@ list pipeline and pagination, the muxws transport, events, and the Vue client.
 
 ## Demo
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/dynamicforms/fastapi-viewsets?quickstart=1)
-
-The codespace installs the dependencies, starts the backend and the frontend and opens the demo in
-a new browser tab. It runs on your own GitHub account's Codespaces quota. To run the same demo
-locally, clone the repository and run the commands below. `--celery` needs Redis at `DEMO_REDIS_URL`
-(default `redis://localhost:6379/0`); the codespace provides one, and `pkill -f demo.py` in its
-terminal stops the demo it started.
-
-```bash
-uv sync && npm ci
-uv run python demo.py                # backend on :8000, frontend on :5173
-uv run python demo.py --celery       # ... with every viewset call routed through a Celery worker
-npm run test:e2e                     # drives the demo in a browser
-```
-
 An infinite-scrolling grid over a 5000-track library, cursor-paged. Switch the whole grid between
 the REST and muxws transports and between the in-memory and SQLite backends, and compare their
 latency side by side. Sorting and filtering are server-side.
@@ -116,6 +101,21 @@ The grid follows its viewset's change events (`ChangeEvents` on the backend, `wa
 grid). Click a Favorite cell to toggle it: every tab showing the library applies the change, over
 muxws as a push, over REST on its next poll. A sorted or filtered grid reloads its list on the
 change: the row may have moved or left it.
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/dynamicforms/fastapi-viewsets?quickstart=1)
+
+### Run locally
+
+Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node 22+; Redis for `--celery`, at
+`DEMO_REDIS_URL` (default `redis://localhost:6379/0`).
+
+```bash
+git clone https://github.com/dynamicforms/fastapi-viewsets.git && cd fastapi-viewsets
+uv sync && npm ci
+uv run python demo.py                # backend on :8000, frontend on :5173
+uv run python demo.py --celery       # ... with every viewset call routed through a Celery worker
+npm run test:e2e                     # drives the demo in a browser
+```
 
 With `--celery` the worker runs the viewset calls of both backends and
 publishes their events through Redis. It runs as one process, because the in-memory library is a
