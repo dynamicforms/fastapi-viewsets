@@ -147,3 +147,8 @@ filterwarnings = [
 
 [tool.coverage.run]
 omit = ["demo/*", "demo/**/*", "demo.py", "test_*.py", "*_test.py"]
+
+# Development and the demo run Celery from the fork with async tasks (`--aconcurrency`); the published package
+# depends on `celery>=5.3`.
+[tool.uv.sources]
+celery = { git = "https://github.com/velis74/celery", tag = "v5.7.0+async" }
