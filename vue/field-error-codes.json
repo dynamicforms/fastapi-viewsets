@@ -53,5 +53,7 @@
     "fields"
   ],
   "fastapi-viewsets.invalid": [],
-  "fastapi-viewsets.pk_assigned_by_server": []
+  "fastapi-viewsets.pk_assigned_by_server": [],
+  "fastapi-viewsets.protected": [],
+  "fastapi-viewsets.restricted": []
 }

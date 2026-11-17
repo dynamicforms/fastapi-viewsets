@@ -27,7 +27,7 @@ features:
   - title: route_viewset decorator
     details: Register a viewset on a FastAPI router with a single decorator call. Handles type resolution, lifecycle management and OpenAPI schema automatically.
   - title: Backends in the box
-    details: CollectionViewSet is a zero-boilerplate viewset backed by any Python list, set or dict. DjangoORMViewSet backs one with a QuerySet, absorbing filtering, ordering and slicing into SQL.
+    details: CollectionViewSet is a zero-boilerplate viewset backed by any Python list, set or dict. DjangoORMViewSet backs one with a QuerySet, absorbing filtering, ordering and slicing into SQL. AdormViewSet does the same on adorm, awaited without threads, with the generated adorm model as its schema.
   - title: muxws WebSocket transport
     details: Reach the same viewsets over a single WebSocket instead of one HTTP request per call. A command goes through your application as an HTTP request does - its middleware, exception handlers, router dependencies and state - so both transports behave identically.
   - title: Backend-to-frontend events

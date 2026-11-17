@@ -3,6 +3,8 @@ Runs the demo: FastAPI, the Vue dev server, and optionally a Celery worker.
 
     uv run python demo.py              # backend + frontend
     uv run python demo.py --celery     # ... and every viewset call routed through a Celery worker
+    uv run python demo.py --adorm-db postgres://user:password@localhost:5432/
+                                       # ... and the library on PostgreSQL through adorm (/music-adorm)
 
 Celery is off by default: its queueing latency would dominate the HTTP vs WebSocket benchmark.
 Ctrl-C stops the children one by one; each runs in its own session and is stopped by process group.
@@ -58,10 +60,24 @@ def main() -> int:
         action="store_true",
         help="route viewset calls through a Celery worker (needs Redis at DEMO_REDIS_URL, default redis://localhost:6379/0)",
     )
+    parser.add_argument(
+        "--adorm-db",
+        metavar="URL",
+        default=os.environ.get("DEMO_ADORM_DATABASE_URL", ""),
+        help="PostgreSQL server of the adorm viewset (needs adorm installed); default: $DEMO_ADORM_DATABASE_URL",
+    )
+    parser.add_argument(
+        "--adorm-driver",
+        choices=("asyncpg", "django"),
+        default=os.environ.get("DEMO_ADORM_DRIVER", "asyncpg"),
+        help="the adorm driver of the adorm viewset",
+    )
     args = parser.parse_args()
 
-    # demo.backend.viewsets reads it at import time
-    env = {"DEMO_CELERY": "1"} if args.celery else {}
+    # demo.backend.viewsets and demo.backend.adorm_demo read them at import time
+    env = {"DEMO_ADORM_DATABASE_URL": args.adorm_db, "DEMO_ADORM_DRIVER": args.adorm_driver}
+    if args.celery:
+        env["DEMO_CELERY"] = "1"
 
     children: list[tuple[str, subprocess.Popen]] = [
         ("the frontend", spawn(["npm", "run", "demo:dev"], env)),  # noqa: S607
@@ -81,6 +97,7 @@ def main() -> int:
     print("FastAPI docs:  http://127.0.0.1:8000/docs")
     print("API reference: http://127.0.0.1:8000/redoc")
     print(f"Celery:        {'on' if args.celery else 'off (--celery to enable)'}")
+    print(f"adorm:         {'on, ' + args.adorm_driver if args.adorm_db else 'off (--adorm-db to enable)'}")
 
     backend = spawn(
         [sys.executable, "-m", "uvicorn", "demo.backend.main:app", "--host", "127.0.0.1", "--port", "8000"],

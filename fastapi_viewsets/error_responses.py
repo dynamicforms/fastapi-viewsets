@@ -154,6 +154,8 @@ FIELD_ERROR_PARAMS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         _namespaced("unique"): ("fields",),
         _namespaced("invalid"): (),
         _namespaced("pk_assigned_by_server"): (),
+        _namespaced("protected"): (),
+        _namespaced("restricted"): (),
     }
 )
 """The field error codes this package declares, each with the names of its params, in order."""
@@ -369,7 +371,7 @@ def field_errors(errors: Any, names: FieldNames | None = None) -> dict[str, list
     with `.` (`("body", "address", "city")` -> `address.city`). A pydantic type that has a field error
     code becomes that code, with params read from `ctx`; a type or choice error with a null input becomes
     `required`. Any other pydantic type, or a covered type whose `ctx` lacks a param key, becomes
-    `pydantic.<type>` with `ctx` as params. A `django.<code>` type from `_django_errors()` becomes its
+    `pydantic.<type>` with `ctx` as params. A `django.<code>` type from `_validation_errors()` becomes its
     field error code under the same rules. A namespaced type (`app.slug_taken`) is the code, with `ctx`
     as params. Any other type becomes `pydantic.custom_error` with `{type, ctx}`. `input` is left out.
 
@@ -393,18 +395,27 @@ def field_errors(errors: Any, names: FieldNames | None = None) -> dict[str, list
 
 
 @cache
-def _django_validation_error() -> type[Exception] | None:
-    """`django.core.exceptions.ValidationError`; None when Django is not installed."""
+def _validation_error_types() -> tuple[type[Exception], ...]:
+    """The installed `ValidationError` classes of Django (`django.core.exceptions`) and adorm; empty without both."""
+    types: list[type[Exception]] = []
     try:
-        from django.core.exceptions import ValidationError
+        from django.core.exceptions import ValidationError as DjangoValidationError
     except ImportError:  # pragma: no cover - the django extra is not installed
-        return None
-    return ValidationError
+        pass
+    else:
+        types.append(DjangoValidationError)
+    try:
+        from adorm import ValidationError as AdormValidationError
+    except ImportError:
+        pass
+    else:
+        types.append(AdormValidationError)
+    return tuple(types)
 
 
-def _is_django_validation_error(error: BaseException) -> bool:
-    validation_error = _django_validation_error()
-    return validation_error is not None and isinstance(error, validation_error)
+def _is_validation_error(error: BaseException) -> bool:
+    """Whether `error` is Django's or adorm's `ValidationError`."""
+    return isinstance(error, _validation_error_types())
 
 
 def _json_safe(value: Any) -> Any:
@@ -412,7 +423,10 @@ def _json_safe(value: Any) -> Any:
     `value` as JSON: lazy text as a string; dates, times, durations, decimals and UUIDs through
     `jsonable_encoder`; containers element by element. Any other object is `_MISSING`; containers drop it.
     """
-    from django.utils.functional import Promise
+    try:
+        from django.utils.functional import Promise
+    except ImportError:  # pragma: no cover - adorm's errors without Django installed
+        Promise = ()  # noqa: N806 - matches nothing in isinstance()
 
     if isinstance(value, Promise):
         return str(value)
@@ -450,20 +464,22 @@ def _django_message(message: Any, params: Mapping[str, Any]) -> str:
         return str(message)
 
 
-def _django_errors(error: Exception, loc: tuple[Any, ...] = (ERROR_NAMESPACE_DJANGO,)) -> list[dict[str, Any]]:
+_NON_FIELD_ERRORS = "__all__"
+"""The key of the errors of no single field in a `ValidationError`'s `error_dict`, Django's `NON_FIELD_ERRORS`."""
+
+
+def _validation_errors(error: Exception, loc: tuple[Any, ...] = (ERROR_NAMESPACE_DJANGO,)) -> list[dict[str, Any]]:
     """
-    A Django `ValidationError` as pydantic-style errors for `field_errors()`: `loc` plus the field name
-    (none for `NON_FIELD_ERRORS` or an error without fields), `type` the Django code as `django.<code>`
+    A Django or adorm `ValidationError` as pydantic-style errors for `field_errors()`: `loc` plus the field name
+    (none for `"__all__"` or an error without fields), `type` the Django code as `django.<code>`
     (`django.invalid` without a code; a namespaced code as is), `ctx` its params as JSON, `msg` the message
     with its params substituted. The default `loc` `("django",)` holds no row's key, so `field_errors()`
     does not split one off in a bulk action.
     """
-    from django.core.exceptions import NON_FIELD_ERRORS
-
-    groups = error.error_dict.items() if hasattr(error, "error_dict") else [(NON_FIELD_ERRORS, error.error_list)]
+    groups = error.error_dict.items() if hasattr(error, "error_dict") else [(_NON_FIELD_ERRORS, error.error_list)]
     entries = []
     for field, grouped in groups:
-        field_loc = loc if field in (NON_FIELD_ERRORS, None) else (*loc, str(field))
+        field_loc = loc if field in (_NON_FIELD_ERRORS, None) else (*loc, str(field))
         for one in (single for errors in grouped for single in errors.error_list):
             params = one.params or {}
             code = one.code or "invalid"
@@ -479,12 +495,12 @@ def _body(detail: str, code: str, params: dict[str, Any], fields: dict | None = 
 
 def error_status(error: BaseException) -> int:
     """
-    An `HTTPException`'s own status, 422 for a `RequestValidationError` or Django's `ValidationError`,
+    An `HTTPException`'s own status, 422 for a `RequestValidationError` or Django's or adorm's `ValidationError`,
     otherwise 500.
     """
     if isinstance(error, HTTPException):
         return error.status_code
-    if isinstance(error, RequestValidationError) or _is_django_validation_error(error):
+    if isinstance(error, RequestValidationError) or _is_validation_error(error):
         return 422
     return 500
 
@@ -492,11 +508,11 @@ def error_status(error: BaseException) -> int:
 def error_body(error: BaseException, names: FieldNames | None = None) -> dict[str, Any]:
     """
     `error` as a JSON `ApiErrorBody`: `DfViewSetError` as is, `RequestValidationError` and Django's
-    `ValidationError` as `validation_failed` (field names through `names`), other `HTTPException` as
+    or adorm's `ValidationError` as `validation_failed` (field names through `names`), other `HTTPException` as
     `http_error` (`{status}`, a non-string detail in `detail_params.detail`), anything else as `UnhandledError`.
     """
-    if isinstance(error, RequestValidationError) or _is_django_validation_error(error):
-        errors = error.errors() if isinstance(error, RequestValidationError) else _django_errors(error)
+    if isinstance(error, RequestValidationError) or _is_validation_error(error):
+        errors = error.errors() if isinstance(error, RequestValidationError) else _validation_errors(error)
         return _body(VALIDATION_FAILED_DETAIL, _namespaced("validation_failed"), {}, field_errors(errors, names))
     if not isinstance(error, HTTPException):
         error = UnhandledError()
@@ -530,7 +546,7 @@ async def _handle_error(request: Request, error: Exception) -> Response:
     """Handler used by `install_error_handlers` and viewset routes. The field errors of a viewset route are
     named by its viewset. Starlette re-raises an `Exception` after the response, so the server logs it."""
     names = None
-    if isinstance(error, RequestValidationError) or _is_django_validation_error(error):
+    if isinstance(error, RequestValidationError) or _is_validation_error(error):
         resolve = getattr(request.scope.get("endpoint"), FIELD_NAMES_ATTRIBUTE, None)
         if resolve is not None:
             names = await resolve(request)
@@ -540,15 +556,15 @@ async def _handle_error(request: Request, error: Exception) -> Response:
 def install_error_handlers(app: FastAPI) -> None:
     """
     Answers every error of `app`'s routes, and Starlette's 404/405, with an `ApiErrorBody`; Django's
-    `ValidationError` (when Django is installed) becomes 422 `validation_failed`. Unhandled
+    and adorm's `ValidationError` (when installed) become 422 `validation_failed`. Unhandled
     exceptions become 500 `unhandled_error` and are re-raised for logging. Handlers registered later,
     or for a more specific class or a status, take precedence.
     """
     app.add_exception_handler(DfViewSetError, _handle_error)
     app.add_exception_handler(HTTPException, _handle_error)
     app.add_exception_handler(RequestValidationError, _handle_error)
-    if (django_validation_error := _django_validation_error()) is not None:
-        app.add_exception_handler(django_validation_error, _handle_error)
+    for validation_error in _validation_error_types():
+        app.add_exception_handler(validation_error, _handle_error)
     app.add_exception_handler(Exception, _handle_error)
 
 
@@ -562,7 +578,7 @@ EXCEPTION_HANDLERS_SCOPE_KEY = "starlette.exception_handlers"
 def uniform_exception_handlers(scope: dict[str, Any]) -> None:
     """
     For this request, replaces FastAPI's default `HTTPException` / `RequestValidationError` handlers
-    with the `ApiErrorBody` one and adds it for Django's `ValidationError`; the application's own
+    with the `ApiErrorBody` one and adds it for Django's and adorm's `ValidationError`; the application's own
     handlers are kept.
     """
     exception_handlers, status_handlers = scope.get(EXCEPTION_HANDLERS_SCOPE_KEY) or ({}, {})
@@ -571,8 +587,8 @@ def uniform_exception_handlers(scope: dict[str, Any]) -> None:
     }
     handlers.setdefault(HTTPException, _handle_error)
     handlers.setdefault(RequestValidationError, _handle_error)
-    if (django_validation_error := _django_validation_error()) is not None:
-        handlers.setdefault(django_validation_error, _handle_error)
+    for validation_error in _validation_error_types():
+        handlers.setdefault(validation_error, _handle_error)
     scope[EXCEPTION_HANDLERS_SCOPE_KEY] = (handlers, status_handlers)
 
 

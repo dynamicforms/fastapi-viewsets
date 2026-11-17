@@ -6,6 +6,36 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] - 2026-11-17
+
+### Added
+
+- `AdormViewSet` (`fastapi_viewsets.backends.adorm`): a viewset over an adorm model, whose records are the model
+  itself (a model `adorm generate` writes) or another pydantic `schema`. Filters, the sort with its NULL placement,
+  the page, the count and the cursor become SQL of adorm query sets, awaited on adorm's pool; a stage it cannot
+  translate falls back to the in-memory pass. Clients sort, filter and receive field errors by a field's alias
+  (`copy` for the generated `copy_`). Creates and updates answer the rows as stored; updates check `get_queryset`
+  before locking their rows in key order, and save every field. Every write runs in a transaction of the call's
+  session. `DoesNotExist` answers `fastapi-viewsets.not_found`; a violated unique, `NOT NULL` or foreign key
+  constraint answers a field error under the model field of the column PostgreSQL reports (a unique key of several
+  columns, and any other constraint, on the form); `PROTECT` and `RESTRICT` answer `fastapi-viewsets.protected` and
+  `fastapi-viewsets.restricted`. `async get_session(context)` and `async get_queryset(context)` choose and scope the
+  call's session; `using` and `session_name` name it; `clean_on_save` runs `full_clean()` before saving;
+  `lookup_title` and `lookup_group` make `LookupMixin` choices and filter the default `LookupFilter` in SQL.
+- The extra `adorm` (Python 3.11+): adorm with its `asyncpg` and `django` drivers.
+- `AdormSession(atomic=False)`: the command middleware that makes an `AdormViewSet`'s session current while its
+  action runs, in one `atomic()` block with `atomic` (per action: `@action_configuration({AdormSession: ...})`).
+  adorm's `ObjectDoesNotExist` and `IntegrityError` raised anywhere in the action answer as the viewset's own
+  operations do; a foreign key checked at the block's commit goes under the field of the row that holds the value.
+- Field error codes `fastapi-viewsets.protected` and `fastapi-viewsets.restricted` (no params) in
+  `FIELD_ERROR_PARAMS` and TS `FieldErrorParams`: a delete refused by a `PROTECT` or `RESTRICT` reference.
+- `segment_condition(keys, position, backwards, inclusive, nulls_first, lookup)` in `fastapi_viewsets.cursor`: the
+  cursor predicate as a union of per-key conditions of a backend's `Q`.
+- adorm's `ValidationError` answers 422 `fastapi-viewsets.validation_failed` wherever Django's does: viewset routes,
+  `install_error_handlers`, muxws, `celery_viewset` workers and `perform_bulk_destroy`.
+- Demo: the music library on PostgreSQL through `AdormViewSet` at `/music-adorm` (`demo.py --adorm-db URL`,
+  `--adorm-driver`), with the typed TS client; `GET /backends` says whether it is available.
+
 ## [0.16.0] - 2026-11-16
 
 ### Added

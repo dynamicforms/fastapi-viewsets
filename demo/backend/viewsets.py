@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from demo.backend import adorm_demo
 from demo.backend.data_generator import generate_music_library
 from demo.backend.django_setup import MusicTrackRow
 from fastapi_viewsets.backends.django_orm import DjangoORMViewSet
@@ -32,6 +33,11 @@ would dominate the HTTP/WebSocket difference the benchmark measures.
 # Writes publish `records_changed` to the viewset's base path topic. Set before any viewset is decorated, in
 # both processes: with Celery, the worker publishes.
 settings.viewsets_command_middleware = [ChangeEvents()]
+if adorm_demo.ENABLED:
+    from fastapi_viewsets.backends.adorm import AdormSession
+
+    # Each action of the adorm viewset in one transaction of its session, committed before ChangeEvents publishes.
+    settings.viewsets_command_middleware.append(AdormSession(atomic=True))
 # A caller may follow a viewset's topic when it may call the viewset (here: everyone, no authentication).
 settings.viewsets_event_authorizers = [ViewsetTopics()]
 
@@ -94,15 +100,19 @@ loop, where Django refuses a synchronous query.
 """
 
 
+LIST_ITEMS_DESCRIPTION = (
+    "Cursor-paged by default - follow `next` to walk forward. Send `X-List-Shape: plain` "
+    "for a bare array or `paginated` for offset paging; the response examples below are "
+    "named after the value that produces them."
+)
+"""The OpenAPI description of the music library's list, on each data source."""
+
+
 @endpoint_docs(
     {
         "list_items": {
             "summary": "Browse the library",
-            "description": (
-                "Cursor-paged by default - follow `next` to walk forward. Send `X-List-Shape: plain` "
-                "for a bare array or `paginated` for offset paging; the response examples below are "
-                "named after the value that produces them."
-            ),
+            "description": LIST_ITEMS_DESCRIPTION,
         },
         "retrieve": {"summary": "One track by id"},
         "create": {"summary": "Add a track"},

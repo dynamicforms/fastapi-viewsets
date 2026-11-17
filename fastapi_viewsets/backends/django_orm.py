@@ -6,9 +6,6 @@ class attribute on `ListMixin`. Requires the `django` extra; every ORM call uses
 `sync_to_async`.
 """
 
-import operator
-
-from functools import reduce
 from typing import Any, ClassVar, Generic, TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
@@ -22,8 +19,8 @@ from typing_extensions import TypeVar
 
 from ..collation import Collation
 from ..context import Context
-from ..cursor import CursorPredicate, wants_greater
-from ..error_responses import _django_errors
+from ..cursor import CursorPredicate, segment_condition, wants_greater
+from ..error_responses import _validation_errors
 from ..exceptions import NotFoundError
 from ..filters import (
     can_compile_all,
@@ -311,7 +308,7 @@ class DjangoORMViewSet(ImplMixin[K, T], Generic[K, T]):
                     with transaction.atomic(using=locked.db):
                         instance.save()
                 except DjangoValidationError as error:
-                    errors.extend(_django_errors(error, ("body", pk) if bulk else ("body",)))
+                    errors.extend(_validation_errors(error, ("body", pk) if bulk else ("body",)))
             if errors:
                 raise RequestValidationError(errors)
         return [self.to_record(rows[pk]) for pk in records]
@@ -473,44 +470,10 @@ def _row_value_condition(keys, position, backwards: bool) -> Q:
     return Q(comparison(left, right))
 
 
-def _equals(name: str, value: Any) -> Q:
-    """`IS NULL` rather than `= NULL`, which is never true."""
-    return Q(**{f"{name}__isnull": True}) if value is None else Q(**{name: value})
-
-
 def _segment_condition(keys, position, backwards: bool, inclusive: bool, nulls_first: bool = True) -> Q:
-    segments: list[Q] = []
-
-    for index, (name, descending) in enumerate(keys):
-        segment = Q()
-        for earlier, _ in keys[:index]:
-            segment &= _equals(earlier, position[earlier])
-
-        value = position[name]
-        greater = wants_greater(descending, backwards)
-        # Whether NULLs come first as this page is read: `nulls`, flipped by descending and by backwards.
-        nulls_lead = (nulls_first != descending) != backwards
-
-        if value is None:
-            if not nulls_lead:
-                # Nothing lies past a NULL when the NULLs are at the far end already.
-                continue
-            segment &= Q(**{f"{name}__isnull": False})
-        else:
-            beyond = Q(**{f"{name}__gt" if greater else f"{name}__lt": value})
-            # SQL comparisons never match NULL, so NULLs ordered past the anchor are added explicitly.
-            segment &= beyond if nulls_lead else beyond | Q(**{f"{name}__isnull": True})
-        segments.append(segment)
-
-    if inclusive:
-        anchor = Q()
-        for name, _ in keys:
-            anchor &= _equals(name, position[name])
-        segments.append(anchor)
-
-    if not segments:
-        return Q(pk__in=[])  # matches nothing, and says so without a special case downstream
-    return reduce(operator.or_, segments)
+    condition = segment_condition(keys, position, backwards, inclusive, nulls_first, Q)
+    # matches nothing, and says so without a special case downstream
+    return Q(pk__in=[]) if condition is None else condition
 
 
 @compiles(DjangoORMViewSet, CursorPredicate)

@@ -14,6 +14,10 @@ Celery-backed async execution and a matching Vue/TypeScript client counterpart.
   sort order with its NULL placement, the page as LIMIT/OFFSET and the total as `COUNT(*)` all
   become SQL; a stage it declines falls back to the in-memory pass instead of failing, and
   `pk_field_name` comes from the model's primary key (requires the `django` extra).
+- **`AdormViewSet`** — back a viewset with [adorm](https://docs.velis.si/adorm/), the asynchronous ORM
+  interface: filter, sort, page and count become SQL of adorm queries awaited on adorm's pool, writes run in
+  transactions with row locks, database constraints answer field errors, and a model `adorm generate` writes is the
+  viewset's schema (requires adorm with a driver).
 - **`celery_viewset` decorator** — move a viewset's execution to a Celery worker with no code changes
   to the viewset itself, for long-running or background processing scenarios (requires the `celery`
   extra).
@@ -88,14 +92,14 @@ app.include_router(router)
 ```
 
 See the [full documentation](https://docs.velis.si/dynamicforms/fastapi-viewsets/) for guides on
-the mixin system, `route_viewset`, `CollectionViewSet`, `DjangoORMViewSet`, `celery_viewset`, the
+the mixin system, `route_viewset`, `CollectionViewSet`, `DjangoORMViewSet`, `AdormViewSet`, `celery_viewset`, the
 list pipeline and pagination, the muxws transport, events, and the Vue client.
 
 ## Demo
 
 An infinite-scrolling grid over a 5000-track library, cursor-paged. Switch the whole grid between
-the REST and muxws transports and between the in-memory and SQLite backends, and compare their
-latency side by side. Sorting and filtering are server-side.
+the REST and muxws transports and between the in-memory, SQLite and PostgreSQL (adorm) backends, and compare
+their latency side by side. Sorting and filtering are server-side.
 
 The grid follows its viewset's change events (`ChangeEvents` on the backend, `watch()` in the
 grid). Click a Favorite cell to toggle it: every tab showing the library applies the change, over
@@ -112,7 +116,8 @@ and dev server on their own ports.
 ### Run locally
 
 Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node 22+; Redis for `--celery`
-(`redis://localhost:6379/0`; a different URL goes in the `DEMO_REDIS_URL` environment variable).
+(`redis://localhost:6379/0`; a different URL goes in the `DEMO_REDIS_URL` environment variable); Python 3.11+ and
+a PostgreSQL server for `--adorm-db`.
 
 ```bash
 git clone https://github.com/dynamicforms/fastapi-viewsets.git && cd fastapi-viewsets
@@ -120,6 +125,8 @@ uv sync && npm ci
 uv run python demo.py                # backend on :8000, frontend on :5173
 uv run python demo.py --celery       # ... with every viewset call routed through a Celery worker
 # DEMO_REDIS_URL=redis://redis-host:6379/0 uv run python demo.py --celery   # Redis elsewhere
+uv run python demo.py --adorm-db postgres://user:password@localhost:5432/
+                                     # ... and the library on PostgreSQL through adorm
 npm run test:e2e                     # drives the demo in a browser
 ```
 

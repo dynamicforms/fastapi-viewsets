@@ -26,7 +26,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from ...action_configuration import resolve_action_configuration
 from ...conf import settings
 from ...context import Context, deserialize_context, from_jsonable
-from ...error_responses import _django_errors, _is_django_validation_error
+from ...error_responses import _is_validation_error, _validation_errors
 from ...exceptions import ActionDispatchError, ActionFailedError, ActionInterruptedError, DfViewSetError
 from ...middleware import ActionTransition, ExecutionRef, run_executor_started, run_transition_listeners
 from ..build_schema import build_schema
@@ -612,7 +612,7 @@ def celery_viewset_server(
 
         def _fail(caught: BaseException, run: _Run, task_name: str, call: dict):
             """Pushes the error of a failed execution and re-raises what Celery is to record; an
-            `HTTPException` is the action's answer and is not re-raised; Django's `ValidationError` is
+            `HTTPException` is the action's answer and is not re-raised; Django's or adorm's `ValidationError` is
             converted to a `RequestValidationError`. A process exit is reported here
             only without a supervisor (any pool but prefork). A `gevent.Timeout` is re-raised as it is:
             the gevent pool handles its time limit only when that exception reaches it."""
@@ -623,8 +623,8 @@ def celery_viewset_server(
                 _report("interrupted", task_name, call, lambda t: ActionInterruptedError(t, "time_limit"))
                 raise pool_timeout
             error = run.translate(caught)
-            if _is_django_validation_error(error):
-                error = RequestValidationError(_django_errors(error))
+            if _is_validation_error(error):
+                error = RequestValidationError(_validation_errors(error))
             process_exit = isinstance(error, (KeyboardInterrupt, SystemExit))
             if process_exit:
                 pushed = ActionInterruptedError(task_name, "terminated")

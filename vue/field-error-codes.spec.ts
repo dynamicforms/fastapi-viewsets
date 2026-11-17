@@ -41,6 +41,8 @@ const SAMPLE = {
   'fastapi-viewsets.unique': { fields: ['title'] },
   'fastapi-viewsets.invalid': {},
   'fastapi-viewsets.pk_assigned_by_server': {},
+  'fastapi-viewsets.protected': {},
+  'fastapi-viewsets.restricted': {},
 } satisfies { [C in FieldErrorCode]: FieldErrorParams[C] };
 
 describe('field error codes', () => {

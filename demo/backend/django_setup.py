@@ -1,6 +1,7 @@
 """
 A minimal Django ORM setup for the demo, backed by SQLite: `settings.configure()` plus
 `django.setup()`, with no Django project. Import this module before anything that touches the models.
+With the adorm demo on (`demo.backend.adorm_demo`), Django also gets the PostgreSQL alias `adorm` and its table.
 """
 
 import os
@@ -9,18 +10,27 @@ from pathlib import Path
 
 from django.conf import settings
 
+from demo.backend import adorm_demo
+
 DB_PATH = Path(os.environ.get("DEMO_DB_PATH", Path(__file__).parent / "demo.sqlite3"))
 
 if not settings.configured:
+    databases = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": str(DB_PATH)}}
+    if adorm_demo.ENABLED:
+        databases[adorm_demo.DATABASE_ALIAS] = adorm_demo.django_database()
     settings.configure(
         INSTALLED_APPS=["demo.backend"],
-        DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": str(DB_PATH)}},
+        DATABASES=databases,
+        DATABASE_ROUTERS=[adorm_demo.TablesRouter()] if adorm_demo.ENABLED else [],
         USE_TZ=True,
         DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
     )
     import django
 
     django.setup()
+
+    if adorm_demo.ENABLED:
+        import demo.backend.adorm_tables  # noqa: F401 - registers the PostgreSQL table with Django
 
 
 from django.db import models  # noqa: E402

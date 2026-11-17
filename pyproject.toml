@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "dynamicforms-fastapi-viewsets"
-version = "0.16.0"
+version = "0.16.1"
 description = "Django REST Framework-style viewsets for FastAPI, with optional Celery-backed async execution and a Vue/TypeScript client counterpart."
 readme = "README.md"
 license = "MIT"
@@ -38,6 +38,7 @@ muxws = ["muxws[starlette]>=0.4.2"]
 django = ["django>=4.2", "asgiref>=3.6"]
 jwt = ["PyJWT>=2.8"]
 icu = ["PyICU>=2.10"]
+adorm = ["adorm[asyncpg]>=0.0.2; python_version >= '3.11'"]
 
 [dependency-groups]
 dev = [
@@ -54,6 +55,7 @@ dev = [
     "django",
     "asgiref",
     "PyJWT",
+    "adorm[asyncpg]>=0.0.2; python_version >= '3.11'",
     "muxws[starlette,websockets]>=0.4.2",
     "ruff",
     "uvicorn",
@@ -69,7 +71,7 @@ Documentation = "https://docs.velis.si/dynamicforms/fastapi-viewsets/"
 module-name = "fastapi_viewsets"
 module-root = ""
 source-include = ["LICENSE"]
-source-exclude = ["**/*_test.py"]
+source-exclude = ["**/*_test.py", "fastapi_viewsets/backends/adorm_test_models"]
 
 [tool.publish]
 tests = "pytest"

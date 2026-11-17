@@ -52,6 +52,8 @@ _DECLARED_CODES = frozenset(
         "unhandled_error",
         "command_invalid",
         "pk_assigned_by_server",
+        "protected",
+        "restricted",
         "required",
         "min_length",
         "max_length",

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 
@@ -10,7 +11,9 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import HTMLResponse
 from muxws import accept, Stream
+from pydantic import BaseModel, Field
 
+from demo.backend import adorm_demo
 from demo.backend.django_setup import ensure_database
 from demo.backend.openapi_docs import add_try_links, REDOC_HEAD, SWAGGER_HEAD
 from demo.backend.viewsets import (
@@ -32,14 +35,35 @@ from fastapi_viewsets.mux_ws import process_command
 async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAPI
     # In a thread: Django refuses synchronous queries inside a running event loop.
     await sync_to_async(ensure_database, thread_sensitive=False)(records)
+    if adorm_demo.ENABLED:
+        import psycopg
+
+        try:
+            await asyncio.to_thread(adorm_demo.ensure_database, records)
+        except psycopg.Error as error:
+            # The other data sources still start; the adorm one reports why it is off.
+            adorm_demo.disable(f"the PostgreSQL server cannot be used: {error}")
+        else:
+            adorm_demo.configure_adorm()
     await start_events()
     check_events()
-
-    if not USE_CELERY:
-        yield
+    try:
+        if USE_CELERY:
+            async with _result_readers():
+                yield
+        else:
+            yield
+    finally:
         await stop_events()
-        return
+        if adorm_demo.ENABLED:
+            from adorm.settings import close_pools
 
+            await close_pools()
+
+
+@asynccontextmanager
+async def _result_readers():
+    """The readers of the Celery viewsets' results, for the lifespan."""
     from demo.backend.celery_app import redis_async
     from fastapi_viewsets.decorators.celery_viewset import (
         check_result_readers,
@@ -53,7 +77,6 @@ async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAP
     check_result_readers()
     yield
     await stop_result_reader()
-    await stop_events()
 
 
 # Both doc pages are served by hand: FastAPI's built-ins have no hook for the extra <head> the
@@ -97,8 +120,35 @@ router = APIRouter()
 route_viewset(router, base_path="/music", pk_field_name="id")(MusicTrackViewSet)
 # The same API over SQLite via the Django ORM, for comparing the two backends on the same data.
 route_viewset(router, base_path="/music-db", pk_field_name="id")(MusicTrackDbViewSet)
+if adorm_demo.ENABLED:
+    from demo.backend.adorm_viewsets import MusicTrackAdormViewSet
+
+    # The same API on PostgreSQL through adorm, with the generated adorm model as its records.
+    route_viewset(router, base_path="/music-adorm", pk_field_name="id")(MusicTrackAdormViewSet)
 # subscribe, unsubscribe and poll of the viewsets' topics, under /events
 register_events(router, base_path="/events")
+
+
+class DemoBackend(BaseModel):
+    """A data source of the demo's music library."""
+
+    name: str = Field(description="`memory`, `db` or `adorm`: the value the frontend selects it by.")
+    base_path: str = Field(description="Where its viewset is routed.")
+    available: bool = Field(description="Whether the viewset is routed.")
+    reason: str | None = Field(None, description="Why it is not available; null when it is.")
+
+
+@router.get("/backends", tags=["demo"], summary="Data sources of the demo")
+async def backends() -> list[DemoBackend]:
+    """The demo's three data sources; the adorm one is available with adorm installed and a PostgreSQL server."""
+    return [
+        DemoBackend(name="memory", base_path="/music", available=True),
+        DemoBackend(name="db", base_path="/music-db", available=True),
+        DemoBackend(
+            name="adorm", base_path="/music-adorm", available=adorm_demo.ENABLED, reason=adorm_demo.UNAVAILABLE
+        ),
+    ]
+
 
 app.include_router(router)
 
