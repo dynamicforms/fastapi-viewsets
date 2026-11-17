@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call's session; `using` and `session_name` name it; `clean_on_save` runs `full_clean()` before saving;
   `lookup_title` and `lookup_group` make `LookupMixin` choices and filter the default `LookupFilter` in SQL.
 - The extra `adorm` (Python 3.11+): adorm with its `asyncpg` and `django` drivers.
+- `celery_viewset` tasks carry an async implementation (`__celery_async__`) for Celery with async tasks
+  (`velis74/celery`): a worker started with `--aconcurrency` runs the actions on the event loop of its async
+  processes, many at a time; a soft or hard time limit and `revoke(..., terminate=True)` cancel the execution and reach
+  `execute()` as `ActionInterruptedError`. Other Celery versions and pools run the actions as before.
 - `AdormSession(atomic=False)`: the command middleware that makes an `AdormViewSet`'s session current while its
   action runs, in one `atomic()` block with `atomic` (per action: `@action_configuration({AdormSession: ...})`).
   adorm's `ObjectDoesNotExist` and `IntegrityError` raised anywhere in the action answer as the viewset's own

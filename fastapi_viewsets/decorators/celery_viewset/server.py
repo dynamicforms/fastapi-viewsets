@@ -2,6 +2,7 @@ import asyncio
 import atexit
 import concurrent.futures
 import contextlib
+import contextvars
 import functools
 import inspect
 import logging
@@ -175,10 +176,15 @@ class _Run:
     `CancelledError` of an interrupted execution to the interruption that caused it.
     """
 
-    def __init__(self, task: str):
+    def __init__(self, task: str, cancel_reason: Callable[[], str | None] | None = None):
         self.task = task
         self.interruption: BaseException | None = None
         self._interrupting: BaseException | None = None
+        self._cancel_reason = cancel_reason
+
+    def cancel_reason(self) -> str | None:
+        """Why the executor cancelled the execution's coroutine: `soft`, `hard` or `terminate`."""
+        return self._cancel_reason() if self._cancel_reason is not None else None
 
     def interrupted(self, error: BaseException) -> None:
         """Records `error`, which interrupted the loop while the execution was suspended."""
@@ -194,6 +200,12 @@ class _Run:
     def translate(self, error: BaseException) -> BaseException:
         if self.interruption is not None and (error is self._interrupting or isinstance(error, asyncio.CancelledError)):
             return self.interruption
+        if isinstance(error, asyncio.CancelledError):
+            reason = self.cancel_reason()
+            if reason in ("soft", "hard"):
+                return ActionInterruptedError(self.task, "time_limit")
+            if reason == "terminate":
+                return ActionInterruptedError(self.task, "terminated")
         if _is_pool_timeout(error):
             return ActionInterruptedError(self.task, "time_limit")
         if _is_executor_error(error):
@@ -291,6 +303,48 @@ def _ensure_executor_started(loop: asyncio.AbstractEventLoop, task: str) -> None
             logger.exception("executor_started() failed in process %d", os.getpid())
             raise ActionFailedError(task, "executor") from error
         _started_loops.add(loop)
+
+
+_starting: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Future]" = weakref.WeakKeyDictionary()
+
+
+async def _ensure_executor_started_on_running_loop(task: str) -> None:
+    """`_ensure_executor_started()` for the running loop, from a coroutine on it: concurrent
+    executions wait for one `Middleware.executor_started()`."""
+    global _started_pid
+    loop = asyncio.get_running_loop()
+    if _started_pid == os.getpid() and loop in _started_loops:
+        return
+    with _started_lock:
+        if _started_pid != os.getpid():
+            _started_loops.clear()
+            _starting.clear()
+            _started_pid = os.getpid()
+        if loop in _started_loops:
+            return
+        starting = _starting.get(loop)
+        if starting is None or (starting.done() and (starting.cancelled() or starting.exception() is not None)):
+            # an empty context: the hook's background tasks do not belong to this execution
+            starting = _starting[loop] = contextvars.Context().run(
+                loop.create_task, run_executor_started(settings.viewsets_command_middleware)
+            )
+    try:
+        await asyncio.shield(starting)
+    except Exception as error:
+        with _started_lock:
+            if _starting.get(loop) is starting:
+                del _starting[loop]
+        logger.exception("executor_started() failed in process %d", os.getpid())
+        raise ActionFailedError(task, "executor") from error
+    with _started_lock:
+        _started_loops.add(loop)
+        _starting.pop(loop, None)
+
+
+def _celery_cancel_reason() -> str | None:
+    from celery.concurrency.aioworker import current_cancel_reason
+
+    return current_cancel_reason()
 
 
 # Transitions observed by the executor outside an execution
@@ -544,13 +598,48 @@ def celery_viewset_server(
         instance = cls() if lifecycle == "singleton" else None
 
         def get_sync_wrapper(original_endpoint, task_name: str):
+            """The task function: runs the action on this thread's event loop. Its `__celery_async__`
+            runs the action on the running loop, where the worker awaits a coroutine (an async process
+            of Celery with async tasks); other Celery versions and pools ignore the attribute."""
             parameters = inspect.signature(original_endpoint).parameters
             codec = ActionCodec(cls, original_endpoint)
 
+            def execution(args, kwargs):
+                """The action's coroutine for one call, from the task's arguments."""
+                context = Context(deserialize_context(kwargs.pop(CONTEXT_KWARG, None) or {}))
+                request = request_from_jsonable(kwargs.pop(REQUEST_KWARG, None))
+                parent = ExecutionRef.from_jsonable(kwargs.pop(PARENT_KWARG, None))
+                untyped = kwargs.pop(UNTYPED_KWARG, None) or ()
+                args = tuple(from_jsonable(arg) for arg in args)
+                kwargs = _reconstruct_kwargs(original_endpoint, kwargs, cls, untyped, codec)
+                return lifecycle_runner(
+                    original_endpoint,
+                    instance,
+                    cls,
+                    lifecycle,
+                    *args,
+                    needs_context="context" in parameters,
+                    request=request,
+                    forwards_request="request" in parameters,
+                    context=context,
+                    parent=parent,
+                    **kwargs,
+                )
+
+            def result_payload(result, correlation_id: str) -> dict:
+                try:
+                    data, encoding = codec.encode_result(result)
+                except Exception as error:
+                    raise ActionFailedError(task_name, "result") from error
+                return {
+                    "correlation_id": correlation_id,
+                    "task": task_name,
+                    "result": data,
+                    "result_encoding": encoding,
+                }
+
             @wraps(original_endpoint)
             def sync_wrapper(*args, **kwargs):
-                nonlocal instance
-
                 call = dict(kwargs)
                 correlation_id = kwargs.pop("_correlation_id", None)
                 result_queue_key = kwargs.pop("_result_queue_key", None)
@@ -560,47 +649,16 @@ def celery_viewset_server(
                 try:
                     loop = _event_loop()
                     _ensure_executor_started(loop, task_name)
-                    context = Context(deserialize_context(kwargs.pop(CONTEXT_KWARG, None) or {}))
-                    request = request_from_jsonable(kwargs.pop(REQUEST_KWARG, None))
-                    parent = ExecutionRef.from_jsonable(kwargs.pop(PARENT_KWARG, None))
-                    untyped = kwargs.pop(UNTYPED_KWARG, None) or ()
-                    args = tuple(from_jsonable(arg) for arg in args)
-                    kwargs = _reconstruct_kwargs(original_endpoint, kwargs, cls, untyped, codec)
+                    coroutine = execution(args, kwargs)
                     marker = execution_translator.set(run.translate)
                     try:
                         with _soft_limit_raises(task_name):
-                            result = _run_to_end(
-                                loop,
-                                lifecycle_runner(
-                                    original_endpoint,
-                                    instance,
-                                    cls,
-                                    lifecycle,
-                                    *args,
-                                    needs_context="context" in parameters,
-                                    request=request,
-                                    forwards_request="request" in parameters,
-                                    context=context,
-                                    parent=parent,
-                                    **kwargs,
-                                ),
-                                run,
-                            )
+                            result = _run_to_end(loop, coroutine, run)
                     finally:
                         execution_translator.reset(marker)
                     logger.info("Celery task completed: %s (correlation_id=%s)", task_name, correlation_id)
                     if correlation_id and result_queue_key:
-                        try:
-                            data, encoding = codec.encode_result(result)
-                            payload = {
-                                "correlation_id": correlation_id,
-                                "task": task_name,
-                                "result": data,
-                                "result_encoding": encoding,
-                            }
-                        except Exception as error:
-                            raise ActionFailedError(task_name, "result") from error
-                        push_payload(redis_client, result_queue_key, payload)
+                        push_payload(redis_client, result_queue_key, result_payload(result, correlation_id))
                         # The caller reads the pushed payload only; Celery is not handed a raw return
                         # value (e.g. a Pydantic model) to encode for its task-succeeded event.
                         return True
@@ -608,6 +666,41 @@ def celery_viewset_server(
                 except BaseException as caught:
                     return _fail(caught, run, task_name, call)
 
+            async def async_wrapper(*args, **kwargs):
+                call = dict(kwargs)
+                correlation_id = kwargs.pop("_correlation_id", None)
+                result_queue_key = kwargs.pop("_result_queue_key", None)
+                run = _Run(task_name, cancel_reason=_celery_cancel_reason)
+
+                logger.info("Celery task executing: %s (correlation_id=%s)", task_name, correlation_id)
+                try:
+                    await _ensure_executor_started_on_running_loop(task_name)
+                    coroutine = execution(args, kwargs)
+                    marker = execution_translator.set(run.translate)
+                    try:
+                        result = await coroutine
+                    finally:
+                        execution_translator.reset(marker)
+                    logger.info("Celery task completed: %s (correlation_id=%s)", task_name, correlation_id)
+                    if correlation_id and result_queue_key:
+                        payload = result_payload(result, correlation_id)
+                        push = asyncio.ensure_future(
+                            asyncio.to_thread(push_payload, redis_client, result_queue_key, payload)
+                        )
+                        try:
+                            await asyncio.shield(push)
+                        except asyncio.CancelledError:
+                            # the result is being delivered: it is the call's outcome
+                            await push
+                        return True
+                    return result
+                except BaseException as caught:
+                    if run.cancel_reason() in ("hard", "terminate"):
+                        # the executor has ended the execution and reports its outcome
+                        raise
+                    return await asyncio.to_thread(_fail, caught, run, task_name, call)
+
+            sync_wrapper.__celery_async__ = async_wrapper
             return sync_wrapper
 
         def _fail(caught: BaseException, run: _Run, task_name: str, call: dict):

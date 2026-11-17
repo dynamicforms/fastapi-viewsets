@@ -513,6 +513,7 @@ the thread that runs them:
 | Pool | Loops of executions |
 |------|---------------------|
 | `prefork` | one in each child process |
+| `prefork` with `--aconcurrency` ([async processes](./routers#async-processes)) | one in each child process; an async process runs all its executions on one loop |
 | `solo` | one in the worker process |
 | `threads` | one in each pool thread |
 | `gevent` | one in the worker process, shared by its greenlets |
