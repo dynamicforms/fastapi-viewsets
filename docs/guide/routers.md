@@ -505,8 +505,8 @@ errors (see [Error Codes](./error-codes#executor-outcomes)):
 | The action raises anything else (a Celery `Retry`, `Ignore` or `Reject` included), or an argument fails validation in the worker | `ActionFailedError` (500, reason `error`); the original error is logged in the worker | `execute()` |
 | The result cannot be serialized (see [Arguments and results](#arguments-and-results)), or deserialized by the caller | `ActionFailedError` (500, reason `result`) | — |
 | Soft time limit | `ActionInterruptedError` (504, reason `time_limit`) | `execute()` (`ActionInterruptedError` from `call_next()`) |
-| Hard time limit | `ActionInterruptedError` (504, reason `time_limit`) | `on_transition("interrupted")`; in a `gevent` pool also `execute()` (`ActionInterruptedError` from `call_next()`) |
-| `revoke(..., terminate=True)` | `ActionInterruptedError` (503, reason `terminated`) | `on_transition("interrupted")` |
+| Hard time limit | `ActionInterruptedError` (504, reason `time_limit`) | `on_transition("interrupted")`; in a `gevent` pool and an [async process](#async-processes) also `execute()` (`ActionInterruptedError` from `call_next()`) |
+| `revoke(..., terminate=True)` | `ActionInterruptedError` (503, reason `terminated`) | `on_transition("interrupted")`; in an [async process](#async-processes) also `execute()` (`ActionInterruptedError` from `call_next()`) |
 | The worker process exits | `ActionInterruptedError` (503, reason `lost`) | `on_transition("interrupted")` |
 | `SystemExit` or `KeyboardInterrupt` ends the execution in a process no supervisor outlives (any pool but `prefork`) | `ActionInterruptedError` (503, reason `terminated`) | `execute()` (`SystemExit` / `KeyboardInterrupt` from `call_next()`), then `on_transition("interrupted")` from that process |
 | Revoked or expired before it started | `ActionDispatchError` (503, reason `revoked` / `expired`) | `on_transition("not_run")` |
@@ -527,6 +527,28 @@ In a `gevent` pool a hard time limit ends the execution's greenlet, not the proc
 `ActionInterruptedError` from `call_next()`, and `finally` blocks and `save_state()` run. The worker
 process then sends the caller its error and calls `on_transition("interrupted")`. The time limit
 interrupts only code that yields to gevent; synchronous code that does not runs on.
+
+### Async processes
+
+The task of each action carries an async implementation for Celery with async tasks
+([`velis74/celery`](https://github.com/velis74/celery), branch `async-worker`). A worker of that
+Celery started with `--aconcurrency` runs the actions in its async processes, many at a time on the
+event loop of each process; other Celery versions and pools run the task's sync function, which runs
+the action on an event loop of its own. In an async process:
+
+- A soft time limit cancels the execution: the action gets `asyncio.CancelledError` at its current
+  `await`, `execute()` sees `ActionInterruptedError` (reason `time_limit`) from `call_next()`, and the
+  worker sends the caller its error.
+- `revoke(..., terminate=True)` cancels the execution the same way, with reason `terminated`; the
+  process keeps running its other executions. The supervisor sends the caller its error and calls
+  `on_transition("interrupted")`.
+- A hard time limit cancels the execution with reason `time_limit`, and the supervisor sends the
+  caller its error and calls `on_transition("interrupted")`. The process then takes no new
+  executions and is replaced: it is ended when its other executions have finished, at the latest
+  after Celery's `worker_async_recycle_timeout`; executions still running then end as `lost`.
+- Synchronous code in an action blocks every execution of the process until it returns. A soft time
+  limit and a termination interrupt it only at its next `await`; a hard time limit ends the process
+  if the code does not reach one.
 
 Celery's `current_task.retry()` publishes the retry before it raises, so the task runs again while
 its caller has already received `ActionFailedError`; the second run's result is dropped. A
@@ -555,9 +577,9 @@ class ReportViewSet(...):
 
 `settings.default_action_configuration = {TimeLimits: TimeLimits(...)}` sets them for every action.
 An action without a `TimeLimits` entry runs under the worker's own limits (`--soft-time-limit`,
-`--time-limit`). Soft time limits need the `prefork` pool, hard time limits the `prefork` or
-`gevent` pool; the `solo`, `threads` and `eventlet` pools enforce neither. An action executed in the
-FastAPI process has no time limit.
+`--time-limit`). Soft time limits need the `prefork` pool (async processes included), hard time
+limits the `prefork` or `gevent` pool; the `solo`, `threads` and `eventlet` pools enforce neither. An
+action executed in the FastAPI process has no time limit.
 
 ---
 

@@ -40,6 +40,7 @@ WORKER_MODULE = textwrap.dedent(
     import asyncio
     import json
     import os
+    import threading
     import time
 
     import redis
@@ -133,6 +134,13 @@ WORKER_MODULE = textwrap.dedent(
         async def quick(self) -> str:
             return "quick"
 
+        @__router.post("/where")
+        async def where(self) -> list:
+            from celery import concurrency
+
+            kind = getattr(concurrency, "current_process_kind", lambda: None)()
+            return [kind, threading.current_thread() is threading.main_thread()]
+
         @__router.post("/login")
         async def login(self) -> ViewSetResult[str]:
             result = ViewSetResult(body="ana")
@@ -185,6 +193,7 @@ POOLS = {
     "prefork": ["-P", "prefork", "-c", "1"],
     "gevent": ["-P", "gevent", "-c", "1"],
     "solo": ["-P", "solo"],
+    "async": ["-P", "prefork", "-c", "1", "--aconcurrency", "20"],
 }
 
 
@@ -303,6 +312,9 @@ def client(worker, redis_url, key, celery_app):
 
         @__router.post("/quick")
         async def quick(self) -> str: ...
+
+        @__router.post("/where")
+        async def where(self) -> list: ...
 
         @__router.post("/missing")
         async def missing(self) -> str: ...
@@ -479,6 +491,80 @@ def test_executor_started_runs_once_on_each_loop_of_the_gevent_pool(client, prob
     started = [tuple(entry) for entry in _entries(probe, key, "started")]
     assert {pid for pid, _loop in started} == {worker.pid}
     assert len(started) == len(set(started))
+
+
+# With async processes (Celery with async tasks), an action runs on the event loop of an async process.
+
+in_async_processes = pytest.mark.parametrize(
+    "pool",
+    [
+        pytest.param(
+            "async",
+            marks=pytest.mark.skipif(
+                not hasattr(importlib.import_module("celery.app.trace"), "ASYNC_VARIANT_ATTR"),
+                reason="Celery without async tasks",
+            ),
+        )
+    ],
+    indirect=True,
+    scope="module",
+)
+
+
+def test_an_action_runs_in_a_prefork_process_on_its_own_loop(client):
+    kind = importlib.import_module("celery.concurrency").__dict__.get("current_process_kind")
+    assert client.post("/jobs/where").json() == ["prefork" if kind else None, True]
+
+
+@in_async_processes
+def test_actions_run_concurrently_on_the_loop_of_an_async_process(client, probe, key):
+    assert client.post("/jobs/where").json() == ["async", True]
+    started = time.monotonic()
+    calls = [_in_background(lambda: client.post("/jobs/long", params={"seconds": 1})) for _ in range(10)]
+    for thread, _outcome in calls:
+        thread.join(timeout=20)
+    assert [outcome["response"].json() for _thread, outcome in calls] == ["done"] * 10
+    assert time.monotonic() - started < 5
+    started_on = [tuple(entry) for entry in _entries(probe, key, "started")]
+    assert len(started_on) == len(set(started_on))
+
+
+@in_async_processes
+def test_a_soft_time_limit_in_an_async_process(client, probe, key):
+    assert _error(client.post("/jobs/suspended", params={"seconds": 5})) == (
+        504,
+        "fastapi-viewsets.action_interrupted",
+        "time_limit",
+    )
+    assert ["suspended", "ActionInterruptedError", "time_limit"] in _entries(probe, key, "execute")
+
+
+@in_async_processes
+def test_a_hard_time_limit_in_an_async_process(client, probe, key):
+    assert _error(client.post("/jobs/hard_suspended", params={"seconds": 5})) == (
+        504,
+        "fastapi-viewsets.action_interrupted",
+        "time_limit",
+    )
+    assert _eventually(lambda: ["interrupted", "hard_suspended", "time_limit"] in _entries(probe, key, "transitions"))
+    assert _eventually(
+        lambda: ["hard_suspended", "ActionInterruptedError", "time_limit"] in _entries(probe, key, "execute")
+    )
+    assert client.post("/jobs/quick").json() == "quick"
+
+
+@in_async_processes
+def test_a_terminated_execution_in_an_async_process(client, probe, key, celery_app):
+    thread, outcome = _in_background(lambda: client.post("/jobs/long", params={"seconds": 30}))
+    task_ids = _eventually(lambda: _task_ids(celery_app, key, "active", f"{key}.long"))
+    celery_app.control.revoke(task_ids[0], terminate=True)
+    thread.join(timeout=20)
+    assert _error(outcome["response"]) == (503, "fastapi-viewsets.action_interrupted", "terminated")
+    assert _eventually(lambda: ["long", "ActionInterruptedError", "terminated"] in _entries(probe, key, "execute"))
+    time.sleep(1)
+    assert [entry for entry in _entries(probe, key, "transitions") if entry[1] == "long"] == [
+        ["interrupted", "long", "terminated"]
+    ]
 
 
 # A process no supervisor outlives reports its own exit.

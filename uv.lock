@@ -210,7 +210,7 @@ wheels = [
 [[package]]
 name = "celery"
 version = "5.7.0+async"
-source = { git = "https://github.com/velis74/celery?tag=v5.7.0%2Basync#ca4c9b4b8aec0cf68c24de7da623b74f36893221" }
+source = { git = "https://github.com/velis74/celery?tag=v5.7.0%2Basync#d775aa21f4af3f719a4841a2e49e919f37ce669f" }
 dependencies = [
     { name = "billiard" },
     { name = "click" },
