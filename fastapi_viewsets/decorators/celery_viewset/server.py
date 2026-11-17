@@ -341,6 +341,28 @@ async def _ensure_executor_started_on_running_loop(task: str) -> None:
         _starting.pop(loop, None)
 
 
+_DJANGO_ORM_MODULE = f"{__name__.split('.')[0]}.backends.django_orm"
+_serialized_warned: set[tuple[int, type]] = set()
+
+
+def _warn_if_serialized(cls: type) -> None:
+    """Logs once per process and viewset class that a `DjangoORMViewSet` runs its queries one at a time in an
+    async process."""
+    key = (os.getpid(), cls)
+    if key in _serialized_warned:
+        return
+    _serialized_warned.add(key)
+    # a DjangoORMViewSet subclass exists only once its module is imported; no import without Django
+    django_orm = sys.modules.get(_DJANGO_ORM_MODULE)
+    if django_orm is not None and issubclass(cls, django_orm.DjangoORMViewSet):
+        logger.warning(
+            "%s is a DjangoORMViewSet: in async process %d its queries run one at a time on one thread "
+            "(sync_to_async(thread_sensitive=True)), whatever --aconcurrency is",
+            cls.__qualname__,
+            os.getpid(),
+        )
+
+
 def _celery_cancel_reason() -> str | None:
     from celery.concurrency.aioworker import current_cancel_reason
 
@@ -675,6 +697,7 @@ def celery_viewset_server(
                 logger.info("Celery task executing: %s (correlation_id=%s)", task_name, correlation_id)
                 try:
                     await _ensure_executor_started_on_running_loop(task_name)
+                    _warn_if_serialized(cls)
                     coroutine = execution(args, kwargs)
                     marker = execution_translator.set(run.translate)
                     try:

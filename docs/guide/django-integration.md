@@ -111,6 +111,13 @@ which is safe. This applies whether or not the action actually goes through Cele
 loop, so the same guard applies there too. Use `sync_to_async` as the standard pattern for any ORM
 access from `perform_*`, not just as a Celery-specific workaround.
 
+**One thread per process.** A `thread_sensitive=True` call runs in the thread of the request's
+`ThreadSensitiveContext`, which Django's ASGI handler opens per request. FastAPI under uvicorn and the
+async processes of Celery with async tasks open none, so every thread-sensitive call of the process
+runs on one shared thread, one at a time. Django's async ORM methods (`aget()`, `acount()`,
+`async for` over a queryset) call the ORM this way, and so does `DjangoORMViewSet`: a process runs
+one ORM query at a time, however many actions it awaits concurrently.
+
 ## Django's `ValidationError`
 
 When Django is installed, a `django.core.exceptions.ValidationError` raised during a request

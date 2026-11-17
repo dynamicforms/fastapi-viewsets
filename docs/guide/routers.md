@@ -531,10 +531,20 @@ interrupts only code that yields to gevent; synchronous code that does not runs 
 ### Async processes
 
 The task of each action carries an async implementation for Celery with async tasks
-([`velis74/celery`](https://github.com/velis74/celery), branch `async-worker`). A worker of that
+([`velis74/celery`](https://github.com/velis74/celery), tag `v5.7.0+async`). A worker of that
 Celery started with `--aconcurrency` runs the actions in its async processes, many at a time on the
 event loop of each process; other Celery versions and pools run the task's sync function, which runs
-the action on an event loop of its own. In an async process:
+the action on an event loop of its own.
+
+A singleton viewset serves every execution of a process on one instance, many of them at the same
+time in an async process, so it keeps no per-call state on `self`.
+
+A `DjangoORMViewSet` runs its queries through Django's async API, which calls the ORM with
+`sync_to_async(thread_sensitive=True)`: one thread per process runs them, one at a time, whatever
+`--aconcurrency` is (see [Django integration](./django-integration#django-orm-access-convention)).
+The worker logs a warning once per process and viewset class when it executes one in an async process.
+
+In an async process:
 
 - A soft time limit cancels the execution: the action gets `asyncio.CancelledError` at its current
   `await`, `execute()` sees `ActionInterruptedError` (reason `time_limit`) from `call_next()`, and the
