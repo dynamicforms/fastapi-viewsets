@@ -8,13 +8,14 @@
   },
   "hostRequirements": { "cpus": 2 },
   "postCreateCommand": "pipx install uv && uv sync --locked && npm ci",
-  "postStartCommand": "nohup uv run python demo.py > /tmp/demo.log 2>&1 &",
+  "postAttachCommand": "curl -sf -o /dev/null localhost:5173 && echo 'The demo is already running.' || uv run python demo.py",
   "forwardPorts": [5173, 8000],
   "portsAttributes": {
     "5173": { "label": "Demo", "onAutoForward": "openBrowser" },
     "8000": { "label": "Demo API", "onAutoForward": "silent" }
   },
   "customizations": {
+    "codespaces": { "openFiles": [".devcontainer/README.md"] },
     "vscode": {
       "extensions": ["ms-python.python", "charliermarsh.ruff", "Vue.volar"]
     }
