@@ -3,7 +3,7 @@ Runs the demo: FastAPI, the Vue dev server, and optionally a Celery worker.
 
     uv run python demo.py              # backend + frontend
     uv run python demo.py --celery     # ... and every viewset call routed through a Celery worker
-    uv run --with "adorm[asyncpg]" python demo.py --adorm-db postgres://user:password@localhost:5432/
+    uv run python demo.py --adorm-db postgres://user:password@localhost:5432/
                                        # ... and the library on PostgreSQL through adorm (/music-adorm)
 
 Celery is off by default: its queueing latency would dominate the HTTP vs WebSocket benchmark.

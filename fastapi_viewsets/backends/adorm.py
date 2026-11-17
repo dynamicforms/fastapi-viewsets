@@ -3,7 +3,7 @@ A viewset backed by adorm, the asynchronous ORM interface: filter, sort and page
 query sets, and every operation is awaited on an adorm session, without threads of the viewset's own.
 
 The backend must precede the list mixin in the bases: `pk_field_name` is a property here and a plain class attribute
-on `ListMixin`. Requires adorm with a driver (`pip install "adorm[asyncpg]"` or `"adorm[django]"`) and a configured
+on `ListMixin`. Requires adorm with a driver (`pip install "dynamicforms-fastapi-viewsets[adorm]"`) and a configured
 adorm connection profile.
 """
 

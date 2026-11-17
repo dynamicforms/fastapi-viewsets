@@ -13,10 +13,12 @@ answers as `ApiErrorBody` wherever it is raised.
 
 ## Installation
 
-adorm with a driver: `asyncpg` (native, async) or `django` (Django's ORM, on a thread per connection).
+adorm with a driver, on Python 3.11+. The extra `adorm` installs adorm with both drivers: `asyncpg` (native, async)
+and `django` (Django's ORM, on a thread per connection).
 
 ```bash
-pip install dynamicforms-fastapi-viewsets "adorm[asyncpg]"     # or "adorm[django]"
+pip install "dynamicforms-fastapi-viewsets[adorm]"
+pip install dynamicforms-fastapi-viewsets "adorm[django]"     # the django driver only
 ```
 
 Both drivers describe the models with Django, so the process sets Django up and configures adorm's connection
@@ -359,11 +361,11 @@ replaces a broken connection for the next request.
 ## Demo
 
 The demo serves the music library from PostgreSQL through `AdormViewSet` at `/music-adorm`, next to the in-memory and
-SQLite ones, with adorm installed and a PostgreSQL server named:
+SQLite ones, on Python 3.11+ (where the dev dependencies include adorm) with a PostgreSQL server named:
 
 ```bash
-uv run --with "adorm[asyncpg]" python demo.py --adorm-db postgres://user:password@localhost:5432/
-uv run --with "adorm[django]" python demo.py --adorm-db postgres://user:password@localhost:5432/ --adorm-driver django
+uv run python demo.py --adorm-db postgres://user:password@localhost:5432/
+uv run python demo.py --adorm-db postgres://user:password@localhost:5432/ --adorm-driver django
 ```
 
 It creates and fills the database `adorm_fastapi_viewsets_demo` on that server. The records are the generated adorm

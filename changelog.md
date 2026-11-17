@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fastapi-viewsets.restricted`. `async get_session(context)` and `async get_queryset(context)` choose and scope the
   call's session; `using` and `session_name` name it; `clean_on_save` runs `full_clean()` before saving;
   `lookup_title` and `lookup_group` make `LookupMixin` choices and filter the default `LookupFilter` in SQL.
+- The extra `adorm` (Python 3.11+): adorm with its `asyncpg` and `django` drivers.
 - `AdormSession(atomic=False)`: the command middleware that makes an `AdormViewSet`'s session current while its
   action runs, in one `atomic()` block with `atomic` (per action: `@action_configuration({AdormSession: ...})`).
   adorm's `ObjectDoesNotExist` and `IntegrityError` raised anywhere in the action answer as the viewset's own
