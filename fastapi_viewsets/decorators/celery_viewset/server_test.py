@@ -158,14 +158,16 @@ def test_celery_viewset_server_pushes_result_to_redis():
     sync_func = registered_tasks["items.list_items"]
     sync_func(_correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
 
-    redis_mock.rpush.assert_called_once()
-    call_args = redis_mock.rpush.call_args
+    redis_mock.pipeline.return_value.rpush.assert_called_once()
+    call_args = redis_mock.pipeline.return_value.rpush.call_args
     queue_key = call_args[0][0]
     payload = json.loads(call_args[0][1])
     assert queue_key == "celery_viewset_results:items"
     assert payload["correlation_id"] == "test-corr-id"
     assert payload["result"] is not None
-    redis_mock.expire.assert_called_once_with("celery_viewset_results:items", RESULT_QUEUE_TTL)
+    redis_mock.pipeline.return_value.expire.assert_called_once_with("celery_viewset_results:items", RESULT_QUEUE_TTL)
+    redis_mock.pipeline.assert_called_once_with(transaction=False)
+    redis_mock.pipeline.return_value.execute.assert_called_once_with()
 
 
 def test_celery_viewset_server_pushes_result_with_date_field_to_redis():
@@ -193,8 +195,8 @@ def test_celery_viewset_server_pushes_result_with_date_field_to_redis():
     sync_func = registered_tasks["items.list_items"]
     sync_func(_correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
 
-    redis_mock.rpush.assert_called_once()
-    payload = json.loads(redis_mock.rpush.call_args[0][1])
+    redis_mock.pipeline.return_value.rpush.assert_called_once()
+    payload = json.loads(redis_mock.pipeline.return_value.rpush.call_args[0][1])
     assert payload["result"] == [{"id": 1, "created": "2026-08-01", "updated": "2026-08-01T12:30:00"}]
 
 
@@ -223,7 +225,7 @@ def test_celery_viewset_server_returns_json_trivial_value_once_pushed_to_redis()
     result = sync_func(_correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
 
     assert result is True
-    redis_mock.rpush.assert_called_once()
+    redis_mock.pipeline.return_value.rpush.assert_called_once()
 
 
 def test_celery_viewset_server_pushes_error_to_redis_on_exception():
@@ -253,8 +255,8 @@ def test_celery_viewset_server_pushes_error_to_redis_on_exception():
         sync_func(_correlation_id="err-corr-id", _result_queue_key="celery_viewset_results:items")
     assert isinstance(raised.value.__cause__, ValueError)
 
-    redis_mock.rpush.assert_called_once()
-    call_args = redis_mock.rpush.call_args
+    redis_mock.pipeline.return_value.rpush.assert_called_once()
+    call_args = redis_mock.pipeline.return_value.rpush.call_args
     payload = json.loads(call_args[0][1])
     assert payload["correlation_id"] == "err-corr-id"
     assert payload["error"]["class"] == "ActionFailedError"
@@ -290,8 +292,8 @@ def test_celery_viewset_server_pushes_http_exception_to_redis():
     result = sync_func(_correlation_id="http-corr-id", _result_queue_key="celery_viewset_results:items")
     assert result is None
 
-    redis_mock.rpush.assert_called_once()
-    payload = json.loads(redis_mock.rpush.call_args[0][1])
+    redis_mock.pipeline.return_value.rpush.assert_called_once()
+    payload = json.loads(redis_mock.pipeline.return_value.rpush.call_args[0][1])
     assert payload["correlation_id"] == "http-corr-id"
     assert payload["http_status_code"] == 404
     assert payload["http_detail"] == "Item with pk 5 not found"
@@ -417,7 +419,7 @@ def test_celery_viewset_server_pushes_viewset_result_to_redis():
     sync_func = registered_tasks["items.go"]
     sync_func(_correlation_id="test-corr-id", _result_queue_key="celery_viewset_results:items")
 
-    payload = json.loads(redis_mock.rpush.call_args[0][1])
+    payload = json.loads(redis_mock.pipeline.return_value.rpush.call_args[0][1])
     assert payload["result_encoding"] == "viewset_result"
     assert payload["result"]["body"] == {"id": 1, "name": "test"}
     assert payload["result"]["body_encoding"] == "typed"
@@ -688,7 +690,7 @@ def test_celery_viewset_server_pushes_request_validation_error_as_422():
         _correlation_id="corr", _result_queue_key="celery_viewset_results:items"
     )
     assert result is None
-    payload = json.loads(redis_mock.rpush.call_args[0][1])
+    payload = json.loads(redis_mock.pipeline.return_value.rpush.call_args[0][1])
     assert payload["http_status_code"] == 422
     assert payload["http_detail"][0]["loc"] == ["query", "year__in", 1]
     assert payload["error"]["class"] == "RequestValidationError"
@@ -726,7 +728,7 @@ def test_celery_viewset_server_pushes_a_django_validation_error_as_422():
         _correlation_id="corr", _result_queue_key="celery_viewset_results:items"
     )
     assert result is None
-    payload = json.loads(redis_mock.rpush.call_args[0][1])
+    payload = json.loads(redis_mock.pipeline.return_value.rpush.call_args[0][1])
     assert (payload["http_status_code"], payload["error"]["class"]) == (422, "RequestValidationError")
     assert error_body(_error_from_jsonable(payload["error"]))["field_errors"] == {
         "name": [{"code": "fastapi-viewsets.min_length", "params": {"minLength": 3}, "detail": "Too short"}]

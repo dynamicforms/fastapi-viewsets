@@ -34,6 +34,7 @@ from starlette.websockets import WebSocket
 from fastapi_viewsets.context import SerializableObject
 from fastapi_viewsets.decorators import celery_viewset_client, celery_viewset_server, route_viewset
 from fastapi_viewsets.decorators.celery_viewset import get_result_queue_key, start_result_reader, stop_result_reader
+from fastapi_viewsets.decorators.celery_viewset.result_reader_test import ResultLists
 from fastapi_viewsets.decorators.celery_viewset.transport import (
     ActionCodec,
     adapter_for,
@@ -439,7 +440,7 @@ def test_viewset_result_cookies_cross_with_all_their_options():
 
 
 class _ResultLists:
-    """The Redis lists the worker pushes results to: `rpush` for the worker, `lpop` for the reader."""
+    """The Redis lists the worker pushes results to: `rpush` for the worker, `reader()` for the result reader."""
 
     def __init__(self):
         self.lists: dict[str, deque] = defaultdict(deque)
@@ -450,14 +451,16 @@ class _ResultLists:
     def expire(self, *_args):
         pass
 
-    def reader(self):
-        lists = self.lists
+    def pipeline(self, transaction=True):  # noqa: ARG002 - commands run at once
+        return self
 
-        class Reader:
-            async def lpop(self, key):
-                return lists[key].popleft().encode() if lists[key] else None
+    def execute(self):
+        pass
 
-        return Reader()
+    def reader(self) -> ResultLists:
+        reader = ResultLists()
+        reader.lists = self.lists
+        return reader
 
 
 MAX_UPLOAD = 1000

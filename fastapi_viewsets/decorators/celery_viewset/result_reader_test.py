@@ -1,20 +1,90 @@
 import asyncio
 import contextlib
+import json
+import os
+import time
+import uuid
 
-from unittest.mock import AsyncMock, MagicMock
+from collections import deque
+from unittest.mock import MagicMock
 
 import pytest
+import pytest_asyncio
 
 from fastapi_viewsets.decorators.celery_viewset import result_reader
 from fastapi_viewsets.decorators.celery_viewset.result_reader import (
     error_payload,
     get_process_queue_key,
     get_result_queue_key,
+    push_payload,
+    push_payload_async,
     push_result,
+    RESULT_QUEUE_TTL,
     start_result_reader,
     stop_result_reader,
 )
-from fastapi_viewsets.exceptions import ActionFailedError, ActionInterruptedError, DfViewSetError
+from fastapi_viewsets.exceptions import (
+    ActionFailedError,
+    ActionInterruptedError,
+    DfViewSetError,
+    ResultReaderStoppedError,
+)
+
+
+class ResultLists:
+    """In-memory Redis lists as the result reader uses them: BLPOP, and LPOP with or without a count."""
+
+    def __init__(self):
+        self.lists: dict[str, deque] = {}
+
+    def push(self, key: str, *items: str) -> None:
+        self.lists.setdefault(key, deque()).extend(item.encode() for item in items)
+
+    async def blpop(self, keys: list[str], timeout: float):
+        deadline = time.monotonic() + timeout
+        while True:
+            for key in keys:
+                if self.lists.get(key):
+                    return [key.encode(), self.lists[key].popleft()]
+            if time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(0.005)
+
+    async def lpop(self, key: str, count: int | None = None):
+        items = self.lists.get(key) or deque()
+        if count is None:
+            return items.popleft() if items else None
+        taken = [items.popleft() for _ in range(min(count, len(items)))]
+        return taken or None
+
+
+@pytest.fixture
+def redis_url() -> str:
+    url = os.environ.get("FASTAPI_VIEWSETS_TEST_REDIS_URL")
+    if not url:
+        pytest.skip("FASTAPI_VIEWSETS_TEST_REDIS_URL is not set")
+    return url
+
+
+@pytest_asyncio.fixture
+async def async_redis(redis_url):
+    import redis.asyncio
+
+    client = redis.asyncio.Redis.from_url(redis_url)
+    yield client
+    await client.aclose()
+
+
+@pytest.fixture
+def queue_key(redis_url) -> str:
+    import redis
+
+    key = f"celery_viewset_results:reader-test-{uuid.uuid4().hex}"
+    yield key
+    client = redis.Redis.from_url(redis_url)
+    client.delete(key, get_process_queue_key(key))
+    client.close()
+
 
 # ---------------------------------------------------------------------------
 # register / unregister future
@@ -66,30 +136,29 @@ def test_get_process_queue_key_names_host_and_process(monkeypatch):
 
 def test_push_result_success():
     """push_result pushes JSON with result to Redis."""
-    import json
-
     redis_mock = MagicMock()
     push_result(redis_mock, "celery_viewset_results:items", "corr-1", result={"id": 1})
 
-    redis_mock.rpush.assert_called_once()
-    key, payload_str = redis_mock.rpush.call_args[0]
+    pipe = redis_mock.pipeline.return_value
+    redis_mock.pipeline.assert_called_once_with(transaction=False)
+    pipe.rpush.assert_called_once()
+    key, payload_str = pipe.rpush.call_args[0]
     assert key == "celery_viewset_results:items"
     payload = json.loads(payload_str)
     assert payload["correlation_id"] == "corr-1"
     assert payload["result"] == {"id": 1}
     assert "error" not in payload
-    redis_mock.expire.assert_called_once_with("celery_viewset_results:items", result_reader.RESULT_QUEUE_TTL)
+    pipe.expire.assert_called_once_with("celery_viewset_results:items", result_reader.RESULT_QUEUE_TTL)
+    pipe.execute.assert_called_once_with()
 
 
 def test_push_result_error():
     """push_result pushes JSON with error to Redis."""
-    import json
-
     redis_mock = MagicMock()
     push_result(redis_mock, "celery_viewset_results:items", "corr-2", error=Exception("something failed"))
 
-    redis_mock.rpush.assert_called_once()
-    key, payload_str = redis_mock.rpush.call_args[0]
+    redis_mock.pipeline.return_value.rpush.assert_called_once()
+    key, payload_str = redis_mock.pipeline.return_value.rpush.call_args[0]
     payload = json.loads(payload_str)
     assert payload["correlation_id"] == "corr-2"
     assert payload["error"]["class"] == "ActionFailedError"
@@ -106,15 +175,13 @@ def test_push_result_error():
 @pytest.mark.asyncio
 async def test_result_reader_loop_resolves_future():
     """result_reader_loop reads from Redis and resolves the matching future."""
-    import json
-
-    redis_mock = AsyncMock()
+    redis_mock = ResultLists()
     queue_key = "celery_viewset_results:test"
     correlation_id = "loop-test-1"
 
     payload = json.dumps({"correlation_id": correlation_id, "result": [1, 2, 3]})
     # First call returns payload, subsequent calls return None (stop polling)
-    redis_mock.lpop.side_effect = [payload.encode(), None, None]
+    redis_mock.push(get_process_queue_key(queue_key), payload)
 
     future = asyncio.get_event_loop().create_future()
     result_reader.register_future(correlation_id, future)
@@ -128,7 +195,6 @@ async def test_result_reader_loop_resolves_future():
         pass
 
     assert result == [1, 2, 3]
-    redis_mock.lpop.assert_called_with(get_process_queue_key(queue_key))
 
 
 @pytest.mark.asyncio
@@ -136,11 +202,9 @@ async def test_result_reader_loop_reconstructs_tagged_serializable_object():
     """A worker-side ViewSetResult (see fastapi_viewsets.middleware) crosses the Redis boundary
     tagged by _to_jsonable (server.py) - the loop must undo that tagging (deserialize_value) so the
     FastAPI-process caller receives a real ViewSetResult, not the raw tagged dict."""
-    import json
-
     from fastapi_viewsets.middleware import ViewSetResult
 
-    redis_mock = AsyncMock()
+    redis_mock = ResultLists()
     queue_key = "celery_viewset_results:test"
     correlation_id = "loop-test-viewset-result"
 
@@ -151,7 +215,7 @@ async def test_result_reader_loop_reconstructs_tagged_serializable_object():
             "result": {"__fpv_type__": "fastapi_viewsets.middleware.ViewSetResult", "__fpv_value__": tagged},
         }
     )
-    redis_mock.lpop.side_effect = [payload.encode(), None, None]
+    redis_mock.push(get_process_queue_key(queue_key), payload)
 
     future = asyncio.get_event_loop().create_future()
     result_reader.register_future(correlation_id, future)
@@ -173,14 +237,12 @@ async def test_result_reader_loop_reconstructs_tagged_serializable_object():
 @pytest.mark.asyncio
 async def test_result_reader_loop_reads_a_legacy_error_as_action_failed():
     """An `error` that is a string, without `http_status_code`, fails the call with ActionFailedError."""
-    import json
-
-    redis_mock = AsyncMock()
+    redis_mock = ResultLists()
     queue_key = "celery_viewset_results:test"
     correlation_id = "loop-test-err"
 
     payload = json.dumps({"correlation_id": correlation_id, "error": "task failed"})
-    redis_mock.lpop.side_effect = [payload.encode(), None, None]
+    redis_mock.push(get_process_queue_key(queue_key), payload)
 
     future = asyncio.get_event_loop().create_future()
     result_reader.register_future(correlation_id, future)
@@ -198,11 +260,9 @@ async def test_result_reader_loop_reads_a_legacy_error_as_action_failed():
 @pytest.mark.asyncio
 async def test_result_reader_loop_sets_http_exception():
     """result_reader_loop reconstructs HTTPException when http_status_code is in payload."""
-    import json
-
     from fastapi import HTTPException
 
-    redis_mock = AsyncMock()
+    redis_mock = ResultLists()
     queue_key = "celery_viewset_results:test"
     correlation_id = "loop-test-http-err"
 
@@ -214,7 +274,7 @@ async def test_result_reader_loop_sets_http_exception():
             "http_detail": "Item with pk 5 not found",
         }
     )
-    redis_mock.lpop.side_effect = [payload.encode(), None, None]
+    redis_mock.push(get_process_queue_key(queue_key), payload)
 
     future = asyncio.get_event_loop().create_future()
     result_reader.register_future(correlation_id, future)
@@ -235,13 +295,11 @@ async def test_result_reader_loop_sets_http_exception():
 @pytest.mark.asyncio
 async def test_result_reader_loop_ignores_unknown_correlation_id():
     """result_reader_loop logs warning and continues when correlation_id is unknown."""
-    import json
-
-    redis_mock = AsyncMock()
+    redis_mock = ResultLists()
     queue_key = "celery_viewset_results:test"
 
     payload = json.dumps({"correlation_id": "unknown-id", "result": "data"})
-    redis_mock.lpop.side_effect = [payload.encode(), None]
+    redis_mock.push(get_process_queue_key(queue_key), payload)
 
     task = asyncio.create_task(result_reader.result_reader_loop(redis_mock, queue_key, poll_interval=0.01))
     await asyncio.sleep(0.05)
@@ -261,8 +319,7 @@ async def test_result_reader_loop_ignores_unknown_correlation_id():
 @pytest.mark.asyncio
 async def test_start_and_stop_result_reader():
     """start_result_reader creates a background task; stop_result_reader cancels it."""
-    redis_mock = AsyncMock()
-    redis_mock.lpop.return_value = None
+    redis_mock = ResultLists()
 
     task = await start_result_reader(redis_mock, "celery_viewset_results:test", poll_interval=0.01)
     assert task is not None
@@ -275,8 +332,7 @@ async def test_start_and_stop_result_reader():
 @pytest.mark.asyncio
 async def test_start_result_reader_returns_existing_task():
     """start_result_reader returns existing task if already running."""
-    redis_mock2 = AsyncMock()
-    redis_mock2.lpop.return_value = None
+    redis_mock2 = ResultLists()
 
     task1 = await start_result_reader(redis_mock2, "celery_viewset_results:test", poll_interval=0.01)
     task2 = await start_result_reader(redis_mock2, "celery_viewset_results:test", poll_interval=0.01)
@@ -288,8 +344,7 @@ async def test_start_result_reader_returns_existing_task():
 @pytest.mark.asyncio
 async def test_start_result_reader_supports_multiple_queue_keys():
     """A different queue_key (e.g. a different celery_viewset task_prefix) gets its own reader task."""
-    redis_mock = AsyncMock()
-    redis_mock.lpop.return_value = None
+    redis_mock = ResultLists()
 
     task_items = await start_result_reader(redis_mock, "celery_viewset_results:items", poll_interval=0.01)
     task_orders = await start_result_reader(redis_mock, "celery_viewset_results:orders", poll_interval=0.01)
@@ -306,8 +361,7 @@ async def test_start_result_reader_supports_multiple_queue_keys():
 @pytest.mark.asyncio
 async def test_stop_result_reader_with_queue_key_stops_only_that_reader():
     """stop_result_reader(queue_key) cancels only the reader for that queue_key."""
-    redis_mock = AsyncMock()
-    redis_mock.lpop.return_value = None
+    redis_mock = ResultLists()
 
     task_items = await start_result_reader(redis_mock, "celery_viewset_results:items", poll_interval=0.01)
     task_orders = await start_result_reader(redis_mock, "celery_viewset_results:orders", poll_interval=0.01)
@@ -323,10 +377,7 @@ async def test_stop_result_reader_with_queue_key_stops_only_that_reader():
 @pytest.mark.asyncio
 async def test_stopped_reader_fails_only_its_own_pending_futures():
     """Stopping a queue_key's reader fails the futures registered for it and leaves other keys' futures pending."""
-    from fastapi_viewsets.exceptions import ResultReaderStoppedError
-
-    redis_mock = MagicMock()
-    redis_mock.lpop = AsyncMock(return_value=None)
+    redis_mock = ResultLists()
     loop = asyncio.get_running_loop()
     own = loop.create_future()
     other = loop.create_future()
@@ -346,10 +397,8 @@ async def test_stopped_reader_fails_only_its_own_pending_futures():
 
 async def _read_one(data: dict) -> asyncio.Future:
     """A future registered for `data`'s correlation id, once the reader has read `data`."""
-    import json
-
-    redis_mock = AsyncMock()
-    redis_mock.lpop.side_effect = [json.dumps(data).encode(), None, None]
+    redis_mock = ResultLists()
+    redis_mock.push(get_process_queue_key("celery_viewset_results:t"), json.dumps(data))
     future = asyncio.get_event_loop().create_future()
     result_reader.register_future(data["correlation_id"], future)
     task = asyncio.create_task(result_reader.result_reader_loop(redis_mock, "celery_viewset_results:t", 0.01))
@@ -398,3 +447,150 @@ async def test_a_result_that_cannot_be_read_fails_the_call():
     raised = future.exception()
     assert isinstance(raised, ActionFailedError)
     assert raised.params == {"task": "items.list_items", "reason": "result"}
+
+
+# ---------------------------------------------------------------------------
+# result reader and push on Redis (FASTAPI_VIEWSETS_TEST_REDIS_URL)
+# ---------------------------------------------------------------------------
+
+
+class _CommandLog:
+    """Proxies a `redis.asyncio` client and records the reader's commands; `lpop_count` False rejects
+    `LPOP key count` as a server before Redis 6.2 does."""
+
+    def __init__(self, client, lpop_count: bool = True):
+        self.client = client
+        self.lpop_count = lpop_count
+        self.commands: list[tuple] = []
+
+    async def blpop(self, keys, timeout):
+        self.commands.append(("blpop",))
+        return await self.client.blpop(keys, timeout=timeout)
+
+    async def lpop(self, key, count=None):
+        from redis.exceptions import ResponseError
+
+        self.commands.append(("lpop", count))
+        if count is not None and not self.lpop_count:
+            raise ResponseError("wrong number of arguments for 'lpop' command")
+        return await self.client.lpop(key, count) if count is not None else await self.client.lpop(key)
+
+
+def _register(count: int, queue_key: str) -> tuple[list[str], list[asyncio.Future], list[str]]:
+    """`count` registered futures and the list their resolutions are appended to."""
+    loop = asyncio.get_running_loop()
+    ids = [f"order-{index}" for index in range(count)]
+    futures, resolved = [], []
+    for correlation_id in ids:
+        future = loop.create_future()
+        future.add_done_callback(lambda _f, correlation_id=correlation_id: resolved.append(correlation_id))
+        result_reader.register_future(correlation_id, future, queue_key)
+        futures.append(future)
+    return ids, futures, resolved
+
+
+@pytest.mark.asyncio
+async def test_the_reader_drains_waiting_results_in_list_order_with_lpop_count(async_redis, queue_key):
+    ids, futures, resolved = _register(250, queue_key)
+    await async_redis.rpush(
+        get_process_queue_key(queue_key), *(json.dumps({"correlation_id": i, "result": i}) for i in ids)
+    )
+    client = _CommandLog(async_redis)
+
+    await start_result_reader(client, queue_key)
+    try:
+        results = await asyncio.wait_for(asyncio.gather(*futures), timeout=5)
+    finally:
+        await stop_result_reader(queue_key)
+
+    assert results == ids
+    assert resolved == ids
+    assert client.commands[:4] == [("blpop",), ("lpop", 100), ("lpop", 100), ("lpop", 100)]
+
+
+@pytest.mark.asyncio
+async def test_the_reader_drains_one_payload_at_a_time_when_lpop_takes_no_count(async_redis, queue_key):
+    ids, futures, resolved = _register(5, queue_key)
+    await async_redis.rpush(
+        get_process_queue_key(queue_key), *(json.dumps({"correlation_id": i, "result": i}) for i in ids)
+    )
+    client = _CommandLog(async_redis, lpop_count=False)
+
+    await start_result_reader(client, queue_key)
+    try:
+        assert await asyncio.wait_for(asyncio.gather(*futures), timeout=5) == ids
+    finally:
+        await stop_result_reader(queue_key)
+
+    assert resolved == ids
+    assert ("lpop", None) in client.commands
+
+
+@pytest.mark.asyncio
+async def test_a_result_pushed_while_the_reader_waits_resolves_without_polling_delay(redis_url, async_redis, queue_key):
+    import redis
+
+    ids, [future], _resolved = _register(1, queue_key)
+    await start_result_reader(async_redis, queue_key)
+    try:
+        await asyncio.sleep(0.2)  # the reader is blocked in BLPOP
+        pusher = redis.Redis.from_url(redis_url)
+        started = time.monotonic()
+        await asyncio.to_thread(push_result, pusher, get_process_queue_key(queue_key), ids[0], result="ok")
+        assert await asyncio.wait_for(future, timeout=1) == "ok"
+        assert time.monotonic() - started < 0.5
+        pusher.close()
+    finally:
+        await stop_result_reader(queue_key)
+
+
+@pytest.mark.asyncio
+async def test_a_reader_blocked_in_blpop_stops_at_once_and_fails_its_pending_calls(async_redis, queue_key):
+    _ids, [future], _resolved = _register(1, queue_key)
+    await start_result_reader(async_redis, queue_key)
+    await asyncio.sleep(0.2)
+
+    started = time.monotonic()
+    await stop_result_reader(queue_key)
+
+    assert time.monotonic() - started < 0.5
+    with pytest.raises(ResultReaderStoppedError):
+        future.result()
+    assert await async_redis.ping()  # the client stays usable
+
+
+@pytest.mark.asyncio
+async def test_a_reader_blocked_in_blpop_leaves_the_clients_other_commands_answered(async_redis, queue_key):
+    await start_result_reader(async_redis, queue_key)
+    try:
+        await asyncio.sleep(0.2)
+        started = time.monotonic()
+        await asyncio.wait_for(async_redis.set(f"{queue_key}:probe", "1", ex=10), timeout=1)
+        assert await asyncio.wait_for(async_redis.get(f"{queue_key}:probe"), timeout=1) == b"1"
+        assert time.monotonic() - started < 0.5
+    finally:
+        await stop_result_reader(queue_key)
+        await async_redis.delete(f"{queue_key}:probe")
+
+
+def test_push_payload_appends_and_renews_the_expiry(redis_url, queue_key):
+    import redis
+
+    client = redis.Redis.from_url(redis_url)
+    try:
+        push_payload(client, queue_key, {"correlation_id": "a"})
+        client.expire(queue_key, 10)
+        push_payload(client, queue_key, {"correlation_id": "b"})
+        assert [json.loads(item)["correlation_id"] for item in client.lrange(queue_key, 0, -1)] == ["a", "b"]
+        assert RESULT_QUEUE_TTL - 5 < client.ttl(queue_key) <= RESULT_QUEUE_TTL
+    finally:
+        client.close()
+
+
+@pytest.mark.asyncio
+async def test_push_payload_async_appends_and_renews_the_expiry(async_redis, queue_key):
+    await push_payload_async(async_redis, queue_key, {"correlation_id": "a"})
+    await async_redis.expire(queue_key, 10)
+    await push_payload_async(async_redis, queue_key, {"correlation_id": "b"})
+    assert [json.loads(item)["correlation_id"] for item in await async_redis.lrange(queue_key, 0, -1)] == ["a", "b"]
+    assert RESULT_QUEUE_TTL - 5 < await async_redis.ttl(queue_key) <= RESULT_QUEUE_TTL

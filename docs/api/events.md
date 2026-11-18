@@ -245,14 +245,15 @@ by poll, on the topic's next push or its check poll.
 from fastapi_viewsets.events.redis import PerLoopRedis
 
 class PerLoopRedis:
-    def __init__(self, url: str, **options): ...
+    def __init__(self, url: str, *, redis_class: type[redis.asyncio.Redis] | None = None, **options): ...
     def client(self) -> redis.asyncio.Redis: ...
 ```
 
 Stands in for a `redis.asyncio.Redis`: every attribute whose name does not start with `_` is read
 off `client()`, the client of the running event loop, created with
-`Redis.from_url(url, **(DEFAULT_CLIENT_OPTIONS | options))` on its first use in that loop. `client()`
-raises `RuntimeError` outside a running loop.
+`redis_class.from_url(url, **(DEFAULT_CLIENT_OPTIONS | options))` on its first use in that loop
+(`redis_class` defaults to `redis.asyncio.Redis`; a subclass can override `from_url`, e.g. to build its own
+connection pool). `client()` raises `RuntimeError` outside a running loop.
 
 A loop's client is closed and forgotten when the loop's tasks are cancelled at its end, as
 `asyncio.run()` does; a client used on that loop by another task's cancellation cleanup may be

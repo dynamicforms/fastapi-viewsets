@@ -330,9 +330,7 @@ class FakeRedisClass:
 
 def per_loop(**options) -> tuple[redis_module.PerLoopRedis, FakeRedisClass]:
     clients = FakeRedisClass()
-    redis = redis_module.PerLoopRedis("redis://example.test/3", **options)
-    redis._redis_class = clients
-    return redis, clients
+    return redis_module.PerLoopRedis("redis://example.test/3", redis_class=clients, **options), clients
 
 
 def test_per_loop_redis_makes_one_client_per_loop_and_closes_it_with_the_loop():

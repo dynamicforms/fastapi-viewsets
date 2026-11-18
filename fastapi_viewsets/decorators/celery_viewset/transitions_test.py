@@ -53,7 +53,7 @@ def log(monkeypatch):
 @pytest.fixture
 def redis_client(log):
     client = MagicMock()
-    client.rpush.side_effect = lambda _key, value: log.append(("pushed", json.loads(value)))
+    client.pipeline.return_value.rpush.side_effect = lambda _key, value: log.append(("pushed", json.loads(value)))
     return client
 
 

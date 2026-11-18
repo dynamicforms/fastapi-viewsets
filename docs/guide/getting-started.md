@@ -53,7 +53,13 @@ uv run python demo.py --db postgres://user:password@localhost:5432/
                                      # ... and the library on PostgreSQL, through the Django ORM and adorm
 uv run python demo.py --db postgres://user:password@localhost:5432/ --benchmark
                                      # ... and the benchmark's Celery workers (Benchmark tab)
+uv run python demo.py --db postgres://user:password@localhost:5432/ --bench-processes 4
+                                     # ... with 4 uvicorn processes for the benchmark viewsets
 ```
+
+The benchmark viewsets run in uvicorn processes of their own, 2 by default (`--bench-processes`, or the
+`DEMO_BENCH_PROCESSES` environment variable), on `DEMO_BENCH_PORT` and the ports after it (`DEMO_API_PORT` + 10 by
+default). The load generator runs in 4 processes (`DEMO_LOADGEN_PROCESSES`).
 
 ## Quick Start
 

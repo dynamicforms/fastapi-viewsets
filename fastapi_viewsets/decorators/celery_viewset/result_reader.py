@@ -15,12 +15,20 @@ from .transport import EncodedResult
 
 if TYPE_CHECKING:
     import redis
+    import redis.asyncio
 
 logger = logging.getLogger(__name__)
 
 # Seconds a result list outlives its last push. A list whose process is gone is never read again;
 # the expiry removes it from Redis.
 RESULT_QUEUE_TTL = 3600
+
+# Seconds BLPOP waits on the result list before the reader waits again; bounds how long a lost
+# connection goes unnoticed. The client's `socket_timeout` must be longer.
+BLOCK_TIMEOUT = 2
+
+# Payloads one LPOP takes from the result list after BLPOP returns (`LPOP key count`, Redis >= 6.2).
+DRAIN_COUNT = 100
 
 # Global registry: correlation_id -> (asyncio.Future, queue_key of the reader that resolves it)
 _pending_futures: dict[str, tuple[asyncio.Future, str | None]] = {}
@@ -53,10 +61,16 @@ def get_process_queue_key(queue_key: str) -> str:
     return f"{queue_key}:{socket.gethostname()}:{os.getpid()}"
 
 
-async def result_reader_loop(redis_client: "redis.Redis", queue_key: str, poll_interval: float = 0.05) -> None:
+async def result_reader_loop(redis_client: "redis.asyncio.Redis", queue_key: str, poll_interval: float = 0.05) -> None:
     """
-    Reads this process's results for queue_key and resolves pending Futures. On exit it fails every
-    Future still pending for queue_key with ResultReaderStoppedError.
+    Reads this process's results for queue_key and resolves pending Futures in list order: waits with
+    BLPOP, then takes what the list already holds with `LPOP key count` (a single LPOP per payload on a
+    server that rejects the count). `poll_interval` is the seconds it waits after a failed read. On
+    exit it fails every Future still pending for queue_key with ResultReaderStoppedError.
+
+    `redis_client` is a `redis.asyncio.Redis`; the reader holds one of its connections while it waits.
+    A pool at its limit raises MaxConnectionsError for the client's other users (a BlockingConnectionPool
+    makes them wait).
     """
     try:
         await _read_results(redis_client, queue_key, poll_interval)
@@ -73,29 +87,52 @@ def _fail_pending_futures(queue_key: str) -> None:
             future.set_exception(ResultReaderStoppedError(queue_key))
 
 
-async def _read_results(redis_client: "redis.Redis", queue_key: str, poll_interval: float) -> None:
+async def _read_results(redis_client: "redis.asyncio.Redis", queue_key: str, poll_interval: float) -> None:
+    from redis.exceptions import ResponseError
+
     process_queue_key = get_process_queue_key(queue_key)
+    drain_count: int | None = DRAIN_COUNT
     while True:
         try:
-            item = await redis_client.lpop(process_queue_key)
-            if item is None:
-                await asyncio.sleep(poll_interval)
+            popped = await redis_client.blpop([process_queue_key], timeout=BLOCK_TIMEOUT)
+            if popped is None:
                 continue
-
-            data = json.loads(item)
-            correlation_id = data.get("correlation_id")
-
-            pending = _pending_futures.pop(correlation_id, None)
-            if pending is None:
-                logger.warning("No pending future for correlation_id=%s", correlation_id)
-                continue
-            _resolve(pending[0], data)
+            _deliver(popped[1])
+            while drain_count is not None:
+                try:
+                    items = await redis_client.lpop(process_queue_key, drain_count)
+                except ResponseError:
+                    # a server before Redis 6.2: LPOP takes no count
+                    drain_count = None
+                    break
+                for item in items or ():
+                    _deliver(item)
+                if not items or len(items) < drain_count:
+                    break
+            if drain_count is None:
+                while (item := await redis_client.lpop(process_queue_key)) is not None:
+                    _deliver(item)
 
         except asyncio.CancelledError:
             break
         except Exception as e:
             logger.exception("Error in result_reader_loop: %s", e)
             await asyncio.sleep(poll_interval)
+
+
+def _deliver(item: bytes | str) -> None:
+    """Resolves the pending Future of one pushed payload."""
+    try:
+        data = json.loads(item)
+        correlation_id = data.get("correlation_id")
+    except Exception:
+        logger.exception("Unreadable result payload: %.200r", item)
+        return
+    pending = _pending_futures.pop(correlation_id, None)
+    if pending is None:
+        logger.warning("No pending future for correlation_id=%s", correlation_id)
+        return
+    _resolve(pending[0], data)
 
 
 def _resolve(future: asyncio.Future, data: dict) -> None:
@@ -149,9 +186,20 @@ def error_payload(correlation_id: str, task: str | None, error: BaseException) -
 
 
 def push_payload(redis_client: "redis.Redis", queue_key: str, data: dict) -> None:
-    """Push one result payload to queue_key and renew the list's expiry to RESULT_QUEUE_TTL."""
-    redis_client.rpush(queue_key, json.dumps(data))
-    redis_client.expire(queue_key, RESULT_QUEUE_TTL)
+    """Pushes one result payload to queue_key and renews the list's expiry to RESULT_QUEUE_TTL, in one
+    round trip."""
+    pipe = redis_client.pipeline(transaction=False)
+    pipe.rpush(queue_key, json.dumps(data))
+    pipe.expire(queue_key, RESULT_QUEUE_TTL)
+    pipe.execute()
+
+
+async def push_payload_async(redis_client: "redis.asyncio.Redis", queue_key: str, data: dict) -> None:
+    """`push_payload()` with a `redis.asyncio` client."""
+    pipe = redis_client.pipeline(transaction=False)
+    pipe.rpush(queue_key, json.dumps(data))
+    pipe.expire(queue_key, RESULT_QUEUE_TTL)
+    await pipe.execute()
 
 
 def push_result(
@@ -180,10 +228,13 @@ def get_running_queue_keys() -> frozenset[str]:
     return frozenset(key for key, task in _reader_tasks.items() if not task.done())
 
 
-async def start_result_reader(redis_client: "redis.Redis", queue_key: str, poll_interval: float = 0.05) -> asyncio.Task:
+async def start_result_reader(
+    redis_client: "redis.asyncio.Redis", queue_key: str, poll_interval: float = 0.05
+) -> asyncio.Task:
     """
     Starts the result reader for queue_key (one per celery_viewset task_prefix) on FastAPI startup.
-    While that reader runs, a second call returns the existing task.
+    While that reader runs, a second call returns the existing task. `poll_interval` is the seconds
+    the reader waits after a failed read (see `result_reader_loop`).
     """
     existing = _reader_tasks.get(queue_key)
     if existing is not None and not existing.done():

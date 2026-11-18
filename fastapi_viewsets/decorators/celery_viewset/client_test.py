@@ -692,3 +692,82 @@ def test_an_action_without_time_limits_sends_none(monkeypatch):
 
     asyncio.run(ItemViewSet().list_items())
     assert not {"soft_time_limit", "time_limit"} & set(celery_app.send_task.call_args.kwargs)
+
+
+# ---------------------------------------------------------------------------
+# publishing: asend_task when the app has it, otherwise send_task in a thread
+# ---------------------------------------------------------------------------
+
+
+class AsyncSendingApp:
+    """A Celery app stand-in with the velis74/celery `asend_task`."""
+
+    def __init__(self):
+        self.sent: list[tuple[str, dict, int]] = []
+        self.send_task = MagicMock()
+        self.error: Exception | None = None
+
+    async def asend_task(self, name, **options):
+        import threading
+
+        if self.error is not None:
+            raise self.error
+        self.sent.append((name, options, threading.get_ident()))
+
+
+def _call_list(celery_app) -> None:
+    """Calls `list_items` of a client viewset on `celery_app`; the result is resolved on publish."""
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    @celery_viewset_client(celery_app=celery_app, task_prefix="items", redis_client=MagicMock())
+    class ItemViewSet(ListMixin[Item]):
+        async def perform_list(self) -> list[Item]:
+            return []
+
+    original_register = result_reader.register_future
+
+    def mock_register(_correlation_id, future, _queue_key=None):
+        future.get_loop().call_soon(future.set_result, [])
+
+    result_reader.register_future = mock_register
+    try:
+        asyncio.run(ItemViewSet().list_items())
+    finally:
+        result_reader.register_future = original_register
+
+
+def test_an_app_with_asend_task_publishes_from_the_event_loop():
+    import threading
+
+    celery_app = AsyncSendingApp()
+    _call_list(celery_app)
+
+    [(name, options, thread)] = celery_app.sent
+    assert name == "items.list_items"
+    assert thread == threading.get_ident()
+    assert options["ignore_result"] is True
+    assert options["kwargs"]["_correlation_id"]
+    celery_app.send_task.assert_not_called()
+
+
+def test_an_asend_task_error_fails_the_call_with_action_dispatch_error():
+    from fastapi_viewsets.decorators.celery_viewset import result_reader
+
+    celery_app = AsyncSendingApp()
+    celery_app.error = RuntimeError("Celery broker unavailable")
+    with pytest.raises(ActionDispatchError) as raised:
+        _call_list(celery_app)
+    assert raised.value.params["reason"] == "send"
+    assert result_reader._pending_futures == {}
+
+
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["asend_task", "send_task"])
+def test_the_task_messages_argument_reprs_are_short(asynchronous):
+    """The reprs do not depend on the size of the arguments, context or request."""
+    celery_app = AsyncSendingApp() if asynchronous else MagicMock()
+    _call_list(celery_app)
+
+    options = celery_app.sent[0][1] if asynchronous else celery_app.send_task.call_args.kwargs
+    correlation_id = options["kwargs"]["_correlation_id"]
+    assert options["argsrepr"] == "()"
+    assert options["kwargsrepr"] == f"{{'_correlation_id': {correlation_id!r}}}"

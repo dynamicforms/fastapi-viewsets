@@ -61,12 +61,12 @@ class PerLoopRedis:
     creation and closed on garbage collection.
     """
 
-    def __init__(self, url: str, **options: Any):
+    def __init__(self, url: str, *, redis_class: "type[Redis] | None" = None, **options: Any):
         from redis.asyncio import Redis
 
         self.url = url
         self.options = DEFAULT_CLIENT_OPTIONS | options
-        self._redis_class = Redis
+        self._redis_class = redis_class or Redis
         self._clients: dict[asyncio.AbstractEventLoop, Redis] = {}
         self._lock = threading.Lock()
 
