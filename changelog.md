@@ -6,7 +6,7 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.16.1] - 2026-11-17
+## [0.16.1] - 2026-11-18
 
 ### Added
 
@@ -42,6 +42,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `install_error_handlers`, muxws, `celery_viewset` workers and `perform_bulk_destroy`.
 - Demo: the music library on PostgreSQL through `AdormViewSet` at `/music-adorm` (`demo.py --adorm-db URL`,
   `--adorm-driver`), with the typed TS client; `GET /backends` says whether it is available.
+
+### Changed
+
+- A `celery_viewset` call publishes its task with `Celery.asend_task` when the Celery app has it (`velis74/celery`):
+  with a Redis broker from the event loop, the tasks published in one iteration of the event loop in one pipeline.
+  Other Celery versions publish with `send_task` in a worker thread as before.
+- The task message of a `celery_viewset` call carries `argsrepr` `(...)` (`()` without arguments) and only the call's
+  correlation id as `kwargsrepr`: the arguments are not rendered for the worker's log or for monitoring tools.
+- The result reader waits for results with `BLPOP` and takes every result already in the list with `LPOP` and a
+  count (Redis 6.2+; one `LPOP` per result on older servers) instead of polling. It holds one connection of its client
+  while it waits, two seconds at a time; a `socket_timeout` of the client must be longer. `poll_interval` of
+  `start_result_reader` and `result_reader_loop` is the pause after a Redis error.
+- A worker pushes a result with `RPUSH` and `EXPIRE` in one round trip. In the async processes of Celery with async
+  tasks it pushes from the event loop with a `redis.asyncio` client built from the connection settings of the
+  `redis_client` given to `celery_viewset`, one per event loop.
+- Demo: the benchmark viewsets run in uvicorn processes of their own (`--bench-processes`, `DEMO_BENCH_PROCESSES`, 2;
+  ports from `DEMO_BENCH_PORT`), the load generator in several processes (`DEMO_LOADGEN_PROCESSES`, 4), and the
+  benchmark's Celery workers run with `ack_emulation` off. The Benchmark tab shows the process counts and the CPU time
+  of the busiest load generator process.
 
 ## [0.16.0] - 2026-11-16
 

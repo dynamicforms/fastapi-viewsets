@@ -208,5 +208,5 @@ required decorator order.
 
 If more than one Django-model-backed `celery_viewset` class is registered (a common shape — one per
 Django app/model), make sure every `task_prefix` in use has its own `start_result_reader` call in
-the FastAPI `lifespan` — see the [Result passing](./routers#result-passing) section for the
+the FastAPI `lifespan` — see the [Result readers](./routers#result-readers) section for the
 multi-prefix setup and why a single missed prefix makes its calls time out.

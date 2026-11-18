@@ -30,6 +30,8 @@ interface BenchmarkState {
   adorm_reason: string | null;
   adorm_pool: number;
   executors: Record<Executor, ExecutorState>;
+  bench_processes: number;
+  loadgen_processes: number;
 }
 
 interface Selection {
@@ -195,7 +197,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId('benchmark-setup')).toBeVisible();
 });
 
-test('the setup card states availability, configured and active workers and the adorm pool', async ({ page }) => {
+test('the setup card states availability, workers, load generator processes and the adorm pool', async ({ page }) => {
   const state = await benchmarkState(page);
   const setup = page.getByTestId('benchmark-setup');
 
@@ -231,7 +233,15 @@ test('the setup card states availability, configured and active workers and the 
       await expect(line).toContainText(reason!);
     }
   }
-  await expect(page.getByTestId('executor-fastapi')).toContainText(/1\b/);
+  expect(state.bench_processes).toBeGreaterThanOrEqual(1);
+  await expect(page.getByTestId('executor-fastapi')).toContainText(`${state.bench_processes} uvicorn process`);
+  if (state.executors.fastapi.available) {
+    await expect(page.getByTestId('executor-fastapi')).toContainText(/[1-9]\d* active/);
+  }
+  expect(state.loadgen_processes).toBeGreaterThanOrEqual(1);
+  const loadgen = page.getByTestId('benchmark-loadgen-processes');
+  await expect(loadgen).toContainText(`Load generator: ${state.loadgen_processes} process`);
+  await expect(loadgen).toHaveAttribute('data-processes', String(state.loadgen_processes));
   if (state.executors.hybrid.available) {
     await expect(page.getByTestId('executor-hybrid')).toContainText('200');
     // 2 prefork + 2 async processes
@@ -287,7 +297,7 @@ test('a run fills one cell per executor, DB API, transport and level, with progr
 
 test('the list operation runs with an injected latency', async ({ page }) => {
   test.setTimeout(120_000);
-  await skipUnlessAvailable(page, { executors: ['fastapi'], adorm: true, latencyProxy: true });
+  const state = await skipUnlessAvailable(page, { executors: ['fastapi'], adorm: true, latencyProxy: true });
 
   await configure(page, {
     transports: ['rest'],
@@ -305,11 +315,11 @@ test('the list operation runs with an injected latency', async ({ page }) => {
 
   const values = await expectMeasured(cell(page, 'fastapi', 'adorm', 'rest', 10));
   await expect(page.getByTestId('bench-loadgen')).toBeVisible();
+  await expect(page.getByTestId('bench-loadgen')).toContainText(`busiest process of ${state.loadgen_processes}`);
   await expect(page.getByTestId('bench-loadgen')).toContainText('s CPU');
   // one injected 10 ms round trip at least
   expect(values['data-p50']).toBeGreaterThanOrEqual(10);
-  const state = await benchmarkState(page);
-  expect(state.db_latency_ms).toBe(10);
+  expect((await benchmarkState(page)).db_latency_ms).toBe(10);
 });
 
 test('both Celery executors run both DB APIs', async ({ page }) => {

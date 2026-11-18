@@ -274,8 +274,11 @@ correlated with a UUID so that concurrent requests are handled correctly.
 Each FastAPI process receives its results on its own list, `{queue_key}:{host name}:{process id}`
 (`get_process_queue_key(queue_key)`): the task carries the list of the process that dispatched it,
 and that process's reader pops it. Any number of FastAPI processes, on any number of hosts, can share
-one Redis. Every push renews the list's expiry to one hour, so the list of a process that has exited
-is removed from Redis.
+one Redis. The worker pushes a result with `RPUSH` and `EXPIRE` in one round trip: every push renews
+the list's expiry to one hour, so the list of a process that has exited is removed from Redis. In the
+async processes of Celery with async tasks (see [Async processes](#async-processes)) the push runs on
+the event loop with a `redis.asyncio` client built from the connection settings of `redis_client`,
+one per event loop; the other pools push with `redis_client`.
 
 A call raises `ResultTimeoutError` (504, `fastapi-viewsets.result_timeout`) when its result does not arrive within
 `result_timeout` seconds, one hour by default. Every outcome the worker observes reaches the caller
@@ -286,11 +289,26 @@ cannot be decoded.
 A call pending when `stop_result_reader` stops the reader of its `queue_key`, or when that reader task
 is cancelled, raises `ResultReaderStoppedError` (503, `fastapi-viewsets.result_reader_stopped`, param `queue_key`). A
 cancelled call removes its pending entry; its result, if the worker still sends one, is logged as
-having no pending call and dropped. `send_task` runs in a worker thread, so a slow broker does not
-block the event loop.
+having no pending call and dropped.
 
 Arguments and results cross as the types the action declares; see
 [Arguments and results](#arguments-and-results).
+
+### Dispatch
+
+A call publishes its task without blocking the event loop. When the Celery app has `Celery.asend_task`
+(the Celery of [`velis74/celery`](https://github.com/velis74/celery) provides it), the call awaits
+`celery_app.asend_task(...)`: with a Redis broker it pushes the message from the event loop and
+sends the tasks published in one iteration of the event loop to Redis in one pipeline; with any
+other broker it runs `send_task` in a worker thread. Without `asend_task`, the call runs
+`send_task` in a worker thread, so a slow broker does not block the event loop.
+
+The task message's `argsrepr` is `(...)`, or `()` for an action without arguments, and its
+`kwargsrepr` holds only the call's correlation id (`{'_correlation_id': '<id>'}`): the arguments are
+not rendered for the worker's log or for monitoring tools. A publish that fails raises
+`ActionDispatchError` (reason `send`).
+
+### Result readers
 
 A result reader background task must be started in the FastAPI lifespan for each `queue_key` (i.e. each distinct
 `task_prefix` used by a `celery_viewset`-decorated class) — `start_result_reader` keeps one reader task per `queue_key`,
@@ -311,6 +329,16 @@ async def lifespan(app: FastAPI):
     yield
     await stop_result_reader()  # stops all readers; pass a queue_key to stop just one
 ```
+
+The reader waits on its process's list with `BLPOP`, two seconds at a time, so it notices a lost
+connection, and then takes every result already in the list with `LPOP key count`; results resolve
+in the order they were pushed. `LPOP` with a count needs Redis 6.2 or later;
+on an older server the reader takes one result per `LPOP`. While it waits, the reader holds one
+connection of the client passed to `start_result_reader` (redis-py's default pool allows 100
+connections in current versions): its pool needs room for one connection per reader beside the
+application's own use, and its `socket_timeout`, if set, must be longer than two seconds.
+`start_result_reader(redis_client, queue_key, poll_interval=0.05)`: `poll_interval` is the number of
+seconds the reader pauses after a Redis error before it reads again.
 
 ::: warning One reader per queue_key, not automatic
 `start_result_reader(redis_client, queue_key)` starts (and reuses) exactly one reader task per
@@ -568,6 +596,27 @@ The tasks are registered with `ignore_result=True`, `acks_late=False`,
 `reject_on_worker_lost=False` and `store_errors_even_if_ignored=False`, which override a global
 `task_acks_late`: a call is acknowledged when its execution starts and is never delivered to the
 worker a second time, since its caller receives one outcome only.
+
+### Redis broker: `ack_emulation`
+
+With kombu's Redis transport a worker keeps every message it has fetched and not yet acknowledged
+in Redis (`ack_emulation`, on by default), so that a message of a worker that dies is delivered
+again after the transport's `visibility_timeout`. That costs Redis round trips on every message.
+Since the tasks of a `celery_viewset` are acknowledged when their execution starts, a worker that
+runs only these tasks can turn it off in its own configuration:
+
+```python
+# celery_worker.py — the worker's Celery app only
+celery_app.conf.broker_transport_options = {
+    **celery_app.conf.broker_transport_options,
+    "ack_emulation": False,
+}
+```
+
+The worker then keeps its prefetch accounting in memory, one Redis round trip per message. The
+trade-off: messages the worker has prefetched but not started are lost if the worker dies, instead
+of being delivered again after the visibility timeout; their callers raise `ResultTimeoutError`
+when `result_timeout` runs out. The FastAPI processes that publish the tasks keep their default.
 
 ### Time limits
 

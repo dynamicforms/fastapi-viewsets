@@ -39,13 +39,15 @@ from ..primary_key_model_helper import (
     typecast_to_original_model,
 )
 from .payload import CONTEXT_KWARG, PARENT_KWARG, request_from_jsonable, REQUEST_KWARG, UNTYPED_KWARG
-from .result_reader import error_payload, push_payload
+from .result_reader import error_payload, push_payload, push_payload_async
 from .transport import ActionCodec
 
 if TYPE_CHECKING:
     import redis
 
     from celery import Celery
+
+    from ...events.redis import PerLoopRedis
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +365,80 @@ def _warn_if_serialized(cls: type) -> None:
         )
 
 
+# Connection settings of a synchronous client that its `redis.asyncio` counterpart takes over.
+_ASYNC_CONNECTION_KWARGS = (
+    "host",
+    "port",
+    "path",
+    "db",
+    "username",
+    "password",
+    "credential_provider",
+    "socket_timeout",
+    "socket_connect_timeout",
+    "socket_keepalive",
+    "socket_keepalive_options",
+    "client_name",
+    "protocol",
+    "health_check_interval",
+)
+
+
+_ASYNC_CONNECTION_CLASSES = ("Connection", "SSLConnection", "UnixDomainSocketConnection")
+
+
+def _async_redis_of(redis_client: "redis.Redis") -> "PerLoopRedis | None":
+    """
+    A `redis.asyncio` client per event loop with the connection settings of `redis_client`'s
+    connection pool (TCP, TLS or Unix socket) and as many connections as that pool allows; a push
+    waits for a free connection. None for a client whose pool is not a plain `ConnectionPool` or
+    `BlockingConnectionPool` of `Connection`, `SSLConnection` or `UnixDomainSocketConnection` (e.g.
+    Sentinel), or whose TLS settings `redis.asyncio` does not support.
+    """
+    pool = getattr(redis_client, "connection_pool", None)
+    connection_kwargs = getattr(pool, "connection_kwargs", None)
+    connection_class = getattr(pool, "connection_class", None)
+    if not isinstance(connection_kwargs, dict) or not isinstance(connection_class, type):
+        return None
+    import redis.asyncio
+    import redis.asyncio.connection as async_connection
+    import redis.connection as sync_connection
+
+    from ...events.redis import PerLoopRedis
+
+    if type(pool) not in (sync_connection.ConnectionPool, sync_connection.BlockingConnectionPool):
+        return None
+    name = connection_class.__name__
+    if name not in _ASYNC_CONNECTION_CLASSES or connection_class is not getattr(sync_connection, name):
+        return None
+    async_class = getattr(async_connection, name)
+    if not connection_kwargs.get("path" if name == "UnixDomainSocketConnection" else "host"):
+        return None
+    options = {key: connection_kwargs[key] for key in _ASYNC_CONNECTION_KWARGS if key in connection_kwargs}
+    ssl_options = {key: value for key, value in connection_kwargs.items() if key.startswith("ssl_")}
+    async_ssl_keys = set(inspect.signature(async_connection.SSLConnection.__init__).parameters)
+    if any(value not in (None, False) for key, value in ssl_options.items() if key not in async_ssl_keys):
+        return None
+    options.update({key: value for key, value in ssl_options.items() if key in async_ssl_keys})
+    if not isinstance(options.get("socket_keepalive_options"), dict):
+        # the synchronous default is a sentinel object
+        options.pop("socket_keepalive_options", None)
+    options.setdefault("socket_timeout", None)
+    options.setdefault("socket_connect_timeout", None)
+    max_connections = getattr(pool, "max_connections", None)
+    options["max_connections"] = max_connections if isinstance(max_connections, int) else 50
+    options["timeout"] = None
+
+    class WaitingPoolRedis(redis.asyncio.Redis):
+        """A client whose pool waits for a free connection instead of raising at its limit."""
+
+        @classmethod
+        def from_url(cls, url: str, **kwargs):
+            return cls(connection_pool=redis.asyncio.BlockingConnectionPool.from_url(url, **kwargs))
+
+    return PerLoopRedis("redis://", redis_class=WaitingPoolRedis, connection_class=async_class, **options)
+
+
 def _celery_cancel_reason() -> str | None:
     from celery.concurrency.aioworker import current_cancel_reason
 
@@ -597,6 +673,84 @@ def _connect_receivers() -> None:
     _receivers_connected = True
 
 
+@dataclass
+class _Failure:
+    """What a failed execution delivers: `report()` reports an interruption to the caller, else
+    `payload` (if any) is pushed to `queue_key`; `finish()` then re-raises what Celery is to record."""
+
+    report: Callable[[], Any] | None = None
+    queue_key: str | None = None
+    payload: dict | None = None
+    raised: BaseException | None = None
+    cause: BaseException | None = None
+
+    def finish(self) -> None:
+        if self.raised is None:
+            return None
+        if self.cause is not None:
+            raise self.raised from self.cause
+        raise self.raised
+
+
+def _failure(caught: BaseException, run: _Run, task_name: str, call: dict) -> _Failure:
+    """
+    The outcome of a failed execution: an `HTTPException` is the action's answer and is not re-raised;
+    Django's or adorm's `ValidationError` is converted to a `RequestValidationError`. A process exit
+    is reported here only without a supervisor (any pool but prefork). A `gevent.Timeout` is re-raised
+    as it is: the gevent pool handles its time limit only when that exception reaches it.
+    """
+    correlation_id = call.get("_correlation_id")
+    result_queue_key = call.get("_result_queue_key")
+    pool_timeout = _pool_timeout_in(caught)
+    if pool_timeout is not None:
+        return _Failure(
+            report=lambda: _report("interrupted", task_name, call, lambda t: ActionInterruptedError(t, "time_limit")),
+            raised=pool_timeout,
+        )
+    error = run.translate(caught)
+    if _is_validation_error(error):
+        error = RequestValidationError(_validation_errors(error))
+    process_exit = isinstance(error, (KeyboardInterrupt, SystemExit))
+    if process_exit:
+        pushed = ActionInterruptedError(task_name, "terminated")
+    elif isinstance(error, (HTTPException, RequestValidationError)):
+        # e.g. a filter value that will not convert: answered as a 422, as in the FastAPI process
+        pushed = error
+    else:
+        pushed = ActionFailedError(task_name)
+    if isinstance(pushed, (ActionInterruptedError, ActionFailedError)):
+        logger.error(
+            "Celery task failed: %s (correlation_id=%s): %s",
+            task_name,
+            correlation_id,
+            pushed.detail,
+            exc_info=caught,
+        )
+    else:
+        status, detail = (
+            (pushed.status_code, pushed.detail) if isinstance(pushed, HTTPException) else (422, pushed.errors())
+        )
+        logger.info(
+            "Celery task returned standard error: %s (correlation_id=%s): %d: %s",
+            task_name,
+            correlation_id,
+            status,
+            detail,
+        )
+    failure = _Failure()
+    if process_exit and not _supervised():
+        failure.report = lambda: _report("interrupted", task_name, call, lambda _t: pushed)
+    elif correlation_id and result_queue_key:
+        failure.queue_key = result_queue_key
+        failure.payload = error_payload(correlation_id, task_name, pushed)
+    if process_exit:
+        failure.raised = caught
+    elif isinstance(pushed, (ActionInterruptedError, ActionFailedError)):
+        failure.raised = pushed
+        failure.cause = None if pushed is caught else caught
+    return failure
+
+
 def celery_viewset_server(
     celery_app: "Celery",
     task_prefix: str,
@@ -614,6 +768,8 @@ def celery_viewset_server(
     """
     if redis_client is None:
         raise ValueError("redis_client is required for celery_viewset_server")
+
+    async_redis = _async_redis_of(redis_client)
 
     def decorator(cls: type[T]):
         seen_tasks = set()
@@ -706,79 +862,44 @@ def celery_viewset_server(
                         execution_translator.reset(marker)
                     logger.info("Celery task completed: %s (correlation_id=%s)", task_name, correlation_id)
                     if correlation_id and result_queue_key:
-                        payload = result_payload(result, correlation_id)
-                        push = asyncio.ensure_future(
-                            asyncio.to_thread(push_payload, redis_client, result_queue_key, payload)
-                        )
-                        try:
-                            await asyncio.shield(push)
-                        except asyncio.CancelledError:
-                            # the result is being delivered: it is the call's outcome
-                            await push
+                        # the result is being delivered: it is the call's outcome
+                        await _push_from_loop(result_queue_key, result_payload(result, correlation_id))
                         return True
                     return result
                 except BaseException as caught:
                     if run.cancel_reason() in ("hard", "terminate"):
                         # the executor has ended the execution and reports its outcome
                         raise
-                    return await asyncio.to_thread(_fail, caught, run, task_name, call)
+                    failure = _failure(caught, run, task_name, call)
+                    if failure.report is not None:
+                        await asyncio.to_thread(failure.report)
+                    elif failure.payload is not None:
+                        await _push_from_loop(failure.queue_key, failure.payload)
+                    return failure.finish()
 
             sync_wrapper.__celery_async__ = async_wrapper
             return sync_wrapper
 
+        async def _push_from_loop(queue_key: str, payload: dict) -> None:
+            """Pushes one payload from the running loop; a cancellation waits for the push to end."""
+            if async_redis is None:
+                work = asyncio.to_thread(push_payload, redis_client, queue_key, payload)
+            else:
+                work = push_payload_async(async_redis, queue_key, payload)
+            push = asyncio.ensure_future(work)
+            try:
+                await asyncio.shield(push)
+            except asyncio.CancelledError:
+                await push
+
         def _fail(caught: BaseException, run: _Run, task_name: str, call: dict):
-            """Pushes the error of a failed execution and re-raises what Celery is to record; an
-            `HTTPException` is the action's answer and is not re-raised; Django's or adorm's `ValidationError` is
-            converted to a `RequestValidationError`. A process exit is reported here
-            only without a supervisor (any pool but prefork). A `gevent.Timeout` is re-raised as it is:
-            the gevent pool handles its time limit only when that exception reaches it."""
-            correlation_id = call.get("_correlation_id")
-            result_queue_key = call.get("_result_queue_key")
-            pool_timeout = _pool_timeout_in(caught)
-            if pool_timeout is not None:
-                _report("interrupted", task_name, call, lambda t: ActionInterruptedError(t, "time_limit"))
-                raise pool_timeout
-            error = run.translate(caught)
-            if _is_validation_error(error):
-                error = RequestValidationError(_validation_errors(error))
-            process_exit = isinstance(error, (KeyboardInterrupt, SystemExit))
-            if process_exit:
-                pushed = ActionInterruptedError(task_name, "terminated")
-            elif isinstance(error, (HTTPException, RequestValidationError)):
-                # e.g. a filter value that will not convert: answered as a 422, as in the FastAPI process
-                pushed = error
-            else:
-                pushed = ActionFailedError(task_name)
-            if isinstance(pushed, (ActionInterruptedError, ActionFailedError)):
-                logger.error(
-                    "Celery task failed: %s (correlation_id=%s): %s",
-                    task_name,
-                    correlation_id,
-                    pushed.detail,
-                    exc_info=caught,
-                )
-            else:
-                status, detail = (
-                    (pushed.status_code, pushed.detail) if isinstance(pushed, HTTPException) else (422, pushed.errors())
-                )
-                logger.info(
-                    "Celery task returned standard error: %s (correlation_id=%s): %d: %s",
-                    task_name,
-                    correlation_id,
-                    status,
-                    detail,
-                )
-            if process_exit and not _supervised():
-                _report("interrupted", task_name, call, lambda _t: pushed)
-            elif correlation_id and result_queue_key:
-                push_payload(redis_client, result_queue_key, error_payload(correlation_id, task_name, pushed))
-            if process_exit:
-                raise caught
-            if isinstance(pushed, (ActionInterruptedError, ActionFailedError)):
-                if pushed is caught:
-                    raise caught
-                raise pushed from caught
-            return None
+            """Pushes the error of a failed execution (see `_failure`) and re-raises what Celery is to record."""
+            failure = _failure(caught, run, task_name, call)
+            if failure.report is not None:
+                failure.report()
+            elif failure.payload is not None:
+                push_payload(redis_client, failure.queue_key, failure.payload)
+            return failure.finish()
 
         build_schema(cls)
         for route in cls.__router.routes:

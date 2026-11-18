@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from fastapi_viewsets.decorators import celery_viewset_server, route_viewset
 from fastapi_viewsets.decorators.celery_viewset import result_reader
+from fastapi_viewsets.decorators.celery_viewset.result_reader_test import ResultLists
 from fastapi_viewsets.decorators.celery_viewset.transport import ActionCodec
 from fastapi_viewsets.mux_ws.registry import reset_registry
 from fastapi_viewsets.mux_ws.server import process_command
@@ -91,10 +92,10 @@ async def celery_result() -> Any:
     await asyncio.to_thread(
         registered_tasks["reports.report"], _correlation_id=correlation_id, _result_queue_key=queue_key
     )
-    pushed = redis_mock.rpush.call_args[0][1]
+    pushed = redis_mock.pipeline.return_value.rpush.call_args[0][1]
 
-    reader_redis = AsyncMock()
-    reader_redis.lpop.side_effect = [pushed.encode(), None, None]
+    reader_redis = ResultLists()
+    reader_redis.push(result_reader.get_process_queue_key(queue_key), pushed)
     future = asyncio.get_running_loop().create_future()
     result_reader.register_future(correlation_id, future)
     task = asyncio.create_task(result_reader.result_reader_loop(reader_redis, queue_key, poll_interval=0.01))

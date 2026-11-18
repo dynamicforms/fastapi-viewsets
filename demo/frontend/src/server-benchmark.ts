@@ -32,14 +32,14 @@ export interface ExecutorInfo {
   label: string;
   available: boolean;
   reason: string | null;
-  /** Configured processes, e.g. `2 prefork + 2 async processes (aconcurrency 200)`. */
+  /** Configured processes, e.g. `2 uvicorn processes` or `2 prefork + 2 async processes (aconcurrency 200)`. */
   description: string;
   processes: number;
   prefork_processes: number;
   async_processes: number;
   /** `--aconcurrency` over the async processes; null without them. */
   async_concurrency: number | null;
-  /** Processes the running worker reports; 0 when no worker answers. */
+  /** Processes that answer: uvicorn processes for `fastapi`, the worker's processes for Celery; 0 when none. */
   active_processes: number;
   active_prefork_processes: number;
   active_async_processes: number;
@@ -61,6 +61,10 @@ export interface BenchmarkInfo {
   library_size: number;
   /** `fastapi`, `classic` and `hybrid`, in that order. */
   executors: ExecutorInfo[];
+  /** uvicorn processes that serve the benchmark viewsets. */
+  bench_processes: number;
+  /** Processes the load generator splits the virtual users over. */
+  loadgen_processes: number;
 }
 
 export interface RunRequest {
@@ -94,8 +98,14 @@ export interface RunResult {
   throughput: number;
   /** Latency of completed requests, in ms. */
   latency_ms: LatencyStats;
-  /** CPU time the load generator used, in seconds. */
+  /** CPU time of all load generator processes together from the start of the warm-up, in seconds. */
   loadgen_cpu_s: number;
+  /** CPU time of the busiest load generator process, in seconds. */
+  loadgen_cpu_max_s: number;
+  /** Wall time from the start of the warm-up until the last load generator process finished, in seconds. */
+  loadgen_active_s: number;
+  /** Processes the load generator ran in. */
+  loadgen_processes: number;
   /** Length of the measured window, in seconds. */
   measured_s: number;
   started: string;
@@ -120,9 +130,18 @@ export function executorInfo(info: BenchmarkInfo, name: Executor): ExecutorInfo 
   return info.executors.find((one) => one.name === name);
 }
 
-/** "Celery hybrid: 2 prefork + 2 async processes (aconcurrency 200), 4 active". */
+/**
+ * "FastAPI: 2 uvicorn processes, 2 active";
+ * "Celery hybrid: 2 prefork + 2 async processes (aconcurrency 200), 4 active".
+ */
 export function describeExecutor(info: ExecutorInfo): string {
   return `${info.label}: ${info.description}, ${info.active_processes} active`;
+}
+
+/** "Load generator: 4 processes". */
+export function describeLoadgen(info: BenchmarkInfo): string {
+  const processes = info.loadgen_processes;
+  return `Load generator: ${processes} ${processes === 1 ? 'process' : 'processes'}`;
 }
 
 /** A latency in ms with one decimal; a dash when none was measured. */

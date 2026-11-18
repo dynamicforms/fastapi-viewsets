@@ -32,6 +32,12 @@ class _PushingRedis:
     def expire(self, _key: str, _ttl: int) -> None:
         pass
 
+    def pipeline(self, transaction: bool = True) -> "_PushingRedis":  # noqa: ARG002 - commands run at once
+        return self
+
+    def execute(self) -> None:
+        pass
+
 
 class _Executor:
     """celery_viewset_client and celery_viewset_server in one process: the client's send_task runs the

@@ -13,13 +13,8 @@ from fastapi.responses import HTMLResponse
 from muxws import accept, Stream
 from pydantic import BaseModel, Field
 
-from demo.backend import benchmark, postgres_demo
-from demo.backend.benchmark.api import (
-    BenchInFlightMiddleware,
-    READER_IDLE_POLL_S,
-    router as benchmark_router,
-    start_result_readers as start_bench_result_readers,
-)
+from demo.backend import postgres_demo
+from demo.backend.benchmark.api import router as benchmark_router
 from demo.backend.django_setup import ensure_database, MusicTrackRow
 from demo.backend.openapi_docs import add_try_links, REDOC_HEAD, SWAGGER_HEAD
 from demo.backend.viewsets import (
@@ -69,9 +64,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001 - signature required by FastAP
 @asynccontextmanager
 async def _result_readers():
     """The readers of the Celery viewsets' results, for the lifespan."""
-    prefixes = (MEMORY_TASK_PREFIX, DB_TASK_PREFIX) if USE_CELERY else ()
-    bench = postgres_demo.ENABLED and benchmark.CELERY_ENABLED
-    if not prefixes and not bench:
+    if not USE_CELERY:
         yield
         return
 
@@ -83,10 +76,8 @@ async def _result_readers():
         stop_result_reader,
     )
 
-    for prefix in prefixes:
-        await start_result_reader(redis_async, get_result_queue_key(prefix), 0.05)
-    # Polled faster only during a run of their executor (POST /benchmark/runs).
-    await start_bench_result_readers(READER_IDLE_POLL_S)
+    for prefix in (MEMORY_TASK_PREFIX, DB_TASK_PREFIX):
+        await start_result_reader(redis_async, get_result_queue_key(prefix))
     check_result_readers()
     yield
     await stop_result_reader()
@@ -97,8 +88,6 @@ async def _result_readers():
 app = FastAPI(title="Demo ViewSet App", lifespan=lifespan, docs_url=None, redoc_url=None)
 # the errors of the routes outside the viewsets, and of a path no route matches, in the viewsets' body
 install_error_handlers(app)
-# Counts the benchmark requests in progress, so a run starts after those of the previous one have ended.
-app.add_middleware(BenchInFlightMiddleware)
 
 
 def custom_openapi():
@@ -140,12 +129,6 @@ if postgres_demo.ADORM_ENABLED:
 
     # The same API on PostgreSQL through adorm, with the generated adorm model as its records.
     route_viewset(router, base_path="/music-adorm", pk_field_name="id")(MusicTrackAdormViewSet)
-if postgres_demo.ENABLED:
-    from demo.backend.benchmark.viewsets import VIEWSETS as BENCH_VIEWSETS
-
-    # The benchmark's read-only viewsets, one per DB API and executor.
-    for (db_api, executor), bench_viewset in BENCH_VIEWSETS.items():
-        route_viewset(router, base_path=f"/bench/{db_api}/{executor}", pk_field_name="id")(bench_viewset)
 # subscribe, unsubscribe and poll of the viewsets' topics, under /events
 register_events(router, base_path="/events")
 
@@ -214,15 +197,11 @@ def _local_origin(origin: str | None) -> bool:
     return hostname in ("127.0.0.1", "localhost") or bool(_CODESPACE_HOST and _CODESPACE_HOST.fullmatch(hostname))
 
 
-MUXWS_MAX_STREAMS = 2000
-
-
 @app.websocket("/ws")
 async def muxws_endpoint(websocket: WebSocket) -> None:
     """The same viewsets over one WebSocket; muxws accepts it, selecting the codec subprotocol."""
     # Origin check against cross-site WebSocket hijacking: other origins get HTTP 403.
-    # Streams at a time per socket: the benchmark's load generator sends up to 1000 over one.
-    peer = await accept(websocket, allowed_origins=_local_origin, max_concurrent_streams=MUXWS_MAX_STREAMS)
+    peer = await accept(websocket, allowed_origins=_local_origin)
 
     async def on_stream(payload, stream: Stream) -> None:
         # peer= is the socket `subscribe` registers the subscription on.

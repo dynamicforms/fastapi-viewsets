@@ -65,7 +65,7 @@ def _worker(cls, redis_client=None, prefix="jobs"):
 
 
 def _pushed(redis_client) -> dict:
-    return json.loads(redis_client.rpush.call_args[0][1])
+    return json.loads(redis_client.pipeline.return_value.rpush.call_args[0][1])
 
 
 CALL = {"_correlation_id": "c1", "_result_queue_key": "celery_viewset_results:jobs:h:1"}

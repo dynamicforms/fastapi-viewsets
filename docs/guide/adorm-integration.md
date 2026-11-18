@@ -382,4 +382,5 @@ the Django alias and the adorm profile `bench`, which connect through a proxy th
 query (`--db-latency`, 10 ms by default). The adorm viewset runs with `@action_configuration({AdormSession: False})`,
 so a read is one query outside a transaction, as the Django ORM's autocommit read is; its pool holds
 `DEMO_ADORM_POOL` connections (40) per process. The Django viewset's alias keeps its connections (`CONN_MAX_AGE =
-None`). `--benchmark` adds the Celery executors: a classic worker and one with async processes (Redis needed).
+None`). The FastAPI executor serves the viewsets from uvicorn processes of their own (`--bench-processes`, 2 by
+default). `--benchmark` adds the Celery executors: a classic worker and one with async processes (Redis needed).

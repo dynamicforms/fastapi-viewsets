@@ -112,12 +112,13 @@ held by each process; the Django ORM library (SQLite or PostgreSQL) is shared by
 end-to-end suite starts its own backend and dev server on their own ports.
 
 The **Benchmark** tab measures the same read-only viewset on the Django ORM (`DjangoORMViewSet`) and on adorm
-(`AdormViewSet`), over one PostgreSQL table, run by FastAPI in-process (one uvicorn process), by a classic Celery
+(`AdormViewSet`), over one PostgreSQL table, run by FastAPI in-process (2 uvicorn processes), by a classic Celery
 worker (2 prefork processes) and by a Celery worker with async processes (2 prefork + 2 async processes,
 `--aconcurrency 200`), over REST and muxws, at 10, 100 and 1000 concurrent clients. A proxy in front of PostgreSQL
 adds a round-trip time to every benchmark query (`--db-latency`, 10 ms by default, adjustable in the tab), standing
-in for a remote database. The load generator runs in a process of its own on the same machine. The FastAPI executor
-needs `--db`; the Celery executors need `--benchmark` and Redis.
+in for a remote database. The benchmark viewsets run in uvicorn processes of their own (`--bench-processes`, 2 by
+default), apart from the process that serves the UI. The load generator runs in 4 processes on the same machine
+(`DEMO_LOADGEN_PROCESSES`). The FastAPI executor needs `--db`; the Celery executors need `--benchmark` and Redis.
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/dynamicforms/fastapi-viewsets?quickstart=1)
 
@@ -137,13 +138,18 @@ uv run python demo.py --db postgres://user:password@localhost:5432/
                                      # ... and the library on PostgreSQL, through the Django ORM and adorm
 uv run python demo.py --db postgres://user:password@localhost:5432/ --benchmark
                                      # ... and the benchmark's Celery workers
+uv run python demo.py --db postgres://user:password@localhost:5432/ --bench-processes 4
+                                     # ... with 4 uvicorn processes for the benchmark viewsets
 npm run test:e2e                     # drives the demo in a browser
 ```
 
 `DEMO_DATABASE_URL` can stand in for `--db`; `DEMO_API_PORT` and `DEMO_FE_PORT` move the backend and the frontend
-to other ports; `DEMO_ADORM_POOL` sets the adorm pool size of each benchmark process (40). With `DEMO_DATABASE_URL`
-set, `npm run test:e2e` starts the backend through `demo.py` with the latency proxy, and with `DEMO_REDIS_URL` set as
-well, with the benchmark's Celery workers; otherwise the benchmark's tests that need them are skipped.
+to other ports; `DEMO_BENCH_PROCESSES` can stand in for `--bench-processes`; the benchmark processes listen on
+`DEMO_BENCH_PORT` and the ports after it (`DEMO_API_PORT` + 10 by default); `DEMO_LOADGEN_PROCESSES` sets the load
+generator's processes (4); `DEMO_ADORM_POOL` sets the adorm pool size of each benchmark process (40). With
+`DEMO_DATABASE_URL` set, `npm run test:e2e` starts the backend through `demo.py` with the latency proxy, and with
+`DEMO_REDIS_URL` set as well, with the benchmark's Celery workers; otherwise the benchmark's tests that need them are
+skipped.
 
 ## License
 

@@ -120,6 +120,15 @@ async def _encode_arguments(
     return encoded_args, encoded_kwargs, untyped
 
 
+async def _send_task(celery_app: "Celery", name: str, **options) -> None:
+    """Publishes task `name` with the app's `asend_task` (velis74/celery) when it has one, otherwise with
+    `send_task` in a worker thread."""
+    if inspect.iscoroutinefunction(getattr(type(celery_app), "asend_task", None)):
+        await celery_app.asend_task(name, **options)
+    else:
+        await asyncio.to_thread(celery_app.send_task, name, **options)
+
+
 def _time_limit_options(context: Context) -> dict:
     """The `send_task` time limit options of the call's `TimeLimits` configuration."""
     limits = context.configuration_for(TimeLimits)
@@ -189,15 +198,17 @@ def _patch_method(
                 raise ActionDispatchError(task_name, "serialization") from error
             logger.info("Celery task scheduling: %s (correlation_id=%s)", task_name, correlation_id)
             try:
-                # send_task() blocks while it connects and publishes to the broker.
-                await asyncio.to_thread(
-                    celery_app.send_task,
+                await _send_task(
+                    celery_app,
                     task_name,
                     args=encoded_args,
                     kwargs=task_kwargs,
                     # The per-request value overrides the task's registered ignore_result=True; without
                     # it the worker would encode the raw return value into its result backend.
                     ignore_result=True,
+                    # Fixed-size log representations instead of Celery's repr of the encoded arguments.
+                    argsrepr="(...)" if encoded_args else "()",
+                    kwargsrepr=f"{{'_correlation_id': {correlation_id!r}}}",
                     **_time_limit_options(bound_context),
                 )
             except Exception as error:

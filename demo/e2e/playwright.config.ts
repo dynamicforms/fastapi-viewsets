@@ -4,8 +4,8 @@ const API_PORT = 8123;
 const FE_PORT = 15173;
 
 /**
- * With `DEMO_DATABASE_URL` the backend starts through `demo.py`, which adds the benchmark's latency proxy; with
- * `DEMO_REDIS_URL` as well, also the benchmark's two Celery workers. Without them it is uvicorn alone.
+ * With `DEMO_DATABASE_URL` the backend starts through `demo.py`, which adds the benchmark's latency proxy and uvicorn
+ * processes; with `DEMO_REDIS_URL` as well, also the benchmark's two Celery workers. Without them it is uvicorn alone.
  */
 const DATABASE_URL = process.env.DEMO_DATABASE_URL ?? '';
 const REDIS_URL = process.env.DEMO_REDIS_URL ?? '';
