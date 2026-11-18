@@ -9,14 +9,14 @@ resolution-markers = [
 
 [[package]]
 name = "adorm"
-version = "0.0.2"
+version = "0.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fa/9f/1b99da09cf84612a648e6e506043e782e457c0be34f8ccd5b8520ba3d0fe/adorm-0.0.2.tar.gz", hash = "sha256:7d7bc843b06e198237255688982e24fc9cb10a7e3e89bb3de15fcb2e1e5499be", size = 282436, upload-time = "2026-11-17T15:44:40.3Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/92/ea/2b4d2bbfaede6e7ac25e9f93df9ccd1c9f929443bb284d086380deafe0ef/adorm-0.0.3.tar.gz", hash = "sha256:1715bd1082afa94a835574824d5012b96c84ac9a4dd1d360d396472426a6554c", size = 282598, upload-time = "2026-11-18T06:14:34.399Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f3/9f/af49b7bbb558eed069c2488a0aa04823ba4d98155eacd9a5df541599bc57/adorm-0.0.2-py3-none-any.whl", hash = "sha256:9b379d8b17bdc2cb954ae09a26c83eda667a219677660213569608d91a60fdab", size = 312435, upload-time = "2026-11-17T15:44:38.552Z" },
+    { url = "https://files.pythonhosted.org/packages/86/9a/ceeed88b2e58672f766c04d1a89e63ac5d67302f1262e770ade7201e8193/adorm-0.0.3-py3-none-any.whl", hash = "sha256:d9bd4010e9788269dccf0366a4fcd2f1c3bde4a2f3c71a86e1ec2af30da9773a", size = 312621, upload-time = "2026-11-18T06:14:32.747Z" },
 ]
 
 [package.optional-dependencies]
@@ -698,7 +698,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "adorm", extras = ["asyncpg"], marker = "python_full_version >= '3.11' and extra == 'adorm'", specifier = ">=0.0.2" },
+    { name = "adorm", extras = ["asyncpg"], marker = "python_full_version >= '3.11' and extra == 'adorm'", specifier = ">=0.0.3" },
     { name = "asgiref", marker = "extra == 'django'", specifier = ">=3.6" },
     { name = "celery", marker = "extra == 'celery'", git = "https://github.com/velis74/celery?tag=v5.7.0%2Basync" },
     { name = "django", marker = "extra == 'django'", specifier = ">=4.2" },
@@ -714,7 +714,7 @@ provides-extras = ["celery", "muxws", "django", "jwt", "icu", "adorm"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "adorm", extras = ["asyncpg"], marker = "python_full_version >= '3.11'", specifier = ">=0.0.2" },
+    { name = "adorm", extras = ["asyncpg"], marker = "python_full_version >= '3.11'", specifier = ">=0.0.3" },
     { name = "asgiref" },
     { name = "celery", git = "https://github.com/velis74/celery?tag=v5.7.0%2Basync" },
     { name = "celery-types", specifier = ">=0.26.0" },
