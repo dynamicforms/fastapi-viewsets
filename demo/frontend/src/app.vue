@@ -2,108 +2,121 @@
   <v-app>
     <v-main>
       <v-container fluid class="pa-4 page">
-        <div class="d-flex align-center flex-wrap ga-4 mb-4">
-          <h1 class="text-h5 mb-0">Music Library</h1>
-          <v-btn-toggle v-model="transport" mandatory density="comfortable" color="primary">
-            <v-btn value="rest" data-testid="transport-rest">REST</v-btn>
-            <v-btn value="muxws" data-testid="transport-muxws">muxws</v-btn>
-          </v-btn-toggle>
-          <v-btn-toggle v-model="backend" mandatory density="comfortable" color="secondary">
-            <v-btn value="memory" data-testid="backend-memory">in-memory</v-btn>
-            <v-btn value="db" data-testid="backend-db">SQLite</v-btn>
-            <v-btn
-              value="adorm"
-              data-testid="backend-adorm"
-              :disabled="!adormAvailable"
-              :title="adormUnavailable ?? 'PostgreSQL through adorm'"
-            >
-              PostgreSQL (adorm)
-            </v-btn>
-          </v-btn-toggle>
-          <v-spacer />
-          <v-btn
-            variant="text"
-            size="small"
-            href="/redoc"
-            target="_blank"
-            rel="noopener"
-            prepend-icon="mdi-book-open-variant"
-          >
-            See API documentation
-          </v-btn>
-          <v-chip
-            v-if="following"
-            :data-following="following"
-            size="small"
-            color="success"
-            variant="tonal"
-            prepend-icon="mdi-access-point"
-            data-testid="following"
-          >
-            following changes
-          </v-chip>
-          <span class="text-caption">
-            <span data-testid="loaded-count">{{ records.length }}</span> loaded
-            <template v-if="!hasMore">· end of list</template>
-            <template v-if="lastLoadMs">· last page {{ lastLoadMs.toFixed(0) }} ms</template>
-          </span>
-          <v-btn :loading="benchmarking" variant="tonal" @click="runComparison">Compare transports</v-btn>
-        </div>
-
-        <v-alert v-if="results.length" type="info" variant="tonal" density="compact" class="mb-4">
-          <table class="benchmark">
-            <thead>
-              <tr>
-                <th>Transport</th>
-                <th colspan="4">Sequential retrieve (ms)</th>
-                <th>{{ results[0].burstCount }} at once</th>
-              </tr>
-              <tr>
-                <th />
-                <th>min</th>
-                <th>p50</th>
-                <th>p95</th>
-                <th>max</th>
-                <th>total (ms)</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="result in results" :key="result.transport">
-                <td class="font-weight-medium">{{ result.transport }}</td>
-                <td>{{ result.sequential.min.toFixed(2) }}</td>
-                <td>{{ result.sequential.p50.toFixed(2) }}</td>
-                <td>{{ result.sequential.p95.toFixed(2) }}</td>
-                <td>{{ result.sequential.max.toFixed(2) }}</td>
-                <td>{{ result.burstTotalMs.toFixed(1) }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div class="text-caption mt-2">
-            Sequential cost is close on both — once a connection is warm, HTTP header parsing against muxws frame
-            decoding is a small difference. The burst column is the real one: a browser opens about six concurrent
-            HTTP/1.1 connections per host, so the seventh request waits. muxws multiplexes all of them onto one socket.
-          </div>
-        </v-alert>
-
-        <div v-if="error" data-testid="error" class="text-error mb-4">{{ error }}</div>
-        <div class="text-caption mb-2">
-          Click a Favorite cell to toggle it. Every tab showing this library applies the change.
-        </div>
-
-        <df-grid
-          v-model:sort-state="sortState"
-          v-model:active-columns="activeColumnDef"
-          :columns="columnsResponsive"
-          :records="records"
-          :loading="loading"
-          :key-field="pkField"
-          :show-filter-row="true"
-          class="grid"
-          @sort="onSort"
-          @filter="onFilter"
-          @load="loadMore"
-          @click="onClick"
+        <v-tabs v-model="tab" density="compact" color="primary" class="tabs mb-2">
+          <v-tab value="library" data-testid="tab-library">Library</v-tab>
+          <v-tab value="benchmark" data-testid="tab-benchmark">Benchmark</v-tab>
+        </v-tabs>
+        <server-benchmark
+          v-if="benchmarkOpened"
+          v-show="tab === 'benchmark'"
+          :active="tab === 'benchmark'"
+          class="tab-page"
         />
+        <div v-show="tab === 'library'" class="tab-page library">
+          <div class="d-flex align-center flex-wrap ga-4 mb-4">
+            <h1 class="text-h5 mb-0">Music Library</h1>
+            <v-btn-toggle v-model="transport" mandatory density="comfortable" color="primary">
+              <v-btn value="rest" data-testid="transport-rest">REST</v-btn>
+              <v-btn value="muxws" data-testid="transport-muxws">muxws</v-btn>
+            </v-btn-toggle>
+            <v-btn-toggle v-model="backend" mandatory density="comfortable" color="secondary">
+              <v-btn value="memory" data-testid="backend-memory">{{ backendLabels.memory }}</v-btn>
+              <v-btn value="db" data-testid="backend-db">{{ backendLabels.db }}</v-btn>
+              <v-btn
+                value="adorm"
+                data-testid="backend-adorm"
+                :disabled="!adormAvailable"
+                :title="adormUnavailable ?? backendLabels.adorm"
+              >
+                {{ backendLabels.adorm }}
+              </v-btn>
+            </v-btn-toggle>
+            <v-spacer />
+            <v-btn
+              variant="text"
+              size="small"
+              href="/redoc"
+              target="_blank"
+              rel="noopener"
+              prepend-icon="mdi-book-open-variant"
+            >
+              See API documentation
+            </v-btn>
+            <v-chip
+              v-if="following"
+              :data-following="following"
+              size="small"
+              color="success"
+              variant="tonal"
+              prepend-icon="mdi-access-point"
+              data-testid="following"
+            >
+              following changes
+            </v-chip>
+            <span class="text-caption">
+              <span data-testid="loaded-count">{{ records.length }}</span> loaded
+              <template v-if="!hasMore">· end of list</template>
+              <template v-if="lastLoadMs">· last page {{ lastLoadMs.toFixed(0) }} ms</template>
+            </span>
+            <v-btn :loading="benchmarking" variant="tonal" @click="runComparison">Compare transports</v-btn>
+          </div>
+
+          <v-alert v-if="results.length" type="info" variant="tonal" density="compact" class="mb-4">
+            <table class="benchmark">
+              <thead>
+                <tr>
+                  <th>Transport</th>
+                  <th colspan="4">Sequential retrieve (ms)</th>
+                  <th>{{ results[0].burstCount }} at once</th>
+                </tr>
+                <tr>
+                  <th />
+                  <th>min</th>
+                  <th>p50</th>
+                  <th>p95</th>
+                  <th>max</th>
+                  <th>total (ms)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="result in results" :key="result.transport">
+                  <td class="font-weight-medium">{{ result.transport }}</td>
+                  <td>{{ result.sequential.min.toFixed(2) }}</td>
+                  <td>{{ result.sequential.p50.toFixed(2) }}</td>
+                  <td>{{ result.sequential.p95.toFixed(2) }}</td>
+                  <td>{{ result.sequential.max.toFixed(2) }}</td>
+                  <td>{{ result.burstTotalMs.toFixed(1) }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="text-caption mt-2">
+              Sequential cost is close on both — once a connection is warm, HTTP header parsing against muxws frame
+              decoding is a small difference. The burst column is the real one: a browser opens about six concurrent
+              HTTP/1.1 connections per host, so the seventh request waits. muxws multiplexes all of them onto one
+              socket.
+            </div>
+          </v-alert>
+
+          <div v-if="error" data-testid="error" class="text-error mb-4">{{ error }}</div>
+          <div class="text-caption mb-2">
+            Click a Favorite cell to toggle it. Every tab showing this library applies the change.
+          </div>
+
+          <df-grid
+            v-model:sort-state="sortState"
+            v-model:active-columns="activeColumnDef"
+            :columns="columnsResponsive"
+            :records="records"
+            :loading="loading"
+            :key-field="pkField"
+            :show-filter-row="true"
+            class="grid"
+            @sort="onSort"
+            @filter="onFilter"
+            @load="loadMore"
+            @click="onClick"
+          />
+        </div>
       </v-container>
     </v-main>
   </v-app>
@@ -128,18 +141,34 @@ import { applyChanges, type Change, type RecordsChanged } from '../../../vue/eve
 import type { EventSubscription } from '../../../vue/events';
 
 import { runBenchmark, type BenchmarkResult } from './benchmark';
+import ServerBenchmark from './server-benchmark.vue';
 import { demoBackends, viewSetFor, type Backend, type MusicTrack, type Transport } from './viewsets';
 
 const PAGE_SIZE = 50;
 
+const tab = ref<'library' | 'benchmark'>('library');
+/** The benchmark tab mounts on first open and then stays mounted, keeping its results. */
+const benchmarkOpened = ref(false);
+watch(tab, (value) => {
+  if (value === 'benchmark') benchmarkOpened.value = true;
+});
+
 const transport = ref<Transport>('rest');
 const backend = ref<Backend>('memory');
+
+/** The data sources' names from `GET /backends`; these stand until it answers. */
+const backendLabels = ref<Record<Backend, string>>({
+  memory: 'in-memory',
+  db: 'Django ORM',
+  adorm: 'PostgreSQL (adorm)',
+});
 
 /** Why the adorm backend is off, as `GET /backends` says; null while it is on or not yet known. */
 const adormUnavailable = ref<string | null>(null);
 const adormAvailable = ref(false);
 void demoBackends().then(
   (backends) => {
+    for (const one of backends) backendLabels.value[one.name] = one.label;
     const adorm = backends.find((one) => one.name === 'adorm');
     adormAvailable.value = adorm?.available ?? false;
     adormUnavailable.value = adorm?.available ? null : (adorm?.reason ?? 'not available');
@@ -438,11 +467,24 @@ void followAndReload();
 </script>
 
 <style scoped>
-/* the grid takes whatever height the toolbar and the benchmark results leave in the window */
+/* the grid takes whatever height the tabs, the toolbar and the benchmark results leave in the window */
 .page {
   display: flex;
   flex-direction: column;
   height: 100dvh;
+}
+.tabs {
+  flex: 0 0 auto;
+}
+.tab-page {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.library {
+  display: flex;
+  flex-direction: column;
+  overflow-y: visible;
 }
 .grid {
   flex: 1 1 0;

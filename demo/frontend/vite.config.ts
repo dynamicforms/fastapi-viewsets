@@ -18,6 +18,7 @@ export default defineConfig({
       '/music': api,
       '/music-db': api,
       '/backends': api,
+      '/benchmark': api,
       '/events': api,
       '/redoc': api,
       '/docs': api,

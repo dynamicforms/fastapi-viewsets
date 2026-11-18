@@ -98,26 +98,34 @@ list pipeline and pagination, the muxws transport, events, and the Vue client.
 ## Demo
 
 An infinite-scrolling grid over a 5000-track library, cursor-paged. Switch the whole grid between
-the REST and muxws transports and between the in-memory, SQLite and PostgreSQL (adorm) backends, and compare
-their latency side by side. Sorting and filtering are server-side.
+the REST and muxws transports and between the in-memory, Django ORM (SQLite, or PostgreSQL with `--db`) and adorm
+(PostgreSQL) data sources, and compare their latency side by side. Sorting and filtering are server-side.
 
 The grid follows its viewset's change events (`ChangeEvents` on the backend, `watch()` in the
 grid). Click a Favorite cell to toggle it: every tab showing the library applies the change, over
 muxws as a push, over REST on its next poll. A sorted or filtered grid reloads its list on the
 change: the row may have moved or left it.
 
-With `--celery` the worker runs the viewset calls of both backends and publishes their events
-through Redis. It runs as one process, because the in-memory library is a dict held by each process;
-the SQLite library is one file shared by every process. The end-to-end suite starts its own backend
-and dev server on their own ports.
+With `--celery` the worker runs the viewset calls of the in-memory and Django ORM data sources and
+publishes their events through Redis. It runs as one process, because the in-memory library is a dict
+held by each process; the Django ORM library (SQLite or PostgreSQL) is shared by every process. The
+end-to-end suite starts its own backend and dev server on their own ports.
+
+The **Benchmark** tab measures the same read-only viewset on the Django ORM (`DjangoORMViewSet`) and on adorm
+(`AdormViewSet`), over one PostgreSQL table, run by FastAPI in-process (one uvicorn process), by a classic Celery
+worker (2 prefork processes) and by a Celery worker with async processes (2 prefork + 2 async processes,
+`--aconcurrency 200`), over REST and muxws, at 10, 100 and 1000 concurrent clients. A proxy in front of PostgreSQL
+adds a round-trip time to every benchmark query (`--db-latency`, 10 ms by default, adjustable in the tab), standing
+in for a remote database. The load generator runs in a process of its own on the same machine. The FastAPI executor
+needs `--db`; the Celery executors need `--benchmark` and Redis.
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/dynamicforms/fastapi-viewsets?quickstart=1)
 
 ### Run locally
 
-Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node 22+; Redis for `--celery`
+Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node 22+; Redis for `--celery` and `--benchmark`
 (`redis://localhost:6379/0`; a different URL goes in the `DEMO_REDIS_URL` environment variable); Python 3.11+ and
-a PostgreSQL server for `--adorm-db`.
+a PostgreSQL server for `--db` (`max_connections` of at least 300 for the benchmark).
 
 ```bash
 git clone https://github.com/dynamicforms/fastapi-viewsets.git && cd fastapi-viewsets
@@ -125,10 +133,17 @@ uv sync && npm ci
 uv run python demo.py                # backend on :8000, frontend on :5173
 uv run python demo.py --celery       # ... with every viewset call routed through a Celery worker
 # DEMO_REDIS_URL=redis://redis-host:6379/0 uv run python demo.py --celery   # Redis elsewhere
-uv run python demo.py --adorm-db postgres://user:password@localhost:5432/
-                                     # ... and the library on PostgreSQL through adorm
+uv run python demo.py --db postgres://user:password@localhost:5432/
+                                     # ... and the library on PostgreSQL, through the Django ORM and adorm
+uv run python demo.py --db postgres://user:password@localhost:5432/ --benchmark
+                                     # ... and the benchmark's Celery workers
 npm run test:e2e                     # drives the demo in a browser
 ```
+
+`DEMO_DATABASE_URL` can stand in for `--db`; `DEMO_API_PORT` and `DEMO_FE_PORT` move the backend and the frontend
+to other ports; `DEMO_ADORM_POOL` sets the adorm pool size of each benchmark process (40). With `DEMO_DATABASE_URL`
+set, `npm run test:e2e` starts the backend through `demo.py` with the latency proxy, and with `DEMO_REDIS_URL` set as
+well, with the benchmark's Celery workers; otherwise the benchmark's tests that need them are skipped.
 
 ## License
 

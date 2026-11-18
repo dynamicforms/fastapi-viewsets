@@ -5,11 +5,41 @@ services:
       - ..:/workspaces/fastapi-viewsets:cached
     command: sleep infinity
     environment:
-      # Celery broker, result queue and event store of `demo.py --celery`
+      # Celery broker, result queue and event store of `demo.py --celery` and `--benchmark`
       DEMO_REDIS_URL: redis://redis:6379/0
+      # The PostgreSQL data sources and the benchmark (`demo.py --db`)
+      DEMO_DATABASE_URL: postgres://postgres:postgres@postgres:5432/
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      # the demo's PostgreSQL check runs once at start-up; initdb on tmpfs runs on every container start
+      postgres:
+        condition: service_healthy
 
   redis:
     image: valkey/valkey:8
     restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    # The demo's data is generated at startup: no durability, all in memory.
+    tmpfs:
+      - /var/lib/postgresql/data
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - max_connections=500

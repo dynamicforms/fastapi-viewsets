@@ -88,7 +88,7 @@ test('the same data arrives over muxws', async ({ page }) => {
   expect(await loadedCount(page)).toBe(loadedOverRest);
 });
 
-test('the SQLite backend serves the same records as the in-memory one', async ({ page }) => {
+test('the Django ORM backend serves the same records as the in-memory one', async ({ page }) => {
   const inMemory = await renderedIds(page);
 
   await page.getByTestId('backend-db').click();
@@ -98,7 +98,7 @@ test('the SQLite backend serves the same records as the in-memory one', async ({
   expect(await renderedIds(page)).toEqual(inMemory);
 });
 
-test('muxws against SQLite works, which is both new paths at once', async ({ page }) => {
+test('muxws against the Django ORM backend works, which is both new paths at once', async ({ page }) => {
   await page.getByTestId('transport-muxws').click();
   await waitForFirstPage(page);
   await page.getByTestId('backend-db').click();

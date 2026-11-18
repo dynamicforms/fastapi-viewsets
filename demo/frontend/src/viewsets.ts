@@ -41,6 +41,8 @@ const BASE_PATHS: Record<Backend, string> = { memory: '/music', db: '/music-db',
 export interface DemoBackend {
   name: Backend;
   base_path: string;
+  /** What the UI calls it, e.g. `PostgreSQL (Django ORM)`. */
+  label: string;
   available: boolean;
   reason: string | null;
 }

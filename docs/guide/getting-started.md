@@ -39,8 +39,9 @@ Requirements: Vue 3.4+, axios.
 
 ### Run locally
 
-Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node 22+; Redis for `--celery`
-(`redis://localhost:6379/0`; a different URL goes in the `DEMO_REDIS_URL` environment variable).
+Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), Node 22+; Redis for `--celery` and `--benchmark`
+(`redis://localhost:6379/0`; a different URL goes in the `DEMO_REDIS_URL` environment variable); Python 3.11+ and a
+PostgreSQL server for `--db`.
 
 ```bash
 git clone https://github.com/dynamicforms/fastapi-viewsets.git && cd fastapi-viewsets
@@ -48,6 +49,10 @@ uv sync && npm ci
 uv run python demo.py                # backend on :8000, frontend on :5173
 uv run python demo.py --celery       # ... with every viewset call routed through a Celery worker
 # DEMO_REDIS_URL=redis://redis-host:6379/0 uv run python demo.py --celery   # Redis elsewhere
+uv run python demo.py --db postgres://user:password@localhost:5432/
+                                     # ... and the library on PostgreSQL, through the Django ORM and adorm
+uv run python demo.py --db postgres://user:password@localhost:5432/ --benchmark
+                                     # ... and the benchmark's Celery workers (Benchmark tab)
 ```
 
 ## Quick Start

@@ -6,9 +6,9 @@
   "features": {
     "ghcr.io/devcontainers/features/node:1": { "version": "22" }
   },
-  "hostRequirements": { "cpus": 2 },
+  "hostRequirements": { "cpus": 4 },
   "postCreateCommand": "pipx install uv && uv sync --locked && npm ci",
-  "postAttachCommand": "curl -sf -o /dev/null localhost:5173 && echo 'The demo is already running.' || uv run python demo.py",
+  "postAttachCommand": "curl -sf -o /dev/null localhost:5173 && echo 'The demo is already running.' || uv run python demo.py --benchmark",
   // No forwardPorts: the ports are forwarded when the demo starts listening, and onAutoForward opens the frontend.
   "portsAttributes": {
     "5173": { "label": "Demo", "onAutoForward": "openBrowserOnce" },

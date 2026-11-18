@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`velis74/celery`): a worker started with `--aconcurrency` runs the actions on the event loop of its async
   processes, many at a time; a soft or hard time limit and `revoke(..., terminate=True)` cancel the execution and reach
   `execute()` as `ActionInterruptedError`. Other Celery versions and pools run the actions as before.
+- A worker of Celery with async tasks logs a warning, once per process and viewset class, when it executes a
+  `DjangoORMViewSet` action in an async process: its queries run one at a time on one thread of the process
+  (`sync_to_async(thread_sensitive=True)`), whatever `--aconcurrency` is.
 - `AdormSession(atomic=False)`: the command middleware that makes an `AdormViewSet`'s session current while its
   action runs, in one `atomic()` block with `atomic` (per action: `@action_configuration({AdormSession: ...})`).
   adorm's `ObjectDoesNotExist` and `IntegrityError` raised anywhere in the action answer as the viewset's own
