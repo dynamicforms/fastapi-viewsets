@@ -26,6 +26,9 @@
                 — unavailable: {{ executor.reason ?? 'no reason given' }}
               </span>
             </li>
+            <li data-testid="benchmark-loadgen-processes" :data-processes="info.loadgen_processes">
+              {{ describeLoadgen(info) }}
+            </li>
             <li>adorm pool: {{ info.adorm_pool }} connections per process</li>
             <li v-if="!info.adorm_available" class="text-medium-emphasis" data-testid="adorm-unavailable">
               adorm: unavailable — {{ info.adorm_reason ?? 'no reason given' }}
@@ -239,16 +242,17 @@
     <v-card variant="text" class="explanation text-body-2">
       <v-card-title class="text-subtitle-1 px-0">What is measured</v-card-title>
       <p>
-        Each cell is one run of a load generator against this server: <em>c</em> virtual users each send the next
-        request as soon as the previous one answers, for the chosen duration after a one-second warm-up. The table shows
-        completed requests per second, latency percentiles of the completed requests and the share of failed ones. Every
-        cell reads the same PostgreSQL table; only the executor, the DB API and the transport differ. A request that
-        waits longer than the 10 s client timeout counts as failed: an overloaded cell can show a throughput together
-        with a 100 % error rate, when every answer in the window belongs to a request started before it.
+        Each cell is one run of a load generator against the benchmark processes: <em>c</em> virtual users each send the
+        next request as soon as the previous one answers, for the chosen duration after a one-second warm-up. The table
+        shows completed requests per second, latency percentiles of the completed requests and the share of failed ones.
+        Every cell reads the same PostgreSQL table; only the executor, the DB API and the transport differ. A request
+        that waits longer than the 10 s client timeout counts as failed: an overloaded cell can show a throughput
+        together with a 100 % error rate, when every answer in the window belongs to a request started before it.
       </p>
       <p>
-        The server is one uvicorn process, and every request, also one Celery executes, passes through it. Its CPU caps
-        the throughput of every row; adorm reaches that cap, Django ORM stays well below it.
+        The benchmark viewsets run in their own uvicorn processes, as many as the setup lists, apart from the process
+        that serves this page. Every benchmark request, also one Celery executes, passes through one of them; the load
+        generator's processes are assigned to them in turn.
       </p>
       <p>
         A proxy between the server and PostgreSQL delays every answer by the chosen DB latency. It stands in for a
@@ -267,9 +271,10 @@
         queries overlap, while Django ORM's still run one at a time per process.
       </p>
       <p>
-        The load generator runs in its own process on the same machine and competes with the server for CPU. Its CPU
-        time is shown below the table and in each cell's tooltip; a load generator near one CPU second per second is
-        saturated and caps every row.
+        The load generator runs in several processes on the same machine, as many as the setup lists, splits the virtual
+        users as evenly as possible over them and competes with the server for CPU. The CPU time of its busiest process
+        is shown below the table, and each cell's tooltip shows that and the total of all its processes; a process near
+        one CPU second per second is saturated and caps every row.
       </p>
     </v-card>
   </div>
@@ -285,6 +290,7 @@ import {
   DB_API_LABELS,
   DB_APIS,
   describeExecutor,
+  describeLoadgen,
   errorRate,
   EXECUTOR_LABELS,
   executorInfo,
@@ -439,23 +445,26 @@ function cellTitle(result: RunResult): string {
   return [
     `${result.completed} completed, ${result.errors} errors${kinds ? ` (${kinds})` : ''}`,
     `latency mean ${formatMs(result.latency_ms.mean)} ms, max ${formatMs(result.latency_ms.max)} ms`,
-    `load generator CPU ${result.loadgen_cpu_s.toFixed(2)} s`,
+    `load generator CPU ${result.loadgen_cpu_s.toFixed(2)} s in ${result.loadgen_processes} processes, ` +
+      `busiest process ${result.loadgen_cpu_max_s.toFixed(2)} s`,
   ].join('\n');
 }
 
-/** The most CPU-hungry run of the load generator, relative to its wall time. */
+/** The run whose busiest load generator process used the most CPU, relative to the run's active wall time. */
 const loadgenSummary = computed(() => {
-  let busiest: { share: number; cpu: number; wall: number } | null = null;
+  let busiest: { share: number; cpu: number; wall: number; processes: number } | null = null;
   for (const result of Object.values(results.value)) {
-    const wall = (Date.parse(result.finished) - Date.parse(result.started)) / 1000;
+    const wall = result.loadgen_active_s;
     if (!(wall > 0)) continue;
-    const share = result.loadgen_cpu_s / wall;
-    if (!busiest || share > busiest.share) busiest = { share, cpu: result.loadgen_cpu_s, wall };
+    const share = result.loadgen_cpu_max_s / wall;
+    if (!busiest || share > busiest.share) {
+      busiest = { share, cpu: result.loadgen_cpu_max_s, wall, processes: result.loadgen_processes };
+    }
   }
   if (!busiest) return '';
   return (
-    `Load generator, busiest run: ${busiest.cpu.toFixed(2)} s CPU in ${busiest.wall.toFixed(1)} s ` +
-    `(${(100 * busiest.share).toFixed(0)} % of one CPU).`
+    `Load generator, busiest process of ${busiest.processes}: ${busiest.cpu.toFixed(2)} s CPU in ` +
+    `${busiest.wall.toFixed(1)} s (${(100 * busiest.share).toFixed(0)} % of one CPU).`
   );
 });
 

@@ -8,7 +8,8 @@ The demo starts in the terminal below once the codespace is ready, and opens in 
 
 The codespace runs PostgreSQL 17 and Valkey next to the demo, so every data source and the **Benchmark** tab are on:
 the Django ORM and adorm on PostgreSQL, the benchmark's FastAPI, classic Celery and hybrid Celery executors. The
-benchmark's load generator shares the codespace's CPUs with the server.
+benchmark viewsets run in 2 uvicorn processes (`--bench-processes`), and the benchmark's load generator, in 4
+processes, shares the codespace's CPUs with them.
 
 Celery mode (the in-memory and Django ORM data sources' viewset calls through a Celery worker): stop the demo with
 Ctrl-C, then run `uv run python demo.py --benchmark --celery`.

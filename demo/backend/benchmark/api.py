@@ -2,13 +2,15 @@
 
 import asyncio
 import json
+import os
+import signal
 import socket
 import sys
 
-from contextlib import asynccontextmanager
+from contextlib import suppress
 from typing import Literal
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 
@@ -24,14 +26,11 @@ Transport = Literal["rest", "muxws"]
 Operation = Literal["retrieve", "list"]
 
 INSPECT_TIMEOUT_S = 1.0
+BENCH_STATUS_TIMEOUT_S = 1.0
+"""Seconds a benchmark process has to answer `GET /bench-status`."""
 DRAIN_TIMEOUT_S = 30.0
-LOADGEN_GRACE_S = 30.0
-"""Seconds a load generator may run beyond its warm-up and duration (start-up, requests in flight)."""
-READER_IDLE_POLL_S = 0.05
-"""Seconds a benchmark result reader waits on an empty result list outside a run of its executor."""
-READER_RUN_POLL_S = 0.002
-"""Seconds a benchmark result reader waits on an empty result list during a run of its executor."""
-BENCH_PATH_PREFIX = "/bench/"
+LOADGEN_GRACE_S = 60.0
+"""Seconds a load generator may run beyond its warm-up and duration (start-up of its processes, requests in flight)."""
 
 
 class BenchmarkBusyError(DfViewSetError):
@@ -72,7 +71,8 @@ class ExecutorStatus(BaseModel):
         None, description="Actions at a time over all async processes (`--aconcurrency`); null without them."
     )
     active_processes: int = Field(
-        description="Processes the running worker reports (FastAPI: its one uvicorn process); 0 when no worker answers."
+        description="Processes the running worker reports (FastAPI: the benchmark's uvicorn processes that answer); "
+        "0 when none answers."
     )
     active_prefork_processes: int = Field(description="Prefork processes of `active_processes`.")
     active_async_processes: int = Field(description="Async processes of `active_processes`.")
@@ -94,13 +94,20 @@ class BenchmarkStatus(BaseModel):
     adorm_pool: int = Field(description="The adorm pool size (`max_connections`) of each process.")
     adorm_driver: str = Field(description="The adorm driver: `asyncpg` or `django`.")
     library_size: int = Field(description="Tracks in the table; retrieves spread their ids over 1..library_size.")
+    bench_processes: int = Field(
+        description="uvicorn processes serving the benchmark viewsets; the load is spread over them."
+    )
+    loadgen_processes: int = Field(description="Processes a run's load generator splits its virtual users over.")
     executors: list[ExecutorStatus] = Field(description="`fastapi`, `classic` and `hybrid`, in that order.")
 
 
 class BenchmarkRunRequest(BaseModel):
     """One cell of the benchmark: a load of `concurrency` virtual users for `duration_s` seconds."""
 
-    transport: Transport = Field(description="`rest` (HTTP, a connection per virtual user) or `muxws` (one WebSocket).")
+    transport: Transport = Field(
+        description="`rest` (HTTP, a connection per virtual user) or `muxws` (one WebSocket per load generator "
+        "process)."
+    )
     executor: Executor = Field(description="Who runs the viewset's actions.")
     db_api: DbApi = Field(description="`django` (Django ORM) or `adorm`.")
     operation: Operation = Field("retrieve", description="`retrieve` one track by id, or `list` the first 50.")
@@ -140,7 +147,18 @@ class BenchmarkRunResult(BaseModel):
     measured_s: float = Field(description="Length of the measured window, in seconds.")
     drain_s: float = Field(description="Seconds the load generator waited after the window for requests in flight.")
     loadgen_cpu_s: float = Field(
-        description="CPU seconds of the load generator; near the wall time it saturates a core and caps the result."
+        description="CPU seconds of the load generator from the start of the warm-up, summed over its processes."
+    )
+    loadgen_cpu_max_s: float = Field(
+        description="CPU seconds of its busiest process; near `loadgen_active_s` that process saturates a core and "
+        "caps the result."
+    )
+    loadgen_active_s: float = Field(
+        description="Wall seconds from the start of the warm-up until the last load generator process finished."
+    )
+    loadgen_processes: int = Field(
+        description="Processes the load generator ran: `loadgen_processes` of `GET /benchmark`, at most one per "
+        "virtual user."
     )
     started: str = Field(description="When the load generator started (ISO 8601, UTC).")
     finished: str = Field(description="When it finished (ISO 8601, UTC).")
@@ -172,21 +190,23 @@ async def _worker_stats() -> dict[str, dict]:
         return {}
 
 
-def _executor_status(name: str, stats: dict[str, dict]) -> ExecutorStatus:
-    unavailable = _executor_unavailable(name)
+def _executor_status(name: str, stats: dict[str, dict], bench: list[dict | None]) -> ExecutorStatus:
+    unavailable = _executor_unavailable(name) or _bench_unavailable(bench)
     if name == "fastapi":
+        processes = benchmark.BENCH_PROCESSES
+        active = sum(status is not None for status in bench)
         return ExecutorStatus(
             name="fastapi",
             label="FastAPI in-process",
             available=unavailable is None,
             reason=unavailable,
-            description="1 uvicorn process",
-            processes=1,
+            description=f"{processes} uvicorn process{'' if processes == 1 else 'es'}",
+            processes=processes,
             prefork_processes=0,
-            async_processes=1,
-            active_processes=1,
+            async_processes=processes,
+            active_processes=active,
             active_prefork_processes=0,
-            active_async_processes=1,
+            active_async_processes=active,
         )
     pool = stats.get(_node(name), {}).get("pool", {})
     active_prefork = len(pool.get("processes") or [])
@@ -214,6 +234,33 @@ def _executor_status(name: str, stats: dict[str, dict]) -> ExecutorStatus:
         active_prefork_processes=active_prefork,
         active_async_processes=active_async,
     )
+
+
+async def _bench_statuses() -> list[dict | None]:
+    """`GET /bench-status` of each benchmark process, None for one that does not answer within a second."""
+    if not postgres_demo.ENABLED:
+        return [None] * benchmark.BENCH_PROCESSES
+    import httpx2 as httpx
+
+    async with httpx.AsyncClient(timeout=BENCH_STATUS_TIMEOUT_S) as client:
+
+        async def status(url: str) -> dict | None:
+            try:
+                response = await client.get(f"{url}/bench-status")
+                response.raise_for_status()
+                return response.json()
+            except Exception:  # noqa: BLE001 - a process that does not answer is reported as inactive
+                return None
+
+        return list(await asyncio.gather(*(status(url) for url in benchmark.bench_urls())))
+
+
+def _bench_unavailable(bench: list[dict | None]) -> str | None:
+    """Why runs cannot start because of the benchmark processes; None when every one answers."""
+    missing = [url for url, status in zip(benchmark.bench_urls(), bench, strict=True) if status is None]
+    if not missing:
+        return None
+    return f"benchmark processes do not answer at {', '.join(missing)} (demo.py --db starts them)"
 
 
 def _celery_unavailable(executor: str, stats: dict[str, dict]) -> str | None:
@@ -265,7 +312,8 @@ def _database() -> str | None:
 
 UNAVAILABLE_RESPONSE = error_entry(
     503,
-    "The selected executor or DB API cannot run (no PostgreSQL server, no benchmark workers, adorm not installed): "
+    "The selected executor or DB API cannot run (no PostgreSQL server, a benchmark process or worker does not "
+    "answer, adorm not installed): "
     "`demo.benchmark_unavailable`, the reason in `detail_params.reason`.",
     BenchmarkUnavailableError("the benchmark's Celery workers run with demo.py --benchmark (needs Redis)"),
 )
@@ -290,10 +338,11 @@ VALIDATION_RESPONSE = error_entry(
 )
 async def benchmark_status() -> BenchmarkStatus:
     """
-    Whether the benchmark can run and why not; the database, the latency the proxy adds now, the adorm pool, and per
-    executor its configured processes and the processes its Celery worker reports (asked with a 1 s timeout).
+    Whether the benchmark can run and why not; the database, the latency the proxy adds now, the adorm pool, the
+    benchmark and load generator process counts, and per executor its configured processes and the processes that
+    answer: its Celery worker's, or the benchmark's uvicorn processes for FastAPI (asked with a 1 s timeout).
     """
-    stats = await _worker_stats()
+    stats, bench = await asyncio.gather(_worker_stats(), _bench_statuses())
     return BenchmarkStatus(
         available=_unavailable() is None,
         reason=_unavailable(),
@@ -306,7 +355,9 @@ async def benchmark_status() -> BenchmarkStatus:
         adorm_pool=postgres_demo.ADORM_POOL,
         adorm_driver=postgres_demo.DRIVER,
         library_size=LIBRARY_SIZE,
-        executors=[_executor_status(name, stats) for name in benchmark.EXECUTORS],
+        bench_processes=benchmark.BENCH_PROCESSES,
+        loadgen_processes=benchmark.LOADGEN_PROCESSES,
+        executors=[_executor_status(name, stats, bench) for name in benchmark.EXECUTORS],
     )
 
 
@@ -316,13 +367,13 @@ async def benchmark_status() -> BenchmarkStatus:
     response_description="Throughput, latency percentiles and errors of the measured window.",
     responses=merge_responses(UNAVAILABLE_RESPONSE, BUSY_RESPONSE, FAILED_RESPONSE, VALIDATION_RESPONSE),
 )
-async def run_benchmark(body: BenchmarkRunRequest, request: Request) -> BenchmarkRunResult:
+async def run_benchmark(body: BenchmarkRunRequest) -> BenchmarkRunResult:
     """
-    Sets the proxy's latency, drains what earlier runs left in the benchmark's Celery queues and workers and in this
-    process's benchmark requests (up to 30 s), then runs the load generator in a process of its own against this
-    server, at `/bench/{db_api}/{executor}` over `transport`, and answers its result. One run at a time.
+    Sets the proxy's latency, drains what earlier runs left in the benchmark's Celery queues and workers and in the
+    benchmark processes' requests (up to 30 s), then runs the load generator in processes of its own against the
+    benchmark processes, at `/bench/{db_api}/{executor}` over `transport`, and answers its result. One run at a time.
     """
-    reason = _run_unavailable(body.executor, body.db_api)
+    reason = _run_unavailable(body.executor, body.db_api) or _bench_unavailable(await _bench_statuses())
     if reason is not None:
         raise BenchmarkUnavailableError(reason)
     if body.executor != "fastapi":
@@ -334,8 +385,7 @@ async def run_benchmark(body: BenchmarkRunRequest, request: Request) -> Benchmar
     async with _run_lock:
         latency = await _apply_latency(body.db_latency_ms)
         await _drain(body.executor)
-        async with _fast_result_readers(body.executor):
-            result = await _run_loadgen(body, request)
+        result = await _run_loadgen(body)
     return BenchmarkRunResult(request=body.model_copy(update={"db_latency_ms": latency}), **result)
 
 
@@ -351,70 +401,17 @@ async def _apply_latency(latency_ms: float | None) -> float | None:
         raise BenchmarkFailedError(f"the latency proxy does not answer: {error!r}") from error
 
 
-def _result_queue_keys(executors) -> list[str]:
-    """The result queue keys of the benchmark Celery viewsets run by `executors`."""
-    from demo.backend.benchmark.viewsets import task_prefix, VIEWSETS
-    from fastapi_viewsets.decorators.celery_viewset import get_result_queue_key
-
-    return [get_result_queue_key(task_prefix(*key)) for key in VIEWSETS if key[1] in executors]
-
-
-async def start_result_readers(poll_interval: float, executors=benchmark.CELERY_EXECUTORS) -> None:
-    """(Re)starts the result readers of the benchmark Celery viewsets of `executors`, polling every `poll_interval`."""
-    if not (postgres_demo.ENABLED and benchmark.CELERY_ENABLED):
-        return
-    from demo.backend.celery_app import redis_async
-    from fastapi_viewsets.decorators.celery_viewset import start_result_reader, stop_result_reader
-
-    for queue_key in _result_queue_keys(executors):
-        await stop_result_reader(queue_key)
-        await start_result_reader(redis_async, queue_key, poll_interval)
-
-
-@asynccontextmanager
-async def _fast_result_readers(executor: str):
-    """Polls the result lists of `executor`'s viewsets every `READER_RUN_POLL_S` s inside the block."""
-    if executor == "fastapi":
-        yield
-        return
-    await start_result_readers(READER_RUN_POLL_S, (executor,))
-    try:
-        yield
-    finally:
-        await start_result_readers(READER_IDLE_POLL_S, (executor,))
-
-
-_in_flight = 0
-"""Requests to the benchmark viewsets (`/bench/...`, over REST or muxws) this process is serving."""
-
-
-class BenchInFlightMiddleware:
-    """ASGI middleware counting the requests to `/bench/...` in progress, including those whose client has gone."""
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not scope.get("path", "").startswith(BENCH_PATH_PREFIX):
-            await self.app(scope, receive, send)
-            return
-        global _in_flight  # noqa: PLW0603 - one counter per process
-        _in_flight += 1
-        try:
-            await self.app(scope, receive, send)
-        finally:
-            _in_flight -= 1
-
-
 async def _drain(executor: str) -> None:
     """
-    Purges the benchmark queues, waits until their workers hold no task and until this process serves no benchmark
+    Purges the benchmark queues, waits until their workers hold no task and until no benchmark process serves a
     request, up to `DRAIN_TIMEOUT_S` in all.
     """
     deadline = asyncio.get_running_loop().time() + DRAIN_TIMEOUT_S
     if benchmark.CELERY_ENABLED:
         await _drain_celery(executor, deadline)
-    while _in_flight and asyncio.get_running_loop().time() < deadline:
+    while asyncio.get_running_loop().time() < deadline:
+        if not sum(status["in_flight"] for status in await _bench_statuses() if status is not None):
+            return
         await asyncio.sleep(0.05)
 
 
@@ -443,15 +440,20 @@ async def _drain_celery(executor: str, deadline: float) -> None:
             raise BenchmarkFailedError(f"the Celery broker does not answer: {error!r}") from error
 
 
-async def _run_loadgen(body: BenchmarkRunRequest, request: Request) -> dict:
-    host, port = request.scope.get("server") or ("127.0.0.1", 8000)
-    if host in ("0.0.0.0", "::", ""):  # noqa: S104 - a wildcard bind is reached on the loopback
-        host = "127.0.0.1"
+async def _kill_group(process: asyncio.subprocess.Process) -> None:
+    """Kills the load generator and its child processes."""
+    with suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    await process.wait()
+
+
+async def _run_loadgen(body: BenchmarkRunRequest) -> dict:
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
         "demo.backend.benchmark.loadgen",
-        f"--base-url=http://{host}:{port}",
+        f"--base-url={','.join(benchmark.bench_urls())}",
+        f"--processes={benchmark.LOADGEN_PROCESSES}",
         f"--path=/bench/{body.db_api}/{body.executor}",
         f"--transport={body.transport}",
         f"--operation={body.operation}",
@@ -460,16 +462,16 @@ async def _run_loadgen(body: BenchmarkRunRequest, request: Request) -> dict:
         f"--ids={LIBRARY_SIZE}",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        # its own process group, so a kill reaches its child processes too
+        start_new_session=True,
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), body.duration_s + LOADGEN_GRACE_S)
     except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
+        await _kill_group(process)
         raise BenchmarkFailedError("the load generator did not finish in time") from None
     except asyncio.CancelledError:
-        process.kill()
-        await process.wait()
+        await _kill_group(process)
         raise
     if process.returncode != 0:
         tail = stderr.decode(errors="replace").strip().splitlines()[-1:] or [""]

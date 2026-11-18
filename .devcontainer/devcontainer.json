@@ -12,7 +12,8 @@
   // No forwardPorts: the ports are forwarded when the demo starts listening, and onAutoForward opens the frontend.
   "portsAttributes": {
     "5173": { "label": "Demo", "onAutoForward": "openBrowserOnce" },
-    "8000": { "label": "Demo API", "onAutoForward": "silent" }
+    "8000": { "label": "Demo API", "onAutoForward": "silent" },
+    "8010-8019": { "label": "Benchmark processes", "onAutoForward": "ignore" }
   },
   // No venv activation in terminals: it types into the demo's terminal and interrupts the demo; uv run needs none.
   "customizations": {
