@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException
+from starlette.requests import ClientDisconnect
 from starlette.routing import Match
 from starlette.types import Message, Receive, Scope, Send
 
@@ -39,7 +40,8 @@ class TransportRoute(APIRoute):
     """
     An `APIRoute` matching only requests over one of `transports`, answering its errors with an
     `ApiErrorBody` without registered handlers. An unhandled exception becomes 500 `unhandled_error`
-    and is re-raised for logging; the application's own handlers still take precedence.
+    and is re-raised for logging; the application's own handlers still take precedence. A request whose
+    client disconnects while its body is read (`ClientDisconnect`) ends without an answer and without an error.
     """
 
     transports: frozenset[str] = frozenset({REST, MUXWS})
@@ -61,6 +63,9 @@ class TransportRoute(APIRoute):
 
         try:
             await super().handle(scope, receive, sending)
+        except ClientDisconnect:
+            # the client closed the connection while its request was read: nobody receives an answer
+            return
         except Exception as error:
             # an HTTPException that reaches here is Starlette's 405 of the route, not the endpoint's
             if started or isinstance(error, HTTPException) or answers_unhandled_itself(scope.get("app")):

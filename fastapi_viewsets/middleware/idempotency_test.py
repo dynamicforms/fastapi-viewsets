@@ -822,3 +822,46 @@ def test_a_repeat_of_a_call_that_raised_djangos_validation_error_answers_the_fir
     }
     assert (first.status_code, first.json()) == (repeat.status_code, repeat.json()) == (422, expected)
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_disconnects_while_its_request_is_read_gets_no_answer_and_raises_nothing():
+    settings.viewsets_command_middleware = [Idempotency()]
+    calls: list = []
+    router = APIRouter()
+
+    @route_viewset(router, "/session")
+    class SessionViewSet:
+        __router = APIRouter()
+
+        @__router.get("")
+        async def state(self) -> dict:
+            calls.append(1)
+            return {}
+
+    app = FastAPI()
+    app.include_router(router)
+    sent: list = []
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/session",
+        "raw_path": b"/session",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"idempotency-key", KEY.encode())],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+    }
+    await app(scope, receive, send)
+    assert (sent, calls) == ([], [])
