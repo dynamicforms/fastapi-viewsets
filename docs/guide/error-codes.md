@@ -52,7 +52,8 @@ An `HTTPException` keeps its `headers`. Its `detail` is the body's `detail` when
 is `detail_params.detail`, and the body's `detail` is the status phrase (`Bad Request`). The body of an unhandled
 exception names no part of it: `detail` is `Internal Server Error`, and the exception is re-raised after the
 response, so the server logs it as it logs any exception of a request. A status that allows no body (204, 304) is
-answered without one.
+answered without one. A request whose client disconnects while the request is read (Starlette's `ClientDisconnect`)
+gets no answer and logs nothing.
 
 `ApiErrorBody`, and `ApiFieldError` for one field error, are the named schemas of every error response in the
 viewsets' OpenAPI document (see [Documenting endpoints](./endpoint-docs#error-responses)).
