@@ -559,6 +559,39 @@ async def test_a_reader_blocked_in_blpop_stops_at_once_and_fails_its_pending_cal
     assert await async_redis.ping()  # the client stays usable
 
 
+class _CancelLosingClient:
+    """A client whose BLPOP answers the first cancel with an empty result, as redis-py can on Python < 3.12."""
+
+    def __init__(self):
+        self.lost_cancels = 0
+
+    async def blpop(self, _keys, timeout):
+        try:
+            await asyncio.sleep(timeout)
+        except asyncio.CancelledError:
+            if self.lost_cancels:
+                raise
+            self.lost_cancels += 1
+        return None
+
+
+@pytest.mark.asyncio
+async def test_a_reader_that_loses_a_cancel_still_stops_and_fails_its_pending_calls():
+    queue_key = f"reader-test-{uuid.uuid4().hex}"
+    _ids, [future], _resolved = _register(1, queue_key)
+    client = _CancelLosingClient()
+    await start_result_reader(client, queue_key)
+    await asyncio.sleep(0.05)
+
+    started = time.monotonic()
+    await asyncio.wait_for(stop_result_reader(queue_key), timeout=2)
+
+    assert time.monotonic() - started < 0.5
+    assert client.lost_cancels == 1
+    with pytest.raises(ResultReaderStoppedError):
+        future.result()
+
+
 @pytest.mark.asyncio
 async def test_a_reader_blocked_in_blpop_leaves_the_clients_other_commands_answered(async_redis, queue_key):
     await start_result_reader(async_redis, queue_key)
