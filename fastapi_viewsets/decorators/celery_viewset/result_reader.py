@@ -27,6 +27,9 @@ RESULT_QUEUE_TTL = 3600
 # connection goes unnoticed. The client's `socket_timeout` must be longer.
 BLOCK_TIMEOUT = 2
 
+# Seconds stop_result_reader waits for a cancelled reader before it cancels it again.
+STOP_RETRY_INTERVAL = 0.1
+
 # Payloads one LPOP takes from the result list after BLPOP returns (`LPOP key count`, Redis >= 6.2).
 DRAIN_COUNT = 100
 
@@ -252,11 +255,9 @@ async def stop_result_reader(queue_key: str | None = None) -> None:
     keys = [queue_key] if queue_key is not None else list(_reader_tasks.keys())
     for key in keys:
         task = _reader_tasks.pop(key, None)
-        if task is not None and not task.done():
+        while task is not None and not task.done():
+            # On Python < 3.12 a cancel delivered while BLPOP is answered is lost; it is sent again.
             task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            await asyncio.wait({task}, timeout=STOP_RETRY_INTERVAL)
         # A task cancelled before its first step never runs result_reader_loop's finally.
         _fail_pending_futures(key)
