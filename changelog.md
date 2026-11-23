@@ -6,9 +6,13 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.16.3] - 2026-11-22
+## [0.16.3] - 2026-11-23
 
 ### Fixed
+
+- The TS client's FE/BE schema check treats an operation on a mixin path (root, `/{pk}`, `/bulk`, `/lookup`) whose
+  `x-viewset-action` names a method other than a mixin's as a custom endpoint, matched by that method's name; it no
+  longer reports such an endpoint as a missing `create` / `destroy` / … mixin.
 
 - `stop_result_reader` stops a reader waiting in BLPOP on Python 3.10 and 3.11; there it could miss the cancel and
   keep reading, so a FastAPI shutdown never finished.
