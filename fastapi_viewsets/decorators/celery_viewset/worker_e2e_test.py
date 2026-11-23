@@ -255,6 +255,7 @@ def worker(tmp_path_factory, redis_url, key, celery_app, pool):
     process = subprocess.Popen(  # noqa: S603 - the interpreter running the tests
         [*command, "--loglevel=INFO", "-n", f"{key}@%h"], cwd=directory, env=env, stdout=log, stderr=subprocess.STDOUT
     )
+    process.log_path = directory / "worker.log"
     try:
         deadline = time.monotonic() + 30
         while not celery_app.control.inspect(timeout=1, destination=[_node(key)]).ping():
