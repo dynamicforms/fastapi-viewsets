@@ -84,7 +84,8 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
   documentation is `SCHEMA_ENDPOINT_DOCS`, overridable with `@endpoint_docs` under the action name `schema`. Each
   operation in it carries `x-viewset-action`, the name of the viewset method that
   serves it (`top_rated` for `GET {base_path}/top-rated`); the FE schema check matches a custom endpoint to a ViewSet
-  method by it.
+  method by it, also one on a mixin path (`POST {base_path}`, `DELETE {base_path}/{pk}`) served by a method that is
+  not a mixin's.
 - Tags the class's routes with `settings.viewsets_tag_name(cls)`, or, when that setting is `None`, with
   [`default_tag_name(cls)`](#default-tag-name), and records the class's own docstring as that tag's description.
   The same tag goes to the operations of `/schema` and to the muxws registration. An empty tag name gives the routes no tag.

@@ -664,6 +664,80 @@ describe('schema validation', () => {
     expect(msg).toContain("no 'import()' method");
   });
 
+  /** The paths of a lookup-only BE viewset. */
+  const LOOKUP_PATHS = {
+    '/items/schema': { get: {} },
+    '/items/lookup': { get: { 'x-viewset-action': 'lookup' } },
+  };
+
+  /** A lookup-only BE that serves its own custom actions on the root and on `/{pk}`. */
+  const CUSTOM_ON_MIXIN_PATHS_SCHEMA = {
+    paths: {
+      ...LOOKUP_PATHS,
+      '/items': { post: { 'x-viewset-action': 'create_activity' } },
+      '/items/{pk}': { delete: { 'x-viewset-action': 'delete_activity' } },
+    },
+  };
+
+  it('checks a custom action on a mixin path as a custom endpoint, by its camelCase name', async () => {
+    await createAndValidate(
+      { paths: { ...LOOKUP_PATHS, '/items': { post: { 'x-viewset-action': 'create_activity' } } } },
+      [LookupMixin],
+      { createActivity: () => Promise.resolve(null) },
+    );
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('checks a custom action on a mixin path as a custom endpoint, by its snake_case name', async () => {
+    await createAndValidate(
+      { paths: { ...LOOKUP_PATHS, '/items': { post: { 'x-viewset-action': 'create_activity' } } } },
+      [LookupMixin],
+      { create_activity: () => Promise.resolve(null) },
+    );
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports a custom action on a mixin path without a method, never as an undeclared mixin', async () => {
+    await createAndValidate(
+      { paths: { ...LOOKUP_PATHS, '/items': { post: { 'x-viewset-action': 'create_activity' } } } },
+      [LookupMixin],
+    );
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg = warnSpy.mock.calls[0][0] as string;
+    expect(msg).toContain(
+      "BE serves 'POST /items' but the ViewSet has no 'createActivity()' or 'create_activity()' method",
+    );
+    expect(msg).not.toContain('declares no create');
+  });
+
+  it('reports a mixin action on a mixin path the ViewSet did not declare', async () => {
+    await createAndValidate(
+      { paths: { ...LOOKUP_PATHS, '/items/{pk}': { delete: { 'x-viewset-action': 'destroy' } } } },
+      [LookupMixin],
+    );
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg = warnSpy.mock.calls[0][0] as string;
+    expect(msg).toContain("BE serves 'DELETE /items/{pk}'");
+    expect(msg).toContain('declares no destroy');
+  });
+
+  it('reports an operation on a mixin path that names no action as the mixin action', async () => {
+    // without x-viewset-action the path alone decides: DELETE /{pk} is destroy
+    await createAndValidate({ paths: { ...LOOKUP_PATHS, '/items/{pk}': { delete: {} } } }, [LookupMixin], {
+      deleteActivity: () => Promise.resolve(null),
+    });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0] as string).toContain('declares no destroy');
+  });
+
+  it('no warnings when the ViewSet has a method for every custom action on mixin paths', async () => {
+    await createAndValidate(CUSTOM_ON_MIXIN_PATHS_SCHEMA, [LookupMixin], {
+      createActivity: () => Promise.resolve(null),
+      deleteActivity: () => Promise.resolve(null),
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
   it('no warnings when schema fetch fails (non-critical)', async () => {
     http.get.mockRejectedValue(new Error('Network error'));
     await createAndValidate();

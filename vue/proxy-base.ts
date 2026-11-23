@@ -97,6 +97,24 @@ const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', '
 /** The OpenAPI extension in which the BE names the method serving an operation, e.g. `top_rated`. */
 const ACTION_EXTENSION = 'x-viewset-action';
 
+/**
+ * The BE methods of the mixins (`fastapi_viewsets/mixins.py`). An operation on a mixin path (root, `/{pk}`, `/bulk`,
+ * `/lookup`) whose `x-viewset-action` names another method is a custom endpoint at that path.
+ */
+const MIXIN_BE_ACTIONS: ReadonlySet<string> = new Set([
+  'list_items',
+  'create',
+  'bulk_create',
+  'retrieve',
+  'update',
+  'partial_update',
+  'bulk_update',
+  'bulk_partial_update',
+  'destroy',
+  'bulk_destroy',
+  'lookup',
+]);
+
 /** The FE method names that serve the BE method `action`: `top_rated` → `topRated()` or `top_rated()`. */
 function customMethodNames(action: string): string[] {
   const camel = action.replace(/(?<=[a-zA-Z0-9])_+([a-z0-9])/g, (_, char: string) => char.toUpperCase());
@@ -396,6 +414,11 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
 
         const methodMap = ENDPOINT_TO_FE_METHOD[pathType] ?? {};
         for (const verb of verbs) {
+          const action = (pathItem[verb] as { [ACTION_EXTENSION]?: unknown } | undefined)?.[ACTION_EXTENSION];
+          if (typeof action === 'string' && action && !MIXIN_BE_ACTIONS.has(action)) {
+            customEndpoints.push({ endpoint: `${verb.toUpperCase()} ${path}`, action });
+            continue;
+          }
           const actions = methodMap[verb.toUpperCase()];
           if (!actions) continue;
           beAlternatives.push({ endpoint: `${verb.toUpperCase()} ${path}`, actions });
