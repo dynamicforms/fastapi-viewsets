@@ -130,3 +130,12 @@ jobs:
             vue/index.ts
           github-token: ${{ secrets.GITHUB_TOKEN }}
         if: github.event_name == 'pull_request'
+
+  # the required status check: fails when any other job of this workflow failed or was cancelled
+  all-green:
+    if: always()
+    needs: [python, node, coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
