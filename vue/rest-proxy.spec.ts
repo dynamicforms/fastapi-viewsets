@@ -4,6 +4,8 @@ import axios, { AxiosError, AxiosHeaders, CanceledError, type InternalAxiosReque
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type CallEvent, onCallActivity } from './call';
+import { errorBodyOf } from './errors';
+import type { FileDownload } from './file-download';
 import {
   BulkViewSetMixin,
   CursorListMixin,
@@ -39,14 +41,18 @@ const MOCK_ITEMS: Item[] = [MOCK_ITEM, { id: 2, name: 'Second item' }];
 // Setup: mock axios instance
 // ---------------------------------------------------------------------------
 
-/** The config every REST attempt carries: the call's own, plus the key, the timeout and the abort signal. */
+/**
+ * The config every REST attempt carries: the call's own, plus the key, no axios timeout, the abort signal
+ * and the download progress handler that keeps the attempt's idle timer running.
+ */
 function sent(config: { params?: unknown; headers?: Record<string, string>; data?: unknown } = {}) {
   return {
     ...config,
     ...(config.params !== undefined ? { paramsSerializer: { indexes: null } } : {}),
     headers: { ...config.headers, 'Idempotency-Key': expect.stringMatching(/^"[0-9a-f-]{36}"$/) },
-    timeout: 30000,
+    timeout: 0,
     signal: expect.any(AbortSignal),
+    onDownloadProgress: expect.any(Function),
   };
 }
 
@@ -1208,7 +1214,7 @@ describe('RestProxyImpl — Idempotency-Key and repeats', () => {
     expect(http.get).not.toHaveBeenCalled();
   });
 
-  it('passes attemptTimeoutMs to axios as timeout', async () => {
+  it('leaves axios without a total timeout, so attemptTimeoutMs alone bounds an attempt', async () => {
     http.get.mockResolvedValue({ data: MOCK_ITEM });
     const api = new RestProxyImpl<number, Item, 'id'>({
       basePath: '/items',
@@ -1218,7 +1224,7 @@ describe('RestProxyImpl — Idempotency-Key and repeats', () => {
       attemptTimeoutMs: 5000,
     });
     await api.retrieve(1);
-    expect(http.get).toHaveBeenCalledWith('/items/1', expect.objectContaining({ timeout: 5000 }));
+    expect(http.get).toHaveBeenCalledWith('/items/1', expect.objectContaining({ timeout: 0 }));
   });
 
   it('repeats a call that got no answer, with the same key, and aborts the repeated attempt', async () => {
@@ -1361,6 +1367,311 @@ describe('RestProxyImpl — Idempotency-Key and repeats', () => {
     const settled = expect(api.retrieve(1)).rejects.toBe(errors[1]);
     await vi.runAllTimersAsync();
     await settled;
+    expect(http.get).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Files: multipart bodies, upload progress, idle attempt timeout, blob answers
+// ---------------------------------------------------------------------------
+
+describe('RestProxyImpl — files and the idle attempt timeout', () => {
+  let http: ReturnType<typeof makeMockAxios>;
+
+  type Progress = (event: { loaded: number; total?: number }) => void;
+
+  /** A ViewSet with the file endpoints the demo serves. */
+  class FileApi extends RestProxyImpl<number, Item, 'id'> {
+    upload(body: FormData, onProgress?: (loaded: number, total: number | undefined) => void) {
+      return this.request<{ filename: string; size: number }>('POST', '/attachments', {
+        body,
+        onUploadProgress: onProgress,
+      });
+    }
+
+    pdf(pk: number): Promise<FileDownload> {
+      // Typed by the `responseType: 'blob'` overload: no type argument.
+      return this.request('GET', `/${pk}/pdf`, { responseType: 'blob' });
+    }
+
+    slow(): Promise<Item> {
+      return this.request<Item>('GET', '/slow');
+    }
+  }
+
+  function makeApi(options: { attemptTimeoutMs?: number; repeat?: { withinMs?: number } } = {}): FileApi {
+    return new FileApi({
+      basePath: '/items',
+      pkFieldName: 'id',
+      axiosInstance: http as unknown as typeof axios,
+      validateSchema: false,
+      ...options,
+    });
+  }
+
+  function configOf(fn: ReturnType<typeof vi.fn>, n = 0): Record<string, unknown> {
+    return fn.mock.calls[n][fn === http.get || fn === http.delete ? 1 : 2] as Record<string, unknown>;
+  }
+
+  function blobError(status: number, body: string, contentType: string): AxiosError {
+    return new AxiosError(`Request failed with status code ${status}`, 'ERR_BAD_RESPONSE', undefined, undefined, {
+      status,
+      statusText: '',
+      headers: new AxiosHeaders({ 'Content-Type': contentType }),
+      config: {} as InternalAxiosRequestConfig,
+      data: new Blob([body], { type: contentType }),
+    });
+  }
+
+  const NOT_FOUND = {
+    detail: 'Not found',
+    detail_code: 'fastapi-viewsets.not_found',
+    detail_params: {},
+    field_errors: {},
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    http = makeMockAxios();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('sends a FormData body as it is, and repeats it without the first attempt’s Content-Type', async () => {
+    const form = new FormData();
+    form.append('file', new Blob(['abc']), 'a.txt');
+    const lost = new AxiosError('Network Error', 'ERR_NETWORK', {
+      headers: new AxiosHeaders({
+        'Idempotency-Key': '"k"',
+        'Content-Type': 'multipart/form-data; boundary=----first',
+      }),
+    } as InternalAxiosRequestConfig);
+    http.post.mockRejectedValueOnce(lost).mockResolvedValueOnce({ data: { filename: 'a.txt', size: 3 } });
+    const call = makeApi().upload(form);
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(call).resolves.toEqual({ filename: 'a.txt', size: 3 });
+    expect(http.post).toHaveBeenCalledTimes(2);
+    expect(http.post.mock.calls[0][1]).toBe(form);
+    expect(http.post.mock.calls[1][1]).toBe(form);
+    const repeatHeaders = (configOf(http.post, 1) as { headers: Record<string, string> }).headers;
+    expect(Object.keys(repeatHeaders).map((name) => name.toLowerCase())).not.toContain('content-type');
+  });
+
+  it('passes upload progress on as (loaded, total)', async () => {
+    const seen: [number, number | undefined][] = [];
+    http.post.mockImplementation((_url: string, _body: unknown, config: { onUploadProgress: Progress }) => {
+      config.onUploadProgress({ loaded: 5, total: 10 });
+      config.onUploadProgress({ loaded: 10, total: 10 });
+      config.onUploadProgress({ loaded: 12 });
+      return Promise.resolve({ data: { filename: 'a.txt', size: 12 } });
+    });
+    await makeApi().upload(new FormData(), (loaded, total) => seen.push([loaded, total]));
+    expect(seen).toEqual([
+      [5, 10],
+      [10, 10],
+      [12, undefined],
+    ]);
+  });
+
+  it('repeats at once, with the same key, an attempt without progress for attemptTimeoutMs', async () => {
+    const events: CallEvent[] = [];
+    const stop = onCallActivity((event) => events.push(event));
+    try {
+      http.get.mockReturnValueOnce(new Promise(() => {})).mockResolvedValueOnce({ data: MOCK_ITEM });
+      const call = makeApi({ attemptTimeoutMs: 5000 }).slow() as Promise<Item> & { key: string };
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(http.get).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      // The stub ignores the abort: the attempt fails on the 0 ms fallback, which fake timers arm 1 ms ahead.
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(call).resolves.toEqual(MOCK_ITEM);
+      expect(http.get).toHaveBeenCalledTimes(2);
+      expect((configOf(http.get, 0).signal as AbortSignal).aborted).toBe(true);
+      expect((configOf(http.get, 1) as { headers: Record<string, string> }).headers['Idempotency-Key']).toBe(
+        (configOf(http.get, 0) as { headers: Record<string, string> }).headers['Idempotency-Key'],
+      );
+      expect(events).toContainEqual({ type: 'retry', key: call.key, failure: 'timeout', attempt: 1, delayMs: 0 });
+    } finally {
+      stop();
+    }
+  });
+
+  it('keeps an attempt alive while upload or download progress arrives', async () => {
+    let answer: (value: unknown) => void = () => {};
+    let config: { onUploadProgress: Progress; onDownloadProgress: Progress } | undefined;
+    http.post.mockImplementation((_url: string, _body: unknown, cfg: typeof config) => {
+      config = cfg;
+      return new Promise((resolve) => (answer = resolve));
+    });
+    const call = makeApi({ attemptTimeoutMs: 5000 }).upload(new FormData());
+    for (let loaded = 1; loaded <= 5; loaded += 1) {
+      await vi.advanceTimersByTimeAsync(4000);
+      config!.onUploadProgress({ loaded, total: 5 });
+    }
+    await vi.advanceTimersByTimeAsync(4000);
+    config!.onDownloadProgress({ loaded: 1 });
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(http.post).toHaveBeenCalledTimes(1);
+    answer({ data: { filename: 'a.txt', size: 5 } });
+    await expect(call).resolves.toEqual({ filename: 'a.txt', size: 5 });
+  });
+
+  it('times out an attempt whose progress stalls, counted from its last progress event', async () => {
+    let config: { onUploadProgress: Progress } | undefined;
+    http.post
+      .mockImplementationOnce((_url: string, _body: unknown, cfg: typeof config) => {
+        config = cfg;
+        return new Promise(() => {});
+      })
+      .mockResolvedValueOnce({ data: { filename: 'a.txt', size: 5 } });
+    const call = makeApi({ attemptTimeoutMs: 5000 }).upload(new FormData());
+    await vi.advanceTimersByTimeAsync(3000);
+    config!.onUploadProgress({ loaded: 1, total: 5 });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(http.post).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    // The stub ignores the abort: the attempt fails on the 0 ms fallback, which fake timers arm 1 ms ahead.
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(call).resolves.toEqual({ filename: 'a.txt', size: 5 });
+    expect(http.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a timed-out attempt with an ECONNABORTED AxiosError, not the abort’s CanceledError', async () => {
+    http.get.mockImplementation(
+      (_url: string, config: { signal: AbortSignal }) =>
+        new Promise((_, reject) => config.signal.addEventListener('abort', () => reject(new CanceledError()))),
+    );
+    const settled = expect(makeApi({ attemptTimeoutMs: 5000, repeat: { withinMs: 0 } }).slow()).rejects.toMatchObject({
+      isAxiosError: true,
+      code: 'ECONNABORTED',
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    await settled;
+    expect(http.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('sets no idle timer with attemptTimeoutMs 0', async () => {
+    http.get.mockReturnValue(new Promise(() => {}));
+    void makeApi({ attemptTimeoutMs: 0 }).slow();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(http.get).toHaveBeenCalledTimes(1);
+    expect(configOf(http.get)).not.toHaveProperty('onDownloadProgress');
+  });
+
+  it('resolves a blob call to a FileDownload, with the RFC 5987 file name', async () => {
+    const pdf = new Blob(['%PDF-1.4'], { type: 'application/pdf' });
+    http.get.mockResolvedValue({
+      data: pdf,
+      headers: new AxiosHeaders({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': 'attachment; filename="track-1.pdf"; filename*=UTF-8\'\'track-1-%C3%A9.pdf',
+        'X-Extra': 'x',
+      }),
+    });
+    const download = await makeApi().pdf(1);
+    expect(configOf(http.get)).toMatchObject({ responseType: 'blob' });
+    expect(http.get.mock.calls[0][0]).toBe('/items/1/pdf');
+    expect(download.blob).toBe(pdf);
+    expect(download.filename).toBe('track-1-é.pdf');
+    expect(download.contentType).toBe('application/pdf');
+    expect(download.headers).toMatchObject({ 'content-type': 'application/pdf', 'x-extra': 'x' });
+  });
+
+  it('takes the plain filename, or none, when filename* is missing', async () => {
+    http.get
+      .mockResolvedValueOnce({
+        data: new Blob(['x']),
+        headers: { 'content-type': 'text/csv', 'content-disposition': 'attachment; filename=export.csv' },
+      })
+      .mockResolvedValueOnce({ data: new Blob(['x']), headers: {} });
+    const named = await makeApi().pdf(1);
+    expect(named.filename).toBe('export.csv');
+    expect(named.blob.type).toBe('text/csv');
+    const unnamed = await makeApi().pdf(2);
+    expect(unnamed.filename).toBeNull();
+    expect(unnamed.contentType).toBe('');
+  });
+
+  // jsdom's Blob has no text(), and its FileReader reads on setImmediate: these two run on real timers.
+  it('decodes a JSON error body of a blob call, which errorBodyOf then reads', async () => {
+    vi.useRealTimers();
+    http.get.mockRejectedValue(blobError(404, JSON.stringify(NOT_FOUND), 'application/json'));
+    const error = await makeApi()
+      .pdf(999999999)
+      .catch((e: unknown) => e);
+    expect((error as AxiosError).response?.data).toEqual(NOT_FOUND);
+    expect(errorBodyOf(error).detail_code).toBe('fastapi-viewsets.not_found');
+  });
+
+  it('settles a blob call with a gateway status whose JSON body is an ApiErrorBody', async () => {
+    const body = { ...NOT_FOUND, detail_code: 'fastapi-viewsets.result_timeout' };
+    vi.useRealTimers();
+    // A repeat would keep the call pending for repeat.withinMs; it rejects with the first attempt's answer.
+    http.get.mockRejectedValue(blobError(503, JSON.stringify(body), 'application/problem+json'));
+    await expect(makeApi().pdf(1)).rejects.toMatchObject({ response: { status: 503, data: body } });
+    expect(http.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for an ArrayBuffer without XHR and passes its bytes on unchanged', async () => {
+    vi.useRealTimers();
+    vi.stubGlobal('XMLHttpRequest', undefined);
+    try {
+      const bytes = new Uint8Array([0x25, 0xe2, 0xff, 0x00, 0x80]);
+      http.get.mockResolvedValue({ data: bytes.buffer, headers: { 'content-type': 'application/pdf' } });
+      const download = await makeApi().pdf(1);
+      expect(configOf(http.get)).toMatchObject({ responseType: 'arraybuffer' });
+      expect(download.contentType).toBe('application/pdf');
+      expect(download.blob.size).toBe(5);
+      const read = await new Promise<ArrayBuffer>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as ArrayBuffer);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsArrayBuffer(download.blob);
+      });
+      expect([...new Uint8Array(read)]).toEqual([...bytes]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('settles a blob call with a gateway status whose ApiErrorBody arrives as an ArrayBuffer', async () => {
+    const body = { ...NOT_FOUND, detail_code: 'fastapi-viewsets.result_timeout' };
+    const error = blobError(503, '', 'application/json');
+    error.response!.data = new TextEncoder().encode(JSON.stringify(body)).buffer;
+    http.get.mockRejectedValue(error);
+    const settled = expect(makeApi().pdf(1)).rejects.toMatchObject({ response: { status: 503, data: body } });
+    await vi.advanceTimersByTimeAsync(0);
+    await settled;
+    expect(http.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('still calls the axios instance’s default progress handlers', async () => {
+    const onDownloadProgress = vi.fn();
+    const onUploadProgress = vi.fn();
+    const own = vi.fn();
+    Object.assign(http, { defaults: { onDownloadProgress, onUploadProgress } });
+    http.post.mockImplementation(
+      (_url: string, _body: unknown, config: { onUploadProgress: Progress; onDownloadProgress: Progress }) => {
+        config.onUploadProgress({ loaded: 3, total: 3 });
+        config.onDownloadProgress({ loaded: 1 });
+        return Promise.resolve({ data: { filename: 'a.txt', size: 3 } });
+      },
+    );
+    await makeApi().upload(new FormData(), own);
+    expect(own).toHaveBeenCalledWith(3, 3);
+    expect(onUploadProgress).toHaveBeenCalledWith({ loaded: 3, total: 3 });
+    expect(onDownloadProgress).toHaveBeenCalledWith({ loaded: 1 });
+  });
+
+  it('repeats a blob call answered by a gateway with a body that is not JSON', async () => {
+    http.get
+      .mockRejectedValueOnce(blobError(502, '<html>Bad Gateway</html>', 'text/html'))
+      .mockResolvedValueOnce({ data: new Blob(['%PDF']), headers: { 'content-type': 'application/pdf' } });
+    const call = makeApi().pdf(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(call).resolves.toMatchObject({ contentType: 'application/pdf' });
     expect(http.get).toHaveBeenCalledTimes(2);
   });
 });

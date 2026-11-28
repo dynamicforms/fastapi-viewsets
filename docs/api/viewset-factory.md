@@ -141,7 +141,7 @@ interface Options {
 | `events` | `EventClient` | — | The event client [`watch()`](./vue-mixins#watch) subscribes on. Without it, a muxws ViewSet uses the client registered for its peer and a REST ViewSet throws from `watch()`. |
 | `topic` | `string` | `basePath` | The client topic `watch()` subscribes: the BE path relative to the application's `root_path`, without a Starlette `Mount` prefix. |
 | `axiosInstance` | `AxiosInstance` | global `axios` | REST only. |
-| `attemptTimeoutMs` | `number` | `30000` | REST only. Timeout of one attempt, passed to axios as `timeout`; `0` for none. |
+| `attemptTimeoutMs` | `number` | `30000` | REST only. Timeout of one attempt without progress, counted from its start or its last upload or download progress event; `0` for none. |
 | `peer` | `MuxwsPeerSource` | — | muxws only. A `Peer`, or a function returning one or a promise of one; the function is called again after its peer closed for good, and after it threw or rejected (see [route_muxws](./route-muxws#muxwsproxyoptions)). |
 | `timeoutMs` | `number` | — | muxws only. Per-attempt timeout, covering the wait for the reply headers and for the body; muxws resets the stream with `TIMEOUT` when it expires and the call is repeated, or rejects with its `StreamTimeout` when it is not. |
 | `headers` | `Record<string, string>` | `{}` | muxws only. Headers added to every request; a call's `RequestOptions.headers` override them. |
@@ -161,10 +161,12 @@ A ViewSet's own methods reach `this.request()` and `this.basePath`, inherited fr
 
 ```ts
 protected readonly basePath: string;
+protected request(method: HttpMethod, path: string, options: BlobRequestOptions): ViewSetCall<FileDownload>;
 protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>;
 ```
 
-`path` is relative to `basePath` — `''` for the collection, `/1` for a record. Writing a custom endpoint against
+`path` is relative to `basePath` — `''` for the collection, `/1` for a record. With `responseType: 'blob'` the call
+resolves to a [`FileDownload`](./vue-mixins#filedownload). Writing a custom endpoint against
 `request()` rather than against a transport is what lets the same method body serve a REST and a muxws ViewSet.
 
 Both members are `protected`, so a caller cannot touch them: `api.basePath` outside the class is

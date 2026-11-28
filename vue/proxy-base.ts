@@ -10,6 +10,7 @@
 import { bindCallKeys, type RepeatOptions, type ViewSetActionCall, type ViewSetCall } from './call';
 import { type ViewSetWatch, watchRecords, type WatchOptions } from './events/changes';
 import type { EventClient, EventSubscription } from './events/client';
+import type { FileDownload } from './file-download';
 import type {
   ActionName,
   BulkDestroyReturnData,
@@ -38,12 +39,22 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 /** Query values; an array becomes a repeated key, which is how FastAPI binds `list[str]`. */
 export type QueryParams = Record<string, string | number | boolean | null | undefined | Array<string | number>>;
 
+/** Options of a `request()` call that downloads a file. */
+export type BlobRequestOptions = RequestOptions & { responseType: 'blob' };
+
 /** Options of one `request()` call. */
 export interface RequestOptions {
   /** Query parameters; see `QueryParams`. */
   query?: QueryParams;
-  /** The request body, sent as JSON. */
+  /** The request body: JSON, or a `FormData`, which the REST transport sends as `multipart/form-data` as it is. */
   body?: unknown;
+  /**
+   * REST only: called while the request body is sent, with the bytes sent and the total when known.
+   * A repeated attempt reports from 0 again.
+   */
+  onUploadProgress?: (loaded: number, total: number | undefined) => void;
+  /** `'blob'` (REST only): the call resolves to a `FileDownload` instead of the decoded body. Default `'json'`. */
+  responseType?: 'json' | 'blob';
   /** Headers for this call only; on muxws they override the proxy's own `headers`. */
   headers?: Record<string, string>;
   /**
@@ -261,12 +272,14 @@ export abstract class ViewSetInternals {
   /**
    * Sends one call and returns the decoded body on a `ViewSetCall` carrying its `Idempotency-Key`.
    * The first attempt is issued synchronously. `path` is relative to `basePath` ('', '/1', '/bulk').
-   * Throws on status >= 400 with `response.status` on the error; a 3xx is returned by muxws and
-   * followed by REST.
+   * With `responseType: 'blob'` the body is a `FileDownload`. Throws on status >= 400 with
+   * `response.status` on the error; a 3xx is returned by muxws and followed by REST.
    *
    * Concrete but never reached: abstract here would fail TS2515 on every factory-built ViewSet;
    * ViewSetProxyBase re-declares it abstract.
    */
+  protected request(method: HttpMethod, path: string, options: BlobRequestOptions): ViewSetCall<FileDownload>;
+  protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the signature is the point; the body cannot run
   protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R> {
     throw new Error('ViewSetInternals.request: no transport');
@@ -360,6 +373,11 @@ export abstract class ViewSetProxyBase<K extends KeyType, T, PK extends keyof T>
   protected initSchemaValidation(): void {}
 
   /** Abstract here, where a transport is actually held to it. See ViewSetInternals.request. */
+  protected abstract override request(
+    method: HttpMethod,
+    path: string,
+    options: BlobRequestOptions,
+  ): ViewSetCall<FileDownload>;
   protected abstract override request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>;
 
   /**

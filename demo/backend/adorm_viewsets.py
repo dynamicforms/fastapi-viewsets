@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from demo.backend import postgres_demo
 from demo.backend.adorm_models.backend import MusicTrackRecord
-from demo.backend.viewsets import LIST_ITEMS_DESCRIPTION
+from demo.backend.viewsets import LIST_ITEMS_DESCRIPTION, TrackFilesMixin
 from fastapi_viewsets.backends.adorm import AdormViewSet
 from fastapi_viewsets.context import Context
 from fastapi_viewsets.endpoint_docs import endpoint_docs
@@ -42,6 +42,7 @@ MusicTrackRecordFilter = make_filter_model(
     }
 )
 class MusicTrackAdormViewSet(
+    TrackFilesMixin,
     AdormViewSet[int, MusicTrackRecord],
     BulkViewSetMixin[int, MusicTrackRecord, MusicTrackRecordFilter],
     CursorListMixin[MusicTrackRecord, MusicTrackRecordFilter],

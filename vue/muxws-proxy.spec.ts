@@ -789,3 +789,56 @@ describe('MuxwsProxyImpl — repeats', () => {
     }
   });
 });
+
+describe('MuxwsProxyImpl — REST-only request options', () => {
+  class FileApi extends MuxwsProxyImpl<number, Item, 'id'> {
+    upload(body: unknown, onUploadProgress?: (loaded: number, total: number | undefined) => void) {
+      return this.request('POST', '/attachments', { body, onUploadProgress });
+    }
+
+    pdf(pk: number) {
+      return this.request('GET', `/${pk}/pdf`, { responseType: 'blob' });
+    }
+  }
+
+  let mock: ReturnType<typeof makeMockPeer>;
+  let api: FileApi;
+
+  beforeEach(() => {
+    mock = makeMockPeer();
+    api = new FileApi({ basePath: '/items', pkFieldName: 'id', peer: mock.peer, validateSchema: false });
+  });
+
+  it('rejects a FormData body without opening a stream', async () => {
+    let call: Promise<unknown> | undefined;
+    expect(() => (call = api.upload(new FormData()))).not.toThrow();
+    await expect(call).rejects.toThrow(/FormData body is not supported by the muxws transport; use the REST transport/);
+    expect(mock.opened).toHaveLength(0);
+  });
+
+  it('rejects onUploadProgress, naming the option', async () => {
+    await expect(api.upload({ a: 1 }, () => {})).rejects.toThrow(
+      /RequestOptions\.onUploadProgress is not supported by the muxws transport/,
+    );
+    expect(mock.opened).toHaveLength(0);
+  });
+
+  it("rejects responseType 'blob', naming the option", async () => {
+    const call = api.pdf(1);
+    expect(call.key).toEqual(expect.any(String));
+    await expect(call).rejects.toThrow(/responseType 'blob' is not supported by the muxws transport/);
+    expect(mock.opened).toHaveLength(0);
+  });
+
+  it("sends a JSON body with responseType 'json' as before", async () => {
+    mock.reply(MOCK_ITEM);
+    class JsonApi extends MuxwsProxyImpl<number, Item, 'id'> {
+      send() {
+        return this.request<Item>('POST', '', { body: MOCK_ITEM, responseType: 'json' });
+      }
+    }
+    const json = new JsonApi({ basePath: '/items', pkFieldName: 'id', peer: mock.peer, validateSchema: false });
+    await expect(json.send()).resolves.toEqual(MOCK_ITEM);
+    expect(mock.last.payload).toEqual(MOCK_ITEM);
+  });
+});

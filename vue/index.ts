@@ -58,7 +58,11 @@ export {
   retryNow,
 } from './call';
 
+export type { FileDownload } from './file-download';
+export { contentDispositionFilename } from './file-download';
+
 export type {
+  BlobRequestOptions,
   HttpMethod,
   ListShape,
   ProxyBaseOptions,

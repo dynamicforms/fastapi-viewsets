@@ -95,7 +95,9 @@ opens one stream with `:method`, `:path` and `:query` pseudo-headers, the proxy'
 overridden by the call's `RequestOptions.headers`, the call's `Idempotency-Key`, and the request
 body as payload, and reads the status from the reply's `:status` header (200 when absent). A status
 of 400 or above throws a `ViewSetRequestError`. The HTTP mapping is
-[`route_rest`'s](./route-rest#http-mapping).
+[`route_rest`'s](./route-rest#http-mapping). A call with a `FormData` body, `onUploadProgress` or
+`responseType: 'blob'` opens no stream: its `ViewSetCall` rejects with an `Error` that names the option
+and says the muxws transport does not support it.
 
 Once the peer has resolved, `request()` opens the stream of the first attempt synchronously. An
 attempt that fails with `ConnectionLost`, `StreamTimeout` or `StreamRefused`, or whose `open()` throws

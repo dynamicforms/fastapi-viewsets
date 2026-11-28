@@ -38,7 +38,7 @@ interface RestProxyOptions {
   topic?: string;
   /** Optional: existing axios instance. Defaults to the global axios. */
   axiosInstance?: AxiosInstance;
-  /** The timeout of one attempt in milliseconds, passed to axios as `timeout`; 0 for none. */
+  /** The timeout of one attempt in milliseconds without upload or download progress; 0 for none. */
   attemptTimeoutMs?: number;
 }
 ```
@@ -51,7 +51,7 @@ interface RestProxyOptions {
 | `basePath` | `string` | Base URL path, e.g. `'/items'`. Trailing slash is stripped automatically. |
 | `pkFieldName` | `string` | Name of the PK field on the model |
 | `axiosInstance` | `AxiosInstance` | Optional custom axios instance; defaults to global `axios` |
-| `attemptTimeoutMs` | `number` | Options object only. Timeout of one attempt in milliseconds, default `30000`, `0` for none |
+| `attemptTimeoutMs` | `number` | Options object only. Timeout of one attempt in milliseconds without progress, counted from its start or its last upload or download progress event; default `30000`, `0` for none |
 | `repeat` | [`RepeatOptions`](./idempotency#repeatoptions) | Options object only. Default `{ withinMs: 600000, delayMs: 1000 }` |
 | `events` | `EventClient` | Options object only. The event client [`watch()`](./vue-mixins#watch) subscribes on; without it, `watch()` throws |
 | `topic` | `string` | Options object only. The client topic `watch()` subscribes: the BE path relative to the application's `root_path`, without a Starlette `Mount` prefix. Default `basePath` |
@@ -91,12 +91,16 @@ class AuthenticatedProxy<K extends KeyType, T, PK extends keyof T> extends RestP
 ```
 
 Each attempt of a call goes through the axios instance's per-verb method (`get`, `post`, `put`, `patch`, `delete`) with
-a config of the call's `params` and `headers`, `Idempotency-Key`, `timeout: attemptTimeoutMs` and the attempt's
-`signal`. An attempt that ends in an axios error without `response` (other than a cancellation), or with `502`, `503`
-or `504` whose body is not a JSON object with `detail`, is repeated as described in
-[Idempotent Calls](../guide/idempotency#repeats); its signal is aborted first. A repeat is sent with the headers of the
-first attempt's `config` after the request interceptors, other than `Accept`, `Accept-Encoding`, `Content-Length`,
-`Content-Type` and `User-Agent`, under the call's own headers.
+a config of the call's `params` and `headers`, `Idempotency-Key`, the attempt's `signal`, upload and download progress
+callbacks and, with `RequestOptions.responseType: 'blob'`, `responseType: 'blob'`. A `FormData` body is passed to axios
+as it is. The signal is aborted when `attemptTimeoutMs` pass without progress, counted from the attempt's start or its
+last progress event; the attempt then counts as timed out. An attempt that ends in an axios error without `response`
+(other than a cancellation), or with `502`, `503` or `504` whose body is not a JSON object with `detail`, is repeated as
+described in [Idempotent Calls](../guide/idempotency#repeats); its signal is aborted first. With `responseType: 'blob'`,
+an error answer whose `Content-Type` is `application/json` or `+json` is decoded into an object before this check, so
+its `error.response.data` is the object a JSON call has. A repeat is sent with the headers of the first attempt's
+`config` after the request interceptors, other than `Accept`, `Accept-Encoding`, `Content-Length`, `Content-Type` and
+`User-Agent`, under the call's own headers.
 
 ## HTTP mapping
 

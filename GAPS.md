@@ -188,26 +188,6 @@ with `[MISSING_EXPORT]` — which vue/index.ts:1-2 explicitly warns against solv
 What would change it: if TypeScript stopped propagating abstractness through construct signatures, the throw goes away
 and `request` becomes abstract in one place.
 
-### `this.http` is not on a factory-built ViewSet
-
-The factory's returned type intersects `ViewSetInternals`, which is `basePath` and `request()` and nothing else. A
-custom endpoint on a factory-built class therefore cannot reach axios directly, and what
-docs/guide/vue-custom-endpoints.md says about `this.http` now applies only to the `extends RestProxyImpl` form.
-
-Deliberate: `http` is the one member that ties a method body to HTTP, and the whole point of the factory is that one
-body serves both transports — the demo's `count()` is exactly that. Exposing it would need a second internals class per
-transport, and the split between `ViewSetInternals` and a REST-flavoured one cannot be expressed in a single inheritance
-chain without RestProxyImpl inheriting the actions we are trying to hide.
-
-What would change it: a real need that `request()` cannot express — a blob response, a progress callback, an
-interceptor-specific config. The escape hatch today is to keep extending RestProxyImpl, which is fully supported and
-unchanged. If that turns out to be common, the answer is to widen `request()`'s options, not to put axios back on the
-surface.
-
-Confirmed as the standing decision: no such need has surfaced in the demo or anywhere else in the repo, so `request()`
-stays the only surface and this entry stays open rather than settled — it is reopened the day a concrete case for
-widening `request()` shows up, not preemptively.
-
 ### An empty or annotated `declares` list is an error whose type is the message
 
 <!-- markdownlint-disable MD013 -->

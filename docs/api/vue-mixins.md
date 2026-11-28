@@ -91,6 +91,7 @@ type QueryParams = Record<string, string | number | boolean | null | undefined |
 
 interface RequestOptions {
   query?: QueryParams;
+  /** JSON, or a FormData sent as multipart/form-data as it is (REST only). */
   body?: unknown;
   /** Headers for this call only; on muxws they override the proxy's own `headers`. */
   headers?: Record<string, string>;
@@ -100,7 +101,14 @@ interface RequestOptions {
   repeat?: RepeatOptions;
   /** Reported to `onCallActivity` listeners as `background: true`; default false. See also `inBackground`. */
   background?: boolean;
+  /** REST only. Called as the request body is sent; a repeated attempt reports from 0 again. */
+  onUploadProgress?: (loaded: number, total: number | undefined) => void;
+  /** Default 'json'. With 'blob' (REST only) the call resolves to a FileDownload. */
+  responseType?: 'json' | 'blob';
 }
+
+/** The options of a call that answers with a file. */
+type BlobRequestOptions = RequestOptions & { responseType: 'blob' };
 
 /** The response shapes of `GET {basePath}`, as the BE names them in `X-List-Shape`. */
 type ListShape = 'plain' | 'paginated' | 'cursor';
@@ -130,8 +138,33 @@ type ActionSurface<K extends KeyType, T, PK extends keyof T, A, L = LookupItem> 
 ```
 
 `request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>` is the one
-call a transport implements; see [custom endpoints](../guide/vue-custom-endpoints#this-request).
+call a transport implements; see [custom endpoints](../guide/vue-custom-endpoints#this-request). An
+overload types a call with `responseType: 'blob'` as `ViewSetCall<FileDownload>`. The muxws transport
+rejects a call with a `FormData` body, `onUploadProgress` or `responseType: 'blob'` with an `Error`
+naming the option.
 `ViewSetCall`, `ViewSetActionCall` and `RepeatOptions` are in [Idempotency](./idempotency#frontend).
+
+### FileDownload
+
+```ts
+/** The answer of a call made with `responseType: 'blob'`. */
+interface FileDownload {
+  /** The response body; its `type` is `contentType`. */
+  blob: Blob;
+  /** From Content-Disposition: `filename*` (RFC 5987) when present, else `filename`, else null. */
+  filename: string | null;
+  /** The Content-Type header; '' when there is none. */
+  contentType: string;
+  /** The response headers, names in lower case. */
+  headers: Record<string, string>;
+}
+
+/** The file name in a Content-Disposition value: `filename*` before `filename`; null when it has neither. */
+function contentDispositionFilename(header: string | null | undefined): string | null;
+```
+
+`filename*` is decoded by its charset (`UTF-8''track-1-%C3%A9.pdf` is `track-1-é.pdf`); `filename` is
+taken quoted or as a token. See [Files](../guide/vue-custom-endpoints#files).
 
 ## watch()
 

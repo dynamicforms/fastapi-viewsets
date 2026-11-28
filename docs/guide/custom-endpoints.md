@@ -92,6 +92,62 @@ class ItemViewSet(CollectionViewSet[int, Item], BulkViewSetMixin[int, Item]):
         )
 ```
 
+### Files
+
+A custom endpoint receives a file through an `UploadFile` parameter, sent as `multipart/form-data`
+(FastAPI reads it with `python-multipart`, a dependency of this package). It answers with a file by
+returning a starlette `Response` whose body is the file's bytes:
+
+```python
+from urllib.parse import quote
+
+from fastapi import UploadFile
+from starlette.responses import Response
+
+from fastapi_viewsets.mixins import ReadOnlyViewSetMixin
+
+
+@route_viewset(router, base_path="/tracks", pk_field_name="id")
+class TrackViewSet(CollectionViewSet[int, Track], ReadOnlyViewSetMixin[int, Track]):
+    __router = APIRouter()
+
+    def __init__(self):
+        super().__init__(container=tracks, pk_field="id")
+
+    @__router.post("attachments")
+    async def upload_attachment(self, context: Context, file: UploadFile) -> Attachment:
+        """Store an attachment and report what was received."""
+        data = await file.read()
+        return Attachment(filename=file.filename or "", size=len(data))
+
+    @__router.get("{pk}/pdf")
+    async def pdf(self, context: Context, pk: int) -> Response:
+        """The track as a PDF."""
+        track = await self.perform_retrieve(context, pk)  # unknown pk: 404, fastapi-viewsets.not_found
+        name = f"track-{pk}-é.pdf"
+        return Response(
+            content=render_pdf(track),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="track-{pk}.pdf"; filename*=UTF-8\'\'{quote(name)}'
+                )
+            },
+        )
+```
+
+`filename` in `Content-Disposition` is ASCII; `filename*` (RFC 5987) carries a name with other
+characters, and the TS client prefers it (see
+[Downloading a file](./vue-custom-endpoints#downloading-a-file)).
+
+- [`Idempotency`](./idempotency#rules) records a `Response` with a buffered body (bytes and headers)
+  and answers a repeat with it. A `FileResponse` or `StreamingResponse` is not recorded, and a
+  repeat runs the action again.
+- A [`celery_viewset`](./routers#arguments-and-results) action cannot return a `FileResponse` or a
+  `StreamingResponse`; it returns `Response(content=bytes)`.
+- A page on another origin reads `Content-Disposition` only when the server exposes it:
+  `CORSMiddleware(..., expose_headers=["Content-Disposition"])`.
+
 ### Notes
 
 - The `__router` attribute on the ViewSet class **must not** shadow the one inherited from a mixin. Declare it as a
