@@ -2,6 +2,7 @@ import axios from 'axios';
 import { connect, type Peer } from 'muxws';
 
 import { attachEvents, createEventClient } from '../../../vue/events';
+import type { FileDownload } from '../../../vue/file-download';
 import {
   BulkViewSetMixin,
   CursorListMixin,
@@ -52,26 +53,52 @@ export async function demoBackends(): Promise<DemoBackend[]> {
   return (await axios.get<DemoBackend[]>('/backends')).data;
 }
 
+/** What `POST {base}/attachments` answers: the uploaded file's name and the bytes received. */
+export interface AttachmentReceived {
+  filename: string;
+  size: number;
+}
+
 /** The ViewSet's own methods, shared by the six proxies below. */
 interface MusicTrackMethods {
   count(): Promise<number>;
+  uploadAttachment(
+    file: File,
+    onProgress?: (loaded: number, total: number | undefined) => void,
+  ): Promise<AttachmentReceived>;
+  pdf(pk: number): Promise<FileDownload>;
 }
 
 /**
- * The custom endpoint as a mixin: the six classes have no common ancestor. `request()` serves both
- * transports. The return type is annotated: an inferred one leaks protected members into the .d.ts
- * (TS4094).
+ * The custom endpoints as a mixin: the six classes have no common ancestor. `request()` serves both
+ * transports; the muxws ones reject a `FormData` body, `onUploadProgress` and `responseType: 'blob'`.
+ * The return type is annotated: an inferred one leaks protected members into the .d.ts (TS4094).
  */
-function WithCount<TBase extends abstract new (...args: any[]) => ViewSetInternals>(
+function WithTrackMethods<TBase extends abstract new (...args: any[]) => ViewSetInternals>(
   Base: TBase,
 ): TBase & (abstract new (...args: any[]) => MusicTrackMethods) {
-  abstract class Counting extends Base {
+  abstract class TrackMethods extends Base {
     /** Served by the BE method `count` (GET /music/count). */
     async count(): Promise<number> {
       return this.request<number>('GET', '/count');
     }
+
+    /** Served by the BE method `upload_attachment` (POST /music/attachments, multipart field `file`). */
+    async uploadAttachment(
+      file: File,
+      onProgress?: (loaded: number, total: number | undefined) => void,
+    ): Promise<AttachmentReceived> {
+      const body = new FormData();
+      body.append('file', file);
+      return this.request<AttachmentReceived>('POST', '/attachments', { body, onUploadProgress: onProgress });
+    }
+
+    /** Served by the BE method `pdf` (GET /music/{pk}/pdf): the track's PDF and its file name. */
+    async pdf(pk: number): Promise<FileDownload> {
+      return this.request<FileDownload>('GET', `/${pk}/pdf`, { responseType: 'blob' });
+    }
   }
-  return Counting;
+  return TrackMethods;
 }
 
 /** What the in-memory BE viewset serves. */
@@ -81,12 +108,12 @@ const DB = [CursorListMixin, RetrieveMixin, UpdateMixin];
 /** What the adorm-backed one serves: the in-memory one's mixins, on PostgreSQL. */
 const ADORM = [BulkViewSetMixin, CursorListMixin, PaginatedListMixin, LookupMixin];
 
-export class MusicTrackRestViewSet extends WithCount(restViewSet<MusicTrack>()('id', MEMORY)) {}
-export class MusicTrackDbRestViewSet extends WithCount(restViewSet<MusicTrack>()('id', DB)) {}
-export class MusicTrackAdormRestViewSet extends WithCount(restViewSet<MusicTrack>()('id', ADORM)) {}
-export class MusicTrackMuxwsViewSet extends WithCount(muxwsViewSet<MusicTrack>()('id', MEMORY)) {}
-export class MusicTrackDbMuxwsViewSet extends WithCount(muxwsViewSet<MusicTrack>()('id', DB)) {}
-export class MusicTrackAdormMuxwsViewSet extends WithCount(muxwsViewSet<MusicTrack>()('id', ADORM)) {}
+export class MusicTrackRestViewSet extends WithTrackMethods(restViewSet<MusicTrack>()('id', MEMORY)) {}
+export class MusicTrackDbRestViewSet extends WithTrackMethods(restViewSet<MusicTrack>()('id', DB)) {}
+export class MusicTrackAdormRestViewSet extends WithTrackMethods(restViewSet<MusicTrack>()('id', ADORM)) {}
+export class MusicTrackMuxwsViewSet extends WithTrackMethods(muxwsViewSet<MusicTrack>()('id', MEMORY)) {}
+export class MusicTrackDbMuxwsViewSet extends WithTrackMethods(muxwsViewSet<MusicTrack>()('id', DB)) {}
+export class MusicTrackAdormMuxwsViewSet extends WithTrackMethods(muxwsViewSet<MusicTrack>()('id', ADORM)) {}
 
 const REST_CLASSES = {
   memory: MusicTrackRestViewSet,

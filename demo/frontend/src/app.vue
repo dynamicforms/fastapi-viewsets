@@ -98,6 +98,7 @@
           </v-alert>
 
           <div v-if="error" data-testid="error" class="text-error mb-4">{{ error }}</div>
+          <files-panel :transport="transport" :backend="backend" />
           <div class="text-caption mb-2">
             Click a Favorite cell to toggle it. Every tab showing this library applies the change.
           </div>
@@ -141,6 +142,7 @@ import { applyChanges, type Change, type RecordsChanged } from '../../../vue/eve
 import type { EventSubscription } from '../../../vue/events';
 
 import { runBenchmark, type BenchmarkResult } from './benchmark';
+import FilesPanel from './files-panel.vue';
 import ServerBenchmark from './server-benchmark.vue';
 import { demoBackends, viewSetFor, type Backend, type MusicTrack, type Transport } from './viewsets';
 
