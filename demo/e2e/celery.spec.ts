@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
 import { expect, test } from '@playwright/test';
 import axios from 'axios';
 import { connect, type Peer } from 'muxws';
@@ -22,7 +23,10 @@ function redisIsUp(): boolean {
   try {
     execFileSync(
       'python',
-      ['-c', 'import os, redis; redis.Redis.from_url(os.environ.get("DEMO_REDIS_URL", "redis://localhost:6379/0")).ping()'],
+      [
+        '-c',
+        'import os, redis; redis.Redis.from_url(os.environ.get("DEMO_REDIS_URL", "redis://localhost:6379/0")).ping()',
+      ],
       { stdio: 'ignore' },
     );
     return true;
@@ -61,8 +65,11 @@ test.describe('the Celery-backed demo', () => {
         workerLog += chunk.toString();
       });
     }
-    backend = spawn('python', ['-m', 'uvicorn', 'demo.backend.main:app', '--host', '127.0.0.1',
-      '--port', String(API_PORT)], { cwd, env, stdio: 'ignore' });
+    backend = spawn(
+      'python',
+      ['-m', 'uvicorn', 'demo.backend.main:app', '--host', '127.0.0.1', '--port', String(API_PORT)],
+      { cwd, env, stdio: 'ignore' },
+    );
 
     // Wait until the worker serves a request; before that the API waits for a result nobody produces.
     const deadline = Date.now() + 90_000;
@@ -116,10 +123,15 @@ test.describe('the Celery-backed demo', () => {
     });
     const events = createEventClient({ basePath: '/events', peer, axios });
     let received: (change: RecordsChanged<unknown>) => void = () => undefined;
-    const change = new Promise<RecordsChanged<unknown>>((resolve) => {
+    let resynced: (error: Error) => void = () => undefined;
+    const change = new Promise<RecordsChanged<unknown>>((resolve, reject) => {
       received = resolve;
+      resynced = reject;
     });
-    const subscription = events.subscribe('/music-db', RECORDS_CHANGED, { onEvent: (payload) => received(payload) });
+    const subscription = events.subscribe('/music-db', RECORDS_CHANGED, {
+      onEvent: (payload) => received(payload),
+      onResync: () => resynced(new Error('the subscription resynced instead of receiving the change')),
+    });
     try {
       await subscription.ready;
 

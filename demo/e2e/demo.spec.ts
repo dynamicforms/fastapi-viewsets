@@ -28,13 +28,15 @@ async function waitForFirstPage(page: Page) {
 async function renderedIds(page: Page, count = 20): Promise<number[]> {
   // record cells only: the header and filter row use wrappers other than `.df-anchored`
   const cells = await page.locator('.df-grid.body-grid .df-anchored .df-grid.cell.id').allInnerTexts();
-  return cells
-    .map((text) => text.trim())
-    // Empty first: Number('') is 0, so a blank id cell would count as record 0.
-    .filter((text) => text !== '')
-    .map(Number)
-    .filter((value) => !Number.isNaN(value))
-    .slice(0, count);
+  return (
+    cells
+      .map((text) => text.trim())
+      // Empty first: Number('') is 0, so a blank id cell would count as record 0.
+      .filter((text) => text !== '')
+      .map(Number)
+      .filter((value) => !Number.isNaN(value))
+      .slice(0, count)
+  );
 }
 
 test.beforeEach(async ({ page }) => {
@@ -53,10 +55,13 @@ test('loading more appends rather than replacing', async ({ page }) => {
 
   await page.locator('.df-grid.body-grid').first().hover();
   await expect
-    .poll(async () => {
-      await page.mouse.wheel(0, 4000);
-      return loadedCount(page);
-    }, { timeout: 30_000 })
+    .poll(
+      async () => {
+        await page.mouse.wheel(0, 4000);
+        return loadedCount(page);
+      },
+      { timeout: 30_000 },
+    )
     .toBeGreaterThan(before);
 
   await page.mouse.wheel(0, -100_000);
@@ -68,10 +73,13 @@ test('scrolling to the end loads the next page', async ({ page }) => {
   const before = await loadedCount(page);
   await page.locator('.df-grid.body-grid').first().hover();
   await expect
-    .poll(async () => {
-      await page.mouse.wheel(0, 4000);
-      return loadedCount(page);
-    }, { timeout: 30_000, message: 'scrolling never triggered a second page' })
+    .poll(
+      async () => {
+        await page.mouse.wheel(0, 4000);
+        return loadedCount(page);
+      },
+      { timeout: 30_000, message: 'scrolling never triggered a second page' },
+    )
     .toBeGreaterThan(before);
 });
 

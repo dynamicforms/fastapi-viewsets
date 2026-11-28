@@ -85,9 +85,12 @@ test('the adorm backend serves the same records as the in-memory one, sorted and
   const before = await loadedCount(page);
   await page.locator('.df-grid.body-grid').first().hover();
   await expect
-    .poll(async () => {
-      await page.mouse.wheel(0, 4000);
-      return loadedCount(page);
-    }, { timeout: 30_000, message: 'scrolling never loaded a second page' })
+    .poll(
+      async () => {
+        await page.mouse.wheel(0, 4000);
+        return loadedCount(page);
+      },
+      { timeout: 30_000, message: 'scrolling never loaded a second page' },
+    )
     .toBeGreaterThan(before);
 });
