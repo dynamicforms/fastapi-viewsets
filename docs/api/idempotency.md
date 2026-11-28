@@ -132,8 +132,9 @@ interface RepeatOptions {
 
 `repeat?: RepeatOptions` is an option of `route_rest`, `route_muxws`, `restViewSet` and
 `muxwsViewSet` ViewSets and of `RequestOptions`, where it overrides the proxy's for one call.
-`attemptTimeoutMs?: number` (default `30000`, `0` for none) is a REST option: the axios `timeout` of
-one attempt.
+`attemptTimeoutMs?: number` (default `30000`, `0` for none) is a REST option: an attempt times out
+after this many milliseconds without progress, counted from its start or its last upload or download
+progress event, whichever is later.
 
 ### CallEvent
 

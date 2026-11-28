@@ -6,6 +6,29 @@ and `@dynamicforms/fastapi-viewsets` on npm — will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4] - 2026-11-28
+
+### Added
+
+- `RequestOptions.body` may be a `FormData`: the REST transport sends it as `multipart/form-data` as it is, with the
+  boundary axios sets, also on a repeat.
+- `RequestOptions.onUploadProgress(loaded, total)` (REST): called as the request body is sent; a repeated attempt
+  reports from `0` again.
+- `RequestOptions.responseType: 'blob'` (REST): the call resolves to a `FileDownload` (`blob`, `filename`,
+  `contentType`, `headers`), and `request()` types it as `ViewSetCall<FileDownload>`. An error answer with a JSON body
+  is decoded before the failure is classified, so `errorBodyOf(error)` reads its `ApiErrorBody` and a `502`–`504` with
+  one is not repeated.
+- `contentDispositionFilename(header)`: the file name of a `Content-Disposition` value, `filename*` (RFC 5987) before
+  `filename`.
+- The muxws transport rejects a call with a `FormData` body, `onUploadProgress` or `responseType: 'blob'` with an
+  `Error` naming the option.
+
+### Changed
+
+- `attemptTimeoutMs` counts from the attempt's start or its last upload or download progress event, whichever is
+  later: an attempt times out after `attemptTimeoutMs` without progress, so an upload whose bytes keep flowing does not
+  time out. It applies to every REST call.
+
 ## [0.16.3] - 2026-11-23
 
 ### Fixed

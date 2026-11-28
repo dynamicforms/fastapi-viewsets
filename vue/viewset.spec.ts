@@ -38,13 +38,17 @@ const READONLY_LOOKUP_SCHEMA = {
   },
 };
 
-/** The config every REST attempt carries: the call's own, plus the key, the timeout and the abort signal. */
+/**
+ * The config every REST attempt carries: the call's own, plus the key, no axios timeout, the abort signal
+ * and the download progress handler that keeps the attempt's idle timer running.
+ */
 function sent(config: { params?: unknown; headers?: Record<string, string>; data?: unknown } = {}) {
   return {
     ...config,
     headers: { ...config.headers, 'Idempotency-Key': expect.stringMatching(/^"[0-9a-f-]{36}"$/) },
-    timeout: 30000,
+    timeout: 0,
     signal: expect.any(AbortSignal),
+    onDownloadProgress: expect.any(Function),
   };
 }
 

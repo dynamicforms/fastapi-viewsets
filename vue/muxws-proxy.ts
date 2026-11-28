@@ -15,9 +15,11 @@ import {
 } from './call';
 import type { KeyOf, RecordOf, ViewSetWatch } from './events/changes';
 import { type EventClient, eventsOf } from './events/client';
+import type { FileDownload } from './file-download';
 import type { DefaultSortOf, KeyType } from './mixins';
 import { readHeaders, readStatus } from './muxws-reply';
 import {
+  type BlobRequestOptions,
   FACTORY_BUILT,
   type HttpMethod,
   type ProxyBaseOptions,
@@ -159,12 +161,16 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
    * Opens a stream with an `Idempotency-Key` and repeats it with the same key and first-stream headers
    * after a timeout, a refusal or a lost connection (waiting for the reconnect), not once the peer has
    * closed for good. With a resolved peer the first stream opens synchronously, so open interceptors
-   * see state the caller bound synchronously.
+   * see state the caller bound synchronously. A `FormData` body, `onUploadProgress` and
+   * `responseType: 'blob'` reject the call: this transport sends and answers JSON only.
    */
+  protected request(method: HttpMethod, path: string, options: BlobRequestOptions): ViewSetCall<FileDownload>;
+  protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>;
   protected request<R>(method: HttpMethod, path: string, options: RequestOptions = {}): ViewSetCall<R> {
     const key = options.key ?? newCallKey();
     let call: Promise<R>;
     try {
+      refuseRestOnly(options);
       // HTTP/2-style: `:`-prefixed pseudo-headers for the request line, plain keys for HTTP headers.
       const headers: Record<string, unknown> = {
         ...withKeyHeader({ ...this.headers, ...options.headers }, key),
@@ -226,6 +232,21 @@ export class MuxwsProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vi
     const body = await result;
     if (status >= 400) throw new ViewSetRequestError(status, body, readHeaders(stream.replyHeaders));
     return body as R;
+  }
+}
+
+/** Throws for a `RequestOptions` member only the REST transport supports. */
+function refuseRestOnly(options: RequestOptions): void {
+  const unsupported =
+    typeof FormData !== 'undefined' && options.body instanceof FormData
+      ? 'A FormData body'
+      : options.onUploadProgress !== undefined
+        ? 'RequestOptions.onUploadProgress'
+        : options.responseType === 'blob'
+          ? "RequestOptions.responseType 'blob'"
+          : null;
+  if (unsupported) {
+    throw new Error(`${unsupported} is not supported by the muxws transport; use the REST transport`);
   }
 }
 

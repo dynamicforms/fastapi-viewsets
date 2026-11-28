@@ -117,11 +117,15 @@ muxws.
 |----------|-------|
 | `method` | `'GET'` \| `'POST'` \| `'PUT'` \| `'PATCH'` \| `'DELETE'` |
 | `path` | relative to `basePath`: `''` for the collection, `'/search'`, `` `/${pk}/history` `` |
-| `options` | `{ query?, body?, headers?, key?, repeat?, background? }`, all optional |
+| `options` | `{ query?, body?, headers?, key?, repeat?, background?, onUploadProgress?, responseType? }`, all optional |
+
+`body` is sent as JSON, or, when it is a `FormData`, as `multipart/form-data` (REST only).
+`onUploadProgress` and `responseType: 'blob'` are REST only as well; see [Files](#files).
 
 `request()` returns a `ViewSetCall<R>`: the promise of the body, with the call's `Idempotency-Key`
-as `key`. The call is repeated with that key when an attempt ends without an answer; `key` sets the
-key, `repeat` overrides the proxy's repeat options for this call (see
+as `key`; with `responseType: 'blob'` it is a `ViewSetCall<FileDownload>`. The call is repeated with
+that key when an attempt ends without an answer; `key` sets the key, `repeat` overrides the proxy's
+repeat options for this call (see
 [Idempotent Calls](./idempotency#frontend)).
 
 A method that calls `request()` before its first `await` returns a promise with the same `key`, also
@@ -146,6 +150,111 @@ An array-valued query entry becomes a repeated key, which is how FastAPI binds a
 parameter. A status of 400 or above throws on both transports, and what is thrown and what a handler
 reads off it is in [handling a failed call](./vue-mixins#handling-a-failed-call).
 
+## Files
+
+A custom endpoint that receives a file (multipart/form-data) or answers with one (a PDF, an export)
+is written against `this.request()` like any other. The BE side is in
+[Custom Endpoints](./custom-endpoints#files).
+
+### Uploading a file
+
+A `FormData` body is sent as `multipart/form-data` as it is; axios sets the `Content-Type` with its
+boundary, again on every repeat. `onUploadProgress(loaded, total)` is called as the body is sent:
+`loaded` is the bytes sent so far, `total` the size of the body, `undefined` when it is not known. A
+repeated attempt reports from `0` again.
+
+```ts
+import { ReadOnlyViewSetMixin, restViewSet, type ViewSetCall } from '@dynamicforms/fastapi-viewsets';
+
+interface Track { id: number; title: string }
+
+interface Attachment { filename: string; size: number }
+
+class TrackApi extends restViewSet<Track>()('id', [ReadOnlyViewSetMixin]) {
+  /** Served by the BE method `upload_attachment` (POST /tracks/attachments). */
+  uploadAttachment(file: File, onProgress?: (percent: number) => void): ViewSetCall<Attachment> {
+    const body = new FormData();
+    body.append('file', file);
+    return this.request<Attachment>('POST', '/attachments', {
+      body,
+      onUploadProgress: (loaded, total) => onProgress?.(Math.round((100 * loaded) / (total ?? file.size))),
+    });
+  }
+}
+```
+
+The field name, `file` here, is the name of the BE method's `UploadFile` parameter.
+
+### Downloading a file
+
+With `responseType: 'blob'` the call resolves to a `FileDownload` instead of a decoded body:
+
+| Field | Type | Value |
+|-------|------|-------|
+| `blob` | `Blob` | The response body; its `type` is `contentType` |
+| `filename` | `string \| null` | From `Content-Disposition`: `filename*` (RFC 5987, e.g. `UTF-8''track-1-%C3%A9.pdf`) when present, else `filename`, else `null` |
+| `contentType` | `string` | The `Content-Type` header, `''` when there is none |
+| `headers` | `Record<string, string>` | The response headers, names in lower case |
+
+`contentDispositionFilename(header)` is the function that reads `filename`: it takes a
+`Content-Disposition` value (or `null` / `undefined`) and returns the file name, or `null`.
+
+```ts
+import type { FileDownload, ViewSetCall } from '@dynamicforms/fastapi-viewsets';
+
+class TrackApi extends restViewSet<Track>()('id', [ReadOnlyViewSetMixin]) {
+  /** Served by the BE method `pdf` (GET /tracks/{pk}/pdf). */
+  pdf(pk: number): ViewSetCall<FileDownload> {
+    return this.request('GET', `/${pk}/pdf`, { responseType: 'blob' });
+  }
+}
+
+const tracksApi = new TrackApi({ basePath: '/tracks' });
+
+const file = await tracksApi.pdf(1);
+const url = URL.createObjectURL(file.blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = file.filename ?? 'track.pdf';
+document.body.appendChild(a);
+a.click();
+a.remove();
+setTimeout(() => URL.revokeObjectURL(url), 1000);
+```
+
+A page on another origin reads `Content-Disposition` only when the server lists it in
+`Access-Control-Expose-Headers`; otherwise `filename` is `null`.
+
+The attempt timeout applies to file calls as to every REST call: an attempt is aborted after
+`attemptTimeoutMs` without progress, counted from its start or its last upload or download progress
+event, whichever is later. An upload whose bytes keep flowing does not time out.
+
+### A failed file call
+
+A blob call fails as a JSON call does. An answer of 400 or above whose `Content-Type` is
+`application/json` or `+json` is decoded into an object before the failure is classified, so
+`errorBodyOf(error)` reads the `ApiErrorBody`, and a `502`–`504` with an `ApiErrorBody` is the
+application's answer and is not repeated. `Idempotency-Key`, repeats and `background` behave as for
+a JSON call.
+
+```ts
+import { errorBodyOf } from '@dynamicforms/fastapi-viewsets';
+
+try {
+  await tracksApi.pdf(999999999);
+} catch (error) {
+  errorBodyOf(error).detail_code;   // 'fastapi-viewsets.not_found'
+}
+```
+
+### Over muxws
+
+The muxws transport sends JSON bodies and decodes every answer as JSON. A call with a `FormData`
+body, with `onUploadProgress` or with `responseType: 'blob'` returns a rejected `ViewSetCall`; the
+`Error` names the option and says the muxws transport does not support it. A file endpoint shared by
+both transports, as in [One endpoint, both transports](#one-endpoint-both-transports), is called on
+the REST ViewSet.
+
 ## Accessing protected members
 
 A factory-built ViewSet descends from `ViewSetInternals`, which holds what a ViewSet's own methods
@@ -153,15 +262,16 @@ need and nothing a caller does:
 
 | Member | Type | Description |
 |--------|------|-------------|
-| `this.request(method, path, opts?)` | `ViewSetCall<R>` | Sends one call and returns the decoded body, with the call's `key`. Transport-independent. |
+| `this.request(method, path, opts?)` | `ViewSetCall<R>` (`ViewSetCall<FileDownload>` with `responseType: 'blob'`) | Sends one call and returns the decoded body, or a `FileDownload` with `responseType: 'blob'`, with the call's `key`. Transport-independent. |
 | `this.basePath` | `string` | The base path, trailing slash removed, e.g. `'/items'` |
 
 Both are `protected`, so reaching them from outside the class body is TS2445.
 
 `this.http` is **not** available on a factory-built class (TS2339): the factory types its result as
 these internals plus the declared actions, and the axios instance belongs to the REST transport
-alone. A method that genuinely needs axios — response headers, a streaming download, an abort signal
-— must extend `RestProxyImpl` instead.
+alone. A file upload with progress and a file download go through `this.request()` (see
+[Files](#files)); a method that needs an axios option `request()` does not take — an abort signal,
+an `onDownloadProgress` callback — extends `RestProxyImpl` instead.
 
 ## One endpoint, both transports
 
@@ -210,7 +320,7 @@ declared actions and their own constructor options — `new ItemRestApi({ basePa
 `new ItemMuxwsApi({ basePath: '/items', peer })` — and the method is on the prototype, so the schema
 check finds it.
 
-The demo does this for all four of its ViewSets: `demo/frontend/src/viewsets.ts`.
+The demo does this for all six of its ViewSets: `demo/frontend/src/viewsets.ts`.
 
 ## Reaching axios: extending RestProxyImpl
 
@@ -225,9 +335,9 @@ import { BulkViewSetMixin, LookupMixin, RestProxyImpl } from '@dynamicforms/fast
 class ItemApi extends RestProxyImpl<number, Item, 'id'> {
   static declares = [BulkViewSetMixin, LookupMixin];
 
-  /** Needs axios itself: request() decodes the body and drops everything around it. */
-  async exportCsv(): Promise<Blob> {
-    const res = await this.http.get<Blob>(`${this.basePath}/export`, { responseType: 'blob' });
+  /** Needs axios itself: request() takes no abort signal. */
+  async exportCsv(signal: AbortSignal): Promise<Blob> {
+    const res = await this.http.get<Blob>(`${this.basePath}/export`, { responseType: 'blob', signal });
     return res.data;
   }
 }

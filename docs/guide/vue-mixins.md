@@ -183,7 +183,7 @@ the constructor options.
 | `events` | both | The event client [`watch()`](#following-changes-watch) subscribes on; without it, a `muxwsViewSet` uses the client registered for its peer and a `restViewSet` throws from `watch()` |
 | `topic` | both | The client topic `watch()` subscribes: the BE path relative to the app's `root_path`, without a Starlette `Mount` prefix; default `basePath` |
 | `axiosInstance` | `restViewSet` | Custom axios instance; defaults to the global one |
-| `attemptTimeoutMs` | `restViewSet` | Timeout of one attempt in milliseconds; default `30000`, `0` for none |
+| `attemptTimeoutMs` | `restViewSet` | Timeout of one attempt in milliseconds without upload or download progress; default `30000`, `0` for none |
 | `peer` | `muxwsViewSet` | The muxws peer, or a function returning one (required) |
 | `headers` | `muxwsViewSet` | Sent on every command, on top of the handshake's |
 | `timeoutMs` | `muxwsViewSet` | Per-attempt timeout, from opening the stream to the last byte of the reply; on expiry the call is repeated |
@@ -193,9 +193,10 @@ the constructor options.
 ### Inside the class body
 
 A ViewSet's own methods reach `this.request(method, path, options?)` and `this.basePath`. Both are
-`protected`, so a caller touching them is TS2445. `this.http` is not among them — a method that needs
-axios directly extends [`RestProxyImpl`](./vue-custom-endpoints) instead, at the cost of working on
-one transport only.
+`protected`, so a caller touching them is TS2445. File uploads and downloads go through
+`this.request()` ([Files](./vue-custom-endpoints#files)). `this.http` is not among them — a method that
+needs axios directly extends [`RestProxyImpl`](./vue-custom-endpoints) instead, at the cost of working
+on one transport only.
 
 ### Following changes: watch()
 

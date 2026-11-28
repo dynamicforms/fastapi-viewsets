@@ -4,7 +4,14 @@
  * and is repeated with it after a network error, an attempt timeout or a gateway status (call.ts).
  */
 
-import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
+import axios, {
+  AxiosError,
+  type AxiosInstance,
+  type AxiosProgressEvent,
+  type AxiosRequestConfig,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from 'axios';
 
 import {
   type AttemptFailure,
@@ -18,8 +25,10 @@ import {
 } from './call';
 import { isApiErrorBody } from './errors';
 import type { KeyOf, RecordOf, ViewSetWatch } from './events/changes';
+import { type FileDownload, fileDownload, flatHeaders, isJsonContentType } from './file-download';
 import type { DefaultSortOf, KeyType } from './mixins';
 import {
+  type BlobRequestOptions,
   FACTORY_BUILT,
   type HttpMethod,
   type ProxyBaseOptions,
@@ -57,11 +66,15 @@ export type RestProxy<M> = ViewSetCalls<M> & ViewSetWatch<RecordOf<M>, KeyOf<M>>
 
 /** Options of a ViewSet proxy over HTTP. */
 export interface RestProxyOptions extends ProxyBaseOptions {
-  /** Optional: existing axios instance. Defaults to the global axios. */
+  /**
+   * Optional: existing axios instance. Defaults to the global axios. Its `defaults.onUploadProgress` and
+   * `defaults.onDownloadProgress` are called for every call, next to the proxy's own handlers.
+   */
   axiosInstance?: AxiosInstance;
   /**
-   * The timeout of one attempt in milliseconds (axios `timeout`); an attempt that reaches it is
-   * repeated at once. `0` means no timeout. Default 30000.
+   * How long one attempt may go without progress, in milliseconds, counted from its start or its last
+   * upload (of a file body or with `onUploadProgress`) or download progress event; an attempt that
+   * reaches it is repeated at once. `0` means no timeout. Default 30000.
    */
   attemptTimeoutMs?: number;
 }
@@ -86,6 +99,8 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
    * Sends the call with its `Idempotency-Key` and repeats it with the same key while an attempt ends
    * without an answer (see `restAttemptFailure`). A non-2xx rejects with axios' own AxiosError.
    */
+  protected request(method: HttpMethod, path: string, options: BlobRequestOptions): ViewSetCall<FileDownload>;
+  protected request<R>(method: HttpMethod, path: string, options?: RequestOptions): ViewSetCall<R>;
   protected request<R>(method: HttpMethod, path: string, options: RequestOptions = {}): ViewSetCall<R> {
     const key = options.key ?? newCallKey();
     let call: Promise<R>;
@@ -109,7 +124,10 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
     return issueCall(call, key, options.background);
   }
 
-  /** One attempt, through axios' per-verb methods: application test doubles stub those, not `request()`. */
+  /**
+   * One attempt, through axios' per-verb methods: application test doubles stub those, not `request()`.
+   * It fails as a timeout (`ECONNABORTED`) after `attemptTimeoutMs` without upload or download progress.
+   */
   private attempt<R>(
     method: HttpMethod,
     url: string,
@@ -118,6 +136,17 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
     onFailure: (config: AxiosRequestConfig | undefined) => void,
   ): CallAttempt<R> {
     const controller = new AbortController();
+    const idleMs = this.attemptTimeoutMs;
+    const blob = options.responseType === 'blob';
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let expired = false;
+    let settled = false;
+    let rearm = (): void => {};
+    const progress = (): void => rearm();
+    const onUpload = options.onUploadProgress;
+    // A request-level handler replaces the instance default in axios; these call it as well.
+    const base = this.http.defaults ?? {};
+
     const config: AxiosRequestConfig = {
       // An array goes out as a repeated key (`ids=1&ids=2`), the form FastAPI reads into a list;
       // axios' default, `ids[]=1&ids[]=2`, reaches FastAPI as an unknown `ids[]` parameter.
@@ -125,8 +154,29 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
         ? { params: options.query, paramsSerializer: { indexes: null } }
         : {}),
       headers,
-      timeout: this.attemptTimeoutMs,
+      // The attempt timeout is the idle timer below; 0 keeps an instance default from adding a total one.
+      timeout: 0,
       signal: controller.signal,
+      ...(blob ? { responseType: blobResponseType() } : {}),
+      // Only a file body reports upload progress to the idle timer: with the fetch adapter, a progress
+      // handler makes axios stream the body, which needs HTTP/2.
+      ...(onUpload || (idleMs > 0 && isFileBody(options.body))
+        ? {
+            onUploadProgress: (event: AxiosProgressEvent) => {
+              progress();
+              onUpload?.(event.loaded, event.total);
+              base.onUploadProgress?.(event);
+            },
+          }
+        : {}),
+      ...(idleMs > 0
+        ? {
+            onDownloadProgress: (event: AxiosProgressEvent) => {
+              progress();
+              base.onDownloadProgress?.(event);
+            },
+          }
+        : {}),
     };
 
     let response: Promise<AxiosResponse<R>>;
@@ -148,16 +198,136 @@ export class RestProxyImpl<K extends KeyType, T, PK extends keyof T> extends Vie
         response = this.http.delete<R>(url, options.body === undefined ? config : { ...config, data: options.body });
         break;
     }
-    return {
-      result: Promise.resolve(response).then(
-        (res) => res.data,
-        (error: unknown) => {
-          onFailure(axios.isAxiosError(error) ? error.config : undefined);
-          throw error;
+
+    const result = new Promise<R>((resolve, reject) => {
+      const fail = (error: unknown): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        onFailure(axios.isAxiosError(error) ? error.config : undefined);
+        reject(error);
+      };
+      const expire = (): void => {
+        expired = true;
+        controller.abort();
+        // axios rejects an aborted request with a CanceledError; a client that ignores the signal fails a tick later.
+        timer = setTimeout(() => fail(idleTimeoutError(idleMs, config)), 0);
+      };
+      rearm = () => {
+        if (settled || expired || idleMs <= 0) return;
+        clearTimeout(timer);
+        timer = setTimeout(expire, idleMs);
+      };
+      rearm();
+
+      Promise.resolve(response).then(
+        (res) => {
+          if (settled) return;
+          clearTimeout(timer);
+          let data: R;
+          try {
+            data = (blob ? fileDownload(res.data, res.headers) : res.data) as R;
+          } catch (error) {
+            fail(error);
+            return;
+          }
+          settled = true;
+          resolve(data);
         },
-      ),
-      abandon: () => controller.abort(),
+        async (error: unknown) => {
+          if (settled) return;
+          clearTimeout(timer);
+          if (expired) {
+            fail(idleTimeoutError(idleMs, axios.isAxiosError(error) ? error.config : config, error));
+            return;
+          }
+          if (blob) await decodeJsonErrorBody(error);
+          fail(error);
+        },
+      );
+    });
+    return {
+      result,
+      abandon: () => {
+        clearTimeout(timer);
+        controller.abort();
+      },
     };
+  }
+}
+
+/** Whether `body` is sent as bytes rather than as JSON: a `FormData`, `Blob`, `ArrayBuffer` or typed array. */
+function isFileBody(body: unknown): boolean {
+  return (
+    (typeof FormData !== 'undefined' && body instanceof FormData) ||
+    (typeof Blob !== 'undefined' && body instanceof Blob) ||
+    isArrayBuffer(body) ||
+    ArrayBuffer.isView(body)
+  );
+}
+
+/** Whether `value` is an `ArrayBuffer`, also one of another realm (a Node buffer's under jsdom). */
+function isArrayBuffer(value: unknown): value is ArrayBuffer {
+  return Object.prototype.toString.call(value) === '[object ArrayBuffer]';
+}
+
+/** The error of an attempt that saw no progress for `idleMs`: an axios timeout, classified `'timeout'`. */
+function idleTimeoutError(idleMs: number, config: AxiosRequestConfig | undefined, cause?: unknown): AxiosError {
+  const request = (cause as { request?: unknown } | undefined)?.request;
+  return new AxiosError(
+    `timeout of ${idleMs}ms without progress exceeded`,
+    AxiosError.ECONNABORTED,
+    config as InternalAxiosRequestConfig | undefined,
+    request,
+  );
+}
+
+/**
+ * The axios `responseType` of a blob call: `'blob'` where XHR delivers a Blob, `'arraybuffer'` without
+ * XHR. axios' Node http adapter has no `'blob'` and decodes any other body to a UTF-8 string, which
+ * corrupts every byte above 0x7F.
+ */
+function blobResponseType(): 'blob' | 'arraybuffer' {
+  return typeof XMLHttpRequest === 'undefined' ? 'arraybuffer' : 'blob';
+}
+
+/** A Blob's text as UTF-8; through `FileReader` where `Blob.text()` is missing. */
+function blobText(blob: Blob): Promise<string> {
+  if (typeof blob.text === 'function') return blob.text();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
+}
+
+/** The UTF-8 text of a binary error body (Blob, ArrayBuffer, typed array or Buffer); null for another value. */
+function bodyText(data: unknown): Promise<string> | null {
+  if (typeof Blob !== 'undefined' && data instanceof Blob) return blobText(data);
+  if (isArrayBuffer(data) || ArrayBuffer.isView(data)) {
+    return Promise.resolve(new TextDecoder().decode(data as ArrayBuffer | ArrayBufferView));
+  }
+  return null;
+}
+
+/**
+ * Replaces a binary error body of a JSON type with the decoded object, so that the failure is classified
+ * and read (`errorBodyOf`) as for a JSON call. A body that does not parse is left as it is.
+ */
+async function decodeJsonErrorBody(error: unknown): Promise<void> {
+  if (!axios.isAxiosError(error) || !error.response) return;
+  const { data } = error.response;
+  const contentType =
+    flatHeaders(error.response.headers)['content-type'] ??
+    (typeof Blob !== 'undefined' && data instanceof Blob ? data.type : undefined);
+  if (!isJsonContentType(contentType)) return;
+  try {
+    const text = bodyText(data);
+    if (text === null) return;
+    error.response.data = JSON.parse(await text);
+  } catch {
+    // not JSON after all: the body stays
   }
 }
 

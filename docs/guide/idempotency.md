@@ -209,7 +209,7 @@ const items = new ItemApi({
 
 | Option | Default | Effect |
 |--------|---------|--------|
-| `attemptTimeoutMs` | `30000` | REST only: the timeout of one attempt, passed to axios as `timeout`; `0` sets none. Over muxws, `timeoutMs` is the timeout of one attempt |
+| `attemptTimeoutMs` | `30000` | REST only: an attempt times out after this long without progress, counted from its start or its last upload or download progress event, so an upload whose bytes keep flowing does not time out; `0` sets none. Over muxws, `timeoutMs` is the timeout of one attempt |
 | `repeat.withinMs` | `600000` | A repeat is sent only this long after the first attempt; past it the call rejects with the error of its last attempt. `0` turns repeating off |
 | `repeat.delayMs` | `1000` | The delay before a repeat after a lost connection or a gateway status, doubled after each, at most 30000 |
 
