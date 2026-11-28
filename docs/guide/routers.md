@@ -160,12 +160,13 @@ A validator of the primary key runs as follows:
 
 ## `celery_viewset`
 
-Moves a viewset's execution to a Celery worker. The decorator auto-detects the execution context and applies the correct
-mode:
+Moves the execution of a viewset's actions, all of them or the ones [`include` / `exclude`](#choosing-the-deferred-actions-include-and-exclude)
+select, to a Celery worker. The decorator auto-detects the execution context and applies the correct mode:
 
-- **FastAPI process (client mode)** — replaces viewset methods with async wrappers that send Celery tasks and await
-  results via a Redis result queue.
-- **Celery worker process (server mode)** — registers each viewset method as a named Celery task that runs the actual implementation.
+- **FastAPI process (client mode)** — replaces the methods of the deferred actions with async wrappers that send
+  Celery tasks and await results via a Redis result queue.
+- **Celery worker process (server mode)** — registers each deferred action as a named Celery task that runs the actual
+  implementation.
 
 The same decorator call works in both processes — no conditional code needed in your application.
 
@@ -181,6 +182,8 @@ def celery_viewset(
     lifecycle: LifecycleType = "singleton",
     redis_client: redis.Redis | None = None,
     result_timeout: float | None = 3600.0,
+    include: Iterable[str | re.Pattern[str]] | None = None,
+    exclude: Iterable[str | re.Pattern[str]] | None = None,
 ) -> Callable[[type], type]:
 ```
 
@@ -193,6 +196,8 @@ def celery_viewset(
 | `lifecycle` | `LifecycleType` | `"singleton"` | Instance lifecycle on the worker side (same semantics as `route_viewset` — see [ViewSet Lifecycle](./lifecycle)) |
 | `redis_client` | `redis.Redis \| None` | `None` | Redis client used to pass results back to FastAPI. Required in both modes; without it the decorator raises `ValueError`. |
 | `result_timeout` | `float \| None` | `3600.0` (`DEFAULT_RESULT_TIMEOUT`) | Client mode: seconds a call waits for its result before it raises `ResultTimeoutError` (504, `fastapi-viewsets.result_timeout`). `None` waits without a limit. Ignored in worker mode. |
+| `include` | `Iterable[str \| re.Pattern[str]] \| None` | `None` | The actions that run in the worker; every other action runs in the FastAPI process. See [Choosing the deferred actions](#choosing-the-deferred-actions-include-and-exclude) |
+| `exclude` | `Iterable[str \| re.Pattern[str]] \| None` | `None` | The actions that run in the FastAPI process; every other action runs in the worker. With neither `include` nor `exclude`, every action runs in the worker |
 
 ### Usage
 
@@ -231,6 +236,60 @@ from myapp.celery_app import celery_app
 app = celery_app
 ```
 
+### Choosing the deferred actions: `include` and `exclude`
+
+An action that runs in the worker is *deferred*; an action that runs in the FastAPI process is *local*. `include`
+names the deferred actions, `exclude` the local ones. One viewset then keeps one route table, one `/schema` and its
+URLs, while only its heavy actions run in Celery:
+
+```python
+import re
+
+@celery_viewset(
+    celery_app,
+    task_prefix="members",
+    redis_client=redis_client,
+    include=[re.compile(r"bulk_.*"), "export_pdf"],
+)
+class MemberViewSet(AdormViewSet[int, Member], BulkViewSetMixin[int, Member]):
+    model = Member
+    __router = APIRouter()
+
+    @__router.get("export-pdf")
+    async def export_pdf(self, context: Context) -> Response: ...
+```
+
+`list_items`, `retrieve`, `create`, `update`, `partial_update` and `destroy` run in the FastAPI process; the four
+bulk actions and `export_pdf` in the worker. `exclude=["list_items", "retrieve"]` instead keeps those two local and
+defers every other action, a custom action added later included.
+
+An entry is one of:
+
+| Entry | Matches |
+|-------|---------|
+| `str` | The action with exactly this name; the string has no pattern semantics |
+| `re.Pattern[str]` | Every action whose name the pattern matches whole (`fullmatch`) |
+
+An action's name is its route's name, the method's name unless the route states one, the same name the task is
+named by (see [Task naming](#task-naming)): `list_items` for every list mixin, `retrieve`, `create`, `bulk_create`,
+`update`, `partial_update`, `bulk_update`, `bulk_partial_update`, `destroy`, `bulk_destroy`, `lookup`, and the method
+name of a custom endpoint.
+
+The decorator raises `ValueError` when both `include` and `exclude` are given, and when a string names no action of
+the class or a pattern matches none; the message names the entry and lists the class's action names. Both processes
+resolve the entries the same way: the FastAPI process patches only the methods of the deferred actions, and the
+worker registers tasks only for them.
+
+A local action is an ordinary action of the viewset: `Middleware.execute()` runs around it once, in the FastAPI
+process, and `executor_started()` and `on_transition()` are not called for it. It has no
+[time limits](#time-limits).
+
+Calls between the actions of one class follow the patched methods:
+
+- a local action that calls `self.<deferred action>()` dispatches that action's task;
+- a deferred action that calls `self.<local action>()` in the worker runs it in the worker, since the worker patches
+  no method.
+
 ### Context auto-detection
 
 The decorator detects the execution context by inspecting `sys.argv`:
@@ -249,7 +308,7 @@ set_is_celery_worker(False)  # force client mode
 
 ### Task naming
 
-Each route method is registered as a Celery task named `{task_prefix}.{route_name}`, the route's
+Each deferred action is registered as a Celery task named `{task_prefix}.{route_name}`, the route's
 name, which is the method's name unless the route states one:
 
 | Method | Task name (prefix `"items"`) |
@@ -405,8 +464,8 @@ the file's size, and the FastAPI process and the worker each hold the encoded co
 while they encode and decode it. FastAPI has received the whole upload before the action is
 called, so a size check in the action runs in the worker, after the content has crossed. Bound the
 size of a request body at the server or proxy in front of the application (e.g. nginx
-`client_max_body_size`), and keep actions that accept large files in a viewset that is not
-decorated with `celery_viewset`.
+`client_max_body_size`), and keep actions that accept large files local with
+[`exclude`](#choosing-the-deferred-actions-include-and-exclude).
 :::
 
 ### Types of your own
@@ -480,6 +539,8 @@ For explicit control over which mode is applied, use the low-level decorators di
 ```python
 from fastapi_viewsets.decorators.celery_viewset import celery_viewset_client, celery_viewset_server
 ```
+
+Both take the same `include` and `exclude` parameters as `celery_viewset`, and resolve them the same way.
 
 ### Result queue helpers
 
@@ -638,7 +699,9 @@ class ReportViewSet(...):
 An action without a `TimeLimits` entry runs under the worker's own limits (`--soft-time-limit`,
 `--time-limit`). Soft time limits need the `prefork` pool (async processes included), hard time
 limits the `prefork` or `gevent` pool; the `solo`, `threads` and `eventlet` pools enforce neither. An
-action executed in the FastAPI process has no time limit.
+action executed in the FastAPI process has no time limit. A `TimeLimits` entry on the method of a local action (the
+action method or its `perform_*` method) raises `ValueError` at decoration, in both processes; a class-level entry
+and `settings.default_action_configuration` apply only to the deferred actions.
 
 ---
 

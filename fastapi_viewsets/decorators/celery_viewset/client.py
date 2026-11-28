@@ -18,6 +18,7 @@ from ..primary_key_model_helper import PARTIAL_UPDATE_ACTIONS
 from . import result_reader
 from .payload import CONTEXT_KWARG, PARENT_KWARG, REQUEST_KWARG, request_to_jsonable, UNTYPED_KWARG
 from .result_reader import get_process_queue_key, get_result_queue_key
+from .selection import _action_routes, ActionSelector, deferred_routes, normalize_selection
 from .transport import ActionCodec, EncodedResult
 
 if TYPE_CHECKING:
@@ -30,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 # Seconds a `celery_viewset_client` call waits for its result when `result_timeout` is not given.
 DEFAULT_RESULT_TIMEOUT = 3600.0
+
+# Attribute of a client wrapper: the name of the task it dispatches.
+CLIENT_TASK_ATTRIBUTE = "__celery_client_task__"
 
 # queue_keys registered by celery_viewset_client, for check_result_readers().
 _registered_queue_keys: set[str] = set()
@@ -45,26 +49,30 @@ def celery_viewset_client(
     task_prefix: str,
     redis_client: "redis.Redis",
     result_timeout: float | None = DEFAULT_RESULT_TIMEOUT,
+    include: ActionSelector = None,
+    exclude: ActionSelector = None,
 ):
     """
     Decorator for the FastAPI side: replaces viewset methods with async wrappers that send Celery tasks
     and await results via a Redis result queue. A result not arriving within `result_timeout` seconds
     raises ResultTimeoutError (504); None waits without a limit.
+
+    `include` / `exclude` select the actions that run in the worker (see `celery_viewset`); the methods
+    of the others stay as they are and run in this process. A method inherited from a class decorated
+    with `celery_viewset_client` is replaced by the method it wraps first, so the selection of `cls`
+    alone decides what is dispatched.
     """
+    include, exclude = normalize_selection(include, exclude)
     queue_key = get_result_queue_key(task_prefix)
 
     def decorator(cls: type[T]):
-        seen_tasks = set()
-
         build_schema(cls)
-        for route in cls.__router.routes:
-            task_name = f"{task_prefix}.{route.name or route.endpoint.__name__}"
-
-            if task_name in seen_tasks:
-                continue
-            seen_tasks.add(task_name)
-
-            _patch_method(cls, route.endpoint, task_name, celery_app, queue_key, result_timeout)
+        _unwrap_inherited_wrappers(cls)
+        deferred = deferred_routes(cls, include, exclude)
+        for action, route in deferred.items():
+            endpoint = _unwrapped(route.endpoint)
+            _patch_method(cls, endpoint, f"{task_prefix}.{action}", celery_app, queue_key, result_timeout)
+        setattr(cls, DEFERRED_ACTIONS_ATTRIBUTE, frozenset(route.endpoint.__name__ for route in deferred.values()))
 
         cls.__celery_viewset_metadata__ = {
             "task_prefix": task_prefix,
@@ -78,6 +86,20 @@ def celery_viewset_client(
         return cls
 
     return decorator
+
+
+def _unwrapped(method):
+    """The method a client wrapper wraps, or `method` when it is not a client wrapper."""
+    return method.__wrapped__ if hasattr(method, CLIENT_TASK_ATTRIBUTE) else method
+
+
+def _unwrap_inherited_wrappers(cls: type) -> None:
+    """Sets every action method of `cls` that is a client wrapper back to the method it wraps."""
+    for route in _action_routes(cls).values():
+        name = route.endpoint.__name__
+        method = getattr(cls, name, None)
+        if hasattr(method, CLIENT_TASK_ATTRIBUTE):
+            setattr(cls, name, method.__wrapped__)
 
 
 async def _serialize_value(value, partial: bool = False):
@@ -233,5 +255,5 @@ def _patch_method(
         finally:
             result_reader.unregister_future(correlation_id)
 
+    setattr(async_client_wrapper, CLIENT_TASK_ATTRIBUTE, task_name)
     setattr(cls, method_name, async_client_wrapper)
-    setattr(cls, DEFERRED_ACTIONS_ATTRIBUTE, frozenset(getattr(cls, DEFERRED_ACTIONS_ATTRIBUTE, ())) | {method_name})

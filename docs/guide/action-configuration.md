@@ -169,7 +169,10 @@ settings.default_action_configuration = {TimeLimits: TimeLimits(soft=120)}
 
 `None` leaves that limit to the worker's own configuration. The entry merges like any other: a
 method-level `TimeLimits` replaces the class-level one whole, and `ByAction` varies it per action.
-An action executed in the FastAPI process has no time limit.
+An action executed in the FastAPI process has no time limit. A method-level `TimeLimits` (on the action method or its
+`perform_*` method) of an action that a [`celery_viewset` `include` / `exclude`](./routers#choosing-the-deferred-actions-include-and-exclude)
+keeps in the FastAPI process raises `ValueError` at decoration; the class-level entry and
+`settings.default_action_configuration` apply only to the actions that run in the worker.
 
 ## Rejecting a request: just raise
 

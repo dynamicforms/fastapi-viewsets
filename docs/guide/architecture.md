@@ -261,7 +261,7 @@ viewset instance state).
 |---|---|---|
 | **Mixins** | Declare which HTTP operations exist (`ListMixin`, `CreateMixin`, ...) and what each one calls (`perform_list`, `perform_create`, ...) | [Python Mixins](./python-mixins) |
 | **`route_viewset`** | Registers a viewset class's routes on a FastAPI router; the entry point for every HTTP request | [Routers & Decorators](./routers) |
-| **`celery_viewset`** | Optionally moves `perform_*` execution to a Celery worker - transparent to everything else in this list | [Routers & Decorators](./routers) |
+| **`celery_viewset`** | Optionally moves the execution of a viewset's actions, all of them or those `include` / `exclude` select, to a Celery worker - transparent to everything else in this list | [Routers & Decorators](./routers#choosing-the-deferred-actions-include-and-exclude) |
 | **`CollectionViewSet`** | A ready-made `perform_*` implementation backed by an in-memory collection | [CollectionViewSet](./collection-viewset) |
 | **Context processors** | Build a per-request `context` (e.g. the authenticated user) before the endpoint runs | [Context Processors](./context-processors) |
 | **Auth backends & `auth_context_processor`** | A pluggable chain of credential schemes contributing `context.user` | [Authentication](./authentication) |

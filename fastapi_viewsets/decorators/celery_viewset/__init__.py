@@ -15,6 +15,7 @@ from .result_reader import (
     start_result_reader,
     stop_result_reader,
 )
+from .selection import ActionSelector
 from .server import celery_viewset_server
 
 logger = logging.getLogger(__name__)
@@ -41,16 +42,32 @@ def celery_viewset(
     lifecycle: LifecycleType = "singleton",
     redis_client=None,
     result_timeout: float | None = DEFAULT_RESULT_TIMEOUT,
+    include: ActionSelector = None,
+    exclude: ActionSelector = None,
 ):
     """
     `celery_viewset_server` in a Celery worker, `celery_viewset_client` otherwise. Raises ValueError
     without `redis_client`.
+
+    `include` runs only the selected actions in the worker, `exclude` all but the selected ones; the
+    others run in the FastAPI process. An entry is an action name (exact) or a compiled `re.Pattern`
+    (`fullmatch`). Raises ValueError when both are given, at decoration for an entry that matches no
+    action, and for a method-level `TimeLimits` on an action that runs in the FastAPI process.
     """
     if redis_client is None:
         raise ValueError("redis_client is required for celery_viewset")
     if _detect_is_celery_worker():
-        return celery_viewset_server(celery_app, task_prefix, lifecycle=lifecycle, redis_client=redis_client)
-    return celery_viewset_client(celery_app, task_prefix, redis_client=redis_client, result_timeout=result_timeout)
+        return celery_viewset_server(
+            celery_app, task_prefix, lifecycle=lifecycle, redis_client=redis_client, include=include, exclude=exclude
+        )
+    return celery_viewset_client(
+        celery_app,
+        task_prefix,
+        redis_client=redis_client,
+        result_timeout=result_timeout,
+        include=include,
+        exclude=exclude,
+    )
 
 
 def check_result_readers() -> frozenset[str]:

@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `filename`.
 - The muxws transport rejects a call with a `FormData` body, `onUploadProgress` or `responseType: 'blob'` with an
   `Error` naming the option.
+- `celery_viewset(..., include=, exclude=)` (also on `celery_viewset_client` and `celery_viewset_server`) chooses
+  which actions of a viewset run in the Celery worker; the others run in the FastAPI process, with the same route
+  table, `/schema` and URLs. An entry is an action name or a `re.Pattern` matched whole. Both parameters together, an
+  entry that matches no action, and a method-level `TimeLimits` on an action that runs in the FastAPI process raise
+  `ValueError` at decoration.
 
 ### Changed
 
