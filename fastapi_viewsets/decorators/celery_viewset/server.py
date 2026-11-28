@@ -40,6 +40,7 @@ from ..primary_key_model_helper import (
 )
 from .payload import CONTEXT_KWARG, PARENT_KWARG, request_from_jsonable, REQUEST_KWARG, UNTYPED_KWARG
 from .result_reader import error_payload, push_payload, push_payload_async
+from .selection import ActionSelector, deferred_routes, normalize_selection
 from .transport import ActionCodec
 
 if TYPE_CHECKING:
@@ -756,11 +757,14 @@ def celery_viewset_server(
     task_prefix: str,
     lifecycle: LifecycleType = "singleton",
     redis_client: "redis.Redis | None" = None,
+    include: ActionSelector = None,
+    exclude: ActionSelector = None,
 ):
     """
-    Decorator for the Celery worker side: registers a task per route that executes the action and
+    Decorator for the Celery worker side: registers a task per action that executes the action and
     pushes its result or error to the caller's result queue through `redis_client` (a synchronous
     `redis.Redis`, required). Arguments and results are coded by the action's type hints (`transport`).
+    `include` / `exclude` select the actions that get a task (see `celery_viewset`).
 
     Tasks are registered with `acks_late=False` (overriding `task_acks_late`): a call is never
     delivered twice. No celery, billiard or kombu exception reaches `Middleware.execute()` or the
@@ -768,11 +772,11 @@ def celery_viewset_server(
     """
     if redis_client is None:
         raise ValueError("redis_client is required for celery_viewset_server")
+    include, exclude = normalize_selection(include, exclude)
 
     async_redis = _async_redis_of(redis_client)
 
     def decorator(cls: type[T]):
-        seen_tasks = set()
         instance = cls() if lifecycle == "singleton" else None
 
         def get_sync_wrapper(original_endpoint, task_name: str):
@@ -902,12 +906,8 @@ def celery_viewset_server(
             return failure.finish()
 
         build_schema(cls)
-        for route in cls.__router.routes:
-            task_name = f"{task_prefix}.{route.name or route.endpoint.__name__}"
-
-            if task_name in seen_tasks:
-                continue
-            seen_tasks.add(task_name)
+        for action, route in deferred_routes(cls, include, exclude).items():
+            task_name = f"{task_prefix}.{action}"
             _task_actions[task_name] = (cls, route.endpoint.__name__)
 
             # The client reads the result queue, never Celery's result backend; a call is never
