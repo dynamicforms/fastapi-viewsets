@@ -73,9 +73,7 @@ test('in a list sorted by Favorite a toggled row leaves its place in both tabs',
   // Sorted by favorite, the loaded prefix holds one value only. In pk order the values are mixed.
   for (const page of [editing, watching]) {
     await page.locator('.df-grid.card.header .df-grid.cell.favorite').click();
-    await expect
-      .poll(async () => new Set(await firstFavorites(page)).size, { timeout: CHANGE_TIMEOUT })
-      .toBe(1);
+    await expect.poll(async () => new Set(await firstFavorites(page)).size, { timeout: CHANGE_TIMEOUT }).toBe(1);
   }
   const pk = await editing.locator('.df-grid.body-grid .df-grid.card[data-pk]').first().getAttribute('data-pk');
   expect(pk).toBeTruthy();
