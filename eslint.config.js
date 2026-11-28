@@ -11,6 +11,14 @@ export default [
     },
   },
   {
+    files: ['demo/e2e/**/*.ts'],
+    languageOptions: {
+      parserOptions: { project: './demo/e2e/tsconfig.json' },
+      // Node's global fetch, which velis's globals list omits
+      globals: { fetch: 'readonly' },
+    },
+  },
+  {
     rules: {
       'no-redeclare': 'off',
       '@typescript-eslint/no-redeclare': 'error',
