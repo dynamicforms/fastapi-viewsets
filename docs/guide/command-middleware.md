@@ -465,6 +465,9 @@ class Tracking(Middleware):
 | `__call__` | FastAPI process | FastAPI process, around handing the call on and receiving the result |
 | `execute()` | FastAPI process | Celery worker |
 
+An action that `celery_viewset`'s [`include` / `exclude`](./routers#choosing-the-deferred-actions-include-and-exclude)
+keeps in the FastAPI process is an in-process action.
+
 `execute()` runs once per execution, where the action executes. A `celery_viewset` action's method in
 the FastAPI process only hands the call to the worker, and `execute()` does not run around it, an
 override in a subclass that calls it through `super()` included. The worker runs it around the real

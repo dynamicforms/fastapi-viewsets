@@ -124,8 +124,8 @@ route_viewset(APIRouter(prefix="/orgs/{org_slug}"), "/tags", pk_field_name="id")
   [muxws](../guide/muxws#choosing-which-viewsets-are-published)); a route not published on REST is left out of the
   application's OpenAPI document. Records the endpoints published on muxws in the muxws registry.
 - Runs every configured middleware's [`execute()`](../guide/command-middleware#around-the-execution-middleware-execute)
-  around the call of the viewset method, inside the command middleware chain, unless the action is a
-  `celery_viewset_client` method, which executes in the worker.
+  around the call of the viewset method, inside the command middleware chain, unless the action is one
+  `celery_viewset_client` defers, which executes in the worker.
 - Stores metadata on the class as `cls.__viewset_metadata__`.
 
 ## default_tag_name

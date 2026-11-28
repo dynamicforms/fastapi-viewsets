@@ -211,6 +211,29 @@ A sub-viewset can be a [`celery_viewset`](./routers#celery_viewset) with its own
 sets of checks and the command middleware chain run in the FastAPI process, the action executes in
 the worker under `Middleware.execute()`, as for any `celery_viewset`.
 
+A sub-viewset's deferred actions are set by its own `celery_viewset` decorator and its own
+[`include` / `exclude`](./routers#choosing-the-deferred-actions-include-and-exclude); the parent's decorator does not
+reach it, and `sub_viewset()` takes no Celery options. `celery_viewset` patches the class it decorates, so a class
+that is also used elsewhere without Celery is decorated through a subclass:
+
+```python
+@celery_viewset(celery_app, task_prefix="members", redis_client=redis_client)
+class MembersCeleryViewSet(MembersViewSet):
+    pass
+
+
+@route_viewset(router, "/accounts", pk_field_name="id")
+class AccountViewSet(DjangoORMViewSet[int, Account], ViewSetMixin[int, Account]):
+    model = AccountModel
+    schema = Account
+
+    __router = ViewSetRouter()
+    __router.sub_viewset("members", MembersCeleryViewSet, pk_field_name="id")
+```
+
+`MembersViewSet` stays an ordinary viewset wherever else it is routed; `AccountViewSet`'s own actions run in the
+FastAPI process.
+
 ---
 
 ## Frontend
